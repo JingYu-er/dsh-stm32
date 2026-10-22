@@ -408,6 +408,25 @@ node test\e2e-flash.mjs                            # 也可把目录当第 1 个
 结论：`project_create → generate → code_patch → build → flash → regs_read` 在真宿主上是一条不断的链，
 A1 的“一条命令出工程”与 A5 的“拒绝烧录”在宿主侧同样成立。
 
+## 开源 / 发布
+
+仓库里 `package.json` 的 repository 先用 `OWNER` 占位，推之前换成你的 GitHub 用户名：
+
+```powershell
+(Get-Content package.json -Raw) -replace 'OWNER', '你的用户名' | Set-Content package.json -NoNewline
+git commit -am 'package.json：换成真实仓库地址'
+```
+
+在 GitHub 上新建一个**空**仓库（不要勾 README / .gitignore / LICENSE，否则首推要先 pull --allow-unrelated-histories），然后：
+
+```powershell
+git remote add origin https://github.com/你的用户名/dsh-stm32.git
+git push -u origin main
+```
+
+- CI：`.github/workflows/ci.yml` 会在每次 push / PR 跑 `npm ci → build → 80 个离线用例`（windows-latest，因为插件面向 Windows 上的 MSYS2 / CubeMX）。
+- 发 npm（可选）：`npm publish`。若 `dsh-stm32` 已被占用，改 `package.json` 的 `name`，并同步 README 的安装命令；`files` 已包含 `lib/`、`templates/`、`docs/`，`templates/` 是脚手架必需的（漏了 `stm32_project_create` 会在别的机器上找不到模板）。
+- 别人装的时候仍然建议 `link:` 到本地克隆（见上一节），因为插件要跟着 `lib/` 重编译、且烧录/调试依赖本机工具链。
 ## 环境变量（可选）
 
 - `STM32_BIN_DIRS`：工具链目录列表，`;` 分隔；默认 `D:/app/msys64/ucrt64/bin` 优先。
