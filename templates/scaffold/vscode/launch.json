@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // ========== ① 只烧录：烧完直接运行，不调试 ==========
+            // 用法：运行和调试面板下拉选中本配置 -> 按 Ctrl+F5
+            // 原理：不写 runToEntryPoint，cortex-debug 烧完复位后会自己 continue，
+            //       芯片直接跑；Ctrl+F5 又不会把你的断点下发到芯片。
+            "name": "① 只烧录（烧完自动运行）",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Debug/__PROJECT_NAME__.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32f1x.cfg"
+            ],
+            "svdPath": "D:/JingYu/STM32/cmsis-svd-stm32/stm32f1/STM32F103.svd",
+            "armToolchainPath": "D:/app/msys64/ucrt64/bin",
+            "gdbPath": "D:/app/msys64/ucrt64/bin/gdb-multiarch.exe",
+            "toolchainPrefix": "arm-none-eabi",
+            "showDevDebugOutput": "none",
+            "breakAfterReset": false
+        },
+        {
+            // ========== ② 烧录并调试：烧完停在 main，可以下断点单步 ==========
+            // 用法：选中本配置 -> 按 F5
+            "name": "② 烧录并调试（停在 main）",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Debug/__PROJECT_NAME__.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32f1x.cfg"
+            ],
+            "svdPath": "D:/JingYu/STM32/cmsis-svd-stm32/stm32f1/STM32F103.svd",
+            "armToolchainPath": "D:/app/msys64/ucrt64/bin",
+            "gdbPath": "D:/app/msys64/ucrt64/bin/gdb-multiarch.exe",
+            "toolchainPrefix": "arm-none-eabi",
+            "showDevDebugOutput": "none",
+            "runToEntryPoint": "main"
+        }
+    ]
+}

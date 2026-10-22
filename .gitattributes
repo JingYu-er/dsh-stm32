@@ -1,0 +1,8 @@
+# 仓库统一用 LF（Windows 上 core.autocrlf 会把它改回 CRLF，这里压住）
+* text=auto eol=lf
+
+# 二进制
+*.elf binary
+*.bin binary
+*.hex binary
+*.png binary

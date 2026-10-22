@@ -1,0 +1,6 @@
+# dsh bundle layer: 只挂载宿主侧工具（无 UI）。
+# 安装方式见 README：把本包放进 profile 的 node_modules，并在 profile 的
+# package.json 的 dsh.profile.bundles 里加 "dsh-stm32"。
+- insert:
+    - id: stm32
+      name: dsh-stm32

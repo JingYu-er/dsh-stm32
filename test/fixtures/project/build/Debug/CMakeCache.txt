@@ -1,0 +1,6 @@
+# 测试夹具用的占位 CMakeCache：只让 detectBuildDir() 认得 build/Debug 是构建目录，
+# 里面的路径是虚构的，不要拿它去 cmake --build。
+CMAKE_BUILD_TYPE:STRING=Debug
+CMAKE_GENERATOR:INTERNAL=Ninja
+CMAKE_CACHEFILE_DIR:INTERNAL=D:/fixture/demo/build/Debug
+CMAKE_HOME_DIRECTORY:INTERNAL=D:/fixture/demo

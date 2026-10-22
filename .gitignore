@@ -1,0 +1,19 @@
+# 构建产物（发布的是 npm 包，lib/ 由 tsc 生成，不入库）
+lib/
+*.tsbuildinfo
+
+# 依赖
+node_modules/
+
+# 测试 / 调试的临时物
+*.log
+.dsh-stm32/
+.tmp-*
+
+# 编辑器与系统
+.vs/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 注意：test/fixtures/ 下的夹具必须入库（含 build/Debug/CMakeCache.txt 与占位 demo.elf），不要忽略。
