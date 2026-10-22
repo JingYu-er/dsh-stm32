@@ -19,7 +19,7 @@ DSH 插件（宿主侧，无 UI）：把 STM32（当前只支持 STM32F103C8T6�
 ## 快速开始（从 GitHub 克隆）
 
 ```powershell
-git clone https://github.com/OWNER/dsh-stm32.git   # 换成你自己的仓库地址
+git clone git@github.com:JingYu-er/dsh-stm32.git        # 或 https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund                   # 只装 typescript
 npm run build                                       # tsc -> lib/
@@ -410,19 +410,16 @@ A1 的“一条命令出工程”与 A5 的“拒绝烧录”在宿主侧同样�
 
 ## 开源 / 发布
 
-仓库里 `package.json` 的 repository 先用 `OWNER` 占位，推之前换成你的 GitHub 用户名：
+仓库地址是 `https://github.com/JingYu-er/dsh-stm32`（`package.json` 的 repository / homepage / bugs 已指向它，已有一份首次提交）。
+
+在 GitHub 上新建一个**空**仓库 `JingYu-er/dsh-stm32`（不要勾 README / .gitignore / LICENSE，否则首推要先 `git pull --rebase`），然后：
 
 ```powershell
-(Get-Content package.json -Raw) -replace 'OWNER', '你的用户名' | Set-Content package.json -NoNewline
-git commit -am 'package.json：换成真实仓库地址'
-```
-
-在 GitHub 上新建一个**空**仓库（不要勾 README / .gitignore / LICENSE，否则首推要先 pull --allow-unrelated-histories），然后：
-
-```powershell
-git remote add origin https://github.com/你的用户名/dsh-stm32.git
+git remote add origin git@github.com:JingYu-er/dsh-stm32.git   # 或 https://github.com/JingYu-er/dsh-stm32.git
 git push -u origin main
 ```
+
+走 SSH：先把 `~/.ssh/id_rsa.pub` 的内容加进 GitHub → Settings → SSH and GPG keys，再 `ssh -T git@github.com` 确认返回 `Hi JingYu-er!`。走 HTTPS：由 Git Credential Manager 弹窗登录。
 
 - CI：`.github/workflows/ci.yml` 会在每次 push / PR 跑 `npm ci → build → 80 个离线用例`（windows-latest，因为插件面向 Windows 上的 MSYS2 / CubeMX）。
 - 发 npm（可选）：`npm publish`。若 `dsh-stm32` 已被占用，改 `package.json` 的 `name`，并同步 README 的安装命令；`files` 已包含 `lib/`、`templates/`、`docs/`，`templates/` 是脚手架必需的（漏了 `stm32_project_create` 会在别的机器上找不到模板）。

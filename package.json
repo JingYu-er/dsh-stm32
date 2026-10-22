@@ -42,11 +42,11 @@
   "author": "dsh-stm32 contributors",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/dsh-stm32.git"
+    "url": "git+https://github.com/JingYu-er/dsh-stm32.git"
   },
-  "homepage": "https://github.com/OWNER/dsh-stm32#readme",
+  "homepage": "https://github.com/JingYu-er/dsh-stm32#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/dsh-stm32/issues"
+    "url": "https://github.com/JingYu-er/dsh-stm32/issues"
   },
   "dsh": {
     "bundle": {
