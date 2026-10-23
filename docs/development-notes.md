@@ -510,3 +510,38 @@ test/fixtures.mjs            测试路径唯一的来源：夹具、e2e 工作�
 
 教训与 subprocess 的 cwd 坑、skill 的 source 坑同源：**只在真环境里暴露的契约**。
 本地 Node 版本比 CI 新时，"我这能跑"的结论对 CI 无效，要么对齐版本，要么让解析层容忍两种格式。
+
+## 离线套件的 hermeticity：不 spawn ≠ 不依赖环境
+
+起因是这样一个问题：「GitHub 上没有能调用的 msys64 和 CubeMX，也能测试吗？」
+
+审计结论（10 个离线套件）：
+
+- 只有 `commands-units` 与 `session-units` 出现 `spawn(`，且都是**假 subprocess 注入**
+  （`makeSubprocess()` 记录 argv，不真起进程）；
+- 只有 `scaffold-patch-units` 真依赖 CubeMX：两条用例写着
+  `skip: !existsSync(path.join(CUBE_ROOT, "Repository", DEFAULT_FIRMWARE_PACKAGE))` → runner 上是 SKIP；
+- 但 `session-units` 用的是 `fixtures.binDirs()`，环境变量未设时返回开发机默认值
+  `D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin` —— runner 上都不存在。
+
+于是出现了一个假象：subprocess 明明是假的，套件照样红。原因是**路径解析仍会打真实磁盘**：
+`src/engine/probe.ts:57` 的 `resolveFromDirs()` 用 `existsSync()` 判存在，
+`src/engine/debug-session.ts:174` 解析不到 openocd 就返回「找不到 openocd」，`:254` 解析不到 gdb 返回「找不到 gdb」。
+
+复现办法（也是验收办法）：干净副本里把 `CUBE_ROOT` 改成不存在的路径，再设
+`STM32_BIN_DIRS=C:/__no_such_bin__`、`STM32_CUBEMX_ROOT=C:/__no_such_cubemx__`、
+`PATH` 只留 node 与 System32，用 Node 20 跑 `test/run-units.mjs`。
+修复前：`TOTAL pass=78 fail=6`（全在 session-units）；修复后：`TOTAL pass=78 fail=0` + 2 skipped。
+
+修复分两处：
+
+1. `test/fixtures.mjs` 新增 `fakeBinDirs(tag = "bin")`：用 `mkdtempSync` 建临时目录，写入
+   空文件占位的 `openocd` / `openocd.exe` / `gdb-multiarch` / `gdb-multiarch.exe` /
+   `arm-none-eabi-gcc(.exe)`，返回 `[dir]`；`session-units` 改用它。
+2. 顺手修了产品侧一处错位：`debug_session` 的 `eval` 过去只读 `resolveSearchConfig(process.env, {})`，
+   **无视调用方传进来的 `binDirs`** ⇒ 换台机器会出现「openocd 起来了，eval 却说缺 gdb」。
+   现在 `InternalSession` 记下起会话时解析出的 `binDirs`（`start()` 里 `binDirs: config.binDirs`），
+   `eval()` 依次查 `session.binDirs` → `this.binDirs`（`configure()` 传入）→ 环境默认值。
+
+最终数字：开发机 80 全跑；hermetic 模拟（Node 20、PATH 里没有工具链、没有 CubeMX）78 pass + 2 skipped、退出码 0。
+结论：**「不 spawn」不等于「不依赖环境」** —— 只要代码里有 `existsSync` / `resolveFromDirs`，就得给它可控的目录。

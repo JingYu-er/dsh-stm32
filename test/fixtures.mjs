@@ -1,5 +1,6 @@
 // 测试路径都从这里来：离线单测只用仓库自带的 test/fixtures/，不依赖开发机上的任何工程。
 // 需要真工程 / 真板子 / 真 CubeMX 的 e2e 用环境变量或命令行参数指路（见 test/fixtures/README.md）。
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,4 +44,17 @@ export function binDirs() {
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
   return fromEnv.length > 0 ? fromEnv : ["D:/app/msys64/ucrt64/bin", "C:/msys64/ucrt64/bin"];
+}
+
+/**
+ * 假的工具链目录：只有空文件占位的 openocd / gdb / gcc。
+ * 给"只验会话与参数构造、不真起进程"的单测用（session-units 的 subprocess 是假的），
+ * 这样在没装 msys64 / CubeMX 的机器（例如 GitHub runner）上也能跑。
+ */
+export function fakeBinDirs(tag = "bin") {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-" + tag + "-"));
+  for (const name of ["openocd", "openocd.exe", "gdb-multiarch", "gdb-multiarch.exe", "arm-none-eabi-gcc", "arm-none-eabi-gcc.exe"]) {
+    writeFileSync(join(dir, name), "");
+  }
+  return [dir];
 }

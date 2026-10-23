@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { DebugSessionManager } from "../lib/engine/debug-session.js";
 
-import { FIXTURE_PROJECT, binDirs } from "./fixtures.mjs";
+import { FIXTURE_PROJECT, fakeBinDirs } from "./fixtures.mjs";
 
 const cases = [];
 function test(name, fn) {
@@ -56,7 +56,8 @@ function makeSubprocess() {
   };
 }
 
-const BIN_DIRS = binDirs();
+// 假工具链目录：会话逻辑不需要真 openocd/gdb，CI 上没有 msys64 也能跑。
+const BIN_DIRS = fakeBinDirs();
 
 test("start：起 openocd 并等到监听，会话变为 active", async () => {
   const fake = makeSubprocess();

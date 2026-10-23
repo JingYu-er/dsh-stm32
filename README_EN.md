@@ -252,10 +252,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/
-npm test                 # 10 offline suites, 80 cases, no board / CubeMX / toolchain needed
+npm test                 # 10 offline suites, 80 cases; no board, CubeMX, or toolchain needed
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm ci → build → 80 cases` on every push and PR (windows-latest).
+CI (`.github/workflows/ci.yml`) runs `npm ci → build → npm test` on every push and PR (windows-latest).
+
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **78 passed + 2 skipped**, while a developer machine runs all 80. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 

@@ -85,6 +85,8 @@ interface InternalSession {
   idleTtlMs: number;
   hardTtlMs: number;
   logText: string;
+  /** 起会话时解析出的工具链目录：eval 必须用同一份，否则换机器/换目录时会"找得到 openocd、找不到 gdb"。 */
+  binDirs: string[];
 }
 
 const DEFAULT_IDLE_TTL_MS = 90_000;
@@ -206,6 +208,7 @@ export class DebugSessionManager {
       idleTtlMs: request.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
       hardTtlMs: request.hardTtlMs ?? DEFAULT_HARD_TTL_MS,
       logText: "",
+      binDirs: config.binDirs,
     };
 
     const listening = await waitForListening(handle, 15_000, (text) => {
@@ -250,8 +253,16 @@ export class DebugSessionManager {
     if (subprocess === null) {
       return { ok: false, output: "", command: "", durationMs: 0, remainingMs: this.remainingMs(session), errors: ["插件还没拿到 subprocess 服务"], message: "没执行：插件未就绪" };
     }
-    const config: SearchConfig = resolveSearchConfig(process.env, {});
-    const gdb = resolveFromDirs("gdb-multiarch", config.binDirs) ?? resolveFromDirs("arm-none-eabi-gdb", config.binDirs);
+    // 用"起会话时那份"工具链目录：只读环境变量的话，调用方传了 binDirs 也会出现
+    // "openocd 起来了、eval 却说缺 gdb"的错位（也便于离线单测给假目录）。
+    const envConfig: SearchConfig = resolveSearchConfig(process.env, {});
+    const searchDirs: string[][] = [session.binDirs, this.binDirs, envConfig.binDirs];
+    let gdb: string | null = null;
+    for (const dirs of searchDirs) {
+      if (dirs.length === 0) continue;
+      gdb = resolveFromDirs("gdb-multiarch", dirs) ?? resolveFromDirs("arm-none-eabi-gdb", dirs);
+      if (gdb !== null) break;
+    }
     if (gdb === null) {
       return { ok: false, output: "", command: "", durationMs: 0, remainingMs: this.remainingMs(session), errors: ["找不到 gdb"], message: "没执行：缺 gdb" };
     }

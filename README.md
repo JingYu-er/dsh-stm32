@@ -254,10 +254,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/
-npm test                 # 10 个离线套件、80 个用例，不需要板子 / CubeMX / 工具链
+npm test                 # 10 个离线套件、80 个用例；不需要板子、CubeMX、工具链
 ```
 
-CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 80 个用例`（windows-latest）。
+CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → npm test`（windows-latest）。
+
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **78 pass + 2 skipped**，开发机上是 80 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 
