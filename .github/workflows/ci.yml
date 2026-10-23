@@ -17,4 +17,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # lib/ 是入库的（git 安装不会构建），所以这里必须保证提交的产物和 src/ 一致。
+      - name: Check lib/ is in sync with src/
+        shell: pwsh
+        run: |
+          $diff = git status --porcelain -- lib
+          if ($diff) {
+            Write-Host $diff
+            throw "lib/ is stale: run 'npm run build' and commit lib/ together with src/."
+          }
       - run: npm test

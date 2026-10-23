@@ -1,5 +1,5 @@
-# 构建产物（发布的是 npm 包，lib/ 由 tsc 生成，不入库）
-lib/
+# lib/ 是故意入库的：dsh plugin add github:... 时 pnpm 不会替依赖跑构建，
+# 只有仓库里带着编译产物，别人才能一条命令装上。改完 src 记得 npm run build 再提交。
 *.tsbuildinfo
 .vscode
 # 依赖

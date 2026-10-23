@@ -545,3 +545,77 @@ test/fixtures.mjs            测试路径唯一的来源：夹具、e2e 工作�
 
 最终数字：开发机 80 全跑；hermetic 模拟（Node 20、PATH 里没有工具链、没有 CubeMX）78 pass + 2 skipped、退出码 0。
 结论：**「不 spawn」不等于「不依赖环境」** —— 只要代码里有 `existsSync` / `resolveFromDirs`，就得给它可控的目录。
+
+## 安装路径的坑：为什么别人一条命令就能装，我们得 clone + build
+
+用户问（m04070 附近）：别人的插件一条命令就装上了
+
+```text
+dsh plugin --profile web add github:2768651338/dsh-plugin-manager#main
+```
+
+为什么我们得 `git clone` + `npm install` + `npm run build`？查清了，结论是：**`dsh plugin add github:` 本身就能一条命令装完（还会自动写 `dsh.profile.bundles`），
+但 pnpm 不会替 git 依赖跑构建 —— 谁的仓库里带着编译产物，谁才能一条命令装上。**
+
+### 1. 实测：一条命令装得上，但没有 `lib/`
+
+拿当时还没提交 `lib/` 的仓库试（profile `probe2`）：
+
+```text
+dsh: initialized profile probe2 at C:\Users\JingYu\.dsh\profiles\probe2
++ dsh-stm32 0.1.0
+Done in 2m 13.4s using pnpm v11.28.5
+```
+
+`package.json` 里 `dependencies` 写了 `github:JingYu-er/dsh-stm32#main`、`dsh.profile.bundles` 自动多了 `dsh-stm32` —— 看起来一切正常。
+但安装目录里只有：
+
+```text
+cordis.patch.yml  docs  LICENSE  package.json  README.md  README_EN.md  templates
+```
+
+**没有 `lib/`**。`cordis.patch.yml` 指向 `lib/index.js`，所以宿主重启后加载不到这个 bundle —— 装上了等于没装。
+（`files` 白名单对 git 依赖同样生效，所以 `src/`、`test/` 不会进 profile，这点是对的。）
+
+### 2. pnpm 的构建触发器只有三个（加上一个权限门）
+
+内置 pnpm 11.28.5（`resources/runtime/primary-runtime/dependencies/pnpm`）里 `packageShouldBeBuilt(manifest, pkgDir)`：
+
+- `scripts.prepare` 非空 → 构建；
+- 否则看 `prepublish` / `prepack` / `publish` —— 而且还得 `main` 指向的文件不存在。
+
+> **`prepublishOnly` 不在这个名单里。** 我们原来只有它（给 `npm publish` 用），所以 pnpm 直接认定"没有构建脚本"。
+
+就算写了 `prepare` 也未必顺：pnpm 11 会先问一句"允许这个依赖执行构建脚本吗"，不给授权就抛
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，要往 `pnpm-workspace.yaml` 加 `allowBuilds`。
+而这个 key 对 git 依赖是 **lockfile 里 depPath 去掉 `#sha` 的那段**，实测本机是：
+
+```yaml
+dsh-stm32@git+ssh://git@github.com/JingYu-er/dsh-stm32.git#28a8901cb5a7...:
+```
+
+即用户得手写 `git+ssh://git@github.com/JingYu-er/dsh-stm32.git: true`。specifier 明明写的是 `github:...`，
+pnpm 却归一化成 ssh 形式 —— 换台机器、换传输方式（https / ssh）这个 key 就可能变，写进文档是给自己埋雷。
+
+### 3. 别人的做法：把 `lib/` 提交进仓库
+
+拉了参考插件 `2768651338/dsh-plugin-manager`（codeload tarball，635 KB）看包结构：
+
+- `package.json` 的 scripts 只有 `build` / `typecheck` / `lint` / `test`，**没有 `prepare`、没有 `prepublish`**；
+- `.gitignore` 只忽略 `lib/types/`、`*.map`、`*.tsbuildinfo` —— **`lib/` 本身是入库的**；
+- `files` 明写 `lib/index.js`、`lib/client.js`、`lib/typert.host.js`。
+
+所以"一条命令装"的真相是：**它不需要构建，因为产物就在仓库里**。pnpm 只是把仓库内容按 `files` 拷进 profile。
+
+### 4. 我们的改法
+
+- `.gitignore` 去掉 `lib/`（保留 `*.tsbuildinfo`）；
+- `package.json` 去掉 `prepare`（保留 `prepublishOnly`，`npm publish` 前仍会重建）；
+- `lib/` 共 35 个 `.js`、约 300 KB。tsconfig 里 `declaration: false`、`sourceMap: false`，产物很干净，没有 `.map` / `.d.ts` 噪音。
+
+代价是一条纪律：**改完 `src/` 必须 `npm run build` 再提交**，否则别人（和 `github:` 安装路径）拿到的是旧代码。
+CI 里 `npm ci → npm run build → npm test` 会在 `main` 上暴露"忘了重建"以外的所有问题；但漏提交产物 CI 查不出来，
+只能靠 reviewer 看 `src/` 与 `lib/` 是否同步。
+
+教训：**给 dsh 写插件，分发面和构建面要一起设计。** gitignore 掉构建产物，就等于放弃了 `github:` 安装路径，
+只能要求用户 clone + build + `link:`（或者等 npm 发布）。这不只是文档问题。

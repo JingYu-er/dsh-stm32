@@ -49,17 +49,31 @@
 
 默认按 MSYS2（`D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin`）→ ST 官方包搜索，CubeMX 默认 `D:/app/STM32CubeMX`；装在别处用环境变量覆盖（见 [配置](#配置)）。
 
-### 从 GitHub 安装
+### 安装（推荐：一条命令）
+
+```powershell
+dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
+```
+
+`dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
+
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.0`；重启后 `/stm32-doctor` 有输出。
+
+> npm 包尚未发布。发布后 `dsh plugin --profile desktop add dsh-stm32` 等价，而且能靠语义化版本回滚。
+
+**卸载**：`dsh plugin --profile desktop remove dsh-stm32`，重启 dsh。
+
+### 源码安装（要改代码时）
 
 ```powershell
 git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
-npm run build                       # tsc -> lib/
+npm run build                       # tsc -> lib/（提交前必须跑）
 npm test                            # 可选：80 个离线用例，不需要板子
 ```
 
-挂进 dsh 的 profile——**必须用 `link:`，不要用 `file:`**：
+挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
 
 ```powershell
 cd "$env:USERPROFILE\.dsh\profiles\desktop"
@@ -69,13 +83,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 # 最后重启 dsh（bundle 层只在进程启动时加载）
 ```
 
-> **为什么必须 `link:`**：pnpm 在 `nodeLinker: hoisted` 下会把 `file:` 依赖复制成真实目录，之后你重新 `tsc` 出的 `lib/` 宿主读不到——表现为"改完代码、重启还是旧行为"。用 `link:` 时 `lib/` 是实时读的，但**仍然要重启 dsh** 才会重新加载插件。
-
-安装成功的判断：重启后输入 `/stm32-doctor` 有输出，或让模型调 `stm32_doctor`。
-
-> npm 包尚未发布。发布后可直接 `dsh plugin --profile desktop add dsh-stm32`，不必再克隆。
-
-**卸载**：从 `package.json` 的 `dsh.profile.bundles` 删掉 `dsh-stm32`，再 `pnpm remove dsh-stm32`，重启 dsh。
+> **为什么改代码必须 `link:`**：pnpm 在 `nodeLinker: hoisted` 下会把 `file:` 依赖复制成真实目录，之后你重新 `tsc` 出的 `lib/` 宿主读不到——表现为"改完代码、重启还是旧行为"。用 `link:` 时 `lib/` 是实时读的，但**仍然要重启 dsh** 才会重新加载插件。`github:` / npm 装的是拷贝，改代码后要重新构建、重新安装。
 
 ## 快速开始：最小验证（空目录到灯在闪）
 
@@ -253,11 +261,11 @@ source [find target/stm32f1x.cfg]
 ## 开发与测试
 
 ```powershell
-npm run build            # tsc -> lib/
+npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
 npm test                 # 10 个离线套件、80 个用例；不需要板子、CubeMX、工具链
 ```
 
-CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → npm test`（windows-latest）。
+CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
 GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **78 pass + 2 skipped**，开发机上是 80 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 

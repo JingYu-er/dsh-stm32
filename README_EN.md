@@ -47,17 +47,31 @@ That is what "hardware programming inside DSH" means here: **the model does not 
 
 Paths are searched as MSYS2 (`D:/app/msys64/ucrt64/bin`, `C:/msys64/ucrt64/bin`) → ST official packages, with CubeMX at `D:/app/STM32CubeMX` by default; override with environment variables if yours live elsewhere (see [Configuration](#configuration)).
 
-### Install from GitHub
+### Install (recommended: one command)
+
+```powershell
+dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
+```
+
+All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
+
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.0`); after a restart `/stm32-doctor` should respond.
+
+> Not published on npm yet. Once it is, `dsh plugin --profile desktop add dsh-stm32` is equivalent, and gives you semantic versions to roll back to.
+
+**Uninstall**: `dsh plugin --profile desktop remove dsh-stm32`, then restart dsh.
+
+### Install from source (when you want to change code)
 
 ```powershell
 git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
-npm install --no-audit --no-fund   # only typescript
-npm run build                       # tsc -> lib/
+npm install --no-audit --no-fund   # typescript only
+npm run build                       # tsc -> lib/ (required before committing)
 npm test                            # optional: 80 offline cases, no board needed
 ```
 
-Link it into your dsh profile — **always `link:`, never `file:`**:
+Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
 
 ```powershell
 cd "$env:USERPROFILE\.dsh\profiles\desktop"
@@ -67,13 +81,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 # finally restart dsh (bundle layers only load at process start)
 ```
 
-> **Why `link:`**: with `nodeLinker: hoisted`, pnpm copies a `file:` dependency into a real directory, so the `lib/` you rebuild with `tsc` is never read by the host — the symptom is "I fixed it, restarted, still the old behaviour". With `link:` the host reads `lib/` live, but you **still have to restart dsh** to reload the plugin.
-
-Installed correctly if `/stm32-doctor` responds after the restart, or the model can call `stm32_doctor`.
-
-> Not published on npm yet. Once it is, `dsh plugin --profile desktop add dsh-stm32` replaces cloning.
-
-**Uninstall**: remove `dsh-stm32` from `dsh.profile.bundles` in `package.json`, run `pnpm remove dsh-stm32`, restart dsh.
+> **Why `link:` while editing**: with `nodeLinker: hoisted`, pnpm copies a `file:` dependency into a real directory, so the `lib/` you rebuild with `tsc` is never read by the host — the symptom is "I fixed it, restarted, still the old behaviour". With `link:` the host reads `lib/` live, but you **still have to restart dsh** to reload the plugin. A `github:` or npm install is a copy, so re-build and reinstall after changing code.
 
 ## Quick start: a minimal end-to-end check (empty directory to a blinking LED)
 
@@ -251,11 +259,11 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 ## Development and testing
 
 ```powershell
-npm run build            # tsc -> lib/
+npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
 npm test                 # 10 offline suites, 80 cases; no board, CubeMX, or toolchain needed
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm ci → build → npm test` on every push and PR (windows-latest).
+CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
 A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **78 passed + 2 skipped**, while a developer machine runs all 80. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
