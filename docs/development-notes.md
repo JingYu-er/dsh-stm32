@@ -480,3 +480,33 @@ test/fixtures.mjs            测试路径唯一的来源：夹具、e2e 工作�
   commands/register.ts     L3 五条斜杠命令（/stm32-flash、/stm32-debug、/stm32-stop、/stm32-build、/stm32-doctor）
   skill/stm32-workflow.ts  L3 随插件下发的 SKILL（USER CODE 硬规范 + 实测坑清单）
 ```
+
+## CI 上的一个坑：`node:test` 的输出格式跟着 reporter 变
+
+`test/run-units.mjs` 要汇总 10 个套件的用例数，其中 5 个套件用 `node:test`
+（doctor-regs / engine / flash / scaffold-patch / schema-guard）。坑在于 `node:test`
+的默认 reporter 不是固定的：
+
+| 环境 | 结尾长什么样 | 旧版 `parseCounts` |
+| --- | --- | --- |
+| 本机 Node 24（spec reporter） | `ℹ pass 16` / `ℹ fail 0` | 认得 |
+| CI 的 Node 20（非 TTY → tap reporter） | `# pass 16` / `# fail 0` | **认不出** |
+
+后果：同一个提交本机 `TOTAL pass=80 fail=0`，GitHub 上 `npm test` 直接红——
+5 个套件被判成"用例数无法解析"并让退出码变 1。首两次 CI（`fca08ff`、`3d25d48`）
+都栽在这一步，`npm ci` 与 `npm run build` 其实都过了，所以红得莫名其妙。
+
+现在 `parseCounts` 认四种结尾：spec（`ℹ pass`）、tap（`# pass`）、自写断言
+（`tests N / fail M`）、commands（`commands-units: N pass / M fail`）；
+解析不到时把该套件**结尾 6 行**打进日志，套件退出码非 0 也一律算失败
+（以前只要它自报 `fail=0` 就放过，崩溃会被吞掉）。
+
+验收方式：把 Node 20 的可移植包解到本地，直接用它跑汇总脚本，不复用系统 Node：
+
+```powershell
+& 'D:\path\to\node-v20.19.0-win-x64\node.exe' test/run-units.mjs
+# doctor-regs/engine/flash/scaffold-patch/schema-guard 都显示 (tap)，TOTAL pass=80 fail=0
+```
+
+教训与 subprocess 的 cwd 坑、skill 的 source 坑同源：**只在真环境里暴露的契约**。
+本地 Node 版本比 CI 新时，"我这能跑"的结论对 CI 无效，要么对齐版本，要么让解析层容忍两种格式。
