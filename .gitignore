@@ -1,7 +1,7 @@
 # 构建产物（发布的是 npm 包，lib/ 由 tsc 生成，不入库）
 lib/
 *.tsbuildinfo
-
+.vscode
 # 依赖
 node_modules/
 

@@ -14,6 +14,7 @@
     "docs",
     "cordis.patch.yml",
     "README.md",
+    "README_EN.md",
     "LICENSE"
   ],
   "engines": {
@@ -22,7 +23,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/run-units.mjs"
+    "test": "node test/run-units.mjs",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "dsh-plugin",
