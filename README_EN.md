@@ -143,7 +143,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 
 | Tool | What it does |
 | --- | --- |
-| `stm32_env_probe` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions, with install hints for what is missing. Read-only, repeatable |
+| `stm32_env_probe` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions; for anything missing it states the impact (cannot build / flash / debug / generate), the recommended install command (pacman / winget, paste-ready), a self-check command, plus `capabilities` (which of the four jobs work) and `recommendations` (install order and an offer to install for you). Read-only, repeatable |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
 | `stm32_project_create` | Empty directory → full CMake project (including both "flash only" and "flash and debug" launch configs in `.vscode`). Refuses a non-empty target unless `overwrite: true` |
 
@@ -202,12 +202,20 @@ Tools are for the model; when you want to act yourself, use a command — one co
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `STM32_BIN_DIRS` | Toolchain directory candidates, `;`-separated, takes precedence over the built-in list | `D:/app/msys64/ucrt64/bin`, `C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin` |
-| `STM32_CUBEMX_ROOT` | STM32CubeMX installation root | `D:/app/STM32CubeMX`, `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_BIN_DIRS` | Toolchain directory candidates, `;`-separated; **replaces** the built-in list (auto-discovered dirs are still appended after it) | `D:/app/msys64/ucrt64/bin`, `C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin` |
+| `STM32_CUBEMX_ROOT` | STM32CubeMX installation root; **replaces** the built-in list | `D:/app/STM32CubeMX`, `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_NO_DISCOVER` | Set to `1` / `true` to turn auto-discovery off (CI, or when you only want the built-in list) | unset = on |
 | `DSH_STM32_E2E_PROJECT` | Project used by hardware e2e runs (with `openocd.cfg` and `build/Debug/*.elf`) | none |
 | `DSH_STM32_E2E_ROOT` | Scratch directory for e2e copies | system temp |
 
 Per-call arguments work too: flash/debug tools accept `binDirs`, `elfPath`, `buildDir`, `configFile`, `adapterSpeed`; generate/create accept `cubeMxRoots`, `firmwarePackage`.
+
+**Auto-discovery (a different machine usually needs no variables at all).** When `binDirs` / `STM32_BIN_DIRS` is not given, the plugin scans common locations once and **appends** what it finds to the end of the candidate list:
+
+- Toolchain: `ucrt64/bin`, `mingw64/bin`, `clang64/bin` under `<drive>/msys64`, `<drive>/msys2`, `<drive>/app/msys64`, `<drive>/tools/msys64`, `%LOCALAPPDATA%/Programs/msys64` (the directory must actually contain `arm-none-eabi-gcc.exe` / `openocd.exe` / `cmake.exe`).
+- CubeMX: registry `HKLM|HKCU\SOFTWARE\STMicroelectronics\STM32CubeMX` → `InstallDir`, `...\Uninstall\STM32CubeMX` → `InstallLocation`, plus `STM32CubeMX` under `<drive>/`, `<drive>/app`, `<drive>/tools`, `Program Files\STMicroelectronics\STM32Cube`, `%LOCALAPPDATA%/Programs` (both `STM32CubeMX.exe` and `jre/bin/java.exe` must exist).
+
+One scan takes about a second and is cached per process. **Explicit `binDirs` / `cubeMxRoots` arguments are used as-is, with nothing appended** — what you point at is what runs, so "I specified it" never turns out to be a lie. Paths from environment variables are normalized first (quotes stripped, backslashes to slashes, duplicate slashes collapsed), so a quoted `setx "D:\app\msys64\ucrt64\bin"` is fine. When a tool is missing, both the error message and `stm32_doctor`'s notes list every directory that was searched.
 
 ### openocd.cfg (in the project, takes precedence over built-in fallbacks)
 
@@ -252,7 +260,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | SWD lost after flashing | The firmware generated `__HAL_AFIO_REMAP_SWJ_DISABLE()`. Hold BOOT0 while powering up to enter the system bootloader and reflash, then set SYS back to Serial Wire — `stm32_flash` now blocks this case first |
 | `Error: No device found` / `transfer count mismatch` | Another process holds the probe. Run `/stm32-stop`, then use `stm32_doctor` to inspect openocd / gdb processes and port 3333 |
 | Build "succeeds" but the old firmware runs | The project was copied or renamed with `build/` included: the CMakeCache directory no longer matches, yet ninja still exits 0. `stm32_build` treats that as a failure; clean or delete `build/Debug` as prompted |
-| `stm32_doctor` cannot find gcc / openocd | Install it and set `STM32_BIN_DIRS`, or pass `binDirs`; `stm32_env_probe` reports exactly what each component is missing |
+| `stm32_doctor` cannot find gcc / openocd | First read the "searched ..." list and the auto-discovery line in the doctor notes / error; if it is installed elsewhere, set `STM32_BIN_DIRS` or pass `binDirs`. **If you do not know what to install, run `stm32_env_probe` first**: every missing component carries `impact` (what stops working), `install` (recommended way, easiest first) and `verify` (self-check after installing), while the top-level `recommendations` gives the install order and offers to install for you |
 | `stm32_generate` feels stuck | A cold CubeMX start takes 60–150 s; it runs as a background job by default — watch it with `job_output`, or pass `foreground: true` |
 | `stm32_code_patch` says the block does not exist | `main.c` uses short labels (`PV` = private variables, `PFP` = prototypes, `2` = init before while, `3` = loop body); the error lists every available label — copy one from there |
 
@@ -260,12 +268,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 10 offline suites, 80 cases; no board, CubeMX, or toolchain needed
+npm test                 # 11 offline suites, 89 cases; no board, CubeMX, or toolchain needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **78 passed + 2 skipped**, while a developer machine runs all 80. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **87 passed + 2 skipped**, while a developer machine runs all 89. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 

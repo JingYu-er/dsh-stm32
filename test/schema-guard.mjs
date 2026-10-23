@@ -334,11 +334,58 @@ test("stm32_env_probe 输出符合 output schema（每项 found/path/version/hin
     assert.equal(typeof item.version, "string");
     assert.equal(typeof item.hint, "string");
     assert.equal(typeof item.error, "string");
+    assert.equal(typeof item.impact, "string", item.id + " 必须写清缺失影响");
+    assert.equal(typeof item.verify, "string", item.id + " 必须给出自检方式");
+    assert.ok(Array.isArray(item.install), item.id + " 必须给出安装步骤");
+    assert.ok(item.install.length > 0, item.id + " 的安装步骤不能为空");
+    assert.equal(typeof item.install[0], "string");
     if (item.found) assert.ok(item.version.length > 0, item.id + " found=true 时应有版本号");
+    if (!item.found) assert.ok(item.impact.length > 0, item.id + " 缺失时影响不能为空");
   }
   // 版本命令全成功 → 五个必需项都不缺；CubeMX 缺只是可选。
   assert.deepEqual(value.missingRequired, []);
   assert.match(value.summary, /工具链就绪/u);
+  // 能力矩阵：编译/烧录/调试齐了，建工程因为 CubeMX 缺失而未就绪。
+  assert.deepEqual(value.capabilities, { build: true, flash: true, debug: true, generate: false });
+  assert.ok(value.recommendations.length > 0, "要给出下一步建议");
+  assert.ok(
+    value.recommendations.some((line) => line.includes("CubeMX 是可选的")),
+    "缺 CubeMX 时必须说明它是可选的：" + JSON.stringify(value.recommendations),
+  );
+  assert.equal(value.searched.length, 2, "要报告工具链与 CubeMX 两处搜索范围");
+  for (const line of value.searched) assert.ok(line.length > 0);
+});
+
+test("stm32_env_probe 全缺时给出安装顺序与「帮你装」的主动询问", async () => {
+  // resolveExecutable 直接抛错 = 所有候选都找不到（不 spawn，纯失败早退）。
+  const nothingSubprocess = {
+    resolveExecutable: () => {
+      throw new Error("not found");
+    },
+    spawn: () => {
+      throw new Error("全缺时不应该 spawn");
+    },
+  };
+  const defs = collectTools(registerEnvProbe, nothingSubprocess);
+  const tool = defs.get("stm32_env_probe");
+  assert.ok(tool, "stm32_env_probe 应已注册");
+  const value = await tool.execute({ binDirs: ["D:/__dsh_stm32_missing_bin__"], cubeMxRoots: ["D:/__dsh_stm32_missing_cubemx__"] }, exec);
+  reportProblems("stm32_env_probe(全缺)", envProbeSchema, value);
+  assert.match(value.summary, /工具链不完整/u);
+  assert.deepEqual(value.missingRequired, ["gcc", "gdb", "openocd", "cmake", "ninja"]);
+  assert.deepEqual(value.capabilities, { build: false, flash: false, debug: false, generate: false });
+  assert.ok(
+    value.recommendations.some((line) => line.includes("pacman.exe -S")),
+    "建议里要带可粘贴的安装命令：" + JSON.stringify(value.recommendations),
+  );
+  assert.ok(
+    value.recommendations.some((line) => line.includes("需要我帮你装吗")),
+    "必须主动问要不要代装：" + JSON.stringify(value.recommendations),
+  );
+  assert.ok(
+    value.recommendations.some((line) => line.includes("CubeMX 是可选的")),
+    "缺 CubeMX 时必须说明它是可选的",
+  );
 });
 
 test("stm32_ioc_inspect 找不到 .ioc 与解析成功都符合 output schema", async () => {

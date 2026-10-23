@@ -614,8 +614,123 @@ pnpm 却归一化成 ssh 形式 —— 换台机器、换传输方式（https / 
 - `lib/` 共 35 个 `.js`、约 300 KB。tsconfig 里 `declaration: false`、`sourceMap: false`，产物很干净，没有 `.map` / `.d.ts` 噪音。
 
 代价是一条纪律：**改完 `src/` 必须 `npm run build` 再提交**，否则别人（和 `github:` 安装路径）拿到的是旧代码。
-CI 里 `npm ci → npm run build → npm test` 会在 `main` 上暴露"忘了重建"以外的所有问题；但漏提交产物 CI 查不出来，
-只能靠 reviewer 看 `src/` 与 `lib/` 是否同步。
+CI 里 `npm ci → npm run build → 检查 lib/ 与 src/ 同步 → npm test` 把"忘了重建"也拦住了：
+`git status --porcelain -- lib` 非空就 `throw`，不用再靠 reviewer 肉眼比对 `src/` 与 `lib/`。
 
 教训：**给 dsh 写插件，分发面和构建面要一起设计。** gitignore 掉构建产物，就等于放弃了 `github:` 安装路径，
 只能要求用户 clone + build + `link:`（或者等 npm 发布）。这不只是文档问题。
+
+## 搜索路径：自动发现（A/B/C）与两个测试陷阱
+
+### 1. 为什么改
+
+用户的原话是「换台机器就找不到工具了」：`DEFAULT_BIN_DIRS` 里硬编码了 `D:/app/msys64/ucrt64/bin`，
+`DEFAULT_CUBEMX_ROOTS` 硬编码了 `D:/app/STM32CubeMX`；别的机器路径不同就只能自己去设环境变量，
+而且缺件时的报错只说「找不到 openocd」，不告诉你**查过哪些目录**。三项改动：
+
+- **A 报错可诊断**：`src/engine/flash.ts` / `generate.ts` / `doctor.ts` 的缺件消息统一带 `describeSearchScope(...)`；
+  doctor 的每条 blocker 附带该组件的 `hint`，notes 里给「工具搜索范围」「CubeMX 搜索范围」「自动发现（已追加到候选尾部）」。
+- **B 自动发现**：`src/data/search-roots.ts` 新增 `discoverBinDirs` / `discoverCubeMxRoots` / `discoverInstalls`（进程内缓存、
+  扫一次约 1 s），`resolveSearchConfig(env, overrides, discoveredOverride?)` 把发现项追加在候选尾部。
+- **C 路径净化**：`normalizePathEntry`（剥引号、反斜杠转正斜杠、折叠重复斜杠、去尾斜杠但保留盘根）、`dedupePaths`（大小写不敏感），
+  `splitList` 也走同一套净化——`setx "D:\app\msys64\ucrt64\bin"` 带进来的引号不会再变成目录名的一部分。
+
+顺序契约：**显式参数 > 环境变量（整份替换）> 默认常量**，自动发现只追加在「没给显式参数」的那一档尾部。
+
+### 2. 坑一：自动发现别往「显式参数」上追加
+
+第一版按「永远追加」实现，`npm test` 立刻掉 2 条（`schema-guard.mjs` pass=14 fail=2）：
+
+- `stm32_debug_session 找不到 openocd 时符合 output schema`：测试用 `binDirs: ["D:/__nope__"]` 假装没装工具，
+  但自动发现把真机上的 `D:/app/msys64/ucrt64/bin` 追了进来 → 找到 openocd → 真去 spawn，
+  报 `TypeError: Cannot read properties of undefined (reading 'spawn')`（该测试的假 subprocess 故意没实现 spawn）。
+- `stm32_env_probe 输出符合 output schema`：同样点名的 `cubeMxRoots` 被追加了真机 CubeMX，
+  `cubemx found=true` 但假 subprocess 给的是 gcc 版本串 → `found=true 时应有版本号` 断言失败。
+
+教训：**默认值 + 发现 = 便利；显式参数 + 发现 = 坑。** 参数是调用方在说「就用这个」，再混进别处的同名工具，
+「我明明指定了」就成了假的。现在是「哪一档点名就哪一档不追加」——环境变量仍会追加发现项（用户多半只是补齐，不是排他）。
+
+### 3. 坑二：`execFileSync` 默认继承 stderr，注册表查询的噪音直接糊进测试输出
+
+`readRegistryInstallDirs` 用 `execFileSync("reg.exe", ["query", key, "/v", value], {...})` 查 `InstallDir` / `InstallLocation`。
+键不存在是最常见的情况（本机就没装注册表项），`reg.exe` 会往 **stderr** 写一行「错误: 系统找不到指定的注册表项或值。」；
+`execFileSync` 不给 `stdio` 时 stderr 是**继承**的，于是 `npm test` 结尾糊了 10 行 GBK 乱码，
+既像测试失败又干扰套件计数解析。
+
+修法两处：
+
+- 探针里显式 `stdio: ["ignore", "pipe", "pipe"]`（stdout 要解析，stderr 要吞掉）；
+- `test/run-units.mjs` 跑各套件的 `execFileSync` 也改成 `stdio: ["ignore", "pipe", "pipe"]`，
+  子进程噪音不再直通终端——套件自身打印的失败原因还在它的 stdout 里。
+
+### 4. 本机实测
+
+```text
+discover 耗时=969ms  disabled=false
+discovered.binDirs=["D:/app/msys64/ucrt64/bin"]
+discovered.cubeMxRoots=["D:/app/STM32CubeMX"]
+cfg.binDirs=["D:/app/msys64/ucrt64/bin","C:/msys64/ucrt64/bin","C:/msys64/mingw64/bin"]   # 发现项与默认值重复 → 去重后不变
+scope(bin)=D:/app/msys64/ucrt64/bin、C:/msys64/ucrt64/bin、C:/msys64/mingw64/bin，以及 PATH
+env.binDirs=["D:/app/msys64/ucrt64/bin","E:/x/y"]   # 输入是 ' "D:\\app\\msys64\\ucrt64\\bin" ;; E:/x//y/ '
+```
+
+`STM32_NO_DISCOVER=1` 关掉发现（CI / 只想用内置列表）；`resetDiscoveryCache()` 给单测用。
+
+### 5. 测试计数
+
+新增 `test/search-roots-units.test.mjs`（9 条：净化 / splitList / dedupe / looksLike* / 两种发现 / 优先级与追加 / 开关 / 缓存）。
+套件 10 → 11，用例 80 → **89 pass / 0 fail**；CI 上是 **87 pass + 2 skipped**（脚手架那两条依赖真固件包）。
+
+## 环境体检要“教人装东西”：env_probe 的引导面（M6 补）
+
+用户的要求很直接：`stm32_env_probe` 是“用插件的第一步”，那它不能只说“缺 openocd”，
+得说清**缺了影响什么、推荐怎么装、装完怎么验、要不要我代劳**，并且把“CubeMX 是可选的”讲明白。
+
+### 1. 数据形状（`src/engine/probe.ts`）
+
+`ProbeTarget` / `ProbeResult` 在原来的 `hint` 之外各加三个字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| `impact` | 缺了影响哪些功能，写清“能干什么、干不了什么”（例如 gdb 缺 → 只影响调试，纯烧录只要 openocd） |
+| `install` | 推荐安装步骤数组，**第一条是最省事的那条**，含可直接粘贴的命令 |
+| `verify` | 装完的自检命令 |
+
+`src/tools/env-probe.ts` 顶层再加三项：
+
+- `capabilities`：`build`（gcc∧cmake∧ninja）、`flash`（openocd）、`debug`（openocd∧gdb）、`generate`（cubemx∧cubemx-java）；
+- `recommendations`：缺必需项时按 `install[0]` 列安装顺序，最后一条主动问「需要我帮你装吗？」；CubeMX 缺失时补一条“CubeMX 是可选的：不影响编译/烧录/调试/改 USER CODE，只影响建工程与重新生成”；装了 CubeMX 但没有内置 JRE 时提示“安装不完整，用官网包重装”；
+- `searched`：`describeSearchScope` 出的两条范围（工具链 / CubeMX），缺件时不用再猜路径。
+
+`render` 把 `impact / install / verify / 搜索范围 / 下一步` 都渲染出来，人在终端里看到的就是一份安装清单。
+
+### 2. 实测过的安装事实（别再猜包名）
+
+MSYS2 UCRT64（`D:/app/msys64/usr/bin/pacman.exe -Ss`）：`mingw-w64-ucrt-x86_64-arm-none-eabi-gcc` 13.3.0、
+`mingw-w64-ucrt-x86_64-gdb-multiarch` 16.2、`mingw-w64-ucrt-x86_64-openocd` 0.12.0、
+`mingw-w64-ucrt-x86_64-cmake` 3.31.5、`mingw-w64-ucrt-x86_64-ninja` 1.12.1。
+**UCRT64 仓库里没有 `arm-none-eabi-gdb` 这个包**（旧提示写错的那个），要找 arm 版 gdb 只能用 ARM 官方工具链。
+
+winget（`winget search`）：`Kitware.CMake`、`Ninja-build.Ninja`、`Arm.ArmGnuToolchain`（自带 gcc/gdb）、
+`xpack-dev-tools.openocd-xpack`。**STM32CubeMX 不在 winget 里**，只能官网下载
+（https://www.st.com/en/development-tools/stm32cubemx.html ），装到默认目录会被自动发现。
+
+### 3. 一个坑：改 ProbeResult 必须同步 doctor 的 schema
+
+`src/tools/doctor.ts` 里的 `toolSchema` 是 env_probe 探测项的复制，且两者都 `additionalProperties: false`。
+给 `ProbeResult` 加字段而漏改 doctor 的话，`stm32_doctor` 的 `tools` 数组会被宿主的输出校验拒收——
+表现是工具“成功执行但结果不合法”。两处 schema 与 `src/engine/probe.ts` 的 interface 必须一起改。
+
+### 4. 真机冒烟
+
+`node test/smoke-env-probe.mjs`（本机）：summary = `工具链就绪：7/7 项可用，可以编译/烧录/调试`，
+capabilities = `{"build":true,"flash":true,"debug":true,"generate":true}`，searched 两条，
+recommendations = 「必需组件齐全：可以编译、可以只烧录、可以烧录并调试。」
+
+### 5. 测试计数
+
+`schema-guard` 16 → **17**：原有用例补了 `impact/install/verify`、`capabilities`、`recommendations`、`searched` 断言；
+新增一条“resolveExecutable 一律抛错”的全缺分支，断言 `missingRequired` 五项、能力全 false、建议里出现
+`pacman.exe -S` 与「需要我帮你装吗」。套件 11 个，用例 89 → **90 pass / 0 fail**。
+
+

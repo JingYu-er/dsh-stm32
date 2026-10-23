@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
-import { resolveSearchConfig } from "../data/search-roots.js";
+import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { detectBuildDir, findElf } from "./build.js";
@@ -216,7 +216,12 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     return {
       ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
       durationMs: Date.now() - startedAt, programmed: false, verified: false,
-      errors: ["找不到 openocd"], message: "没烧：找不到 openocd（msys64 里 pacman -S mingw-w64-ucrt-x86_64-openocd）", logTail: "", notes,
+      errors: ["找不到 openocd"],
+      message:
+        "没烧：找不到 openocd（msys64 里 pacman -S mingw-w64-ucrt-x86_64-openocd）；查过 " +
+        describeSearchScope(config.binDirs, "PATH"),
+      logTail: "",
+      notes,
     };
   }
 

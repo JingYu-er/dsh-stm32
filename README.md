@@ -145,7 +145,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 | 工具 | 作用 |
 | --- | --- |
-| `stm32_env_probe` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本，缺什么给安装提示。只读、可重复调 |
+| `stm32_env_probe` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
 | `stm32_project_create` | 空目录 → 完整 CMake 工程（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
 
@@ -204,12 +204,20 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 | 变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `STM32_BIN_DIRS` | 工具链目录候选，`;` 分隔，优先于内置列表 | `D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin`、`C:/msys64/mingw64/bin` |
-| `STM32_CUBEMX_ROOT` | STM32CubeMX 安装根目录 | `D:/app/STM32CubeMX`、`C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_BIN_DIRS` | 工具链目录候选，`;` 分隔，**整份替换**内置列表（之后的自动发现仍追加在尾部） | `D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin`、`C:/msys64/mingw64/bin` |
+| `STM32_CUBEMX_ROOT` | STM32CubeMX 安装根目录，**整份替换**内置列表 | `D:/app/STM32CubeMX`、`C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_NO_DISCOVER` | 设为 `1` / `true` 关掉下面的自动发现（CI、只想用内置列表时） | 不设 = 开着 |
 | `DSH_STM32_E2E_PROJECT` | 真机 e2e 用的工程（含 `openocd.cfg` 与 `build/Debug/*.elf`） | 无 |
 | `DSH_STM32_E2E_ROOT` | e2e 临时副本目录 | 系统临时目录 |
 
 也可以按调用传参：烧录/调试类工具都接受 `binDirs`、`elfPath`、`buildDir`、`configFile`、`adapterSpeed`；生成/建工程类接受 `cubeMxRoots`、`firmwarePackage`。
+
+**自动发现（换台机器通常不用配任何变量）。** 没给 `binDirs` / `STM32_BIN_DIRS` 时，插件会扫一遍常见位置，把找到的目录**追加**在候选列表尾部：
+
+- 工具链：`<盘>/msys64`、`<盘>/msys2`、`<盘>/app/msys64`、`<盘>/tools/msys64`、`%LOCALAPPDATA%/Programs/msys64` 下的 `ucrt64/bin`、`mingw64/bin`、`clang64/bin`（该目录里得真有 `arm-none-eabi-gcc.exe` / `openocd.exe` / `cmake.exe`）。
+- CubeMX：注册表 `HKLM|HKCU\SOFTWARE\STMicroelectronics\STM32CubeMX` 的 `InstallDir`、`...\Uninstall\STM32CubeMX` 的 `InstallLocation`，以及 `<盘>/`、`<盘>/app`、`<盘>/tools`、`Program Files\STMicroelectronics\STM32Cube`、`%LOCALAPPDATA%/Programs` 下的 `STM32CubeMX`（要求 `STM32CubeMX.exe` 与 `jre/bin/java.exe` 都在）。
+
+扫一次约 1 s，进程内缓存。**用工具参数点名 `binDirs` / `cubeMxRoots` 时不追加**——你指哪儿就用哪儿，免得"我明明指定了"变成假的。环境变量里的路径会先净化（去引号、反斜杠转正斜杠、折叠重复斜杠），不用怕 `setx "D:\app\msys64\ucrt64\bin"` 带进来的引号。找不到工具时，报错和 `stm32_doctor` 的 notes 都会列出「查过哪些目录」。
 
 ### openocd.cfg（工程内，优先于内置回退）
 
@@ -254,7 +262,7 @@ source [find target/stm32f1x.cfg]
 | 烧完连不上、SWD 失联 | 固件里生成了 `__HAL_AFIO_REMAP_SWJ_DISABLE()`。按住 BOOT0 上电进系统 bootloader 重烧，然后把 SYS 设回 Serial Wire——`stm32_flash` 现在会先拦这种情况 |
 | `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口 |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
-| `stm32_doctor` 说找不到 gcc / openocd | 装上后设 `STM32_BIN_DIRS`，或给工具传 `binDirs`；`stm32_env_probe` 会给出每个组件缺什么 |
+| `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | CubeMX 冷启动 60–150 s 属正常；默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等 |
 | `stm32_code_patch` 说块不存在 | `main.c` 里是短标签（`PV`=私有变量、`PFP`=函数原型、`2`=while 前初始化、`3`=循环体）；报错会列出该文件全部可用标签，照抄即可 |
 
@@ -262,12 +270,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 10 个离线套件、80 个用例；不需要板子、CubeMX、工具链
+npm test                 # 11 个离线套件、89 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **78 pass + 2 skipped**，开发机上是 80 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **87 pass + 2 skipped**，开发机上是 89 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

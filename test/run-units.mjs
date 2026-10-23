@@ -18,6 +18,7 @@ const suites = [
   "ioc-plan-units.test.mjs",
   "ioc-units.test.mjs",
   "scaffold-patch-units.test.mjs",
+  "search-roots-units.test.mjs",
   "session-units.test.mjs",
   "schema-guard.mjs",
 ];
@@ -49,7 +50,12 @@ for (const name of suites) {
   let out = "";
   let code = 0;
   try {
-    out = execFileSync(process.execPath, ["test/" + name], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    out = execFileSync(process.execPath, ["test/" + name], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      // 别再继承 stderr：子进程（reg.exe 之类）的噪音会直接糊到终端上，还打乱套件输出。
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (error) {
     out = String(error.stdout ?? "") + String(error.stderr ?? "");
     code = error.status ?? -1;

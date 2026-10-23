@@ -609,7 +609,7 @@ M5 收尾时对着规格自查，发现两个规格里的工具**从未实现**�
 7. CLI 生成不产出 `sysmem.c`/`syscalls.c`，而 `cmake/stm32cubemx/CMakeLists.txt` 写死了引用 → 模板补进 `Core/Src/`（模板文件 12 → 14）。
 8. 取消语义缺失：被中断的 build/generate 只会报"超时/失败" → 现在明确报"已取消"，且 generate 会清掉半成品 `Src/``Inc/`、释放锁。
 
-**离线套件（10 个，80 个用例，0 失败）**：`build-units` 5、`commands-units` 6、`doctor-regs-units` 5、`engine-units` 8、`flash-units` 6、`ioc-plan-units` 9、`ioc-units` 6、`scaffold-patch-units` 11、`session-units` 8、`schema-guard` 16（覆盖全部 15 个工具的输出契约；M6 补了 `stm32_env_probe` 与 `stm32_ioc_inspect` 两个此前漏掉的工具，并用假 subprocess 让 `env_probe` 的成功路径也能离线断言）。
+**离线套件（11 个，90 个用例，0 失败）**：`build-units` 5、`commands-units` 6、`doctor-regs-units` 5、`engine-units` 8、`flash-units` 6、`ioc-plan-units` 9、`ioc-units` 6、`scaffold-patch-units` 11、`search-roots-units` 9、`session-units` 8、`schema-guard` 17（覆盖全部 15 个工具的输出契约；M6 补了 `stm32_env_probe` 与 `stm32_ioc_inspect` 两个此前漏掉的工具，并用假 subprocess 让 `env_probe` 的成功路径也能离线断言）。
 
 **宿主侧复核（重启 dsh 后，真进程注册的工具）**：`stm32_project_create` 空目录 **1690 ms**（14 个模板文件 + 629 个固件文件）
 → `stm32_generate` **61.0 s** / 6 文件 → `stm32_code_patch`（`PV` 声明 + `3` 自增）→ `stm32_build` 首次自动 `cmake --preset Debug` 5.4 s、编译 3.0 s、

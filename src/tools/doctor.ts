@@ -23,9 +23,24 @@ const toolSchema: JsonSchema = {
     version: { type: "string" },
     required: { type: "boolean" },
     hint: { type: "string" },
+    impact: { type: "string" },
+    install: { type: "array", items: { type: "string" } },
+    verify: { type: "string" },
     error: { type: "string" },
   },
-  required: ["id", "label", "found", "path", "version", "required", "hint", "error"],
+  required: [
+    "id",
+    "label",
+    "found",
+    "path",
+    "version",
+    "required",
+    "hint",
+    "impact",
+    "install",
+    "verify",
+    "error",
+  ],
 };
 
 const processSchema: JsonSchema = {

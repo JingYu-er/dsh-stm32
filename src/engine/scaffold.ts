@@ -49,16 +49,27 @@ export function templateDir(): string {
   return fileURLToPath(new URL("../../templates/scaffold/", import.meta.url));
 }
 
-function listFiles(root: string): string[] {
+/**
+ * 模板目录里**不算工程文件**的东西：本地在 templates/scaffold 里跑过一次 cmake
+ * 就会留下 build/（CMakeCache、CompilerId 之类），它们既不该被拷进新工程，
+ * 也不该被当作"工程文件"计数——否则 scaffold 出来的工程会带着别人的构建缓存。
+ */
+const TEMPLATE_SKIP_PREFIXES = ["build/"];
+
+function listFiles(root: string, skipPrefixes: string[] = []): string[] {
   const out: string[] = [];
-  const walk = (dir: string): void => {
+  const walk = (dir: string, relDir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else out.push(full);
+      const rel = relDir === "" ? entry.name : relDir + "/" + entry.name;
+      if (entry.isDirectory()) {
+        if (skipPrefixes.some((prefix) => (rel + "/").startsWith(prefix))) continue;
+        walk(path.join(dir, entry.name), rel);
+      } else {
+        out.push(path.join(dir, entry.name));
+      }
     }
   };
-  walk(root);
+  walk(root, "");
   return out;
 }
 
@@ -163,7 +174,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
 
   // 1) 模板快照：CMake 工程文件 / 链接脚本 / .vscode / .ioc（只替换工程名）
   let templateFiles = 0;
-  for (const source of listFiles(tpl)) {
+  for (const source of listFiles(tpl, TEMPLATE_SKIP_PREFIXES)) {
     const rel = path.relative(tpl, source).replace(/\\/gu, "/");
     let text = fs.readFileSync(source, "utf8");
     if (rel !== ".gitignore" && rel !== "STM32F103XX_FLASH.ld") {

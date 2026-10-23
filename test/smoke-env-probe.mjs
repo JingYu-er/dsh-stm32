@@ -80,6 +80,24 @@ console.log("summary:", value.summary);
 for (const tool of value.tools) {
   console.log((tool.found ? "  OK   " : "  MISS ") + tool.id + (tool.version ? "  " + tool.version : ""));
 }
+console.log("capabilities:", JSON.stringify(value.capabilities));
+for (const line of value.searched) console.log("searched:", line);
+for (const line of value.recommendations) console.log("next:", line);
+const rendered = envProbe.output.render({}, value);
+console.log("---- render ----");
+console.log(rendered.map((part) => part.text).join("\n"));
+if (typeof value.capabilities?.build !== "boolean" || !Array.isArray(value.recommendations)) {
+  console.error("FAIL: 缺少 capabilities / recommendations");
+  process.exit(1);
+}
+if (value.recommendations.length === 0 || !value.recommendations.every((line) => typeof line === "string" && line.length > 0)) {
+  console.error("FAIL: recommendations 必须是非空字符串数组");
+  process.exit(1);
+}
+if (value.searched.length !== 2) {
+  console.error("FAIL: searched 应有两条（工具链 / CubeMX）");
+  process.exit(1);
+}
 if (missing.length > 0) {
   console.error("FAIL: 必需组件缺失：" + missing.map((t) => t.id + " (" + t.error + ")").join("; "));
   process.exit(1);

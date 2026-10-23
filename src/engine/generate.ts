@@ -13,7 +13,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
-import { resolveSearchConfig } from "../data/search-roots.js";
+import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { buildGenerateScript, parseGenerateLog } from "./generate-script.js";
 import type { GenerateLayout, GenerateVerdict } from "./generate-script.js";
@@ -317,7 +317,12 @@ export async function runGenerate(
   const config = resolveSearchConfig(process.env, request.cubeMxRoots === undefined ? {} : { cubeMxRoots: request.cubeMxRoots });
   const launch = cubeMxLaunch(config.cubeMxRoots);
   if (launch === null) {
-    return fail(request, "找不到可无头调用的 STM32CubeMX（需要 <root>/jre/bin/java.exe 与 <root>/STM32CubeMX.exe）；可用 STM32_CUBEMX_ROOT 指定");
+    return fail(
+      request,
+      "找不到可无头调用的 STM32CubeMX（需要 <root>/jre/bin/java.exe 与 <root>/STM32CubeMX.exe）；查过 " +
+        describeSearchScope(config.cubeMxRoots) +
+        "；可用 STM32_CUBEMX_ROOT 指定安装根，或把 STM32CubeMX 装到这些位置之一",
+    );
   }
   const lock = acquireLock(projectDir, "generate " + basename(iocPath));
   if ("error" in lock) return fail(request, lock.error, { iocPath, layout });
