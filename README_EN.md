@@ -57,7 +57,6 @@ All `dsh plugin` does is run `pnpm add` inside the profile directory. On success
 
 Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.0`); after a restart `/stm32-doctor` should respond.
 
-> Not published on npm yet. Once it is, `dsh plugin --profile desktop add dsh-stm32` is equivalent, and gives you semantic versions to roll back to.
 
 **Uninstall**: `dsh plugin --profile desktop remove dsh-stm32`, then restart dsh.
 

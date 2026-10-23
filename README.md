@@ -47,7 +47,6 @@
 | STM32CubeMX（含内置 JRE） | `stm32_generate`、`stm32_project_create` | 生成类工具不可用，其余照常 |
 | STM32Cube 固件包 F1（随 CubeMX 装） | 建骨架时抄 Drivers | 报「找不到固件包」 |
 
-默认按 MSYS2（`D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin`）→ ST 官方包搜索，CubeMX 默认 `D:/app/STM32CubeMX`；装在别处用环境变量覆盖（见 [配置](#配置)）。
 
 ### 安装（推荐：一条命令）
 
@@ -59,7 +58,6 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.0`；重启后 `/stm32-doctor` 有输出。
 
-> npm 包尚未发布。发布后 `dsh plugin --profile desktop add dsh-stm32` 等价，而且能靠语义化版本回滚。
 
 **卸载**：`dsh plugin --profile desktop remove dsh-stm32`，重启 dsh。
 
