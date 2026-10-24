@@ -733,4 +733,220 @@ recommendations = 「必需组件齐全：可以编译、可以只烧录、可�
 新增一条“resolveExecutable 一律抛错”的全缺分支，断言 `missingRequired` 五项、能力全 false、建议里出现
 `pacman.exe -S` 与「需要我帮你装吗」。套件 11 个，用例 89 → **90 pass / 0 fail**。
 
+## generate 为什么慢：把它测成一条时间线，然后缓存 + 按需停放第三方包索引
 
+用户的诉求（原话）：「a直接执行，b如果不使用x-cube扩展包就不加载thirdparties/pdsc，使用的时候再加载」——
+(a) 生成没变化就别重跑，(b) 只在真的用到 X-CUBE 扩展包时才让 CubeMX 去挂那套 PDSC 索引。
+
+### 1. 先量化：一次生成到底花在哪
+
+同一工程（`_timing_m7/blink`，F103C8T6 + HSE 8 MHz + 1 GPIO）连跑四次完整生成，
+墙钟 **216.8 → 170.6 → 155.6 → 130.3 s**（第一次含冷启动与 Windows 文件缓存预热）。
+只把 JVM 拉起来、等 `Code succesfully generated` 之外什么都不干，约 **26 s**——所以"启动 26 s + 剩下全是配置解析"。
+
+从 CubeMX 自己的 `*.log` 时间戳拆出来（单位 s，相对进程启动）：
+
+| 时间窗 | 阶段 | 说明 |
+| --- | --- | --- |
+| 0–12 | JVM 启动 + 18 个 GUI 插件 | 无头模式也照装不误 |
+| 13–16 | 扫 60+ 个 `*.IP` jar | 枚举可用 IP |
+| 16–28 | 扫 `thirdparties/pdsc` 下 **159 个 PDSC** | 就是用户说的那套扩展包索引 |
+| 21–31 | 联网：HomeAdPanel、URL 文件、md5 清单 | 断网时会等超时，更慢 |
+| 32 | UserAuth + JxBrowser 初始化 | 无头也初始化 |
+| 34.8–90.8 | `LoadConfig` | **56 s**，一次性解析 MxCube 的 XML 配置 |
+| 91.6–121.5 | change project 后**再次**枚举 | **≈30 s**，同一批 IP/PDSC 被扫第二遍 |
+| 121.5–160.3 | 真正生成 6 个文件 | **≈39 s** |
+| 160–170 | 退出 | 关 JxBrowser、刷日志 |
+
+两个结论直接决定了改法：
+
+1. **pdsc 那 159 个文件被扫了两遍**（16–28 s、91.6–121.5 s 里各一次）。把 `pdsc` 临时改名停放后
+   整跑降到 **130.3 s**，即省 **≈25 s**。停放不影响产物：同一工程在"停放"与"已还原"两种状态下生成的
+   6 个文件整树 sha256 都是 `a78a451dff0ab876d4abf09cd4c8e86791d648f6e509901f31219e379b8f5d99`。
+2. **剩下的 100+ s 全在重复干同一件事**。工程没变就没有理由再跑一遍——这就是 (a)。
+
+顺手证伪了一个想法：**不能用 mtime 判断是否需要重新生成**。CubeMX 对内容相同的文件并不重写，
+只打一行 `oldGeneratedFile`，mtime 不动；反过来一次异常慢跑（508 s）里文件也没更新。
+要判断"变了没有"只能比内容 hash。
+
+### 2. (a) 缓存跳过：`src/engine/generate-cache.ts`
+
+缓存文件 `.dsh-stm32/generate-cache.json`（`CACHE_VERSION=1`），一条 entry = 键 + 每个产物的 sha256。
+
+缓存键 = `.ioc` 正文 sha256 + **CubeMX 指纹** + 布局版本：
+
+- CubeMX 指纹取 `STM32CubeMX.exe` 旁 `jre` 的 `size:mtime`（`cubeMxStamp`）——
+  jar 里没有稳定可解析的版本号入口，升级/换装时 size 与 mtime 必有一个变。
+- 布局版本是落位规则的常量（`layout`），改落位逻辑就自动失效。
+
+命中判定 `cacheHit()` 做三重校验，任何一环不满足都退回真跑，并把原因通过 progress 打出来：
+
+| 校验 | 不满足时的 reason |
+| --- | --- |
+| 键一致 | `.ioc 内容、CubeMX 版本或布局变过（缓存键不一致）` |
+| 产物都还在 | `缓存里的产物不见了：<target>` |
+| 每个产物 hash 与缓存一致 | `产物与缓存不一致（被改过）：<target>` |
+
+命中即直接返回 ok 报告：`skipped: true`、`durationMs ≈ 0`、
+`successLine = "（跳过 CubeMX：复用上次生成结果）"`、`files` 全是 `unchanged-cached`，
+notes 提示逃生口（`skipIfUnchanged=false`，或删掉缓存文件）。
+只有确认要真跑时才 `acquireLock`（不白占探针/锁），成功后才写缓存，写缓存失败只加一条 note、不影响生成结果。
+
+### 3. (b) pdsc 按需停放：`src/engine/thirdparty.ts`
+
+`needsThirdpartyPacks(iocText)` 判断这份 `.ioc` 是否真的用扩展包：
+
+| 条件 | 判定 |
+| --- | --- |
+| `Mcu.ThirdPartyNb > 0` | 需要 |
+| `Mcu.ThirdPartyNb < 0` | 当 0 处理 |
+| **`Mcu.ThirdPartyNb` 键缺失** | 保守判"需要"（reason 写明"保守保留"） |
+| 正文出现 `X-CUBE` / `I-CUBE` / `STM32CubeExpansion` / `FP-SNS` / `FP-ATR` / `FP-AI` / `FP-LOOP` / `*ThirdParty*=` | 需要 |
+| `Mcu.ThirdPartyNb = 0` 且无上述标记 | 不需要 → 停放 |
+
+> 注：这张表是 M7 当时的判定。M8 之后「正文出现标记」这一行已被**包目录实名匹配**取代
+> （`Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0` 直接对快照），见下文
+> 「X-CUBE 判定从「关键词猜」改成「实名查目录」」。
+
+不需要时把 `~/.stm32cubemx/thirdparties/pdsc` 改名成 `pdsc.dsh-parked`（同盘 rename，瞬时），
+`runStreaming` 的 `finally` 里无论成功失败都 `restore()`。
+
+还原这里有个坑：**CubeMX 运行时发现没有 pdsc 目录会自己建一个空的**。所以 `restore()` 不能直接
+rename 回去，要先 `rmdir` 那个空目录；如果它非空（真被写了东西），就两份都保留并给备注
+「CubeMX 运行中重新生成了 …（非空），原索引仍在 …，请手动合并或删除其一」，绝不静默丢数据。
+
+用户家目录用 `cubeMxUserHome(env)` 推：`STM32CUBEMX_HOME` 优先，否则 `USERPROFILE`/`HOME` + `/.stm32cubemx`
+（统一转成 `/`）；都拿不到就跳过停放、只记 detail。
+`thirdpartyPacks: "keep"` 可强制保留索引（例如正在 CubeMX GUI 里手工选扩展包）。
+
+### 4. 真机验证（`_gen_probe/verify-cache.mjs`，直接 import 构建产物 `lib/engine/generate.js`）
+
+| | run1（真跑） | run2（命中缓存） |
+| --- | --- | --- |
+| 墙钟 | **175,120 ms** | **688 ms**（自报 11 ms） |
+| `skipped` | false | **true** |
+| 产物 | 6 个 `overwritten`，保活 USER CODE 标签 11 个（`main.c`：Header/WHILE/3/Error_Handler_Debug/6） | 6 个 `unchanged-cached` |
+| thirdparty | `parked: true` | `未探测（本次跳过 CubeMX）` |
+| pdsc 状态 | 跑前 159 文件 / 跑后 **159 文件，`parked=false`** | 仍 159 / false |
+
+即：**首次 3 分钟左右，之后只要 `.ioc`、CubeMX 版本、产物都没动，重新生成 ≈0.7 s。**
+
+### 5. 测试计数
+
+新增 `test/generate-cache-units.test.mjs`（8 条：sha256/键稳定性/CubeMX 指纹/读写/三重校验各自的失败 reason/entryFromFiles）
+与 `test/thirdparty-units.test.mjs`（11 条：ThirdPartyNb 三分支/键缺失保守/七类标记/家目录推导/停放与还原/非空冲突保留）。
+套件 11 → 13，用例 90 → **109 pass / 0 fail**；两套件插在 `flash-units.test.mjs` 与 `session-units.test.mjs` 之后。
+
+
+
+## X-CUBE 判定从「关键词猜」改成「实名查目录」（M8 补）
+
+### 1. 为什么要改
+
+原来 `needsThirdpartyPacks` 靠 `X-CUBE` / `I-CUBE` 之类的模糊标记判断要不要加载 `thirdparties/pdsc`，
+两类误判都会咬人：
+
+- **真用了包却没写标记** → 索引被停放，生成时报缺包；
+- **工程名里带 `X-CUBE-xxx`**（例如 `ProjectManager.ProjectName=X-CUBE-AI-demo`）→ 白加载 25 s 的索引。
+
+用户的原话是「我觉得应该把 x-cube 里的目录列表先提前存到程序中，工程真的要用 X-CUBE 扩展包时检索一下就知道是否要 thirdparties/pdsc 了」——
+即：判定不该猜，该拿**包名**去对**目录**。
+
+### 2. 目录快照从哪来
+
+本机 `~/.stm32cubemx/thirdparties/pdsc` 下有 **159 个 `.pdsc`**（11.6 MB），文件名形如
+`<vendor>.<pack>[.<version>].pdsc`，例如 `STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0.pdsc`、
+`wolfSSL.I-CUBE-wolfMQTT.pdsc`。去掉版本、大小写不敏感合并后是 **67 个包**（`X-CUBE-DPower` 无版本的那条
+与 `X-CUBE-DPOWER.1.3.0` 合并成一条）。
+
+快照由 `scripts/gen-xcube-catalog.mjs` 生成成源码，跟着插件一起发布：
+
+```powershell
+# 默认：读 <STM32CUBEMX_HOME 或 %USERPROFILE%/.stm32cubemx>/thirdparties/pdsc，写 src/engine/xcube-catalog.ts
+node scripts/gen-xcube-catalog.mjs
+node scripts/gen-xcube-catalog.mjs D:/some/pdsc src/engine/xcube-catalog.ts   # 也可以显式给目录
+```
+
+生成物 `src/engine/xcube-catalog.ts` **不要手改**：里面是 `XCUBE_PACK_CATALOG`（67 条 `{vendor,name,versions}`）、
+`XCUBE_CATALOG_FILE_COUNT`、`XCUBE_CATALOG_SOURCE`、`XCUBE_CATALOG_GENERATED_AT`。
+在 CubeMX 里装了新扩展包之后目录会旧，重跑一次脚本即可（旧的目录仍然可用，只是不认识新包）。
+
+踩过的坑：版本号必须从结尾**连续**剥纯数字段。只剥最后一段会把 `X-CUBE-ALGOBUILD.1.4.0` 拆成
+`name = X-CUBE-ALGOBUILD.1.4` + `version = 0`，条目数变成 154（错的）；修好后 67 条。
+
+### 3. `.ioc` 里包的身份
+
+真实样本 `8110_foc.ioc`（497 行，见 `.ioc` 里能查到这几行）：
+
+| 行 | 内容 |
+| --- | --- |
+| 206 | `Mcu.Pin35=VP_STMicroelectronics.X-CUBE-ALGOBUILD_VS_DSPOoLibraryJjLibrary_1.4.0_1.4.0` |
+| 214 | `Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0` |
+| 215 | `Mcu.ThirdPartyNb=1` |
+| 436-438 | `STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0.<key>=…` |
+| 482 | `VP_STMicroelectronics.X-CUBE-ALGOBUILD_VS_DSPOoLibraryJjLibrary_1.4.0_1.4.0.Mode=…` |
+
+⇒ 包身份就是 `<vendor>.<pack>.<version>`，与 `.pdsc` 文件名同构，所以「目录 ↔ `.ioc`」可以直接对名字。
+本机其它 `.ioc`（`demo`、`_timing_m7`、ODrive 等）只有 `Mcu.ThirdPartyNb=0`，没有任何第三方包。
+
+### 4. 判定规则（现行，覆盖第 3 节那张表里的「标记」行）
+
+`scanIocPacks()` 先扫出包引用，`needsThirdpartyPacks()` 再按顺序下结论：
+
+| 依据 | 结论 |
+| --- | --- |
+| `Mcu.ThirdPartyNb > 0` | 需要，reason 列出包名与本机安装情况 |
+| `.ioc` 引用了目录里的包（`Mcu.ThirdParty<k>` 或任意行里的 `vendor.name`） | 需要；若同时 `Nb=0`，reason 注明「两处对不上，保守保留索引」 |
+| 只命中裸包名（凑不出 vendor，例如 `ProjectManager.ProjectName=X-CUBE-AI-demo`） | 需要（保守），整行进 `markers` 当证据 |
+| `Mcu.ThirdParty<k>` 行解析不了（含空值 `Mcu.ThirdParty0=`） | 需要（保守），进 `malformed` |
+| `Mcu.ThirdPartyNb = 0` 且无以上证据 | **不需要 → 停放** |
+| 没有 `Mcu.ThirdPartyNb` 且无证据 | 需要（保守） |
+
+安装状态 `installed`：`exact`（本机就有这个版本）/ `other-version`（本机只有别的版本）/ `missing`（本机没有）/
+`unknown`（调用方没给本机索引，不做存在性判断）。
+
+给 `needsThirdpartyPacks(ioc, { pdscDir })` 传本机索引目录时，还会产出 `warnings`：
+
+| 情况 | warning |
+| --- | --- |
+| `missing` | `工程要用 …，但本机第三方包索引里没有这个包（先在 CubeMX 的 Manage embedded software packages 里装上它，否则生成会报缺包）：<pdscDir>` |
+| `other-version` | `工程要用 …，本机索引里只有 1.5.0（CubeMX 会按可用版本处理，必要时在它里面 Migrate）` |
+| 索引目录读不到 | `读不到本机第三方包索引目录（<pdscDir>），没法判断工程要的包在不在本机` |
+
+`src/engine/generate.ts` 把 `warnings` 直接并进报告 `notes`，所以**缺包在生成前就能看到**，不用等 CubeMX 报错。
+
+### 5. 测试
+
+新增 `test/xcube-units.test.mjs`（14 条）：目录快照自检（≥60 条、含 `X-CUBE-ALGOBUILD` 1.4.0、无大小写重复、版本号形如数字点号）、
+两处解析器（生成脚本 `parsePdscFileNames` 与运行时 `parsePdscNames`）对同一 fixture 输出一致、
+`identifyPackId` 四类情形（目录命中带/不带版本、目录外的包通用拆法、认不出来返回 null）、
+用 `8110_foc.ioc` 真实片段跑 `scanIocPacks`（`nb=1`、版本由 `Mcu.ThirdParty0` 补全）、
+`installed` 三态、`markers` 与 `malformed`、`listInstalledPacks`、`summarizePacks`、
+带 `pdscDir` 的三类 warning、纯 HAL 工程（`Nb=0`）不告警。
+
+套件 13 → 14，用例 109 → **123 pass / 0 fail**。
+
+### 6. 教训
+
+- 快照是「这台机器上装了什么」的静态镜像；版本更新靠重跑脚本，不靠写更聪明的正则。宁可旧，也不猜。
+- 生成脚本与运行时各有一份解析器，必须有测试对齐，否则快照和判定会慢慢漂。
+- 空值行也算 malformed：`Mcu.ThirdParty0=` 什么都不写，比写错更常见。
+- 保守的方向只有一个：**判不准就加载索引**。多花 25 s 可以接受，漏包生成错代码不行。
+
+### 7. 真机验证（`_gen_probe/verify-thirdparty.mjs`，`skipIfUnchanged: false` 强制真跑）
+
+| 项 | 结果 |
+| --- | --- |
+| 工程 | `D:/JingYu/Desktop/c8t6_vscode_test/_timing_m7/blink`（`Mcu.ThirdPartyNb=0`） |
+| 墙钟 / 自报 | 117,397 ms / 116,405 ms（ok=true，`skipped=false`） |
+| `thirdparty` | `parked: true`，detail = `已临时停放第三方包索引（…\pdsc.dsh-parked），生成结束后自动还原；判定依据：工程没有第三方包（Mcu.ThirdPartyNb=0），本次生成不需要包索引` |
+| pdsc 状态 | 跑前 159 文件 / `parked=false` → 跑后 **159 文件 / `parked=false`**（自动还原） |
+
+同一份代码对真实 `.ioc` 的判定（`needsThirdpartyPacks` 直接调用）：
+
+| `.ioc` | 结论 |
+| --- | --- |
+| `8110_foc.ioc`（G431 FOC 工程） | needed=true，`工程声明了 1 个第三方包（STMicroelectronics.X-CUBE-ALGOBUILD 1.4.0）`，本机 `exact`（装了 1.4.0 / 1.5.0），无 warning，证据行 `Mcu.ThirdPartyNb=1`、`Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0` |
+| `demo.ioc`（本机 C8T6 工程） | needed=false，`工程没有第三方包（Mcu.ThirdPartyNb=0），本次生成不需要包索引`，无包无 warning |
+
+本机 pdsc 目录 159 个文件 → `listInstalledPacks()` 解析出 **67 个包**，与快照条数一致。

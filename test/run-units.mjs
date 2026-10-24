@@ -15,11 +15,14 @@ const suites = [
   "doctor-regs-units.mjs",
   "engine-units.test.mjs",
   "flash-units.test.mjs",
+  "generate-cache-units.test.mjs",
   "ioc-plan-units.test.mjs",
   "ioc-units.test.mjs",
   "scaffold-patch-units.test.mjs",
   "search-roots-units.test.mjs",
   "session-units.test.mjs",
+  "thirdparty-units.test.mjs",
+  "xcube-units.test.mjs",
   "schema-guard.mjs",
 ];
 

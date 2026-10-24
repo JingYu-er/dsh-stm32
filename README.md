@@ -68,7 +68,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：80 个离线用例，不需要板子
+npm test                            # 可选：123 个离线用例，不需要板子
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -91,7 +91,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | --- | --- | --- | --- |
 | 1 | 体检：工具链、被占用的探针、端口、`.elf`、`.ioc` 告警 | `stm32_doctor` | ~2 s |
 | 2 | 空目录建 CMake 工程骨架（14 个模板文件 + 629 个固件文件 + 配好 SWD 的 `.ioc`） | `stm32_project_create` | ~2 s |
-| 3 | 按 `.ioc` 无头跑 CubeMX，产物落到 `Core/` | `stm32_generate` | 61–77 s |
+| 3 | 按 `.ioc` 无头跑 CubeMX，产物落到 `Core/` | `stm32_generate` | 首次 130–175 s；之后再跑，`.ioc` 与产物都没变会**直接跳过**（<1 s） |
 | 4 | 编译（首次自动 `cmake --preset`） | `stm32_build` | 配置 ~5 s + 编译 3 s |
 | 5 | **只烧录**：program + verify + reset | `stm32_flash` | 2.1–2.6 s |
 | 6 | 读回 `GPIOC_ODR`，确认状态确实在翻 | `stm32_regs_read` | 0.4–1.3 s |
@@ -160,7 +160,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_code_patch` | 只在 `USER CODE` 块内 replace/append；块外字节（含 CRLF）原样保留；写前备份、临时文件 + rename 原子替换。标签写错会把该文件所有可用标签列给你 |
-| `stm32_generate` | 无头跑 `java -jar STM32CubeMX.exe -q`，成功后落位到 `Core/Src`、`Core/Inc`，旧文件的 USER CODE 按标签搬进新内容。默认后台 job |
+| `stm32_generate` | 无头跑 `java -jar STM32CubeMX.exe -q`，成功后落位到 `Core/Src`、`Core/Inc`，旧文件的 USER CODE 按标签搬进新内容。默认后台 job。**`.ioc`、CubeMX 版本、产物 hash 都没变时直接复用上次结果**（`skipped: true`，约 1 s；传 `skipIfUnchanged: false` 或删 `.dsh-stm32/generate-cache.json` 可强制重跑）。工程没用 X-CUBE 扩展包时（`Mcu.ThirdPartyNb=0`）会自动把 `~/.stm32cubemx/thirdparties/pdsc` 临时停放、跑完还原，省约 25 s；要保留索引传 `thirdpartyPacks: "keep"`。**要不要索引不靠关键词猜**：`.ioc` 里的 `Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0` 会跟内置的 X-CUBE 包目录（67 个包，`scripts/gen-xcube-catalog.mjs` 生成）对名字，本机缺这个包会提前在 notes 里警告 |
 | `stm32_build` | `cmake --build`，构建目录从 `CMakePresets.json` 与 `build/*/CMakeCache.txt` 推断；首次构建自动 configure；会拦住"CMakeCache 目录不一致但 ninja 退出码 0"的假成功 |
 
 ### 烧录与调试
@@ -261,19 +261,22 @@ source [find target/stm32f1x.cfg]
 | `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口 |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
-| `stm32_generate` 很慢或像卡住 | CubeMX 冷启动 60–150 s 属正常；默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等 |
+| `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
+| 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
+| 生成变快了，但 CubeMX GUI 里看不到扩展包了 | `thirdpartyPacks: "auto"` 会在不需要扩展包时把 `thirdparties/pdsc` 停放成 `pdsc.dsh-parked`，生成结束自动还原。若正在 CubeMX GUI 里手工选包，传 `thirdpartyPacks: "keep"` |
+| notes 说「本机第三方包索引里没有这个包」 | 工程要用的 X-CUBE 包本机没装（判定靠 `.ioc` 里的 `Mcu.ThirdParty<k>` 与内置包目录对名字）。在 CubeMX 的 Manage embedded software packages 里装上它再生成。内置目录是快照，装了新包后重跑 `node scripts/gen-xcube-catalog.mjs` 更新（旧的目录只是不认识新包，不会误判成「不需要」） |
 | `stm32_code_patch` 说块不存在 | `main.c` 里是短标签（`PV`=私有变量、`PFP`=函数原型、`2`=while 前初始化、`3`=循环体）；报错会列出该文件全部可用标签，照抄即可 |
 
 ## 开发与测试
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 11 个离线套件、89 个用例；不需要板子、CubeMX、工具链
+npm test                 # 14 个离线套件、123 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **87 pass + 2 skipped**，开发机上是 89 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **121 pass + 2 skipped**，开发机上是 123 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

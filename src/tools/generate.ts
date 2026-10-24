@@ -32,7 +32,7 @@ const fileSchema: JsonSchema = {
     target: { type: "string" },
     action: {
       type: "string",
-      enum: ["created", "overwritten", "skipped-no-user-code-markers", "would-write"],
+      enum: ["created", "overwritten", "skipped-no-user-code-markers", "would-write", "unchanged-cached"],
     },
     preserved: { type: "array", items: { type: "string" } },
     droppedLabels: { type: "array", items: { type: "string" } },
@@ -49,6 +49,17 @@ const reportSchema: JsonSchema = {
     iocPath: { type: "string" },
     layout: { type: "string", enum: ["coupled", "per-ip"] },
     durationMs: { type: "number" },
+    skipped: { type: "boolean" },
+    cacheKey: { type: "string" },
+    thirdparty: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        parked: { type: "boolean" },
+        detail: { type: "string" },
+      },
+      required: ["parked", "detail"],
+    },
     message: { type: "string" },
     script: { type: "string" },
     command: { type: "string" },
@@ -58,7 +69,7 @@ const reportSchema: JsonSchema = {
     files: { type: "array", items: fileSchema },
     notes: { type: "array", items: { type: "string" } },
   },
-  required: ["ok", "projectDir", "iocPath", "layout", "durationMs", "message", "script", "command", "logTail", "backupDir", "verdict", "files", "notes"],
+  required: ["ok", "projectDir", "iocPath", "layout", "durationMs", "skipped", "cacheKey", "thirdparty", "message", "script", "command", "logTail", "backupDir", "verdict", "files", "notes"],
 };
 
 export const outputSchema: JsonSchema = {
@@ -78,6 +89,8 @@ interface GenerateArgs {
   iocPath?: string;
   layout?: "auto" | "coupled" | "per-ip";
   dryRun?: boolean;
+  skipIfUnchanged?: boolean;
+  thirdpartyPacks?: "auto" | "keep";
   foreground?: boolean;
   cubeMxRoots?: string[];
   timeoutMs?: number;
@@ -96,6 +109,8 @@ function formatReport(report: GenerateReport): string[] {
   lines.push("工程：" + report.projectDir);
   if (report.iocPath !== "") lines.push(".ioc：" + report.iocPath + "（布局 " + report.layout + "）");
   if (report.durationMs > 0) lines.push("耗时：" + (report.durationMs / 1000).toFixed(1) + " s");
+  if (report.skipped) lines.push("本次没有跑 CubeMX：直接复用上次生成结果（产物 hash 全部一致）");
+  if (report.thirdparty.detail !== "") lines.push("第三方包索引：" + report.thirdparty.detail);
   if (report.verdict.successLine !== "") lines.push("CubeMX：" + report.verdict.successLine);
   for (const error of report.verdict.errors.slice(0, 5)) lines.push("! " + error);
   if (report.files.length > 0) {
@@ -124,7 +139,7 @@ export function registerGenerate(ctx: DshContext): void {
   ctx.tools.register({
     name: GENERATE_TOOL,
     description:
-      "用 STM32CubeMX 无头模式（java -jar STM32CubeMX.exe -q）按 .ioc 生成代码，并把产物从 Src/Inc 落位到工程的 Core/Src、Core/Inc；目标文件已存在时搬运 USER CODE 区内容，覆盖前备份到 .dsh-stm32/backups。默认后台运行（3–4 分钟），返回 jobId，用 job_output 看进度；foreground=true 则同步返回完整报告。dryRun=true 只生成不改工程（CubeMX 仍会写 Src/Inc）。",
+      "用 STM32CubeMX 无头模式（java -jar STM32CubeMX.exe -q）按 .ioc 生成代码，并把产物从 Src/Inc 落位到工程的 Core/Src、Core/Inc；目标文件已存在时搬运 USER CODE 区内容，覆盖前备份到 .dsh-stm32/backups。默认后台运行（首次 3–4 分钟），返回 jobId，用 job_output 看进度；foreground=true 则同步返回完整报告。dryRun=true 只生成不改工程（CubeMX 仍会写 Src/Inc）。skipIfUnchanged（默认 true）让 .ioc 没变时直接复用上次产物、跳过 CubeMX；thirdpartyPacks=auto 在没有 X-CUBE 扩展包的工程里生成期间临时停放第三方包索引（省约 25 s，结束自动还原）。只改 USER CODE、不动 .ioc 的日常循环不需要重新生成，改动只需 stm32_build + stm32_flash。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -137,6 +152,15 @@ export function registerGenerate(ctx: DshContext): void {
           description: "生成布局。auto 按现有 Core/Src/main.c 的 USER CODE 标签推断；coupled 把外设初始化并入 main.c（ST 默认工程）；per-ip 每外设一对 .c/.h。",
         },
         dryRun: { type: "boolean", description: "只跑 CubeMX 并给出落位计划，不改动 Core/**。" },
+        skipIfUnchanged: {
+          type: "boolean",
+          description: "默认 true：.ioc、CubeMX 版本、布局都没变且产物 hash 全部一致时直接复用上次结果，不跑 CubeMX（3–4 分钟 → 0 s）。传 false 强制重新生成。",
+        },
+        thirdpartyPacks: {
+          type: "string",
+          enum: ["auto", "keep"],
+          description: "第三方包索引（~/.stm32cubemx/thirdparties/pdsc）策略。auto（默认）= .ioc 没有 X-CUBE/第三方包时生成期间临时停放，省约 25 s，结束后自动还原；keep = 始终原样加载。",
+        },
         foreground: { type: "boolean", description: "同步执行并返回完整报告（默认 false，走后台 job）。" },
         cubeMxRoots: { type: "array", items: { type: "string" }, description: "STM32CubeMX 安装根目录候选，优先于默认值/环境变量。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 600000（10 分钟）。" },
@@ -171,6 +195,8 @@ export function registerGenerate(ctx: DshContext): void {
           ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),
           ...(args.layout === undefined ? {} : { layout: args.layout }),
           ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+          ...(args.skipIfUnchanged === undefined ? {} : { skipIfUnchanged: args.skipIfUnchanged }),
+          ...(args.thirdpartyPacks === undefined ? {} : { thirdpartyPacks: args.thirdpartyPacks }),
           ...(args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots }),
           ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
           signal: exec.signal,
@@ -193,6 +219,8 @@ export function registerGenerate(ctx: DshContext): void {
             ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),
             ...(args.layout === undefined ? {} : { layout: args.layout }),
             ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+            ...(args.skipIfUnchanged === undefined ? {} : { skipIfUnchanged: args.skipIfUnchanged }),
+            ...(args.thirdpartyPacks === undefined ? {} : { thirdpartyPacks: args.thirdpartyPacks }),
             ...(args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots }),
             ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
             signal: controller.signal,

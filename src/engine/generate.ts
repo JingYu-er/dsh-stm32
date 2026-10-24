@@ -17,6 +17,9 @@ import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.j
 import type { SubprocessService } from "../types.js";
 import { buildGenerateScript, parseGenerateLog } from "./generate-script.js";
 import type { GenerateLayout, GenerateVerdict } from "./generate-script.js";
+import { cacheHit, cacheKeyFor, entryFromFiles, readCache, writeCache } from "./generate-cache.js";
+import { cubeMxUserHome, needsThirdpartyPacks, parkThirdpartyDb } from "./thirdparty.js";
+import type { ParkHandle } from "./thirdparty.js";
 import { listGeneratedFiles, mapGeneratedPath } from "./layout.js";
 import { canMergeUserCode, mergeUserCode } from "./usercode-merge.js";
 import { runStreaming } from "./subprocess-runner.js";
@@ -35,6 +38,17 @@ export interface GenerateRequest {
   cubeMxRoots?: string[];
   /** 只跑 CubeMX 并给出计划，不落位（CubeMX 自己仍会写 Src/Inc）。 */
   dryRun?: boolean;
+  /**
+   * .ioc / CubeMX 版本 / 布局都没变且产物 hash 全部一致时，直接复用上次结果、不跑 CubeMX。
+   * 缺省为 true（想强制重跑就传 false）。
+   */
+  skipIfUnchanged?: boolean;
+  /**
+   * 第三方包索引（thirdparties/pdsc）策略：
+   *   auto（缺省）= .ioc 没有第三方包时临时停放，生成完还原；
+   *   keep        = 始终按原样加载。
+   */
+  thirdpartyPacks?: "auto" | "keep";
   timeoutMs?: number;
   signal?: AbortSignal;
   onProgress?: (line: string) => void;
@@ -45,7 +59,7 @@ export interface GeneratedFileReport {
   source: string;
   /** 工程内相对路径，例如 Core/Src/main.c。 */
   target: string;
-  action: "created" | "overwritten" | "skipped-no-user-code-markers" | "would-write";
+  action: "created" | "overwritten" | "skipped-no-user-code-markers" | "would-write" | "unchanged-cached";
   /** 从旧文件保活过来的 USER CODE 标签。 */
   preserved: string[];
   /** 旧文件有、新文件没有的标签（内容未搬运，旧文件已备份）。 */
@@ -58,6 +72,12 @@ export interface GenerateReport {
   iocPath: string;
   layout: GenerateLayout;
   durationMs: number;
+  /** true = 本次没有跑 CubeMX，直接复用缓存里的产物。 */
+  skipped: boolean;
+  /** 本次的缓存键（.ioc + CubeMX 指纹 + 布局的 sha256）。 */
+  cacheKey: string;
+  /** 第三方包索引处理情况。 */
+  thirdparty: { parked: boolean; detail: string };
   /** CubeMX 日志结论。 */
   verdict: GenerateVerdict;
   /** 生成脚本全文（便于复现）。 */
@@ -86,6 +106,9 @@ function fail(request: GenerateRequest, message: string, extra: Partial<Generate
     iocPath: "",
     layout: request.layout === undefined || request.layout === "auto" ? "coupled" : request.layout,
     durationMs: 0,
+    skipped: false,
+    cacheKey: "",
+    thirdparty: { parked: false, detail: "" },
     verdict: { ok: false, successLine: "", errors: [], knownNoise: [] },
     script: "",
     command: "",
@@ -324,11 +347,86 @@ export async function runGenerate(
         "；可用 STM32_CUBEMX_ROOT 指定安装根，或把 STM32CubeMX 装到这些位置之一",
     );
   }
+  const iocText = readFileSync(iocPath, "utf8");
+  const cacheKey = cacheKeyFor(iocText, launch.java, launch.jar, layout);
+  const stateDir = join(projectDir, STATE_DIR);
+  const enteredAt = Date.now();
+  const progress = request.onProgress ?? ((): void => undefined);
+  let skipMiss = "";
+  // 先看缓存：.ioc、CubeMX 版本、布局都没动且产物 hash 全对 → 一秒都不用等。
+  if (request.skipIfUnchanged !== false) {
+    const hit = cacheHit(readCache(stateDir), cacheKey.key, projectDir);
+    if (hit.hit && hit.entry !== null) {
+      const cached = hit.entry;
+      return {
+        ok: true,
+        projectDir,
+        iocPath,
+        layout,
+        durationMs: Date.now() - enteredAt,
+        skipped: true,
+        cacheKey: cacheKey.key,
+        thirdparty: { parked: false, detail: "未探测（本次跳过 CubeMX）" },
+        verdict: { ok: true, successLine: "（跳过 CubeMX：复用上次生成结果）", errors: [], knownNoise: [] },
+        script: "",
+        command: "",
+        files: cached.files.map((file) => ({
+          source: file.target,
+          target: file.target,
+          action: "unchanged-cached" as const,
+          preserved: [],
+          droppedLabels: [],
+        })),
+        backupDir: "",
+        message:
+          "跳过 CubeMX：.ioc、CubeMX 版本与布局都没变，且 " +
+          String(cached.files.length) +
+          " 个产物 hash 全部一致（直接复用 " +
+          new Date(cached.createdAt).toLocaleString() +
+          " 的生成结果，耗时 0 s）",
+        notes: [
+          "想强制重新生成就传 skipIfUnchanged=false（会再跑一次 CubeMX，3–4 分钟）。",
+          "缓存文件：.dsh-stm32/" + "generate-cache.json" + "；删掉它等效于强制重跑。",
+        ],
+        logTail: "",
+      };
+    }
+    skipMiss = hit.reason;
+  }
+
   const lock = acquireLock(projectDir, "generate " + basename(iocPath));
   if ("error" in lock) return fail(request, lock.error, { iocPath, layout });
 
+  // 第三方包索引：没有 X-CUBE 就临时停放，省掉两次 159 包枚举（实测约 25 s）。
+  const thirdparty: { parked: boolean; detail: string } = { parked: false, detail: "" };
+  let park: ParkHandle | null = null;
+  const parkNotes: string[] = [];
+  // 判定靠包目录（src/engine/xcube-catalog.ts）+ 本机 pdsc 索引：认得出用的是什么包，也说得出本机有没有。
+  const home = cubeMxUserHome(process.env);
+  if (request.thirdpartyPacks === "keep") {
+    thirdparty.detail = "thirdpartyPacks=keep：原样加载第三方包索引";
+  } else {
+    const pdscDir = home === null ? undefined : home + "/thirdparties/pdsc";
+    const decision = needsThirdpartyPacks(iocText, pdscDir === undefined ? {} : { pdscDir });
+    parkNotes.push(...decision.warnings);
+    if (decision.needed) {
+      thirdparty.detail = "保留第三方包索引：" + decision.reason;
+    } else if (home === null) {
+      thirdparty.detail = "无法确定 CubeMX 用户目录（USERPROFILE/HOME 为空），未停放第三方包索引";
+    } else {
+      const parked = parkThirdpartyDb(home + "/thirdparties");
+      if (parked.ok) {
+        park = parked;
+        thirdparty.parked = true;
+        thirdparty.detail = parked.detail + "；判定依据：" + decision.reason;
+      } else {
+        thirdparty.detail = parked.detail;
+      }
+    }
+  }
+  if (park !== null) progress("第三方包索引：" + thirdparty.detail);
+
   const stamp = nowStamp();
-  const stateDir = join(projectDir, STATE_DIR);
   const tmpDir = join(stateDir, "tmp");
   mkdirSync(tmpDir, { recursive: true });
   const scriptPath = join(tmpDir, "gen-" + stamp + ".txt");
@@ -337,7 +435,7 @@ export async function runGenerate(
   const argv = [launch.java, "-jar", launch.jar, "-q", scriptPath];
   const command = argv.map((part) => (part.includes(" ") ? '"' + part + '"' : part)).join(" ");
   const startedAt = Date.now();
-  const progress = request.onProgress ?? ((): void => undefined);
+  if (skipMiss !== "") progress("未跳过 CubeMX：" + skipMiss);
   progress("使用布局：" + (layout === "coupled" ? "coupled（外设初始化并入 main.c）" : "per-ip（每外设一对 .c/.h）"));
   progress("脚本：" + scriptPath);
   progress("命令：" + command);
@@ -359,6 +457,10 @@ export async function runGenerate(
     });
   } finally {
     lock.release();
+    if (park !== null) {
+      // CubeMX 进程已经退出，这里把第三方包索引改回去；失败了要让人看见。
+      for (const note of park.restore()) parkNotes.push("! " + note);
+    }
   }
 
   const log = outcome.stdout + "\n" + outcome.stderr;
@@ -369,6 +471,9 @@ export async function runGenerate(
     iocPath,
     layout,
     durationMs,
+    skipped: false,
+    cacheKey: cacheKey.key,
+    thirdparty,
     verdict,
     script,
     command,
@@ -407,6 +512,28 @@ export async function runGenerate(
     notes.push("CubeMX 噪音 " + String(verdict.knownNoise.length) + " 条（与本芯片无关，已忽略）");
   }
   if (request.dryRun !== true) notes.push(...cleanupGenerated(projectDir, generated));
+  if (thirdparty.detail !== "") notes.push("第三方包索引：" + thirdparty.detail);
+  notes.push(...parkNotes);
+  if (request.dryRun !== true) {
+    // 记下这次产物：下次 .ioc 没变就能直接跳过 CubeMX（3–4 分钟 → 0 s）。
+    const entry = entryFromFiles(
+      cacheKey.key,
+      cacheKey.iocSha256,
+      cacheKey.cubeMxStamp,
+      layout,
+      projectDir,
+      applied.files.filter((file) => file.action !== "skipped-no-user-code-markers").map((file) => file.target),
+    );
+    if (entry === null) {
+      notes.push("没能写生成缓存（有产物取不到 hash），下次仍会跑 CubeMX");
+    } else {
+      try {
+        writeCache(stateDir, entry);
+      } catch (error) {
+        notes.push("没能写生成缓存：" + String((error as Error).message));
+      }
+    }
+  }
   return {
     ok: true,
     ...baseReport,
