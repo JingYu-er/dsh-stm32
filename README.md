@@ -10,9 +10,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.0-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 15 个工具、5 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
+这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 16 个工具、6 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
 ## 为什么需要它
 
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
 
-装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.0`；重启后 `/stm32-doctor` 有输出。
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.1`；重启后 `/stm32-doctor` 有输出。
 
 
 **卸载**：`dsh plugin --profile desktop remove dsh-stm32`，重启 dsh。
@@ -68,7 +68,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：123 个离线用例，不需要板子
+npm test                            # 可选：170 个离线用例，不需要板子
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -100,6 +100,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 ```text
 /stm32-doctor         # 开工前体检
+/stm32-env            # 只看四项能力缺什么（缺件也能看）
 /stm32-build          # 编译，打印内存占用与错误
 /stm32-flash          # 只烧录，不进调试会话
 /stm32-debug          # 烧录 + 停在 main
@@ -127,6 +128,8 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 能力 | 提供方式 |
 | --- | --- |
 | 环境体检 | `stm32_env_probe`（只读）、`stm32_doctor`（工具链 + 探针占用 + 端口 + 工程告警） |
+| 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
+| 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
 | 从零建工程 | `stm32_project_create`：模板快照 + 固件包 Drivers，与 CubeMX GUI 新建的工程逐字节一致 |
 | `.ioc` 事务 | `stm32_ioc_inspect`（只读解析）→ `stm32_ioc_plan`（算 diff，不写盘）→ `stm32_ioc_apply`（SHA 校验 + 备份 + 回滚） |
 | 只改 USER CODE | `stm32_code_patch`：只写 `/* USER CODE BEGIN X */` 与 `END X` 之间，块外逐字节不动 |
@@ -144,6 +147,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_env_probe` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
+| `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
 | `stm32_project_create` | 空目录 → 完整 CMake 工程（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
 
@@ -181,6 +185,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 命令 | 做什么 | 会不会动板子 |
 | --- | --- | --- |
 | `/stm32-doctor` | 体检：工具链、被占用的调试进程、端口、`.elf`、`.ioc` 告警 | 否 |
+| `/stm32-env` | 看四项能力（编译 / 烧录 / 调试 / 生成代码）各缺什么、装什么、装完怎么自检；缺件也照常出卡片 | 否 |
 | `/stm32-build [dir] [--clean]` | 编译，打印内存占用 / `.elf` / 错误 | 否 |
 | `/stm32-flash [dir]` | **烧录**：program + verify + reset，不建调试会话、不下断点 | 是 |
 | `/stm32-debug [dir]` | **烧录 + 调试**：烧完停到 `main`，会话保留（空闲 3 分钟 / 上限 10 分钟，本轮结束也会自动关） | 是 |
@@ -198,13 +203,36 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 ## 配置
 
+### 用户配置文件（`~/.dsh-stm32/config.json`）
+
+工具装在哪，插件自己记。`stm32_env_install` 装完会写这个文件，之后所有工具读它——**不用重启 DSH、也不用设环境变量**。手写也行：
+
+```json
+{
+  "version": 1,
+  "msys64": "E:/msys64",
+  "binDirs": [],
+  "packages": ["mingw-w64-ucrt-x86_64-arm-none-eabi-gcc", "mingw-w64-ucrt-x86_64-cmake"],
+  "cubeMxRoot": "",
+  "updatedAt": "2026-02-01T00:00:00.000Z"
+}
+```
+
+`binDirs` 留空时由 `msys64` 推出 `<msys64>/ucrt64/bin`——安装器写的就是这个形状。文件坏了（JSON 不合法）不会让工具报错，只是当它不存在。
+
+**优先级**：工具参数（`binDirs` / `cubeMxRoots`）> 环境变量 > 这个配置文件 > 内置默认值；自动发现只追加在"没点名参数"的那一档尾部。
+
+**内置默认值里没有任何"某台机器专属"的路径**：只有 `C:/msys64/...` 与 `C:/Program Files/...` 这种 Windows 默认安装位置，装在别处靠自动发现兜底。配置或环境变量里点名的目录如果在本机不存在（典型情况：配置是从别的机器拷过来的，带着 `D:/app/msys64` 这种路径），门禁与 `stm32_env_probe` 会明确写一句「配置文件里的 X 在本机不存在……这一条搜不到工具」，而**不会**悄悄改你的配置；安装器也不会拿这种路径当安装目标（盘符都没有时只提示、并要求你给 `targetDir`）。
+
 ### 环境变量（可选）
 
 | 变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `STM32_BIN_DIRS` | 工具链目录候选，`;` 分隔，**整份替换**内置列表（之后的自动发现仍追加在尾部） | `D:/app/msys64/ucrt64/bin`、`C:/msys64/ucrt64/bin`、`C:/msys64/mingw64/bin` |
-| `STM32_CUBEMX_ROOT` | STM32CubeMX 安装根目录，**整份替换**内置列表 | `D:/app/STM32CubeMX`、`C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_BIN_DIRS` | 工具链目录候选，`;` 分隔，**整份替换**内置列表（之后的自动发现仍追加在尾部） | `C:/msys64/ucrt64/bin`、`C:/msys64/mingw64/bin` |
+| `STM32_CUBEMX_ROOT` | STM32CubeMX 安装根目录，**整份替换**内置列表 | `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
 | `STM32_NO_DISCOVER` | 设为 `1` / `true` 关掉下面的自动发现（CI、只想用内置列表时） | 不设 = 开着 |
+| `DSH_STM32_CONFIG` | 换一个配置文件路径（多份工具链 / 多工程隔离） | `%USERPROFILE%\.dsh-stm32\config.json` |
+| `DSH_STM32_NO_CONFIG` | 设为 `1` / `true` 完全不读配置文件（只想走环境变量时） | 不设 = 读 |
 | `DSH_STM32_E2E_PROJECT` | 真机 e2e 用的工程（含 `openocd.cfg` 与 `build/Debug/*.elf`） | 无 |
 | `DSH_STM32_E2E_ROOT` | e2e 临时副本目录 | 系统临时目录 |
 
@@ -261,6 +289,7 @@ source [find target/stm32f1x.cfg]
 | `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口。调试会话开着时读寄存器不会再有这个问题：`stm32_regs_read` 复用会话的 openocd，不另起第二个 |
 | 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 用会话自己的 gdb 连接执行 `print/x $pc` 与 `print/x *(unsigned int *)0x…`，读完 `monitor resume` 再 detach，notes 第一条写「复用调试会话（端口 N）的 openocd，没有另起一个」；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
+| 工具直接回「缺 arm-none-eabi-gcc…，这次没有开始编译」 | 这是开工前门禁（`envCheck` 默认 `block`）拦下来的，不是 bug：它比跑到一半才发现省时间。回一句「装」，模型调 `stm32_env_install` 出计划；确认后装好并写配置文件，**下一条命令就能用，不必重启**。想先看全貌就 `/stm32-env`；只想先跑起来就传 `envCheck: "warn"`（照做但写警告）或 `"off"`（不查） |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
@@ -272,12 +301,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 15 个离线套件、137 个用例；不需要板子、CubeMX、工具链
+npm test                 # 17 个离线套件、170 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **135 pass + 2 skipped**，开发机上是 137 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **168 pass + 2 skipped**，开发机上是 170 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 
@@ -293,9 +322,9 @@ node test\e2e-flash.mjs
 ```text
 src/
   index.ts                 插件入口（name / inject / apply）
-  tools/                   15 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
+  tools/                   16 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
   engine/                  纯逻辑与工作流（generate / build / flash / debug / ioc / scaffold …）
-  commands/register.ts     5 条斜杠命令
+  commands/register.ts     6 条斜杠命令
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）

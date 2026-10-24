@@ -8,9 +8,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.0-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 15 tools, 5 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 16 tools, 6 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -45,7 +45,7 @@ That is what "hardware programming inside DSH" means here: **the model does not 
 | STM32CubeMX (with its bundled JRE) | `stm32_generate`, `stm32_project_create` | Generation tools unavailable, everything else still works |
 | STM32Cube firmware package F1 (installed with CubeMX) | Drivers copied when scaffolding | "Firmware package not found" |
 
-Paths are searched as MSYS2 (`D:/app/msys64/ucrt64/bin`, `C:/msys64/ucrt64/bin`) → ST official packages, with CubeMX at `D:/app/STM32CubeMX` by default; override with environment variables if yours live elsewhere (see [Configuration](#configuration)).
+Paths are searched as MSYS2 (`C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin`) → ST official packages, with CubeMX at `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` by default; installs elsewhere are found by auto-discovery, and environment variables override everything (see [Configuration](#configuration)).
 
 ### Install (recommended: one command)
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.0`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.1`); after a restart `/stm32-doctor` should respond.
 
 
 **Uninstall**: `dsh plugin --profile desktop remove dsh-stm32`, then restart dsh.
@@ -99,6 +99,7 @@ On the model side it is one sentence: "create a blinking-LED project for STM32F1
 
 ```text
 /stm32-doctor         # health check before you start
+/stm32-env            # what each capability is missing (works even when incomplete)
 /stm32-build          # build, print memory usage and errors
 /stm32-flash          # flash only, no debug session
 /stm32-debug          # flash + halt at main
@@ -126,6 +127,8 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Capability | How it is provided |
 | --- | --- |
 | Environment health check | `stm32_env_probe` (read-only), `stm32_doctor` (toolchain + busy probes + ports + project warnings) |
+| Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
+| Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
 | Project from scratch | `stm32_project_create`: template snapshot + firmware Drivers, byte-identical to a project created in the CubeMX GUI |
 | `.ioc` as a transaction | `stm32_ioc_inspect` (read-only parse) → `stm32_ioc_plan` (diff, no writes) → `stm32_ioc_apply` (SHA check + backup + rollback) |
 | USER CODE only | `stm32_code_patch`: writes only between `/* USER CODE BEGIN X */` and `END X`; everything else untouched |
@@ -143,6 +146,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Tool | What it does |
 | --- | --- |
 | `stm32_env_probe` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions; for anything missing it states the impact (cannot build / flash / debug / generate), the recommended install command (pacman / winget, paste-ready), a self-check command, plus `capabilities` (which of the four jobs work) and `recommendations` (install order and an offer to install for you). Read-only, repeatable |
+| `stm32_env_install` | One-stop install when the toolchain is missing: `dryRun` (default) only returns a plan — size of the official MSYS2 installer, the five packages, the PATH entry it would add; only `dryRun: false` + `confirm: true` actually work (download → install MSYS2 → `pacman -S` → user-level PATH → self-check → write `~/.dsh-stm32/config.json`). With an existing msys64 it only adds the packages. No uninstall |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
 | `stm32_project_create` | Empty directory → full CMake project (including both "flash only" and "flash and debug" launch configs in `.vscode`). Refuses a non-empty target unless `overwrite: true` |
 
@@ -180,6 +184,7 @@ Tools are for the model; when you want to act yourself, use a command — one co
 | Command | What it does | Touches the board |
 | --- | --- | --- |
 | `/stm32-doctor` | Health check: toolchain, busy debug processes, ports, `.elf`, `.ioc` warnings | No |
+| `/stm32-env` | Shows what each of the four capabilities (build / flash / debug / generate) is missing, what to install and how to self-check; a missing toolchain still renders the card | No |
 | `/stm32-build [dir] [--clean]` | Build, printing memory usage / `.elf` / errors | No |
 | `/stm32-flash [dir]` | **Flash**: program + verify + reset, no debug session, no breakpoints | Yes |
 | `/stm32-debug [dir]` | **Flash + debug**: halt at `main` after flashing, session kept (3 min idle / 10 min limit, also closed when the turn ends) | Yes |
@@ -197,13 +202,34 @@ Tools are for the model; when you want to act yourself, use a command — one co
 
 ## Configuration
 
+### User config file (`~/.dsh-stm32/config.json`)
+
+The plugin remembers where the toolchain lives. `stm32_env_install` writes this file when it finishes, and every tool reads it — **no DSH restart, no environment variables**. Hand-writing it works too:
+
+```json
+{
+  "version": 1,
+  "msys64": "E:/msys64",
+  "binDirs": [],
+  "packages": ["mingw-w64-ucrt-x86_64-arm-none-eabi-gcc", "mingw-w64-ucrt-x86_64-cmake"],
+  "cubeMxRoot": "",
+  "updatedAt": "2026-02-01T00:00:00.000Z"
+}
+```
+
+An empty `binDirs` is derived from `msys64` as `<msys64>/ucrt64/bin` — the shape the installer writes. A corrupt file (invalid JSON) never makes a tool fail; it is simply treated as "not configured".
+
+**Precedence**: tool arguments (`binDirs` / `cubeMxRoots`) > environment variables > this config file > built-in defaults; auto-discovered installs are only appended when no argument was given.
+
 ### Environment variables (optional)
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `STM32_BIN_DIRS` | Toolchain directory candidates, `;`-separated; **replaces** the built-in list (auto-discovered dirs are still appended after it) | `D:/app/msys64/ucrt64/bin`, `C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin` |
-| `STM32_CUBEMX_ROOT` | STM32CubeMX installation root; **replaces** the built-in list | `D:/app/STM32CubeMX`, `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
+| `STM32_BIN_DIRS` | Toolchain directory candidates, `;`-separated; **replaces** the built-in list (auto-discovered dirs are still appended after it) | `C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin` |
+| `STM32_CUBEMX_ROOT` | STM32CubeMX installation root; **replaces** the built-in list | `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` |
 | `STM32_NO_DISCOVER` | Set to `1` / `true` to turn auto-discovery off (CI, or when you only want the built-in list) | unset = on |
+| `DSH_STM32_CONFIG` | Point the config file elsewhere (several toolchains / project isolation) | `%USERPROFILE%\.dsh-stm32\config.json` |
+| `DSH_STM32_NO_CONFIG` | Set to `1` / `true` to ignore the config file entirely (environment variables only) | unset = read |
 | `DSH_STM32_E2E_PROJECT` | Project used by hardware e2e runs (with `openocd.cfg` and `build/Debug/*.elf`) | none |
 | `DSH_STM32_E2E_ROOT` | Scratch directory for e2e copies | system temp |
 
@@ -260,6 +286,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | `Error: No device found` / `transfer count mismatch` | Another process holds the probe. Run `/stm32-stop`, then use `stm32_doctor` to inspect openocd / gdb processes and port 3333. Reading registers while a debug session is open no longer hits this: `stm32_regs_read` reuses the session's openocd instead of starting a second one |
 | Reading registers with a live session shows a `gdb-multiarch … target extended-remote 127.0.0.1:3333` `report.command` | That is the normal "reuse" shape: while `stm32_debug_session` is alive, `stm32_regs_read` drives the session's own gdb connection with `print/x $pc` and `print/x *(unsigned int *)0x…`, then `monitor resume` and detach; the first note reads "reusing the openocd of the debug session (port N), not starting another". Only without a session does it start its own openocd. Older builds failed here with `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | Build "succeeds" but the old firmware runs | The project was copied or renamed with `build/` included: the CMakeCache directory no longer matches, yet ninja still exits 0. `stm32_build` treats that as a failure; clean or delete `build/Debug` as prompted |
+| A tool answers "missing arm-none-eabi-gcc …, X was not started" | That is the pre-flight gate (`envCheck` defaults to `block`) doing its job, not a bug: it is cheaper than discovering the problem halfway through. Answer "install", and the model runs `stm32_env_install` for a plan; after you confirm, the toolchain is installed and the config written — **the next call works without a restart**. Run `/stm32-env` for the whole picture, or pass `envCheck: "warn"` (continue with a warning) / `"off"` (skip the check) |
 | `stm32_doctor` cannot find gcc / openocd | First read the "searched ..." list and the auto-discovery line in the doctor notes / error; if it is installed elsewhere, set `STM32_BIN_DIRS` or pass `binDirs`. **If you do not know what to install, run `stm32_env_probe` first**: every missing component carries `impact` (what stops working), `install` (recommended way, easiest first) and `verify` (self-check after installing), while the top-level `recommendations` gives the install order and offers to install for you |
 | `stm32_generate` feels stuck | The first run (cold start, no cache) legitimately takes 3.5–4 minutes; later runs are skipped (<1 s) while the `.ioc` and outputs are unchanged. It runs as a background job by default — watch it with `job_output`, or pass `foreground: true`. Check `skipped` in the result and the reason in the notes to see whether the cache hit |
 | It regenerates for 3 minutes even though nothing changed | The cache key covers the CubeMX `size:mtime` and every output hash, so swapping CubeMX, editing generated files or changing the layout invalidates it. Read the reason in the notes, or delete `.dsh-stm32/generate-cache.json` |
@@ -271,12 +298,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 15 offline suites, 137 cases; no board, CubeMX, or toolchain needed
+npm test                 # 17 offline suites, 170 cases; no board, CubeMX, or toolchain needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **135 passed + 2 skipped**, while a developer machine runs all 137. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **168 passed + 2 skipped**, while a developer machine runs all 170. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
@@ -292,9 +319,9 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 15 tools, L3 (parameter schema + output contract + rendering)
+  tools/                   the 16 tools, L3 (parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
-  commands/register.ts     the 5 slash commands
+  commands/register.ts     the 6 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
   data/                    paths and chip data (paths are data, not logic)
 templates/scaffold/        project template snapshot (CMake / .ld / .vscode / .ioc)

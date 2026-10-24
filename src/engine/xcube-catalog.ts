@@ -3,7 +3,7 @@
  *
  * 由 scripts/gen-xcube-catalog.mjs 从 CubeMX 的包索引目录生成，不要手改；想要最新的目录，重跑一次生成脚本。
  *
- * 来源：C:/Users/JingYu/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）
+ * 来源：CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）
  * 生成时间：2026-10-24T03:04:36.542Z
  * 索引文件数：159
  *
@@ -26,7 +26,7 @@ export interface XCubeCatalogEntry {
 export const XCUBE_CATALOG_FILE_COUNT = 159;
 
 /** 快照来源（进报告 notes，便于判断新旧）。 */
-export const XCUBE_CATALOG_SOURCE = "C:/Users/JingYu/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）";
+export const XCUBE_CATALOG_SOURCE = "CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）";
 
 /** 生成时间（ISO 字符串）。 */
 export const XCUBE_CATALOG_GENERATED_AT = "2026-10-24T03:04:36.542Z";

@@ -8,7 +8,9 @@
 
 import { runFlash } from "../engine/flash.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { FlashReport } from "../engine/flash.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 
@@ -48,6 +50,13 @@ export const outputSchema: JsonSchema = {
   required: ["message", "report"],
 };
 
+/** 门禁档位参数：三个档位的说明文字与 build 工具保持一致。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface FlashArgs {
   projectDir?: string;
   elfPath?: string;
@@ -57,6 +66,7 @@ interface FlashArgs {
   timeoutMs?: number;
   binDirs?: string[];
   allowNoDebug?: boolean;
+  envCheck?: string;
 }
 
 interface ToolValue {
@@ -98,6 +108,7 @@ export function registerFlash(ctx: DshContext): void {
         timeoutMs: { type: "number", description: "超时毫秒数，默认 120000。" },
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值。" },
+        envCheck: ENV_CHECK_SCHEMA,
       },
       required: [],
     },
@@ -120,6 +131,18 @@ export function registerFlash(ctx: DshContext): void {
       // 探针只有一块：有调试会话占着就先让它让出来（规格 §6）。
       const released = await releaseProbeFor("stm32_flash");
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      // 门禁：烧录只需要 openocd。缺件且 envCheck=block 时连 openocd 都不起，
+      // 免得"探针被占 / 连不上"这类假象盖住真正的原因。
+      const gate = await ensureToolchain(ctx, {
+        capability: "flash",
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        envCheck: args.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        const blocked = blockedReport(resolution.projectDir, gate);
+        return { message: blocked.message, report: blocked };
+      }
       const report = await runFlash(subprocess, {
         projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
@@ -131,11 +154,21 @@ export function registerFlash(ctx: DshContext): void {
         ...(args.allowNoDebug === undefined ? {} : { allowNoDebug: args.allowNoDebug }),
         signal: exec.signal,
       });
+      if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
       if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },
   });
+}
+
+/** 门禁拒绝时的报告：形如 emptyReport，但 notes 换成"缺什么、装在哪"。 */
+function blockedReport(projectDir: string, gate: GateResult): FlashReport {
+  return {
+    ok: false, projectDir, elfPath: "", elfSize: 0, command: "", args: [], configs: [],
+    durationMs: 0, programmed: false, verified: false,
+    errors: [], message: gate.message, logTail: "", notes: gateReportNotes(gate),
+  };
 }
 
 function emptyReport(message: string): FlashReport {

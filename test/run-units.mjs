@@ -17,12 +17,14 @@ const suites = [
   "flash-units.test.mjs",
   "generate-cache-units.test.mjs",
   "ioc-plan-units.test.mjs",
+  "install-units.test.mjs",
   "ioc-units.test.mjs",
   "scaffold-patch-units.test.mjs",
   "search-roots-units.test.mjs",
   "session-units.test.mjs",
   "thirdparty-units.test.mjs",
   "tool-contract-units.test.mjs",
+  "toolchain-units.test.mjs",
   "xcube-units.test.mjs",
   "schema-guard.mjs",
 ];
@@ -59,6 +61,9 @@ for (const name of suites) {
       maxBuffer: 64 * 1024 * 1024,
       // 别再继承 stderr：子进程（reg.exe 之类）的噪音会直接糊到终端上，还打乱套件输出。
       stdio: ["ignore", "pipe", "pipe"],
+      // 单测不许受开发机上真实存在的 ~/.dsh-stm32/config.json 影响（装了工具链的机器上
+      // search-roots 的"默认候选"断言会因此变红）；toolchain-units 自己会清掉这个变量再测配置读取。
+      env: { ...process.env, DSH_STM32_NO_CONFIG: "1" },
     });
   } catch (error) {
     out = String(error.stdout ?? "") + String(error.stderr ?? "");

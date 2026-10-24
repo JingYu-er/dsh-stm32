@@ -7,7 +7,9 @@
 
 import { runDebugRun } from "../engine/debug.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DebugRunReport } from "../engine/debug.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 
@@ -58,6 +60,13 @@ export const outputSchema: JsonSchema = {
   required: ["message", "report"],
 };
 
+/** 门禁档位参数：三个档位的说明文字与 build 工具保持一致。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface DebugArgs {
   projectDir?: string;
   elfPath?: string;
@@ -69,6 +78,7 @@ interface DebugArgs {
   adapterSpeed?: number;
   timeoutMs?: number;
   binDirs?: string[];
+  envCheck?: string;
 }
 
 interface ToolValue {
@@ -101,6 +111,16 @@ export function formatDebugReport(report: DebugRunReport): string[] {
   return lines;
 }
 
+/** 门禁拒绝时的报告：形如 emptyReport，但 notes 换成"缺什么、装在哪"。 */
+function blockedReport(projectDir: string, gate: GateResult): DebugRunReport {
+  return {
+    ok: false, projectDir, elfPath: "", port: 0, breakAt: "main",
+    hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
+    gdbCommand: "", gdbOutput: "", openOcdLogTail: "", durationMs: 0,
+    errors: [], message: gate.message, notes: gateReportNotes(gate),
+  };
+}
+
 function emptyReport(message: string): DebugRunReport {
   return {
     ok: false, projectDir: "", elfPath: "", port: 0, breakAt: "main",
@@ -129,6 +149,7 @@ export function registerDebugRun(ctx: DshContext): void {
         adapterSpeed: { type: "number", description: "adapter speed（kHz）。" },
         timeoutMs: { type: "number", description: "gdb 超时，默认 45000。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选。" },
+        envCheck: ENV_CHECK_SCHEMA,
       },
       required: [],
     },
@@ -151,6 +172,17 @@ export function registerDebugRun(ctx: DshContext): void {
       // debug_run 自己也要独占探针。
       const released = await releaseProbeFor("stm32_debug_run");
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      // 门禁：调试要 openocd + GDB 两件。缺件且 envCheck=block 时不占探针、不起进程。
+      const gate = await ensureToolchain(ctx, {
+        capability: "debug",
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        envCheck: args.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        const blocked = blockedReport(resolution.projectDir, gate);
+        return { message: blocked.message, report: blocked };
+      }
       const report = await runDebugRun(subprocess, {
         projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
@@ -164,6 +196,7 @@ export function registerDebugRun(ctx: DshContext): void {
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         signal: exec.signal,
       });
+      if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
       if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };

@@ -7,7 +7,9 @@
 
 import { describeSample, runRegsRead } from "../engine/regs.js";
 import { debugSessions } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { RegsReport } from "../engine/regs.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
 
@@ -56,6 +58,13 @@ export const outputSchema: JsonSchema = {
   required: ["message", "report"],
 };
 
+/** 门禁档位参数：三个档位的说明文字与 build 工具保持一致。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface RegsArgs {
   projectDir?: string;
   addresses: string[];
@@ -63,6 +72,7 @@ interface RegsArgs {
   adapterSpeed?: number;
   timeoutMs?: number;
   binDirs?: string[];
+  envCheck?: string;
 }
 
 interface ToolValue {
@@ -108,6 +118,7 @@ export function registerRegsRead(ctx: DshContext): void {
         adapterSpeed: { type: "number", description: "adapter speed（kHz）。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 30000。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选。" },
+        envCheck: ENV_CHECK_SCHEMA,
       },
       required: ["addresses"],
     },
@@ -132,6 +143,19 @@ export function registerRegsRead(ctx: DshContext): void {
       }
 
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      // 门禁：读寄存器要 openocd（或已有会话里的那个）。放在借用会话之前判断，
+      // 两种取词方式都不会在缺件时白跑一趟。
+      const gate = await ensureToolchain(ctx, {
+        capability: "debug",
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        envCheck: args.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        const blocked = failureReport(resolution.projectDir, gate.message, []);
+        blocked.notes = gateReportNotes(gate);
+        return { message: blocked.message, report: blocked };
+      }
       // 洞 D：有调试会话时不能再起一个 openocd —— 同一块 CMSIS-DAP 被两个进程抢会报
       // "CMSIS-DAP transfer count mismatch"。直接借会话的 gdb 读，halt → 读 → resume。
       if (debugSessions.isActive()) {
@@ -140,7 +164,8 @@ export function registerRegsRead(ctx: DshContext): void {
           ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
           signal: exec.signal,
         });
-        const notes = ["复用调试会话（端口 " + String(words.port) + "）的 openocd，没有另起一个"];
+        const notes = gate.ok ? [] : [gate.message];
+        notes.push("复用调试会话（端口 " + String(words.port) + "）的 openocd，没有另起一个");
         if (resolution.note !== null) notes.push(resolution.note);
         if (words.projectDir !== "" && words.projectDir !== resolution.projectDir) {
           notes.push("会话的工程目录是 " + words.projectDir + "，与本次参数的 " + resolution.projectDir + " 不同（读值用的是会话里的那个）");
@@ -178,6 +203,7 @@ export function registerRegsRead(ctx: DshContext): void {
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         signal: exec.signal,
       });
+      if (!gate.ok) report.notes.unshift(gate.message);
       if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },

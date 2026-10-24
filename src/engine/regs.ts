@@ -15,7 +15,7 @@ import { resolveSearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { STATE_DIR } from "./generate.js";
 import { defaultConfigs, findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
-import { resolveFromDirs } from "./probe.js";
+import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 import type { RunOutcome } from "./subprocess-runner.js";
 
@@ -147,7 +147,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
   const config = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
   const openOcd = request.openOcdPath !== undefined && request.openOcdPath !== ""
     ? request.openOcdPath
-    : resolveFromDirs("openocd", config.binDirs);
+    : await resolveToolIn(subprocess, ["openocd"], config.binDirs);
   if (openOcd === null) {
     return { ...base, ok: false, errors: ["找不到 openocd"], message: "没读：找不到 openocd" };
   }

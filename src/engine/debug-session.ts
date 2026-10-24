@@ -18,7 +18,7 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { pickPort, resolveElfPath } from "./debug.js";
 import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
-import { resolveFromDirs } from "./probe.js";
+import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
 import { waitForListening } from "./debug.js";
 
@@ -220,7 +220,7 @@ export class DebugSessionManager {
 
     const projectDir = request.projectDir;
     const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
-    const openOcd = resolveFromDirs("openocd", config.binDirs);
+    const openOcd = await resolveToolIn(subprocess, ["openocd"], config.binDirs);
     if (openOcd === null) return emptyReport(["找不到 openocd（先跑 stm32_env_probe）"], "没开会话：找不到 openocd");
 
     // 符号表在这里解析：调用方（工具层、e2e、以后可能的 CLI）都不用自己找 .elf。
@@ -308,7 +308,7 @@ export class DebugSessionManager {
     let gdb: string | null = null;
     for (const dirs of searchDirs) {
       if (dirs.length === 0) continue;
-      gdb = resolveFromDirs("gdb-multiarch", dirs) ?? resolveFromDirs("arm-none-eabi-gdb", dirs);
+      gdb = await resolveToolIn(this.subprocess, ["gdb-multiarch", "arm-none-eabi-gdb"], dirs);
       if (gdb !== null) break;
     }
     if (gdb === null) {

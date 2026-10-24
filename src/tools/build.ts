@@ -6,7 +6,9 @@
 
 import { runBuild } from "../engine/build.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { BuildReport, MemoryUsage } from "../engine/build.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 
@@ -69,6 +71,13 @@ export const outputSchema: JsonSchema = {
   required: ["mode", "jobId", "message"],
 };
 
+/** 门禁档位参数：三个工具共用一份说明文字，直接内联进各自的 parameters。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface BuildArgs {
   projectDir?: string;
   buildDir?: string;
@@ -77,6 +86,7 @@ interface BuildArgs {
   foreground?: boolean;
   binDirs?: string[];
   timeoutMs?: number;
+  envCheck?: string;
 }
 
 interface ToolValue {
@@ -105,6 +115,15 @@ function formatReport(report: BuildReport): string[] {
   return lines;
 }
 
+/** 门禁拒绝时的报告：字段按 outputSchema.required 逐项给值，别让宿主报 "is not lossless JSON"。 */
+function blockedReport(projectDir: string, gate: GateResult): BuildReport {
+  return {
+    ok: false, projectDir, buildDir: "", command: "", durationMs: 0,
+    errors: [], warningCount: 0, memoryUsage: [],
+    message: gate.message, logTail: "", notes: gateReportNotes(gate),
+  };
+}
+
 export function registerBuild(ctx: DshContext): void {
   ctx.tools.register({
     name: BUILD_TOOL,
@@ -120,6 +139,7 @@ export function registerBuild(ctx: DshContext): void {
         clean: { type: "boolean", description: "先 clean 再编译（全量，慢）。" },
         foreground: { type: "boolean", description: "同步返回完整报告（默认 false，走后台 job）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值/环境变量。" },
+        envCheck: ENV_CHECK_SCHEMA,
         timeoutMs: { type: "number", description: "超时毫秒数，默认 300000（5 分钟）。" },
       },
       required: [],
@@ -141,6 +161,19 @@ export function registerBuild(ctx: DshContext): void {
       if (subprocess === undefined) return { mode: "report", jobId: "", message: "宿主缺少 subprocess 服务，无法编译" };
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
+      // 门禁：编译前先确认这台机器有 gcc / CMake / Ninja。缺件且 envCheck=block 时连 cmake 都不起，
+      // 免得用户在一屏 CMake 报错里找原因；warn 档只带一句警告继续。
+      const gate = await ensureToolchain(ctx, {
+        capability: "build",
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        envCheck: args.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        const blocked = blockedReport(projectDir, gate);
+        return { mode: "report", jobId: "", message: blocked.message, report: blocked };
+      }
+      const gateNote = gate.ok ? null : gate.message;
       // 编译本身不碰探针，但 openocd 常驻会让 ninja 的进程环境变复杂；先让会话让出来更稳。
       const released = await releaseProbeFor("stm32_build");
       const jobs = ctx.get<JobsService>("jobs");
@@ -154,6 +187,7 @@ export function registerBuild(ctx: DshContext): void {
           ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
           signal: exec.signal,
         });
+        if (gateNote !== null) report.notes.unshift(gateNote);
         if (released !== null) report.notes.push(released);
         if (resolution.note !== null) report.notes.push(resolution.note);
         return { mode: "report", jobId: "", message: report.message, report };
@@ -164,6 +198,7 @@ export function registerBuild(ctx: DshContext): void {
         label: "stm32_build " + projectDir,
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
+          if (gateNote !== null) handle.append(gateNote + "\n");
           handle.append("开始编译：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runBuild(subprocess, {
             projectDir,

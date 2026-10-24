@@ -8,7 +8,7 @@
  *     searched（这次查了哪些目录），缺件时不必再猜路径。
  */
 
-import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
+import { describeSearchScope, resolveSearchConfig, searchConfigWarnings } from "../data/search-roots.js";
 import { buildTargets, probeAll } from "../engine/probe.js";
 import type { ProbeResult } from "../engine/probe.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
@@ -271,7 +271,11 @@ export function registerEnvProbe(ctx: DshContext): void {
         summary,
         missingRequired,
         capabilities,
-        recommendations: computeRecommendations(results, missingRequired, capabilities),
+        recommendations: [
+          // 配置里点名但本机不存在的目录先说出来：否则"我明明配了"会变成一句莫名其妙的失败。
+          ...searchConfigWarnings(process.env).map((warning) => "⚠ " + warning.message),
+          ...computeRecommendations(results, missingRequired, capabilities),
+        ],
         searched: computeSearched(config.binDirs, config.cubeMxRoots),
         tools: results,
       };

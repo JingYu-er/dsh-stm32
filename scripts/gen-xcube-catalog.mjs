@@ -122,7 +122,8 @@ function main(argv) {
   const names = readdirSync(pdscDir);
   const packs = parsePdscFileNames(names);
   if (packs.length === 0) throw new Error("在 " + pdscDir + " 里没解析出任何包（目录选错了？）");
-  const source = pdscDir.replace(/\\/g, "/") + "（" + String(names.length) + " 个 .pdsc）";
+  // 不写绝对路径：快照会进仓库/报告，带用户名和本机盘符没有意义，还会泄露用户名。
+  const source = "CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（" + String(names.length) + " 个 .pdsc）";
   const text = render(packs, source, new Date().toISOString(), names.length);
   writeFileSync(outFile, text, "utf8");
   console.log("packages=" + String(packs.length) + " files=" + String(names.length) + " -> " + outFile);

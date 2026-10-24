@@ -1,17 +1,22 @@
 /**
  * 工具链搜索配置。
  *
- * 设计约定：路径是数据，不是逻辑。候选按优先级来自三处：
+ * 设计约定：路径是数据，不是逻辑。候选按优先级来自四处：
  *   1. 工具参数（binDirs / cubeMxRoots）—— 调用方显式指定，最高优先；
- *   2. 环境变量（STM32_BIN_DIRS / STM32_CUBEMX_ROOT）—— **整份替换**默认值，不合并；
- *   3. 默认候选表（DEFAULT_BIN_DIRS / DEFAULT_CUBEMX_ROOTS，本机常见安装位置）。
+ *   2. 环境变量（STM32_BIN_DIRS / STM32_CUBEMX_ROOT）—— **整份替换**下面的值，不合并；
+ *   3. 用户配置文件（toolchain-config：stm32_env_install 装好后自己写的，见下）——
+ *      也整份替换默认值，但排在环境变量之后（环境变量是临时/脚本场景的活开关）；
+ *   4. 默认候选表（DEFAULT_BIN_DIRS / DEFAULT_CUBEMX_ROOTS，本机常见安装位置）。
  * 之后再把**自动发现到的**安装目录追加到尾部：只做兜底，不覆盖上面任何一处，
  * 这样别人把 MSYS2 装在 E:\\msys64、CubeMX 装在 F:\\tools 也能直接跑。
- * 设 STM32_NO_DISCOVER=1 可关掉自动发现（CI / 单测里避免扫盘）。
+ * 设 STM32_NO_DISCOVER=1 可关掉自动发现（CI / 单测里避免扫盘）；
+ * 设 DSH_STM32_NO_CONFIG=1 可让第 3 档失效（单测里保证不读本机配置）。
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
+
+import { binDirsFromConfig, configReadingDisabled, cubeMxRootsFromConfig, readToolchainConfig } from "./toolchain-config.js";
 
 export interface SearchConfig {
   /** 优先在这些目录里找裸命令名（gcc/openocd/...）。 */
@@ -26,16 +31,20 @@ export interface DiscoveredInstalls {
   cubeMxRoots: string[];
 }
 
-/** 默认二进制目录：用户已确认的偏好是 msys64 优先。 */
+/**
+ * 默认二进制目录：只放**任何 Windows 机器上都可能存在**的位置。
+ *
+ * 这里绝不能出现开发机专属路径（D:/app/msys64 之类）：插件是给别人下载的，
+ * 那些路径在别人机器上必然搜不到，还会把「查过哪些地方」的文案污染成别人看不懂的样子。
+ * 装在别处的情况由自动发现兜底（扫盘符 msys64/app/msys64/tools 等常见布局）。
+ */
 export const DEFAULT_BIN_DIRS: readonly string[] = [
-  "D:/app/msys64/ucrt64/bin",
   "C:/msys64/ucrt64/bin",
   "C:/msys64/mingw64/bin",
 ];
 
-/** 默认 CubeMX 安装根目录候选（6.x）。 */
+/** 默认 CubeMX 安装根目录候选（6.x 的 Windows 默认安装位置）。 */
 export const DEFAULT_CUBEMX_ROOTS: readonly string[] = [
-  "D:/app/STM32CubeMX",
   "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX",
 ];
 
@@ -251,12 +260,65 @@ export function describeSearchScope(paths: readonly string[], tail?: string): st
   return tail === undefined ? list : list + "，以及 " + tail;
 }
 
+/** 一条「点名了、本机却没有」的搜索结果告警。 */
+export interface SearchConfigWarning {
+  /** 目录从哪来：config = ~/.dsh-stm32/config.json，env = 环境变量。 */
+  source: "config" | "env";
+  /** 那个不存在的路径。 */
+  path: string;
+  /** 一句话人话（可直接贴进报告/notes）。 */
+  message: string;
+}
+
 /**
- * 环境变量或显式参数覆盖默认搜索配置。
+ * 只读检查：配置/环境变量里点名的目录在这台机器上到底有没有。
  *
- * 优先级：显式参数 > 环境变量（整份替换，分号分隔）> 默认常量。
+ * 为什么需要这一层：插件是给别人下载的，配置也可能从别的机器拷过来（D:/app/msys64 这种
+ * 开发机专属路径）。这种路径不会让程序崩，但会让用户以为"我明明配了却没生效"。
+ * 这里**只报告、不删条目**：路径可能是还没装（装完就存在），删掉反而抹掉用户意图。
+ */
+export function searchConfigWarnings(
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): SearchConfigWarning[] {
+  const warnings: SearchConfigWarning[] = [];
+  const seen = new Set<string>();
+  const push = (source: "config" | "env", raw: string): void => {
+    const path = normalizePathEntry(raw);
+    if (path === "" || seen.has(path.toLowerCase()) || exists(path)) return;
+    seen.add(path.toLowerCase());
+    warnings.push({
+      source,
+      path,
+      message:
+        (source === "config" ? "配置文件里的 " : "环境变量里的 ") +
+        path +
+        " 在本机不存在（配置可能是从别的机器拷来的），这一条搜不到工具；换机器后重跑 stm32_env_install，或手改 " +
+        (source === "config" ? "~/.dsh-stm32/config.json（DSH_STM32_CONFIG 可改位置）" : "STM32_BIN_DIRS / STM32_CUBEMX_ROOT"),
+    });
+  };
+
+  for (const dir of splitList(env["STM32_BIN_DIRS"])) push("env", dir);
+  for (const dir of splitList(env["STM32_CUBEMX_ROOT"])) push("env", dir);
+
+  const config = configReadingDisabled(env) ? null : readToolchainConfig(env).config;
+  if (config !== null) {
+    if (config.msys64 !== "") push("config", config.msys64);
+    for (const dir of config.binDirs) push("config", dir);
+    if (config.cubeMxRoot !== "") push("config", config.cubeMxRoot);
+  }
+  return warnings;
+}
+
+/**
+ * 显式参数 / 环境变量 / 用户配置覆盖默认搜索配置。
+ *
+ * 优先级：显式参数 > 环境变量（整份替换，分号分隔）> 用户配置文件（整份替换）> 默认常量。
  * 自动发现的安装只追加在"没给显式参数"的那一档尾部：用参数点名目录时说明调用方
  * 心里有确切位置，再混进别处的同名工具会让"我明明指定了"变成假的。
+ *
+ * 用户配置文件在这里读，是因为**这一层是唯一的汇聚点**：所有工具/引擎都经过它，
+ * 装完工具链后不必改任何调用方就能立即生效（不需要重启 DSH：路径是我们自己读的）。
  */
 export function resolveSearchConfig(
   env: Record<string, string | undefined> = process.env,
@@ -266,11 +328,20 @@ export function resolveSearchConfig(
 ): SearchConfig {
   const binFromEnv = splitList(env["STM32_BIN_DIRS"]);
   const rootsFromEnv = splitList(env["STM32_CUBEMX_ROOT"]);
+  const userConfig = configReadingDisabled(env) ? null : readToolchainConfig(env).config;
+  const binFromConfig = binDirsFromConfig(userConfig);
+  const rootsFromConfig = cubeMxRootsFromConfig(userConfig);
   const discovered = discoveryDisabled(env)
     ? { binDirs: [], cubeMxRoots: [] }
     : (discoveredOverride ?? discoverInstalls());
-  const binBase = overrides.binDirs ?? (binFromEnv.length > 0 ? binFromEnv : [...DEFAULT_BIN_DIRS]);
-  const rootsBase = overrides.cubeMxRoots ?? (rootsFromEnv.length > 0 ? rootsFromEnv : [...DEFAULT_CUBEMX_ROOTS]);
+  const binBase = overrides.binDirs
+    ?? (binFromEnv.length > 0
+      ? binFromEnv
+      : (binFromConfig.length > 0 ? binFromConfig : [...DEFAULT_BIN_DIRS]));
+  const rootsBase = overrides.cubeMxRoots
+    ?? (rootsFromEnv.length > 0
+      ? rootsFromEnv
+      : (rootsFromConfig.length > 0 ? rootsFromConfig : [...DEFAULT_CUBEMX_ROOTS]));
   return {
     binDirs: dedupePaths([...binBase, ...(overrides.binDirs === undefined ? discovered.binDirs : [])]),
     cubeMxRoots: dedupePaths([...rootsBase, ...(overrides.cubeMxRoots === undefined ? discovered.cubeMxRoots : [])]),

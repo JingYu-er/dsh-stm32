@@ -5,12 +5,13 @@
  * 而人想按一下就烧，最省事的路径是 /stm32-flash —— 宿主直接执行 handler，不进模型、
  * 不消耗对话，结果像一条系统消息一样贴回对话里。
  *
- * 五条命令：
+ * 六条命令：
  *   /stm32-flash  [<工程目录>]              只烧录（program + verify + reset + exit），不进调试会话
  *   /stm32-debug  [<工程目录>]              烧录后起调试会话并停在 main，可继续读寄存器
  *   /stm32-stop                             提前关掉调试会话，把探针还给 VS Code
  *   /stm32-build  [<工程目录>] [--clean]     编译（默认走 CMake+Ninja 的 build/Debug）
  *   /stm32-doctor [<工程目录>]              体检：工具链 / 残留进程 / 端口 / .elf / .ioc 告警
+ *   /stm32-env    [<工程目录>]              工具链体检卡：编译/烧录/调试/生成各缺什么、装在哪、怎么装
  *
  * 工程目录缺省取会话当前工作目录；也可以直接写路径（相对路径按当前目录解析）。
  */
@@ -21,10 +22,12 @@ import { runBuild } from "../engine/build.js";
 import { debugSessions, releaseProbeFor } from "../engine/debug-session.js";
 import { runDoctor } from "../engine/doctor.js";
 import { runFlash } from "../engine/flash.js";
+import { ensureToolchain } from "../engine/toolchain-gate.js";
 import { formatFlashReport } from "../tools/flash.js";
 import type { BuildReport } from "../engine/build.js";
 import type { DoctorReport } from "../engine/doctor.js";
 import type { FlashReport } from "../engine/flash.js";
+import type { GateResult, ToolchainCapability } from "../engine/toolchain-gate.js";
 import type {
   CommandInvocation,
   CommandResult,
@@ -109,6 +112,49 @@ function flashText(report: FlashReport, released: string | null): CommandResult 
 
 function err(text: string): CommandResult {
   return { kind: "error", text };
+}
+
+/** 体检卡上的四项能力，顺序就是用户干的顺序：先能编译，再能烧、能调，最后才生成。 */
+const ENV_CAPABILITIES: readonly ToolchainCapability[] = ["build", "flash", "debug", "generate"];
+
+const ENV_CAPABILITY_LABEL: Record<ToolchainCapability, string> = {
+  build: "编译",
+  flash: "烧录",
+  debug: "调试",
+  generate: "生成代码",
+};
+
+/** 组件 id → 卡片上写的名字（齐全时点名用；缺的时候用门禁给的 label，那里写得更细）。 */
+const ENV_COMPONENT_LABEL: Record<string, string> = {
+  gcc: "gcc",
+  cmake: "CMake",
+  ninja: "Ninja",
+  openocd: "OpenOCD",
+  gdb: "GDB",
+  cubemx: "CubeMX",
+  "cubemx-java": "CubeMX 内置 JRE",
+};
+
+/** 四行体检结论：行的顺序固定，缺件时把第一条安装动作贴在后面（可直接粘贴）。 */
+function envText(rows: readonly { capability: ToolchainCapability; gate: GateResult }[], configPath: string): CommandResult {
+  const lines: string[] = ["工具链体检（配置：" + configPath + "）"];
+  let anyMissing = false;
+  for (const row of rows) {
+    const label = ENV_CAPABILITY_LABEL[row.capability];
+    if (row.gate.ok) {
+      const names = row.gate.checked.map((id) => ENV_COMPONENT_LABEL[id] ?? id).join("、");
+      // 单项时"OpenOCD 都在"读着别扭，按项数选量词。
+      lines.push(label + "  ✔ " + names + (row.gate.checked.length > 1 ? " 都在" : " 在"));
+      continue;
+    }
+    anyMissing = true;
+    const missing = row.gate.missing.map((item) => item.label).join("、");
+    const install = row.gate.missing[0]?.install[0];
+    lines.push(label + "  ✘ 缺 " + missing + (install === undefined ? "" : " —— " + install));
+  }
+  // 缺件也是体检结果，不是命令错误；所以两种结尾都是 success。
+  lines.push(anyMissing ? "要装：回「装」，我跑 stm32_env_install 出计划（先不下载）" : "都齐了：/stm32-build 就能编译");
+  return { kind: "success", text: lines.join("\n") };
 }
 
 /** 注册五条斜杠命令；宿主没组合 commands 服务时直接返回（工具不受影响）。 */
@@ -217,6 +263,33 @@ export function registerCommands(ctx: DshContext): void {
         return doctorText(report);
       } catch (error) {
         return err("体检命令异常：" + (error instanceof Error ? error.message : String(error)));
+      }
+    },
+  });
+
+  commands.register({
+    definitionId: "dsh-stm32/stm32-env",
+    name: "stm32-env",
+    description: "工具链体检：编译/烧录/调试/生成各缺什么、装在哪、怎么装",
+    input: { hint: "[<工程目录>]" },
+    handler: async (invocation) => {
+      try {
+        const subprocess = needSubprocess(ctx);
+        if (typeof subprocess === "string") return err(subprocess);
+        // 体检只问"这台机器能不能干这四件事"，不看工程目录；hint 里仍留着 [<工程目录>]，
+        // 是因为用户习惯性地带路径，不想让人以为参数被吞了。
+        // envCheck=warn：缺件也要拿到结论 + 安装建议，不能第一项缺就中断体检。
+        // 门禁自带 60 s 探测缓存，四项连着查只真探一遍。
+        const rows: Array<{ capability: ToolchainCapability; gate: GateResult }> = [];
+        let configPath = "";
+        for (const capability of ENV_CAPABILITIES) {
+          const gate = await ensureToolchain(ctx, { capability, envCheck: "warn", signal: invocation.signal });
+          if (configPath === "") configPath = gate.configPath;
+          rows.push({ capability, gate });
+        }
+        return envText(rows, configPath);
+      } catch (error) {
+        return err("工具链体检异常：" + (error instanceof Error ? error.message : String(error)));
       }
     },
   });

@@ -10,7 +10,9 @@
  */
 
 import { debugSessions } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { EvalReport, SessionReport } from "../engine/debug-session.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
@@ -83,6 +85,13 @@ export const stopOutputSchema: JsonSchema = {
   required: ["message", "ok", "stopped"],
 };
 
+/** 门禁档位参数：三个档位的说明文字与 build 工具保持一致。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface SessionArgs {
   projectDir?: string;
   elfPath?: string;
@@ -93,6 +102,7 @@ interface SessionArgs {
   hardTtlMs?: number;
   reset?: "none" | "halt" | "run";
   binDirs?: string[];
+  envCheck?: string;
 }
 
 function describeSession(report: SessionReport): string[] {
@@ -104,6 +114,19 @@ function describeSession(report: SessionReport): string[] {
   }
   for (const error of report.errors.slice(0, 6)) lines.push("x " + error);
   return lines;
+}
+
+/**
+ * 门禁拒绝时的会话报告。
+ * sessionSchema 是 additionalProperties:false 且没有 notes，门禁的补充说明只能落在 errors 里
+ * （首行就是 message，跳过以免重复）。
+ */
+function blockedSession(projectDir: string, gate: GateResult): SessionReport {
+  return {
+    ok: false, active: false, sessionId: "", port: 0, projectDir, elfPath: "",
+    startedAt: 0, idleTtlMs: 0, hardTtlMs: 0, remainingMs: 0,
+    errors: gateReportNotes(gate).slice(1), message: gate.message,
+  };
 }
 
 export function registerDebugSession(ctx: DshContext): void {
@@ -124,6 +147,7 @@ export function registerDebugSession(ctx: DshContext): void {
         hardTtlMs: { type: "number", description: "总时长上限毫秒数，默认 600000。" },
         reset: { type: "string", enum: ["none", "halt", "run"], description: "起会话时对目标做什么，默认 none（不动芯片）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选。" },
+        envCheck: ENV_CHECK_SCHEMA,
       },
     },
     timeoutMs: 60_000,
@@ -138,6 +162,16 @@ export function registerDebugSession(ctx: DshContext): void {
     async execute(rawArgs: SessionArgs, exec: ToolExec) {
       const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
       const projectDir = resolution.projectDir;
+      // 门禁：长调试会话同样要 openocd + GDB。开着会话再报"缺 openocd"只会让人以为探针坏了。
+      const gate = await ensureToolchain(ctx, {
+        capability: "debug",
+        ...(rawArgs.binDirs === undefined ? {} : { binDirs: rawArgs.binDirs }),
+        envCheck: rawArgs.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        return { message: gate.message, session: blockedSession(resolution.projectDir, gate) };
+      }
       debugSessions.configure(ctx.subprocess, rawArgs.binDirs ?? []);
       const session = await debugSessions.start({
         projectDir,
@@ -151,10 +185,11 @@ export function registerDebugSession(ctx: DshContext): void {
         ...(rawArgs.binDirs === undefined ? {} : { binDirs: rawArgs.binDirs }),
       });
       void exec;
-      return {
-        message: resolution.note === null ? session.message : session.message + "\n· " + resolution.note,
-        session,
-      };
+      const base = resolution.note === null ? session.message : session.message + "\n· " + resolution.note;
+      // 会话报告的 schema 关了额外属性、又没有 notes 字段，warn 档只能把警告并回 message；
+      // 而且 render 只打 session.message（不看外层 message），所以警告必须写进 session 里才看得见。
+      session.message = gate.ok ? base : gate.message + "\n" + base;
+      return { message: session.message, session };
     },
   });
 

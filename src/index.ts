@@ -19,6 +19,7 @@ import { registerCodePatch } from "./tools/code-patch.js";
 import { registerDebugRun } from "./tools/debug.js";
 import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
+import { registerEnvInstall } from "./tools/env-install.js";
 import { registerEnvProbe } from "./tools/env-probe.js";
 import { registerFlash } from "./tools/flash.js";
 import { registerGenerate } from "./tools/generate.js";
@@ -34,6 +35,7 @@ export const inject = ["tools", "subprocess", "jobs"];
 
 export function apply(ctx: DshContext): void {
   registerEnvProbe(ctx);
+  registerEnvInstall(ctx);
   registerProjectCreate(ctx);
   registerCodePatch(ctx);
   registerGenerate(ctx);

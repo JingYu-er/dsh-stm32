@@ -15,7 +15,7 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { detectBuildDir, findElf } from "./build.js";
 import { defaultConfigs, findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
-import { resolveFromDirs } from "./probe.js";
+import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 
 export interface DebugRunRequest {
@@ -198,8 +198,8 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
   }
   const openOcd = request.openOcdPath !== undefined && request.openOcdPath !== ""
     ? request.openOcdPath
-    : resolveFromDirs("openocd", config.binDirs);
-  const gdb = resolveFromDirs("gdb-multiarch", config.binDirs) ?? resolveFromDirs("arm-none-eabi-gdb", config.binDirs);
+    : await resolveToolIn(subprocess, ["openocd"], config.binDirs);
+  const gdb = await resolveToolIn(subprocess, ["gdb-multiarch", "arm-none-eabi-gdb"], config.binDirs);
   if (openOcd === null || gdb === null) {
     errors.push(openOcd === null ? "找不到 openocd" : "找不到 gdb（gdb-multiarch 或 arm-none-eabi-gdb）");
     return { ...empty, elfPath, message: "没调试：缺工具链（先跑 stm32_env_probe）", durationMs: Date.now() - startedAt };

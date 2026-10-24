@@ -16,10 +16,17 @@ import {
   normalizePathEntry,
   resetDiscoveryCache,
   resolveSearchConfig,
+  searchConfigWarnings,
   splitList,
 } from "../lib/data/search-roots.js";
 
 const key = (path) => path.replace(/\\/gu, "/").toLowerCase();
+
+/**
+ * 这几条断言讲的是"没有任何点名来源时吃什么"。本机真装过以后 ~/.dsh-stm32/config.json 是存在的，
+ * 那是更高一层（配置 > 默认），所以这里必须把配置层关掉——否则测试结果取决于"开发机装没装过"。
+ */
+const cleanEnv = (extra = {}) => ({ DSH_STM32_NO_CONFIG: "1", ...extra });
 
 /** 假文件系统：files 是"存在的文件"，dirs 是"目录 → 直接子目录"，其余由参数给出。 */
 function fakeProbe({ files = [], dirs = {}, registry = [], drives = [], user = [] } = {}) {
@@ -87,15 +94,15 @@ test("自动发现工具链：<盘>/msys64 下三个变体里挑有 exe 的 bin"
 test("resolveSearchConfig：默认 < 环境变量 < 参数，自动发现只追加不覆盖（点名参数时不追加）", () => {
   const discovered = { binDirs: ["F:/found/ucrt64/bin"], cubeMxRoots: ["G:/STM32CubeMX"] };
 
-  const plain = resolveSearchConfig({}, {}, discovered);
+  const plain = resolveSearchConfig(cleanEnv(), {}, discovered);
   assert.deepEqual(plain.binDirs, [...DEFAULT_BIN_DIRS, "F:/found/ucrt64/bin"]);
   assert.deepEqual(plain.cubeMxRoots, [...DEFAULT_CUBEMX_ROOTS, "G:/STM32CubeMX"]);
 
-  const fromEnv = resolveSearchConfig({ STM32_BIN_DIRS: "E:\\tools\\bin", STM32_CUBEMX_ROOT: "E:/cube" }, {}, discovered);
+  const fromEnv = resolveSearchConfig(cleanEnv({ STM32_BIN_DIRS: "E:\\tools\\bin", STM32_CUBEMX_ROOT: "E:/cube" }), {}, discovered);
   assert.deepEqual(fromEnv.binDirs, ["E:/tools/bin", "F:/found/ucrt64/bin"], "环境变量整体替换默认值，发现项仍追加");
   assert.deepEqual(fromEnv.cubeMxRoots, ["E:/cube", "G:/STM32CubeMX"]);
 
-  const explicit = resolveSearchConfig({ STM32_BIN_DIRS: "E:/env/bin" }, { binDirs: ["H:/arg/bin"] }, discovered);
+  const explicit = resolveSearchConfig(cleanEnv({ STM32_BIN_DIRS: "E:/env/bin" }), { binDirs: ["H:/arg/bin"] }, discovered);
   assert.deepEqual(explicit.binDirs, ["H:/arg/bin"], "显式参数整份替换，且不再混入自动发现（我点名的地方就是我要的）");
   assert.deepEqual(explicit.cubeMxRoots, [...DEFAULT_CUBEMX_ROOTS, "G:/STM32CubeMX"], "另一个 list 没点名，仍吃自动发现");
 });
@@ -105,8 +112,8 @@ test("STM32_NO_DISCOVER=1 关掉自动发现（CI / 单测用）", () => {
   assert.equal(discoveryDisabled({ STM32_NO_DISCOVER: "1" }), true);
   assert.equal(discoveryDisabled({ STM32_NO_DISCOVER: "true" }), true);
   assert.equal(discoveryDisabled({}), false);
-  assert.deepEqual(resolveSearchConfig({ STM32_NO_DISCOVER: "1" }, {}, discovered).binDirs, [...DEFAULT_BIN_DIRS]);
-  assert.deepEqual(resolveSearchConfig({ STM32_NO_DISCOVER: "1" }, {}, discovered).cubeMxRoots, [...DEFAULT_CUBEMX_ROOTS]);
+  assert.deepEqual(resolveSearchConfig(cleanEnv({ STM32_NO_DISCOVER: "1" }), {}, discovered).binDirs, [...DEFAULT_BIN_DIRS]);
+  assert.deepEqual(resolveSearchConfig(cleanEnv({ STM32_NO_DISCOVER: "1" }), {}, discovered).cubeMxRoots, [...DEFAULT_CUBEMX_ROOTS]);
 });
 
 test("discoverInstalls：进程内只扫一次盘（缓存），resetDiscoveryCache 后可重扫", () => {
@@ -115,4 +122,29 @@ test("discoverInstalls：进程内只扫一次盘（缓存），resetDiscoveryCa
   assert.equal(discoverInstalls(), first, "第二次必须命中缓存");
   resetDiscoveryCache();
   assert.notEqual(discoverInstalls(), first, "reset 之后要重新扫描");
+});
+
+test("默认候选只含任何 Windows 机器上可能存在的路径（插件给别人下载也不能指着开发机的 D:/app）", () => {
+  assert.deepEqual(DEFAULT_BIN_DIRS, ["C:/msys64/ucrt64/bin", "C:/msys64/mingw64/bin"]);
+  assert.deepEqual(DEFAULT_CUBEMX_ROOTS, ["C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX"]);
+  for (const dir of [...DEFAULT_BIN_DIRS, ...DEFAULT_CUBEMX_ROOTS]) {
+    assert.doesNotMatch(dir, /\/app\//iu, "开发机专属布局不该进默认值：" + dir);
+  }
+});
+
+test("searchConfigWarnings：点名了但本机不存在的目录要报出来（只报，不改配置）", () => {
+  const warnings = searchConfigWarnings(
+    { DSH_STM32_NO_CONFIG: "1", STM32_BIN_DIRS: "E:/real/bin;E:/gone/bin", STM32_CUBEMX_ROOT: "E:/cube" },
+    (path) => path === "E:/real/bin",
+  );
+  assert.deepEqual(warnings.map((item) => item.path), ["E:/gone/bin", "E:/cube"]);
+  assert.deepEqual(warnings.map((item) => item.source), ["env", "env"]);
+  assert.match(warnings[0].message, /在本机不存在/u);
+  assert.match(warnings[0].message, /STM32_BIN_DIRS/u);
+
+  assert.deepEqual(
+    searchConfigWarnings({ DSH_STM32_NO_CONFIG: "1", STM32_BIN_DIRS: "E:/real/bin" }, (path) => path === "E:/real/bin"),
+    [],
+    "存在的目录不该报",
+  );
 });

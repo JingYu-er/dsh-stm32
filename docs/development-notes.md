@@ -1,6 +1,6 @@
 # 开发笔记（原 README）
 
-> 这是 0.1.0 发布前的开发记录：里程碑、宿主契约踩坑、15 个工具的实现细节、A1–A13 验收与宿主侧复验。
+> 这是 0.1.0 发布前的开发记录：里程碑、宿主契约踩坑、16 个工具的实现细节、A1–A13 验收与宿主侧复验。
 > 面向使用者的说明已移到仓库根目录的 [README.md](../README.md)。
 # dsh-stm32
 
@@ -339,7 +339,7 @@ node test\flash-units.test.mjs    # 6 个烧录用例：openocd 命令拼装 / �
 node test\doctor-regs-units.mjs   # 5 个用例：tasklist 解析 / 地址归一化 / regs 的 Tcl 脚本 / openocd 真实日志格式
 node test\ioc-plan-units.test.mjs  # 9 个事务用例：plan 不写源文件 / apply 核 SHA / 引脚校验 / rollback
 node test\session-units.test.mjs  # 8 个会话用例：租约、续租、超时自动关、重复 start、无会话时 eval
-node test\schema-guard.mjs        # 15 个工具的输出契约守卫（未声明键 / null / 类型），离线复刻宿主校验
+node test\schema-guard.mjs        # 16 个工具的输出契约守卫（未声明键 / null / 类型），离线复刻宿主校验
 node test\e2e-generate.mjs D:\tmp\copy-of-demo   # 真调 CubeMX（2–4 分钟），在副本上验证落位与 USER CODE 保活
 node test\e2e-build.mjs          # 真编译 demo（clean，约 1 分钟）
 node test\e2e-flash.mjs          # 真烧录 demo（会写板子）
@@ -1123,5 +1123,179 @@ const baseReport = { …, notes: failureNotes, … };
 - 报告的 `notes` 是**给失败看**的，不是给成功看的。任何 `fail()` 都必须带上「为什么会失败」的上下文；把 `notes` 默认写成 `[]` 等于在最需要信息时静音。
 - 判定依赖 `process.env` 的代码（`cubeMxUserHome`）在探针里必须显式喂 env，否则测到的是另一条分支，而且「看起来正常」。
 - 造「缺包」比造「包都在」便宜：改两行 `.ioc` 就够，不必真装一个 X-CUBE 包。
-- 声明了不存在的包时 CubeMX 会**挂住而不是报错**（8 分钟无输出），所以真机验证要留够超时，并记住超时也是一条有效证据（走的是失败路径）。
+- 声明了不存在的包时 CubeMX 不是「报错退出」，而是弹出**模态 Warning 等人点 OK**：`The CMSIS-Pack : STMicroelectronics.X-CUBE-ALGOBUILD.9.9.9 is unknown` / `You must Use the Embedded Software Packages Manager to install this CMSIS-pack from your local environment.` / `Now, STM32CubeMX tools continue to load this project without CMSIS-Pack contains.` / `Please,do not save this project to avoid to corrupt it`。`-q` 无头模式没有人能点这个对话框，于是日志停在 `ThirdParty:883 - exiting critical section [close project]`，直到超时被杀——这就是第二次跑 481 s `ok=false` 的全部原因。
+- 正因为 CubeMX 在缺包时会弹框卡死，**插件必须提前把这条警告说出来**（§3、§6 的 notes）：用户先看到「本机索引里没有 X-CUBE-F103DEMO」「只有 1.4.0、1.5.0」，就不会白等 8 分钟去撞同一个框。
+
+## L2：用户级工具链配置、开工前门禁与安装器（方案1）
+
+### 1. 目的
+
+三件互相咬合的事，起因都是「换台机器就得从头教一遍」：
+
+| 痛点 | 具体表现 | 这次的做法 |
+| --- | --- | --- |
+| 工具链位置无处安放 | 只认环境变量与写死的 `DEFAULT_BIN_DIRS`，换台机器把 msys64 装到别处就得设环境变量 | 加用户级配置文件，装在哪写一次、所有工具都认 |
+| 缺件时跑一半才炸 | `stm32_build` 会 spawn `cmake`，缺 gcc 时报的是 cmake 的内部错误 | 每个动作工具入口先过门禁，缺件就直接给「缺什么、怎么装」 |
+| 装工具链全靠人肉 | 新手不知道要装 5 个包、不知道要进 PATH | `stm32_env_install` 先出计划（不下载），确认后才真装，PATH 只写用户级 |
+
+### 2. 用户级配置（`src/data/toolchain-config.ts`）
+
+配置文件放在 `%USERPROFILE%/.dsh-stm32/config.json`（可用 `DSH_STM32_CONFIG` 指到别处，`DSH_STM32_NO_CONFIG=1` 整体关掉）：
+
+```json
+{
+  "version": 1,
+  "msys64": "D:/app/msys64",
+  "binDirs": [],
+  "packages": ["mingw-w64-ucrt-x86_64-arm-none-eabi-gcc"],
+  "cubeMxRoot": "D:/app/STM32CubeMX",
+  "updatedAt": "2026-02-11T12:00:00.000Z"
+}
+```
+
+几个定死的选择：
+
+- **放 `data` 层，不放 `engine` 层**：`data/search-roots.ts` 的 `resolveSearchConfig()` 要读它，放 engine 会形成 `data → engine` 的循环依赖。分层不是审美，是编译器会真的报错。
+- **`binDirs` 留空就由 `msys64` 推导**（`binDirsFromConfig()` 返回 `[msys64 + "/ucrt64/bin"]`）。用户只写一个 msys64 路径就能用，不必知道 ucrt64/clang64 的区别。
+- **优先级四层**：显式参数 > `STM32_BIN_DIRS` / `STM32_CUBEMX_ROOT`（整份替换）> 用户配置（整份替换）> `DEFAULT_BIN_DIRS` / `DEFAULT_CUBEMX_ROOTS`。自动发现（扫盘 + 注册表）只在「没给显式参数」那一档追加到尾部，不会盖掉用户写的。
+- **坏 JSON 当没配置**：`readToolchainConfig()` 返回 `config: null` + `errors[0] = "配置文件不是合法 JSON：…；已按未配置处理（重新写入会覆盖它）"`。绝不因为一个坏文件让所有工具罢工。
+- **原子写**：写 `<path>.tmp-<pid>` 再 `rename`，避免写一半断电留下半截 JSON。
+- **读缓存按 `path + mtimeMs + size`**：门禁每次工具调用都要读一次配置，每次 `stat + readFile` 不贵但没必要；写完立刻失效。
+
+### 3. 门禁（`src/engine/toolchain-gate.ts`）
+
+能力 → 必需组件的映射是唯一事实来源：
+
+```ts
+export const CAPABILITY_COMPONENTS = {
+  build:    ["gcc", "cmake", "ninja"],
+  flash:    ["openocd"],
+  debug:    ["openocd", "gdb"],
+  generate: ["cubemx", "cubemx-java"],
+};
+```
+
+`ensureToolchain(ctx, { capability, binDirs?, cubeMxRoots?, envCheck?, signal? })` 的判定顺序：
+
+1. **快路径先走文件存在性**（`resolveFromDirs`，只 `existsSync`，**不 spawn**）。门禁挂在每个工具入口上，如果每次都 `--version` 一遍，编译一次就多五个进程、几百毫秒，还会被杀毒软件拖成秒级。
+2. 快路径没全命中，才 `probeTarget` 逐个真探测（拿版本号，报告里能显示 `13.3.0` 这种实话），结果按「能力 + binDirs + cubeMxRoots」缓存 **60 s**（`PROBE_CACHE_TTL_MS`）。
+3. `envCheck` 三档：`block`（默认，缺件不干活，返回 schema 齐全的失败报告）、`warn`（照干，把警告放报告首行）、`off`（不检查，报告里写「（envCheck=off，没有检查）」）。**默认档是 block**：宁可不动手，也不要给一个「跑到一半才炸」的失败。
+
+blocked 时的 `message` 是一句人话，不是字段堆砌：
+
+```
+缺 arm-none-eabi-gcc、CMake、Ninja，这次没有开始编译：arm-none-eabi-gcc 没找到（编译 C 代码用）…。要我装吗？回一句「装」，我先跑 stm32_env_install 出计划（只列大小与步骤、不下载），确认后才真装；想自己装就看下面 missing[0].install 的第一条。
+```
+
+`gateReportNotes()` 把它摊成报告 `notes`：首行 message、每个缺件一行「缺 X：hint」+ 一行缩进的「安装：…」、末行 nextStep。**失败报告也必须有 nextStep**——见「缺包警告的真机验证」那节的教训。
+
+### 4. 安装器（`src/engine/msys2-install.ts` + `src/tools/env-install.ts`）
+
+默认 `dryRun` 是 `true`：`stm32_env_install` 被调一次，只出计划（7 步、下载大小、PATH 前后对比），**零下载、零写注册表、零建目录**。真装必须 `dryRun: false` **且** `confirm: true` 两个开关同时在。
+
+计划模式在本机的实测：
+
+| 字段 | 值 |
+| --- | --- |
+| `report.mode` | `plan` |
+| `report.msys64` / `resolvedVia` | `D:/app/msys64` / `discovered`（正确复用已有工具链，不重复装一份 2.5 GB） |
+| `report.steps` | 7 步全 `pending` |
+| `report.config.written` / `report.path.done` | `false` / `false` |
+| 副作用 | 临时目录零新文件、零 `curl`、零 `reg add` |
+
+真装的四个技术决定：
+
+- **下载官方 sfx**：`https://github.com/msys2/msys2-installer/releases/latest/download/msys2-base-x86_64-latest.sfx.exe`（43,060,392 字节）。原本任务书里写的 `msys2-x86_64-latest.sfx.exe` 在 GitHub 上**不存在**，是资产名写错——下载 URL 一定要真访问一次再写进代码。缓存 `<配置目录>/msys2-latest.sfx.exe`，先写 `.part` 再 rename，复用前验 `MZ` 头（`0x4d 0x5a`）。
+- **sfx 解出来自带一层 `msys64`**：所以先解到 `<targetParent>/.dsh-msys2-staging`，确认里面有 `usr/bin/bash.exe`，再同盘 rename 到 `targetDir`。`-y -o<dir>` 与 `-y -o"<dir>"` 两种写法都试（7z 自解压对带空格路径的引号处理不一致）。
+- **补包用 pacman，不整包重下**：`<msys64>/usr/bin/bash.exe -lc "pacman -Sy --noconfirm && pacman -S --noconfirm --needed <5 包>"`，5 个包是 `mingw-w64-ucrt-x86_64-arm-none-eabi-gcc`、`-gdb-multiarch`、`-openocd`、`-cmake`、`-ninja`。stderr 命中 keyring 或 `invalid or corrupted package` 就先 `pacman-key --init && pacman-key --populate msys2` 再重试一次（新解压的 MSYS2 第一次 `-Sy` 几乎必然撞签名）。pacman 失败不停整体流程：PATH 与配置照写，报告里 `ok` 由「除 path 外有无 failed 步骤」决定。
+- **PATH 只写用户级，而且先备份**：`reg query "HKCU\Environment" /v Path` 读出 `REG_EXPAND_SZ`，按 `normalizePathEntry` + 小写比较做幂等，写前备份到 `<配置目录>/path-backup-<ISO>.txt`，**备份失败就不写**。写用 `reg add HKCU\Environment /v Path /t REG_EXPAND_SZ /d <新值> /f`：`setx` 会在 1024 字符处截断，还会把 `%USERPROFILE%` 这类变量展开成死路径。绝不碰 `HKLM`。
+- **不做卸载**：删工具链要判断「是不是用户自己的目录」，误删代价远大于留着一份。
+
+### 5. 接入点
+
+七个动作工具 + 一条命令，能力映射：
+
+| 工具 | 能力 | 门禁位置 |
+| --- | --- | --- |
+| `stm32_build` | build | `src/tools/build.ts:167`（block `:172`） |
+| `stm32_flash` | flash | `src/tools/flash.ts:137`（block `:142`） |
+| `stm32_debug_run` | debug | `src/tools/debug.ts:177`（block `:182`） |
+| `stm32_debug_session` | debug | `src/tools/debug-session.ts:167`（block `:172`） |
+| `stm32_regs_read` | debug | `src/tools/regs.ts:149`（block `:154`，在「借活跃会话」分支之前） |
+| `stm32_generate` | generate | `src/tools/generate.ts:215`（block `:220`，在 `releaseProbeFor` 之前，不占探针） |
+| `stm32_project_create` | generate | `src/tools/project-create.ts:143`（block `:148`） |
+| `/stm32-env` | 全部四项 | `src/commands/register.ts:271` |
+
+门禁统一插在「取到 subprocess + 解析工程目录 + 参数校验之后、调用引擎之前」：早退（工程名非法、目录不存在）比门禁更优先，否则用户会收到「缺 gcc」而不是「工程名不对」。`stm32_doctor` 与 `stm32_env_probe` 不接门禁——它们本身就是体检工具。
+
+`/stm32-env` 的真实卡片（本机）：
+
+```
+工具链体检（配置：C:/Users/JingYu/.dsh-stm32/config.json）
+编译  ✔ gcc、CMake、Ninja 都在
+烧录  ✔ OpenOCD 在
+调试  ✔ OpenOCD、GDB 都在
+生成代码  ✔ CubeMX、CubeMX 内置 JRE 都在
+都齐了：/stm32-build 就能编译
+```
+
+缺件那行是「编译  ✘ 缺 arm-none-eabi-gcc、CMake —— winget install …」这种形状，**缺件也算 success**：体检结果不是错误，是信息。
+
+### 6. 踩坑
+
+- **`stm32_env_install` 有两层 mode**：工具的返回体是宿主卡片形态 `{ mode: "report" | "job", jobId, message, report }`，引擎侧的 `plan` / `install` 在 `report.mode` 里。第一版 schema-guard 断言 `value.mode === "plan"` 直接红（`'report' !== 'plan'`）。断言必须写成 `value.mode !== "job"` + `value.report.mode === "plan"`。
+- **schema-guard 的假 ctx 只有 `tools.register` 和 `get("subprocess")`**：门禁如果插在参数校验之前，一大批「非法参数也能拿到完整失败报告」的既有断言会被门禁文案替代。blocked 报告还必须满足各自的 `output.schema`：`stm32_project_create` 的 `report.firmwareRoot` 不能赋 `undefined`（要干脆不赋），`stm32_debug_session` 的 `session.ok` 必须是 `false`。
+- **`test/run-units.mjs` 必须给子进程 `DSH_STM32_NO_CONFIG=1`**：开发机上真实存在 `~/.dsh-stm32/config.json` 时，`search-roots-units` 里「没给参数就用默认候选」的断言会红。而 `toolchain-units.test.mjs` 顶部自己 `delete process.env.DSH_STM32_NO_CONFIG`——它测的就是配置层。这是个典型的「测试互相污染」，用环境变量在进程边界切开最省事。**二次事故**：真装把 `~/.dsh-stm32/config.json` 写出来之后，`search-roots-units` 里那两条「没给参数就该吃默认候选」的断言直接红了（actual 变成 `D:/app/msys64/ucrt64/bin`）——这几条把 env 当参数**显式传** `{}`，`run-units` 给子进程设的 `DSH_STM32_NO_CONFIG=1` 传不进这个参数。现在该文件顶部有 `cleanEnv(extra)` = `{ DSH_STM32_NO_CONFIG: "1", ...extra }`，四条断言都走它：断言的是「默认层」，就不该让「本机装没装过」参与决定。
+- **没有 subprocess 也不能只说「没找到」**：门禁在 `subprocess` 缺失时合成 `found: false` 的探测结果，并且把 `error`（`宿主没有提供 subprocess 服务，只能做文件存在性检查`）落进 `missing[].error`。否则用户看到「缺 gcc」，实际是宿主少注入了服务。
+- **工具数/命令数是硬断言**：`test/commands-units.test.mjs` 里有一份命令名数组、`schema-guard` 头注释、README 的「N 个工具 / N 条命令」、`docs/development-notes.md` 的头部说明，新增一个工具要一起改，否则红的是三处不相关的地方。
+
+### 7. 测试计数
+
+套件 15 → 17，用例 137 → **170 pass / 0 fail**（CI 上是 168 pass + 2 skipped，跳过的仍是那两条需要真固件包的脚手架用例）。新增：
+
+- `test/toolchain-units.test.mjs`（22 例）：配置读写往返（`DSH_STM32_CONFIG` 指到临时目录、反斜杠与大小写重复归并、写完无 `.tmp` 残留）、坏 JSON → `config: null` + errors、`normalize` 丢非法字段、`binDirsFromConfig` 推导、`toolchainConfigPath` 三种优先级、`updateToolchainConfig` 合并、`resolveSearchConfig` 四层优先级；门禁的 `CAPABILITY_COMPONENTS` / `normalizeEnvCheck`、快路径不 spawn、缺件 block 文案与 detail、warn 前缀、off 放行、60 s 缓存 `cacheHit` 与 `resetGateCache`、`generate` 报 `[cubemx, cubemx-java]`、无 subprocess 时 `missing[0].error`；以及引擎/门禁共用的 `resolveToolIn`（显式目录命中就不问宿主、目录没有才回退 PATH、哪都没有返回 null 不抛、老式假 subprocess 不带 `resolveExecutable` 也不炸）；再加大三例（§10）：外来配置的告警透传到 `warnings` / `gateReportNotes`、`buildTargets` 的 pacman 建议按 `binDirs` 推导且全文不出现开发机路径、`resolveTargetDir` 拒绝「盘符都不存在」的配置 msys64。`test/search-roots-units.test.mjs` 9 → 11：内置默认候选不含任何某台机器专属路径、`searchConfigWarnings` 只报不存在的条目（含 `source: "env"` 与存在项不报）。
+- `test/install-units.test.mjs`（6 例，§11 那次真装事故换来的）：`parsePacmanQuery` 只收「包名 版本」行；五包已装时 pacman 步 `skipped` 且一条 `pacman -S` 都没执行（断言 calls 里没有该前缀）、`ok` / `verify.ok` / `config.written` 全 true 且写出的配置 `msys64` 对得上；pacman 失败但自检全过 → 步 `done`、detail 含「已装」与 `pacman -Syu`、`ok` true；依赖解不开且自检失败 → `failed`、detail 含「无法满足依赖关系」与 `-Syu`、`ok` false；工具真装返回 `mode: "job"`、`message` 含「已在后台安装」且不含「还没动手」、`report.notes` 里没有「这只是计划」、job label 含 `stm32_env_install`。假件只实现 `spawn` 的四个成员（`done` / `collected` / `terminate` / `waitForExit`），按命令内容回答，不跑真 pacman。第 6 例盯的是**计划文案与实际执行的偏差**：计划里 pacman 步必须写出「先 `pacman -Q` 问一遍、已装跳过」，且不能再预告一条无条件 `-Sy --noconfirm && pacman -S` 的命令；计划模式除了一次只读的 `reg.exe query HKCU\Environment /v Path`（用来预告「会不会重复写 PATH」）之外不跑任何命令，尤其不跑 pacman。
+- `test/schema-guard.mjs` 17 → 20：`stm32_env_install` 缺开关停在计划（不写 PATH、不开 job）、门禁缺件时 `stm32_build` 返回 schema 齐全的失败报告、`envCheck: "off"` 不被门禁文案替代。
+
+### 8. 还没验证的
+
+- **真装只跑通了一半**（2026-10-24 在开发机真跑过一次，见 §11）：复用已有 MSYS2 → `prepare` 命中、`download` / `extract` 跳过、`pacman -Q` 判已装 → `skipped`、`verify` 5/5、`config` 写入，整条链是真通的。**仍然没跑过**：真下载 43 MB、解压、真装 247 MB（这台的五个包本来就在）、`reg add` 成功路径（PATH 里早就有这条目录，走的是「已存在不重复写」）、超长 PATH 的变量展开、跨卷 rename、`pacman-key` 重试分支、`needsDecision: "msys64Dir"` 分支。
+- **`needsDecision: "msys64Dir"` 分支**：本机因为已有 `D:/app/msys64` 走的是 `discovered`，没有目标的机器上该返回「装哪？」而不是替用户决定。
+- **block 档的真机复现**：只能真在缺件机器上跑。本机 `binDirs: ["D:/__dsh_stm32_missing_bin__"]` **模拟不出来**——探测层会回退到 PATH，`D:/app/msys64/ucrt64/bin` 在用户级 PATH 里，于是门禁照样放行；本机用 `generate` 能力（CubeMX 走绝对路径候选、PATH 供不上）验过 block 生效。
+
+### 9. 0.1.1 真机验证揪出的不一致：门禁看 PATH、引擎不看（已修）
+
+- **现象**：真宿主上 `stm32_build({binDirs: ["D:/__dsh_missing_bin__"], envCheck: "block"})` 照样编译成功（0.9 s）；`stm32_flash` / `stm32_regs_read` / `stm32_debug_session` 同参数却报引擎自己的旧文案「找不到 openocd（…）；查过 D:/__dsh_missing_bin__，以及 PATH」。同一次调用里门禁说齐全、引擎说找不到，用户看到的是自相矛盾的两句话。
+- **根因**：门禁的探测（`probe.ts` 的 `resolveCandidate`）找不到目录就走 `subprocess.resolveExecutable`（= PATH）；而 `engine/flash.ts:214`、`engine/regs.ts:150`、`engine/debug.ts:201-202`、`engine/debug-session.ts:223`/`:311` 只调 `resolveFromDirs`（只看 `config.binDirs`），文件不存在就直接返回失败——**文案里那句「以及 PATH」其实没查**。`engine/build.ts` 的 `resolveCmake` 反而有 PATH 兜底（找不到就返回裸 `cmake` 交给宿主），所以只有它跑得通。
+- **修法**：`src/engine/probe.ts` 新增 `resolveToolIn(subprocess, names, binDirs, signal)`：先按目录找文件（零 spawn），miss 再依次问宿主；宿主没有 `resolveExecutable`（老式假 subprocess / 离线单测）就返回 null 不抛。flash / regs / debug / debug-session 五处调用点全部换成它，门禁与引擎从此同一条规则。这也正是 `docs/development-notes.md:673` 早就写下的设计意图（scope 含「以及 PATH」）。
+- **决策（用户 2026-10-24 明确）**：门禁与引擎都**不**忽略 PATH。顺序固定为「配置目录（`binDirs` / `msys64` / 环境变量）→ PATH 兜底」：配置里指的那份优先，配置里没有才用系统 PATH 里的，都没有才判缺件。理由：PATH 里的工具就是真能跑的工具，忽略它反而会对着一个装好的机器说「缺工具链」；配置目录优先则保证用户点名的那份不被旧版本顶掉。**不做**严格模式（只看配置目录）。
+- **真机复验（2026-10-24，插件 0.1.1）**：`binDirs: ["D:/__dsh_missing_bin__"]` + `envCheck: "warn"` 逐个入口打了一遍，四个入口全部**靠 PATH 兜底跑通**：`stm32_build` 1.3 s 成功（增量，产物 656888 B）、`stm32_flash` 4.4 s「烧录成功（已校验）」（openocd 日志里有 `device id = 0x20036410`、`flash size = 64 KiB`、`** Verified OK **`）、`stm32_regs_read` 读到 3 个地址（`GPIOC_ODR=0x00000000`、`RCC_APB2ENR=0x00000035`、`ICSR=0x00000000`，pc=0x0800024c）、`stm32_debug_session` 起会话成功并在 `stm32_debug_eval` 里读到 `g_led_blink_count = 23`、`pc 0x8001178 <Reset_Handler>`，`stm32_debug_stop` 正常释放探针（之后 `stm32_doctor` 报 `processes: []`、`portBusy: false`）。**结论**：§9 那条修复在真硬件上成立，门禁与引擎不再是两套规则。
+- **后台 job 在真宿主的行为**：`foreground !== true` 且宿主有 `jobs` 时走 job 分支，进度靠 `handle.append`，只在单测里用假 handle 验过。
+
+### 10. 插件要给别人下载：默认值去本机化 + 外来配置告警
+
+- **现象**：插件是给自己写的，路径也是自己的。三处把开发机写死进了产物：`DEFAULT_BIN_DIRS` 第一项是 `D:/app/msys64/ucrt64/bin`、`DEFAULT_CUBEMX_ROOTS` 第一项是 `D:/app/STM32CubeMX`；`buildTargets` 的五条 `install` 建议直接写 `D:/app/msys64/usr/bin/pacman.exe -S …`；`xcube-catalog.ts` 的来源串带 `C:/Users/JingYu/…`。别人 `dsh plugin add` 之后：报告里「查过 D:/app/msys64/…」是一句在他机器上无意义的噪声，照抄 pacman 建议直接报「不是内部或外部命令」，而把 `~/.dsh-stm32/config.json` 从这台机器拷过去更糟——安装器会拿配置里的 `msys64` 当已装目标，往一个不存在的盘上写。
+- **根因**：路径不是「配置」，而是写进了常量、提示文案和数据快照；同时「配置是别的机器的」这个状态在整个链路里**没有任何表达通道**——读进来的路径既不过滤也不提示，安装器也分不清「已装」与「这台机器上根本没有这个盘」。
+- **修法**（四条，互相独立）：
+  1. **默认值只留通用位置**：`DEFAULT_BIN_DIRS = ["C:/msys64/ucrt64/bin", "C:/msys64/mingw64/bin"]`、`DEFAULT_CUBEMX_ROOTS = ["C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX"]`。装在别处不靠猜——自动发现（扫盘 + 注册表 + PATH）本来就兜得住，默认列表只是起点。
+  2. **只报告，不动手**：`searchConfigWarnings(env, exists)` 检查 `STM32_BIN_DIRS` / `STM32_CUBEMX_ROOT` 与配置里的 `msys64` / `binDirs` / `cubeMxRoot`，不存在的每条给一句「配置文件里的 X 在本机不存在（配置可能是从别的机器拷来的），这一条搜不到工具；换机器后重跑 stm32_env_install，或手改 ~/.dsh-stm32/config.json」。它**不删条目也不过滤**，`resolveSearchConfig` 的输出与以前逐字一致——配置是用户的，插件没有资格替人清空。告警接进三处：`GateResult.warnings` + `buildDetail` 的「⚠ …」行、`gateReportNotes`（**放行时也带**，否则「编译成功」旁边看不到污染来源）、`stm32_env_probe.recommendations` 开头。
+  3. **建议按实际 MSYS2 推导**：新增 `msys64RootFromBinDirs(binDirs)`（从 `<root>/ucrt64/bin` 这类路径反推 root）与 `pacmanHint(config)`，五条包建议变成 `<root>/usr/bin/pacman.exe -S …`，没有 MSYS2 证据时回落 `C:/msys64`；CubeMX 那条改成「装到 `C:/Program Files/…` 会被自动发现」。
+  4. **安装器认盘符**：`driveUsable(path)` 先确认 `Q:/` 本身存在，再谈目录。配置里的 `msys64` 盘符都没有时 → 忽略该配置、notes 与 message 前置「⚠ 配置里的 MSYS2 根 Q:/app/msys64 在本机不存在（盘符都没有，配置大概是从别的机器拷来的），已忽略，请指定 targetDir」，然后照常回落自动发现、否则要求 `targetDir`。**绝不**往不存在的盘上 mkdir/解压。
+- **决策**：为什么不按原计划写「按 `env` 推导默认路径的函数」（`LOCALAPPDATA`、`scoop`、`ChocolateyToolsLocation`…）？因为那等于把「猜别人的安装位置」这件事从 3 条硬编码扩散成 8 条更隐蔽的猜测，而自动发现已经在做同一件事且证据更强（真扫盘、真查注册表）。默认值越短越好，短到「只含 Windows 上最标准的两个位置」。
+- **未做**：以上全部只在单测里用 `exists` 注入模拟过（假 `Q:/`、假 `E:/gone/bin`），**没有一台真正「什么都没装」的机器**跑过；PATH 写坏/超长的真机路径仍只在计划模式里看过（见 §8）。
+
+### 11. 第一次真装：pacman 会顺手升级用户工具链，且"失败"不等于没装成
+
+- **真跑的证据**（2026-10-24，`stm32_env_install({dryRun:false, confirm:true})`，后台 job）：`prepare` 命中已有 MSYS2、`download` / `extract` 跳过、`pacman` 退出码 1「错误：无法准备事务处理 (无法满足依赖关系)」、`verify` 5/5 全过（gcc 13.3.0、gdb 16.2、openocd 0.12.0、cmake 3.31.5、ninja 1.12.1）、`config` 写入，**job 整体判 failed**。
+- **根因一（副作用）**：`pacman -S --noconfirm <5 个 mingw 包>` 对**已装**的包不是跳过而是"顺手升级到仓库最新"。`pacman -Sp --needed` 一跑就露馅：gcc 13.3.0 → 16.2.0、gdb 16.2 → 18.1、cmake 3.31.5 → 4.4.4、ninja 1.12.1 → 1.13.2、openocd 0.12.0 → 0.12.0-4。装个 openocd 顺手把别人的编译器升一个大版本，是任何插件都没资格做的决定。
+- **根因二（假失败）**：久未整体升级的 MSYS2 上，`pacman -Sy` + 局部 `-S` 会因"局部升级解不开依赖"直接失败；而这时工具链其实**全都在**（`verify` 5/5），却报"安装未完成"。
+- **修法**：
+  1. 先问再装：`pacman -Q <packages>` → `parsePacmanQuery` 解析出已装集合，缺件才装。五个全在 → pacman 步直接 `skipped`，detail 写「…都已经装了，没有重复安装，也没有升级（要升级自己跑 pacman -Syu）。」
+  2. 新命令 `pacmanInstallCommand(packages)` = `pacman -S --noconfirm --needed …`，**不带 `-Sy`**；只有整机一件都没装（`installed.size === 0`）时才走带同步的那条。
+  3. 补包失败且不是"整机没装"时，先自动 `pacman -Sy` 重试一次并 `onProgress` 说明；仍失败且 stderr 含「无法满足依赖关系」就追加一句「这条一般是 MSYS2 太久没整体升级：先在 <msys64> 里跑 pacman -Syu，再重调本工具。」
+  4. 成功判定加一条：`verify.ok` 且 pacman 步失败 → 该步改判 `done` 并附「但自检显示 5 个组件都能跑，按「已装」处理（插件不替你升级，要升级自己跑 pacman -Syu）。」——自检是最终裁判，pacman 的退出码只是过程信息。
+  5. 真装卡片文案换成「已在后台安装 MSYS2 到 …：7 步依次跑，进度看 job 输出。」，并过滤掉计划模式专属的那句「这只是计划」，否则用户在 job 里读到"还没动手"会以为没装。
+  6. **计划文案与实际执行对齐**：pacman 步原本预告的是 `bash.exe -lc "pacman -Sy --noconfirm && pacman -S …"`——真跑已经不是这条了。改成「先 `pacman -Q <5 个包>` 问一遍装没装，已装的直接跳过（不重复安装、也不升级…）；只对缺的包跑 `pacman -S --noconfirm --needed <缺的包>`；整机一件都没有时才先 `pacman -Sy` 同步一次」。用户是先看计划再决定装不装，计划里的命令必须就是会跑的命令。
+- **验证**：`test/install-units.test.mjs` 6 例（假 `spawn`，按命令内容回答）；修完后再真机跑一次 `stm32_env_install({dryRun:false, confirm:true})`（job `stm32-env-install-7d8c8295473445d7`）：卡片首行「已在后台安装 MSYS2 到 D:/app/msys64（来源：配置里的 msys64）：7 步依次跑，进度看 job 输出。」，job 状态 **completed**，pacman 步 `[--]` 跳过（detail 列出 5 个包与版本）、PATH 步「已经有 D:\app\msys64\ucrt64\bin，没有重复写」、自检 5/5、config 写入，结尾「现在可以编译 / 烧录 / 调试」；再用真 `subprocess` 在本机复跑一次（临时脚本、`DSH_STM32_CONFIG` 指临时文件、`writePath: false`）：pacman 步 `skipped`、detail 列出 5 个包与版本、`ok` true、`verify.ok` true，**全程没有第二条 `pacman -S`**。
+- **教训**：安装器对"已经装好一部分"的机器最危险——很容易把"再确认一次"写成"再动一遍手"。凡是 pacman / apt / npm install 这类命令，先查状态再决定执行，且默认永不隐式升级。
 

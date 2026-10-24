@@ -7,7 +7,9 @@
 
 import { runGenerate } from "../engine/generate.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
+import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { GenerateReport } from "../engine/generate.js";
+import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 
@@ -85,6 +87,13 @@ export const outputSchema: JsonSchema = {
   required: ["mode", "jobId", "message"],
 };
 
+/** 门禁档位参数：三个档位的说明文字与 build 工具保持一致。 */
+const ENV_CHECK_SCHEMA: JsonSchema = {
+  type: "string",
+  enum: ["block", "warn", "off"],
+  description: "工具链检查：block 缺件就拒绝（默认）、warn 只警告、off 不检查",
+};
+
 interface GenerateArgs {
   projectDir?: string;
   iocPath?: string;
@@ -95,6 +104,7 @@ interface GenerateArgs {
   foreground?: boolean;
   cubeMxRoots?: string[];
   timeoutMs?: number;
+  envCheck?: string;
 }
 
 interface ToolValue {
@@ -136,6 +146,18 @@ function summarize(report: GenerateReport): string {
   return report.message;
 }
 
+/** 门禁拒绝时的报告：jobs 一条都不起，字段按 outputSchema.required 补齐。 */
+function blockedReport(projectDir: string, gate: GateResult): GenerateReport {
+  return {
+    ok: false, projectDir, iocPath: "", layout: "coupled", durationMs: 0, skipped: false,
+    cacheKey: "",
+    thirdparty: { parked: false, detail: "" },
+    message: gate.message, script: "", command: "", logTail: "", backupDir: "",
+    verdict: { ok: false, successLine: "", errors: [], knownNoise: [] },
+    files: [], notes: gateReportNotes(gate),
+  };
+}
+
 export function registerGenerate(ctx: DshContext): void {
   ctx.tools.register({
     name: GENERATE_TOOL,
@@ -164,6 +186,7 @@ export function registerGenerate(ctx: DshContext): void {
         },
         foreground: { type: "boolean", description: "同步执行并返回完整报告（默认 false，走后台 job）。" },
         cubeMxRoots: { type: "array", items: { type: "string" }, description: "STM32CubeMX 安装根目录候选，优先于默认值/环境变量。" },
+        envCheck: ENV_CHECK_SCHEMA,
         timeoutMs: { type: "number", description: "超时毫秒数，默认 600000（10 分钟）。" },
       },
       required: [],
@@ -187,6 +210,18 @@ export function registerGenerate(ctx: DshContext): void {
       }
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
+      // 门禁：无头生成要 CubeMX 启动器 + 它自带的 JRE。缺件时不必等 3–4 分钟才报错。
+      const gate = await ensureToolchain(ctx, {
+        capability: "generate",
+        ...(args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots }),
+        envCheck: args.envCheck,
+        signal: exec.signal,
+      });
+      if (!gate.ok && gate.mode === "block") {
+        const blocked = blockedReport(projectDir, gate);
+        return { mode: "report", jobId: "", message: blocked.message, report: blocked };
+      }
+      const gateNote = gate.ok ? null : gate.message;
       // CubeMX 生成期间别让 openocd 占着探针（单飞，规格 I5）。
       const released = await releaseProbeFor("stm32_generate");
       const jobs = ctx.get<JobsService>("jobs");
@@ -203,6 +238,7 @@ export function registerGenerate(ctx: DshContext): void {
           ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
           signal: exec.signal,
         });
+        if (gateNote !== null) report.notes.unshift(gateNote);
         if (released !== null) report.notes.push(released);
         if (resolution.note !== null) report.notes.push(resolution.note);
         return { mode: "report", jobId: "", message: summarize(report), report };
@@ -216,6 +252,7 @@ export function registerGenerate(ctx: DshContext): void {
         label: "stm32_generate " + projectDir,
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
+          if (gateNote !== null) handle.append(gateNote + "\n");
           handle.append("开始无头生成：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runGenerate(subprocess, {
             projectDir,

@@ -76,6 +76,35 @@ export function resolveFromDirs(candidate: string, binDirs: string[]): string | 
   return null;
 }
 
+/**
+ * 引擎里找可执行文件的统一入口：先按显式目录（msys64 / binDirs）找文件，
+ * 再交给宿主解析（等价于 PATH）。门禁（toolchain-gate）走的是同一套规则，
+ * 两边不一致就会出现"门禁说齐全、引擎说找不到"的错位。
+ */
+export async function resolveToolIn(
+  subprocess: SubprocessService | null | undefined,
+  names: readonly string[],
+  binDirs: readonly string[],
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const dirs = [...binDirs];
+  for (const name of names) {
+    const hit = resolveFromDirs(name, dirs);
+    if (hit !== null) return hit;
+  }
+  if (subprocess === null || subprocess === undefined) return null;
+  if (typeof subprocess.resolveExecutable !== "function") return null;
+  for (const name of names) {
+    try {
+      const resolved = await subprocess.resolveExecutable(name, undefined, signal);
+      if (typeof resolved === "string" && resolved !== "") return resolved;
+    } catch {
+      // 宿主解析失败（命令不存在）就继续试下一个候选名。
+    }
+  }
+  return null;
+}
+
 function firstMeaningfulLine(text: string): string {
   for (const line of text.split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -187,10 +216,31 @@ export async function probeAll(
   return results;
 }
 
+/** 从 binDirs 里认出 MSYS2 根（<root>/ucrt64/bin 这种形状）。 */
+export function msys64RootFromBinDirs(binDirs: readonly string[]): string {
+  for (const dir of binDirs) {
+    const match = /^(.*)\/(?:ucrt64|mingw64|clang64|mingw32)\/bin$/iu.exec(dir);
+    const root = match?.[1] ?? "";
+    if (root !== "") return root;
+  }
+  return "";
+}
+
+/**
+ * 安装建议里的 pacman：知道用户的 MSYS2 在哪就用它，不知道就给 MSYS2 的默认安装位置。
+ * 绝不写死开发机的 D:/app/msys64 —— 别人机器上没这个目录，贴出来的命令等于假的。
+ */
+function pacmanHint(config: SearchConfig): string {
+  const root = msys64RootFromBinDirs(config.binDirs);
+  return (root === "" ? "C:/msys64" : root) + "/usr/bin/pacman.exe -S ";
+}
+
 /** 本机需要的能力清单。路径全部来自配置，不在逻辑里硬编码。 */
 export function buildTargets(config: SearchConfig): ProbeTarget[] {
+  const pacman = pacmanHint(config);
   const cubeMxLaunchers = config.cubeMxRoots.map((dir) => dir + "/STM32CubeMX.exe");
   const cubeMxJavas = config.cubeMxRoots.map((dir) => dir + "/jre/bin/java.exe");
+  const cubeMxDefaultRoot = "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX";
   return [
     {
       id: "gcc",
@@ -201,7 +251,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       hint: "装 GNU Arm 工具链：msys64 里 pacman -S mingw-w64-ucrt-x86_64-arm-none-eabi-gcc",
       impact: "编译不了：没有 arm-none-eabi-gcc 就产不出 build/Debug/demo.elf，烧录和调试也无从谈起。",
       install: [
-        "本机已有 MSYS2 时最省事：D:/app/msys64/usr/bin/pacman.exe -S mingw-w64-ucrt-x86_64-arm-none-eabi-gcc（13.3.0）",
+        "已有 MSYS2 时最省事：" + pacman + "mingw-w64-ucrt-x86_64-arm-none-eabi-gcc（13.3.0）",
         "没有 MSYS2：winget install --id Arm.ArmGnuToolchain；装完把它的 bin 目录加进 STM32_BIN_DIRS（分号分隔，整份替换默认值）",
         "装完自检：arm-none-eabi-gcc --version",
       ],
@@ -216,7 +266,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       hint: "调试要 GDB：msys64 里 pacman -S mingw-w64-ucrt-x86_64-gdb-multiarch",
       impact: "调试用不了（F5 / stm32_debug_run 起不来 GDB）；只烧录不受影响，纯烧录只需要 openocd。",
       install: [
-        "MSYS2：D:/app/msys64/usr/bin/pacman.exe -S mingw-w64-ucrt-x86_64-gdb-multiarch（16.2；UCRT64 仓库里没有 arm-none-eabi-gdb 这个包）",
+        "MSYS2：" + pacman + "mingw-w64-ucrt-x86_64-gdb-multiarch（16.2；UCRT64 仓库里没有 arm-none-eabi-gdb 这个包）",
         "不想装 MSYS2：winget install --id Arm.ArmGnuToolchain，它自带 arm-none-eabi-gdb，装完加进 STM32_BIN_DIRS",
         "装完自检：gdb-multiarch --version",
       ],
@@ -231,7 +281,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       hint: "烧录/调试服务端：msys64 里 pacman -S mingw-w64-ucrt-x86_64-openocd",
       impact: "烧录和调试都用不了（stm32_flash / stm32_debug_run / stm32_stop 全部失败）；生成代码、编译、改 USER CODE 不受影响。",
       install: [
-        "MSYS2：D:/app/msys64/usr/bin/pacman.exe -S mingw-w64-ucrt-x86_64-openocd（0.12.0）",
+        "MSYS2：" + pacman + "mingw-w64-ucrt-x86_64-openocd（0.12.0）",
         "不想装 MSYS2：winget install --id xpack-dev-tools.openocd-xpack",
         "装完自检：openocd --version",
       ],
@@ -246,7 +296,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       hint: "配置/编译要 CMake：msys64 里 pacman -S mingw-w64-ucrt-x86_64-cmake",
       impact: "配置和编译都会失败（build/Debug 配不起来）；烧录现成的 elf 不受影响。",
       install: [
-        "MSYS2：D:/app/msys64/usr/bin/pacman.exe -S mingw-w64-ucrt-x86_64-cmake（3.31.5）",
+        "MSYS2：" + pacman + "mingw-w64-ucrt-x86_64-cmake（3.31.5）",
         "或者 winget install --id Kitware.CMake；装了 ST 的 VS Code 扩展通常也会带一份 CMake",
         "装完自检：cmake --version",
       ],
@@ -261,7 +311,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       hint: "CMakePresets 指定 Ninja 生成器：msys64 里 pacman -S mingw-w64-ucrt-x86_64-ninja",
       impact: "编译失败：CMakePresets 指定 Ninja 生成器，配置阶段就会报找不到 ninja。",
       install: [
-        "MSYS2：D:/app/msys64/usr/bin/pacman.exe -S mingw-w64-ucrt-x86_64-ninja（1.12.1）",
+        "MSYS2：" + pacman + "mingw-w64-ucrt-x86_64-ninja（1.12.1）",
         "或者 winget install --id Ninja-build.Ninja",
         "装完自检：ninja --version",
       ],
@@ -277,7 +327,7 @@ export function buildTargets(config: SearchConfig): ProbeTarget[] {
       impact:
         "只影响建工程与重新生成代码：stm32_project_create 和改 .ioc 后的 stm32_generate 用不了；编译、烧录、调试、以及 stm32_ioc_inspect / stm32_ioc_plan 的只读分析都不受影响。",
       install: [
-        "官网下载安装（winget 里没有）：https://www.st.com/en/development-tools/stm32cubemx.html；装到默认目录（D:/app/STM32CubeMX 或 C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX）会被自动发现",
+        "官网下载安装（winget 里没有）：https://www.st.com/en/development-tools/stm32cubemx.html；装到默认目录 " + cubeMxDefaultRoot + " 会被自动发现",
         "装在别处：设 STM32_CUBEMX_ROOT=<安装根>（根下要有 STM32CubeMX.exe 和 jre/bin/java.exe），或把路径传给 stm32_env_probe 的 cubeMxRoots",
         "装完自检：<安装根>/jre/bin/java.exe -version 能打印版本",
       ],

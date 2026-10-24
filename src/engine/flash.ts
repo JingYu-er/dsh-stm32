@@ -15,7 +15,7 @@ import type { SubprocessService } from "../types.js";
 import { detectBuildDir, findElf } from "./build.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
-import { resolveFromDirs } from "./probe.js";
+import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 
 export interface FlashRequest {
@@ -211,7 +211,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
 
   const openOcd = request.openOcdPath !== undefined && request.openOcdPath !== ""
     ? request.openOcdPath
-    : resolveFromDirs("openocd", config.binDirs);
+    : await resolveToolIn(subprocess, ["openocd"], config.binDirs);
   if (openOcd === null) {
     return {
       ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],

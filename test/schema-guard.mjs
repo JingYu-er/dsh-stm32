@@ -6,7 +6,7 @@
 // 之前 stm32_flash 少了 args 声明、stm32_build 用 null 顶替 exitCode/elf，
 // 都是"副作用已经发生、调用却报 ToolCallError"。除 stm32_env_probe 外，本测试只走失败早退路径
 // （不 spawn 进程）；env_probe 的成功形状用一个假 subprocess 喂版本号（也不起进程）。
-// 覆盖范围是全部 15 个工具 + 5 条斜杠命令里的工具部分；真宿主里的成功路径仍要靠 e2e 复验。
+// 覆盖范围是全部 16 个工具 + 6 条斜杠命令里的工具部分；真宿主里的成功路径仍要靠 e2e 复验。
 //
 // 运行：node test/schema-guard.mjs（需先 npm run build）
 import assert from "node:assert/strict";
@@ -33,6 +33,9 @@ import { outputSchema as debugSchema } from "../lib/tools/debug.js";
 import { registerCodePatch } from "../lib/tools/code-patch.js";
 import { outputSchema as codePatchSchema } from "../lib/tools/code-patch.js";
 import { outputSchema as doctorSchema } from "../lib/tools/doctor.js";
+import { registerEnvInstall } from "../lib/tools/env-install.js";
+import { outputSchema as envInstallSchema } from "../lib/tools/env-install.js";
+import { registerBuild } from "../lib/tools/build.js";
 import { registerEnvProbe } from "../lib/tools/env-probe.js";
 import { outputSchema as envProbeSchema } from "../lib/tools/env-probe.js";
 import { registerIocInspect } from "../lib/tools/ioc-inspect.js";
@@ -186,6 +189,39 @@ function collectTools(register, subprocess = forbiddenSubprocess) {
 
 const noBinDirs = { binDirs: ["D:/__dsh_stm32_missing_bin__"] };
 const exec = { signal: new AbortController().signal };
+
+test("stm32_env_install 缺 dryRun:false / confirm:true 时停在计划模式，形状合规", async () => {
+  const tool = collectTools(registerEnvInstall).get("stm32_env_install");
+  assert.ok(tool, "stm32_env_install 应已注册");
+  for (const args of [{}, { confirm: true }, { dryRun: false }]) {
+    const value = await tool.execute(args, exec);
+    reportProblems("stm32_env_install" + JSON.stringify(args), envInstallSchema, value);
+    // 外层 mode 是宿主卡片的形态（report/job），引擎侧的 mode 才是 plan/install；
+    // 两个开关缺一就只能是 plan，绝不开 job、绝不动网络与注册表。
+    assert.notEqual(value.mode, "job", "缺开关时不许开后台 job：" + JSON.stringify(args));
+    assert.equal(value.report.mode, "plan", "两个开关缺一就必须停在计划：" + JSON.stringify(args));
+    assert.ok(value.report.steps.length > 0, "计划里要列出步骤");
+    assert.equal(value.report.path.done, false, "计划模式不许改 PATH");
+    assert.equal(value.report.config.written, false, "计划模式不许写配置");
+  }
+});
+
+test("门禁缺件时 stm32_build 返回 schema 齐全的失败报告（不 spawn cmake）", async () => {
+  const tool = collectTools(registerBuild).get("stm32_build");
+  assert.ok(tool, "stm32_build 应已注册");
+  const value = await tool.execute({ projectDir: FIXTURE_PROJECT, ...noBinDirs, envCheck: "block", foreground: true }, exec);
+  reportProblems("stm32_build(门禁)", buildSchema, value);
+  assert.equal(value.report.ok, false);
+  assert.match(value.message, /这次没有开始编译/u);
+  assert.ok(value.report.notes.some((line) => line.includes("安装：")), "notes 里要有可粘贴的安装动作");
+});
+
+test("envCheck=off 时门禁不拦（仍会走真编译路径，故只看它没被门禁文案替代）", async () => {
+  const tool = collectTools(registerBuild).get("stm32_build");
+  const value = await tool.execute({ projectDir: FIXTURE_PROJECT, ...noBinDirs, envCheck: "off", foreground: true, timeoutMs: 5000 }, exec);
+  reportProblems("stm32_build(off)", buildSchema, value);
+  assert.doesNotMatch(value.message, /这次没有开始编译/u);
+});
 
 test("stm32_ioc_plan 早退（找不到 .ioc）符合 output schema", async () => {
   const defs = collectTools(registerIocPlan);

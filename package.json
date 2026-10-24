@@ -1,6 +1,6 @@
 {
   "name": "dsh-stm32",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH 插件：STM32（F103C8T6）全流程工具层 —— 环境探测、.ioc 事务、生成工程、编译、只烧录、按需调试",
   "type": "module",
   "main": "lib/index.js",
