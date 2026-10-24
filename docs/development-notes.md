@@ -1028,3 +1028,100 @@ if (debugSessions.isActive()) {
 ### 6. 测试计数
 
 套件 14 → 15，用例 123 → **137 pass / 0 fail**。新增的 `test/tool-contract-units.test.mjs`（14 例）覆盖 `normalizeHexAddress`、`parseGdbPrintedHex`、无会话时 `readWords` 的可读错误，以及工具层省略 `projectDir` 时确实取会话工作目录。
+
+## 缺包警告的真机验证：失败报告也必须带 notes
+
+### 1. 目的
+
+`needsThirdpartyPacks()` 产出的 `warnings` 此前只有单测覆盖，没在真 CubeMX 上验过。本机 C8T6 工程全是 `Mcu.ThirdPartyNb=0`，所以要造一个「声明了包、但本机缺包或缺版本」的工程真跑一遍。
+
+### 2. 选包：ALGOBUILD 为什么在 F103C8T6 上能用
+
+159 个 pdsc 里 **0 个**出现 `STM32F103` / `STM32F1xx` 字样——pdsc 不按型号写死，靠条件匹配。`STMicroelectronics.X-CUBE-ALGOBUILD.pdsc` 的兼容条件写的是内核：
+
+```xml
+<condition id="Cortex-M Device"><accept Dcore="Cortex-M3"/> …</condition>
+```
+
+F103C8T6 正是 Cortex-M3，所以它在 F1 工程里「能用」；本机装了 1.4.0 / 1.5.0，正好可以构造「版本不存在」。
+
+### 3. 造测试工程
+
+- `D:/JingYu/Desktop/c8t6_vscode_test/_xcube_probe` = demo 的完整拷贝（3055 文件，排除 `build`、`_probe`、`dsh-stm32`、`.git`、`.dsh-stm32`）。不能拷到 demo 的子目录里，Node 会报 `ERR_FS_CP_EINVAL: cp returned EINVAL (cannot copy … to a subdirectory of self …)`。
+- 往 `_xcube_probe/demo.ioc` 写入两条假引用（其余行不动）：
+
+```ini
+Mcu.ThirdPartyNb=2
+Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.9.9.9
+Mcu.ThirdParty1=STMicroelectronics.X-CUBE-F103DEMO.1.0.0
+```
+
+一个「包在、版本不在」，一个「包不在」。
+
+预期（直接调 `lib/engine/thirdparty.js`，`pdscDir=C:/Users/JingYu/.stm32cubemx/thirdparties/pdsc`）：
+
+| 字段 | 值 |
+| --- | --- |
+| `needed` | `true` |
+| `reason` | `工程声明了 2 个第三方包（STMicroelectronics.X-CUBE-ALGOBUILD 9.9.9、STMicroelectronics.X-CUBE-F103DEMO 1.0.0）` |
+| `warnings[0]` | `工程要用 STMicroelectronics.X-CUBE-ALGOBUILD 9.9.9，本机索引里只有 1.4.0、1.5.0（CubeMX 会按可用版本处理，必要时在它里面 Migrate）` |
+| `warnings[1]` | `工程要用 STMicroelectronics.X-CUBE-F103DEMO 1.0.0，但本机第三方包索引里没有这个包（先在 CubeMX 的 Manage embedded software packages 里装上它，否则生成会报缺包）：C:/Users/JingYu/.stm32cubemx/thirdparties/pdsc` |
+
+### 4. 第一次跑：`ok=true`，但报告里没有 warning——**探针的错，不是产品的错**
+
+第一次只声明了 ALGOBUILD 9.9.9，真跑 CubeMX 成功（470,354 ms，6 文件落位，保活 12 个 USER CODE 标签），`notes` 里却只有「第三方包索引：保留第三方包索引：工程声明了 1 个第三方包（…9.9.9）」，没有版本不符的警告。
+
+原因在探针：脚本由 `run_code` 起，子进程 `process.env` 是空的 → `cubeMxUserHome(process.env)` 返回 `null` → `pdscDir` 为 `undefined` → 只判「要不要索引」，不去比对本机装了哪些包。
+
+```
+home({})                                  = null
+home({ USERPROFILE: "C:/Users/JingYu" })  = C:/Users/JingYu/.stm32cubemx
+```
+
+宿主进程有 `USERPROFILE`，所以产品侧没问题；但**任何脱离 DSH 宿主跑的探针都必须自己补 env**，否则测的是「没装 CubeMX 的机器」那条分支。
+
+### 5. 顺带发现的真缺陷：失败报告把 notes 写死成空数组
+
+`src/engine/generate.ts` 的 `fail()` 默认值是 `notes: []`：
+
+```ts
+function fail(request: GenerateRequest, message: string, extra: Partial<GenerateReport> = {}): GenerateReport {
+  return { … notes: [], …extra };
+}
+```
+
+而第三方包的 `warnings` 在 `parkNotes` 里（`src/engine/generate.ts:411` 的 `parkNotes.push(...decision.warnings)`），只在成功分支 `src/engine/generate.ts:516` 的 `notes.push(...parkNotes)` 被并入。
+
+后果很刺眼：**CubeMX 恰恰在最需要那条警告的时候失败**——缺包导致生成报错，而报告里的 notes 是空的，用户看不出缺了什么。
+
+修法（`src/engine/generate.ts`）：
+
+```ts
+const failureNotes: string[] = [];
+if (thirdparty.detail !== "") failureNotes.push("第三方包索引：" + thirdparty.detail);
+failureNotes.push(...parkNotes);
+const baseReport = { …, notes: failureNotes, … };
+```
+
+四处失败出口（`spawnError` / `aborted` / `timedOut` / `!verdict.ok`）都走 `fail(request, …, baseReport)`，一并继承。
+
+### 6. 第二次跑：失败也把两条警告带出来了
+
+同一工程、`skipIfUnchanged: false`、`thirdpartyPacks: "auto"`、`timeoutMs: 480000`，探针顶部补 `process.env.USERPROFILE = "C:/Users/JingYu"`：
+
+| 项 | 结果 |
+| --- | --- |
+| 墙钟 | 481,553 ms，`ok=false`，`message = CubeMX 生成超时`（16:24:31 载入工程后再无输出，被 480 s 杀掉） |
+| `thirdparty` | `parked: false`，detail = `保留第三方包索引：工程声明了 2 个第三方包（…ALGOBUILD 9.9.9、…X-CUBE-F103DEMO 1.0.0）`（需要包时不停放，符合设计） |
+| `notes` | 3 条：第三方包索引那行 + **两条警告原文**（见 §3 表） |
+| pdsc | 159 个原位，无 `pdsc.dsh-parked`（不需要停放） |
+
+也就是说：**警告在失败报告里也能看到**，第 5 节的修复生效。CubeMX 自己的日志里也有旁证（`ThirdParty IPModes/IPconfigs doesn't exist for :STMicroelectronics.X-CUBE-ALGOBUILD.9.9.9`），被 `parseGenerateLog` 归入 knownNoise。
+
+### 7. 教训
+
+- 报告的 `notes` 是**给失败看**的，不是给成功看的。任何 `fail()` 都必须带上「为什么会失败」的上下文；把 `notes` 默认写成 `[]` 等于在最需要信息时静音。
+- 判定依赖 `process.env` 的代码（`cubeMxUserHome`）在探针里必须显式喂 env，否则测到的是另一条分支，而且「看起来正常」。
+- 造「缺包」比造「包都在」便宜：改两行 `.ioc` 就够，不必真装一个 X-CUBE 包。
+- 声明了不存在的包时 CubeMX 会**挂住而不是报错**（8 分钟无输出），所以真机验证要留够超时，并记住超时也是一条有效证据（走的是失败路径）。
+

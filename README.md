@@ -265,7 +265,7 @@ source [find target/stm32f1x.cfg]
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
 | 生成变快了，但 CubeMX GUI 里看不到扩展包了 | `thirdpartyPacks: "auto"` 会在不需要扩展包时把 `thirdparties/pdsc` 停放成 `pdsc.dsh-parked`，生成结束自动还原。若正在 CubeMX GUI 里手工选包，传 `thirdpartyPacks: "keep"` |
-| notes 说「本机第三方包索引里没有这个包」 | 工程要用的 X-CUBE 包本机没装（判定靠 `.ioc` 里的 `Mcu.ThirdParty<k>` 与内置包目录对名字）。在 CubeMX 的 Manage embedded software packages 里装上它再生成。内置目录是快照，装了新包后重跑 `node scripts/gen-xcube-catalog.mjs` 更新（旧的目录只是不认识新包，不会误判成「不需要」） |
+| notes 说「本机第三方包索引里没有这个包」 | 工程要用的 X-CUBE 包本机没装（判定靠 `.ioc` 里的 `Mcu.ThirdParty<k>` 与内置包目录对名字）。在 CubeMX 的 Manage embedded software packages 里装上它再生成。这条在**生成失败的报告里也会出现**（超时/报错时照样带 notes，先看 notes 再猜原因）。内置目录是快照，装了新包后重跑 `node scripts/gen-xcube-catalog.mjs` 更新（旧的目录只是不认识新包，不会误判成「不需要」） |
 | `stm32_code_patch` 说块不存在 | `main.c` 里是短标签（`PV`=私有变量、`PFP`=函数原型、`2`=while 前初始化、`3`=循环体）；报错会列出该文件全部可用标签，照抄即可 |
 
 ## 开发与测试

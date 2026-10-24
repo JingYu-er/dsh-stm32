@@ -466,6 +466,11 @@ export async function runGenerate(
   const log = outcome.stdout + "\n" + outcome.stderr;
   const verdict = parseGenerateLog(log);
   const durationMs = Date.now() - startedAt;
+  // 失败路径也要把「第三方包索引」的判定与缺包警告带出去：CubeMX 报缺包时，
+  // 我们自己那条"本机没有这个包"恰恰是最有用的信息，不能只在成功时给。
+  const failureNotes: string[] = [];
+  if (thirdparty.detail !== "") failureNotes.push("第三方包索引：" + thirdparty.detail);
+  failureNotes.push(...parkNotes);
   const baseReport = {
     projectDir,
     iocPath,
@@ -475,6 +480,7 @@ export async function runGenerate(
     cacheKey: cacheKey.key,
     thirdparty,
     verdict,
+    notes: failureNotes,
     script,
     command,
     logTail: tail(log, 25),
