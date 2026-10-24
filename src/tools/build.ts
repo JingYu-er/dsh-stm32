@@ -8,6 +8,7 @@ import { runBuild } from "../engine/build.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import type { BuildReport, MemoryUsage } from "../engine/build.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const BUILD_TOOL = "stm32_build";
 
@@ -138,7 +139,8 @@ export function registerBuild(ctx: DshContext): void {
       const args = rawArgs ?? {};
       const subprocess = ctx.get<SubprocessService>("subprocess");
       if (subprocess === undefined) return { mode: "report", jobId: "", message: "宿主缺少 subprocess 服务，无法编译" };
-      const projectDir = args.projectDir ?? process.cwd();
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const projectDir = resolution.projectDir;
       // 编译本身不碰探针，但 openocd 常驻会让 ninja 的进程环境变复杂；先让会话让出来更稳。
       const released = await releaseProbeFor("stm32_build");
       const jobs = ctx.get<JobsService>("jobs");
@@ -153,6 +155,7 @@ export function registerBuild(ctx: DshContext): void {
           signal: exec.signal,
         });
         if (released !== null) report.notes.push(released);
+        if (resolution.note !== null) report.notes.push(resolution.note);
         return { mode: "report", jobId: "", message: report.message, report };
       }
       const controller = new AbortController();
@@ -161,7 +164,7 @@ export function registerBuild(ctx: DshContext): void {
         label: "stm32_build " + projectDir,
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
-          handle.append("开始编译：" + projectDir + "\n");
+          handle.append("开始编译：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runBuild(subprocess, {
             projectDir,
             ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
@@ -184,7 +187,7 @@ export function registerBuild(ctx: DshContext): void {
           };
         },
       });
-      return { mode: "job", jobId, message: "已在后台开始编译 " + projectDir };
+      return { mode: "job", jobId, message: "已在后台开始编译 " + projectDir + (resolution.note === null ? "" : "（" + resolution.note + "）") };
     },
   });
 }

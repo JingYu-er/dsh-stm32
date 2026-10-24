@@ -258,7 +258,8 @@ source [find target/stm32f1x.cfg]
 | 现象 | 原因与处理 |
 | --- | --- |
 | 烧完连不上、SWD 失联 | 固件里生成了 `__HAL_AFIO_REMAP_SWJ_DISABLE()`。按住 BOOT0 上电进系统 bootloader 重烧，然后把 SYS 设回 Serial Wire——`stm32_flash` 现在会先拦这种情况 |
-| `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口 |
+| `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口。调试会话开着时读寄存器不会再有这个问题：`stm32_regs_read` 复用会话的 openocd，不另起第二个 |
+| 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 用会话自己的 gdb 连接执行 `print/x $pc` 与 `print/x *(unsigned int *)0x…`，读完 `monitor resume` 再 detach，notes 第一条写「复用调试会话（端口 N）的 openocd，没有另起一个」；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
@@ -271,12 +272,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 14 个离线套件、123 个用例；不需要板子、CubeMX、工具链
+npm test                 # 15 个离线套件、137 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **121 pass + 2 skipped**，开发机上是 123 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **135 pass + 2 skipped**，开发机上是 137 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

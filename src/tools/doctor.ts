@@ -9,6 +9,7 @@ import { runDoctor } from "../engine/doctor.js";
 import type { DoctorProcess, DoctorReport } from "../engine/doctor.js";
 import type { ProbeResult } from "../engine/probe.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const DOCTOR_TOOL = "stm32_doctor";
 
@@ -166,14 +167,16 @@ export function registerDoctor(ctx: DshContext): void {
           },
         };
       }
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const report = await runDoctor(subprocess, {
-        projectDir: args.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         ...(args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots }),
         ...(args.port === undefined ? {} : { port: args.port }),
         ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
         signal: exec.signal,
       });
+      if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },
   });

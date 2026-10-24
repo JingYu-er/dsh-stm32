@@ -7,7 +7,8 @@
  */
 
 import { applyIocPlan, rollbackIoc } from "../engine/ioc-plan.js";
-import type { DshContext, JsonSchema } from "../types.js";
+import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const IOC_APPLY_TOOL = "stm32_ioc_apply";
 
@@ -73,8 +74,10 @@ export function registerIocApply(ctx: DshContext): void {
         return [{ type: "text", text: lines.join("\n") }];
       },
     },
-    async execute(rawArgs: IocApplyArgs) {
-      const projectDir = rawArgs.projectDir ?? process.cwd();
+    async execute(rawArgs: IocApplyArgs, exec: ToolExec) {
+      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
+      const projectDir = resolution.projectDir;
+      const extraNotes = resolution.note === null ? [] : [resolution.note];
       if (rawArgs.rollbackFrom !== undefined && rawArgs.rollbackFrom !== "") {
         const rollback = rollbackIoc({ projectDir, backupFrom: rawArgs.rollbackFrom });
         return {
@@ -89,7 +92,7 @@ export function registerIocApply(ctx: DshContext): void {
           shaAfter: rollback.shaAfter,
           backupPath: rollback.backupPath,
           warnings: [],
-          notes: rollback.ok ? ["回滚后建议 stm32_generate 重新生成，让代码与 .ioc 一致"] : [],
+          notes: [...(rollback.ok ? ["回滚后建议 stm32_generate 重新生成，让代码与 .ioc 一致"] : []), ...extraNotes],
         };
       }
       const planId = rawArgs.planId ?? "";
@@ -97,7 +100,7 @@ export function registerIocApply(ctx: DshContext): void {
         return {
           message: "没写入：必须带 planId（先 stm32_ioc_plan 拿到计划 ID）；要回滚请用 rollbackFrom。",
           mode: "apply", ok: false, projectDir, iocPath: "", planId: "", appliedChanges: 0,
-          shaBefore: "", shaAfter: "", backupPath: "", warnings: [], notes: [],
+          shaBefore: "", shaAfter: "", backupPath: "", warnings: [], notes: extraNotes,
         };
       }
       const applied = applyIocPlan({ projectDir, planId });
@@ -113,7 +116,7 @@ export function registerIocApply(ctx: DshContext): void {
         shaAfter: applied.shaAfter,
         backupPath: applied.backupPath,
         warnings: applied.warnings,
-        notes: applied.notes,
+        notes: [...applied.notes, ...extraNotes],
       };
     },
   });

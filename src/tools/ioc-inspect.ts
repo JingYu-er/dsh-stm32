@@ -13,6 +13,7 @@ import { findIocFile } from "../engine/generate.js";
 import { summarizeIoc } from "../engine/ioc.js";
 import type { IocSummary } from "../engine/ioc.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const IOC_INSPECT_TOOL = "stm32_ioc_inspect";
 
@@ -220,9 +221,10 @@ export function registerIocInspect(ctx: DshContext): void {
         return [{ type: "text", text: formatValue(typed as IocValue).join("\n") }];
       },
     },
-    async execute(rawArgs: IocInspectArgs | undefined, _exec: ToolExec): Promise<IocValue | EmptyValue> {
+    async execute(rawArgs: IocInspectArgs | undefined, exec: ToolExec): Promise<IocValue | EmptyValue> {
       const args = rawArgs ?? {};
-      const projectDir = args.projectDir ?? process.cwd();
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const projectDir = resolution.projectDir;
       const iocPath = args.iocPath === undefined ? findIocFile(projectDir) : resolve(projectDir, args.iocPath);
       if (iocPath === null) {
         return { found: false, path: "", message: "在 " + projectDir + " 里没找到唯一的 *.ioc，请用 iocPath 指定", warnings: [] };

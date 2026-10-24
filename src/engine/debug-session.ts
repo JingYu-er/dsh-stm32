@@ -74,6 +74,32 @@ export interface EvalReport {
   message: string;
 }
 
+export interface SessionWordSample {
+  address: string;
+  value: string;
+  ok: boolean;
+}
+
+export interface SessionWordsRequest {
+  addresses: string[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface SessionWordsReport {
+  ok: boolean;
+  sessionId: string;
+  port: number;
+  projectDir: string;
+  command: string;
+  pc: string;
+  samples: SessionWordSample[];
+  durationMs: number;
+  output: string;
+  errors: string[];
+  message: string;
+}
+
 interface InternalSession {
   id: string;
   projectDir: string;
@@ -94,6 +120,28 @@ const DEFAULT_HARD_TTL_MS = 10 * 60_000;
 const SWEEP_MS = 5_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+/** 把 "0x4001100c" / "4001100C" 统一成 8 位小写 0x 形式；解析不了返回 null。 */
+export function normalizeHexAddress(text: string): string | null {
+  const body = text.trim().replace(/^0x/iu, "");
+  if (!/^[0-9a-f]{1,8}$/iu.test(body)) return null;
+  return "0x" + body.toLowerCase().padStart(8, "0");
+}
+
+/**
+ * 从 gdb 输出里按出现顺序取 print/x 打印的十六进制值（形如 $1 = 0x4001100c）。
+ *
+ * gdb 只在成功打印时输出 `$N = 0x...`，被拒绝的表达式留一行 Cannot access memory，
+ * 所以"少了一个"正好表示那个地址没读到。
+ */
+export function parseGdbPrintedHex(output: string): string[] {
+  const values: string[] = [];
+  for (const match of output.matchAll(/\$\d+\s*=\s*(0x[0-9a-fA-F]+)/gu)) {
+    const value = match[1];
+    if (value !== undefined) values.push(value.toLowerCase());
+  }
+  return values;
+}
 
 function emptyReport(errors: string[], message: string): SessionReport {
   return {
@@ -305,6 +353,75 @@ export class DebugSessionManager {
       remainingMs: stillActive ? this.remainingMs(session) : 0,
       errors,
       message: errors.length === 0 ? "执行完成（" + String(this.now() - startedAt) + " ms）" : "执行有问题：" + (errors[0] as string),
+    };
+  }
+
+  /**
+   * 借正在跑的调试会话（它已经占着 openocd + CMSIS-DAP）读 32 位字。
+   *
+   * 为什么要借：再起一个 openocd 会抢同一块探针，实测报
+   * "CMSIS-DAP transfer count mismatch: expected 3, got 2"。所以有会话时一律走 gdb 表达式
+   * （print/x $pc + 每地址 print/x *(unsigned int *)0x...），halt 之后 resume，芯片照原样继续跑。
+   */
+  async readWords(request: SessionWordsRequest): Promise<SessionWordsReport> {
+    const startedAt = this.now();
+    const session = this.current;
+    if (session === null) {
+      return {
+        ok: false, sessionId: "", port: 0, projectDir: "", command: "", pc: "", samples: [],
+        durationMs: 0, output: "",
+        errors: ["没有调试会话（先 stm32_debug_session，或短任务用 stm32_debug_run）"],
+        message: "没读：没有调试会话",
+      };
+    }
+    const addresses: string[] = [];
+    const bad: string[] = [];
+    for (const raw of request.addresses) {
+      const normalized = normalizeHexAddress(raw);
+      if (normalized === null) bad.push(raw);
+      else addresses.push(normalized);
+    }
+    if (addresses.length === 0) {
+      return {
+        ok: false, sessionId: session.id, port: session.port, projectDir: session.projectDir,
+        command: "", pc: "", samples: [], durationMs: this.now() - startedAt, output: "",
+        errors: ["没有可读的地址" + (bad.length === 0 ? "" : "（解析不了：" + bad.join("、") + "）")],
+        message: "没读：地址不合法",
+      };
+    }
+    const commands = ["print/x $pc"];
+    for (const address of addresses) commands.push("print/x *(unsigned int *)" + address);
+    const evaluated = await this.eval({
+      commands,
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    const printed = parseGdbPrintedHex(evaluated.output);
+    const pc = printed[0] ?? "";
+    const samples: SessionWordSample[] = addresses.map((address, index) => {
+      const value = printed[index + 1];
+      return value === undefined ? { address, value: "", ok: false } : { address, value, ok: true };
+    });
+    const missing = samples.filter((sample) => !sample.ok).length;
+    const errors = [...evaluated.errors];
+    for (const raw of bad) errors.push("地址解析不了：" + raw);
+    if (missing > 0) errors.push("有 " + String(missing) + " 个地址没读到值（地址没映射或没对齐）");
+    if (pc === "") errors.push("没读到 pc");
+    const ok = evaluated.ok && missing === 0 && pc !== "";
+    return {
+      ok,
+      sessionId: session.id,
+      port: session.port,
+      projectDir: session.projectDir,
+      command: evaluated.command,
+      pc,
+      samples,
+      durationMs: this.now() - startedAt,
+      output: evaluated.output,
+      errors,
+      message: ok
+        ? "从调试会话（端口 " + String(session.port) + "）读了 " + String(samples.length) + " 个值"
+        : "读失败：" + (errors[0] ?? "未知原因"),
     };
   }
 

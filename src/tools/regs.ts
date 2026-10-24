@@ -6,8 +6,10 @@
  */
 
 import { describeSample, runRegsRead } from "../engine/regs.js";
+import { debugSessions } from "../engine/debug-session.js";
 import type { RegsReport } from "../engine/regs.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
 
 export const REGS_TOOL = "stm32_regs_read";
 
@@ -84,6 +86,13 @@ function formatReport(report: RegsReport): string[] {
   return lines;
 }
 
+function failureReport(projectDir: string, message: string, errors: string[]): RegsReport {
+  return {
+    ok: false, projectDir, configFile: "", command: "", script: "", pc: "",
+    samples: [], durationMs: 0, errors, message, logTail: "", notes: [],
+  };
+}
+
 export function registerRegsRead(ctx: DshContext): void {
   ctx.tools.register({
     name: REGS_TOOL,
@@ -111,20 +120,57 @@ export function registerRegsRead(ctx: DshContext): void {
         return [{ type: "text", text: formatReport(typed.report).join("\n") }];
       },
     },
-    async execute(rawArgs: RegsArgs, exec: ToolExec): Promise<ToolValue> {
-      const subprocess = ctx.get<SubprocessService>("subprocess");
-      const args = rawArgs;
-      if (subprocess === undefined) {
+    async execute(rawArgs: RegsArgs | undefined, exec: ToolExec): Promise<ToolValue> {
+      const args = rawArgs ?? ({} as RegsArgs);
+      // 洞 C：参数名写错（例如把 addresses 写成 addresses_list）时先给一句人话，不要让宿主去报
+      // "returned invalid output: value is not lossless JSON"。
+      const invalid = validateToolArgs(REGS_TOOL, args as unknown as Record<string, unknown>, [
+        { name: "addresses", kind: "string[]" },
+      ]);
+      if (invalid !== null) {
+        return { message: invalid, report: failureReport(typeof args.projectDir === "string" ? args.projectDir : "", invalid, [invalid]) };
+      }
+
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      // 洞 D：有调试会话时不能再起一个 openocd —— 同一块 CMSIS-DAP 被两个进程抢会报
+      // "CMSIS-DAP transfer count mismatch"。直接借会话的 gdb 读，halt → 读 → resume。
+      if (debugSessions.isActive()) {
+        const words = await debugSessions.readWords({
+          addresses: args.addresses,
+          ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
+          signal: exec.signal,
+        });
+        const notes = ["复用调试会话（端口 " + String(words.port) + "）的 openocd，没有另起一个"];
+        if (resolution.note !== null) notes.push(resolution.note);
+        if (words.projectDir !== "" && words.projectDir !== resolution.projectDir) {
+          notes.push("会话的工程目录是 " + words.projectDir + "，与本次参数的 " + resolution.projectDir + " 不同（读值用的是会话里的那个）");
+        }
         return {
-          message: "宿主缺少 subprocess 服务，无法读寄存器",
+          message: words.message,
           report: {
-            ok: false, projectDir: args.projectDir ?? "", configFile: "", command: "", script: "", pc: "",
-            samples: [], durationMs: 0, errors: ["宿主缺少 subprocess 服务"], message: "无法读寄存器", logTail: "", notes: [],
+            ok: words.ok,
+            projectDir: words.projectDir === "" ? resolution.projectDir : words.projectDir,
+            configFile: "",
+            command: words.command,
+            script: "",
+            pc: words.pc,
+            samples: words.samples,
+            durationMs: words.durationMs,
+            errors: words.errors,
+            message: words.message,
+            logTail: words.output.split(/\r?\n/u).slice(-12).join("\n"),
+            notes,
           },
         };
       }
+
+      const subprocess = ctx.get<SubprocessService>("subprocess");
+      if (subprocess === undefined) {
+        const message = "宿主缺少 subprocess 服务，无法读寄存器";
+        return { message, report: failureReport(resolution.projectDir, message, [message]) };
+      }
       const report = await runRegsRead(subprocess, {
-        projectDir: args.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         addresses: args.addresses,
         ...(args.configFile === undefined ? {} : { configFile: args.configFile }),
         ...(args.adapterSpeed === undefined ? {} : { adapterSpeed: args.adapterSpeed }),
@@ -132,6 +178,7 @@ export function registerRegsRead(ctx: DshContext): void {
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         signal: exec.signal,
       });
+      if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },
   });

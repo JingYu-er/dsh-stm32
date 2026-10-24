@@ -10,6 +10,7 @@ import { createProjectScaffold } from "../engine/scaffold.js";
 import type { ScaffoldReport } from "../engine/scaffold.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { validateToolArgs } from "./project-dir.js";
 
 export const PROJECT_CREATE_TOOL = "stm32_project_create";
 
@@ -96,6 +97,27 @@ export function registerProjectCreate(ctx: DshContext): void {
     },
     async execute(rawArgs: ProjectCreateArgs | undefined, _exec: ToolExec): Promise<ToolValue> {
       const args = rawArgs ?? ({} as ProjectCreateArgs);
+      // 洞 C：缺 targetDir 时以前会带着 undefined 一路走下去，宿主只报 "value is not lossless JSON"。
+      const invalid = validateToolArgs(PROJECT_CREATE_TOOL, args as unknown as Record<string, unknown>, [
+        { name: "targetDir", kind: "string" },
+      ]);
+      if (invalid !== null) {
+        return {
+          message: invalid,
+          report: {
+            ok: false,
+            targetDir: typeof args.targetDir === "string" ? args.targetDir : "",
+            projectName: args.projectName ?? "",
+            iocPath: "",
+            templateDir: "",
+            templateFiles: 0,
+            driverFiles: 0,
+            durationMs: 0,
+            warnings: [invalid],
+            message: invalid,
+          },
+        };
+      }
       const config = resolveSearchConfig(process.env, args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots });
       const report = createProjectScaffold({
         targetDir: args.targetDir,

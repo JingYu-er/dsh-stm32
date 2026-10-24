@@ -7,7 +7,8 @@
 
 import { planIocChanges } from "../engine/ioc-plan.js";
 import type { IocPlanChange, PinAddRequest } from "../engine/ioc-plan.js";
-import type { DshContext, JsonSchema } from "../types.js";
+import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const IOC_PLAN_TOOL = "stm32_ioc_plan";
 
@@ -137,15 +138,17 @@ export function registerIocPlan(ctx: DshContext): void {
         return [{ type: "text", text: format(typed.changes, typed.message, typed.warnings, typed.errors, typed.nextStep).join("\n") }];
       },
     },
-    async execute(rawArgs: IocPlanArgs) {
+    async execute(rawArgs: IocPlanArgs, exec: ToolExec) {
+      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
       const report = planIocChanges({
-        projectDir: rawArgs.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         ...(rawArgs.iocPath === undefined ? {} : { iocPath: rawArgs.iocPath }),
         ...(rawArgs.entries === undefined ? {} : { entries: rawArgs.entries }),
         ...(rawArgs.unset === undefined ? {} : { unset: rawArgs.unset }),
         ...(rawArgs.pins === undefined ? {} : { pins: rawArgs.pins }),
         ...(rawArgs.serialWire === undefined ? {} : { serialWire: rawArgs.serialWire }),
       });
+      if (resolution.note !== null) report.notes.push(resolution.note);
       const changes = toViews(report.changes);
       const nextStep = report.ok
         ? "确认无误后：stm32_ioc_apply({ projectDir: \"" + report.projectDir.replace(/\\/gu, "/") + "\", planId: \"" + report.planId + "\" })，然后 stm32_generate 重新生成代码。"

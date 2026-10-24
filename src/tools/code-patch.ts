@@ -9,6 +9,7 @@
 import { patchUserCode } from "../engine/code-patch.js";
 import type { CodePatchReport } from "../engine/code-patch.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
 
 export const CODE_PATCH_TOOL = "stm32_code_patch";
 
@@ -89,15 +90,40 @@ export function registerCodePatch(ctx: DshContext): void {
         return [{ type: "text", text: formatCodePatchReport(typed.report).join("\n") }];
       },
     },
-    async execute(rawArgs: CodePatchArgs | undefined, _exec: ToolExec): Promise<ToolValue> {
+    async execute(rawArgs: CodePatchArgs | undefined, exec: ToolExec): Promise<ToolValue> {
       const args = rawArgs ?? ({} as CodePatchArgs);
+      // 洞 C：以前参数名写错（例如把 file/block/code 写成 edits）会把 undefined 塞进报告，宿主序列化
+      // 时抛 "value is not lossless JSON"，用户完全看不到真正原因。
+      const invalid = validateToolArgs(CODE_PATCH_TOOL, args as unknown as Record<string, unknown>, [
+        { name: "file", kind: "string" },
+        { name: "block", kind: "string" },
+        { name: "code", kind: "string" },
+      ]);
+      if (invalid !== null) {
+        return {
+          message: invalid,
+          report: {
+            ok: false,
+            file: typeof args.file === "string" ? args.file : "",
+            block: typeof args.block === "string" ? args.block : "",
+            mode: args.mode === "append" ? "append" : "replace",
+            labels: [],
+            linesBefore: 0,
+            linesAfter: 0,
+            errors: [invalid],
+            message: invalid,
+          },
+        };
+      }
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const report = patchUserCode({
-        projectDir: args.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         file: args.file,
         block: args.block,
         code: args.code,
         ...(args.mode === undefined ? {} : { mode: args.mode }),
       });
+      if (resolution.note !== null) report.message = report.message + "\n· " + resolution.note;
       return { message: report.message, report };
     },
   });

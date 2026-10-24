@@ -13,6 +13,7 @@ import { debugSessions } from "../engine/debug-session.js";
 import type { EvalReport, SessionReport } from "../engine/debug-session.js";
 
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const DEBUG_SESSION_TOOL = "stm32_debug_session";
 export const DEBUG_EVAL_TOOL = "stm32_debug_eval";
@@ -135,7 +136,8 @@ export function registerDebugSession(ctx: DshContext): void {
       },
     },
     async execute(rawArgs: SessionArgs, exec: ToolExec) {
-      const projectDir = rawArgs.projectDir ?? process.cwd();
+      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
+      const projectDir = resolution.projectDir;
       debugSessions.configure(ctx.subprocess, rawArgs.binDirs ?? []);
       const session = await debugSessions.start({
         projectDir,
@@ -149,7 +151,10 @@ export function registerDebugSession(ctx: DshContext): void {
         ...(rawArgs.binDirs === undefined ? {} : { binDirs: rawArgs.binDirs }),
       });
       void exec;
-      return { message: session.message, session };
+      return {
+        message: resolution.note === null ? session.message : session.message + "\n· " + resolution.note,
+        session,
+      };
     },
   });
 

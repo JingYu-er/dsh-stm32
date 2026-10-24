@@ -9,6 +9,7 @@ import { runDebugRun } from "../engine/debug.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import type { DebugRunReport } from "../engine/debug.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const DEBUG_RUN_TOOL = "stm32_debug_run";
 
@@ -149,8 +150,9 @@ export function registerDebugRun(ctx: DshContext): void {
       }
       // debug_run 自己也要独占探针。
       const released = await releaseProbeFor("stm32_debug_run");
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const report = await runDebugRun(subprocess, {
-        projectDir: args.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
         ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
         ...(args.breakAt === undefined ? {} : { breakAt: args.breakAt }),
@@ -163,6 +165,7 @@ export function registerDebugRun(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (released !== null) report.notes.push(released);
+      if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },
   });

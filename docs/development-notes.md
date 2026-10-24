@@ -950,3 +950,81 @@ node scripts/gen-xcube-catalog.mjs D:/some/pdsc src/engine/xcube-catalog.ts   # 
 | `demo.ioc`（本机 C8T6 工程） | needed=false，`工程没有第三方包（Mcu.ThirdPartyNb=0），本次生成不需要包索引`，无包无 warning |
 
 本机 pdsc 目录 159 个文件 → `listInstalledPacks()` 解析出 **67 个包**，与快照条数一致。
+
+## 调试会话活着时读寄存器：复用它的 openocd（洞 D）
+
+### 1. 现象
+
+`stm32_debug_session`（`reset: "halt"`）开着的时候调 `stm32_regs_read`，两个采样全部 `ok: false`：
+
+```text
+读寄存器失败：Error: CMSIS-DAP transfer count mismatch: expected 3, got 2
+```
+
+同一批地址在**没有会话**时是好的（`0x4001100C = 0x00000000`、`0x40010004 = 0x02000000`、`pc = 0x08000248`）。也就是说不是地址写错、也不是探针坏了，是「谁先占着探针」的问题。
+
+### 2. 根因
+
+两条路各自起一个 openocd：
+
+- `stm32_debug_session` → `DebugSessionManager.start()`，openocd 监听 `127.0.0.1:3333`，gdb 通过 `target extended-remote` 连它。
+- `stm32_regs_read` → `runRegsRead()`，**又**起一个 openocd（同一份 `configFiles`、同样绑定 3333），脚本里 `init → halt → mdw <addr> → resume → shutdown`。
+
+CMSIS-DAP 探针同一时刻只允许一个调试会话，第二个 openocd 抢到的是「半个探针」：它自己的 transfer 队列和第一个会话交错，于是 `expected 3, got 2` 这种计数错。修 `regs_read` 的脚本写法没用——错在两个 openocd 同时在跑。
+
+### 3. 修法：会话活着就借它的 gdb
+
+`src/engine/debug-session.ts` 新增 `readWords({ addresses, timeoutMs?, signal? })`：
+
+- 没有会话 → 立刻返回 `ok: false`，`errors: ["没有调试会话（先 stm32_debug_session，或短任务用 stm32_debug_run）"]`，不假装读过。
+- 有会话 → `commands = ["print/x $pc", "print/x *(unsigned int *)0x…", …]` 交给已有的 `eval()`。`eval` 自己会 `monitor halt` → 逐条执行 → `monitor resume` → `detach`，所以读值不动固件状态，也不额外占探针。
+- 解析：`parseGdbPrintedHex()` 用 `/\$\d+\s*=\s*(0x[0-9a-fA-F]+)/gu` 按出现顺序取值，第 0 个是 pc；缺值只把那一条标 `ok: false` 并在 `errors` 里说「有 N 个地址没读到值（地址没映射或没对齐）」。
+- 地址规整：`normalizeHexAddress()` 剥 `0x`、限 1–8 位十六进制、统一成 8 位小写（`0x0000024c`），避免 `0X4001100C` 这种写法进 gdb 表达式。
+
+工具层 `src/tools/regs.ts` 只做一个分支：
+
+```ts
+if (debugSessions.isActive()) {
+  const words = await debugSessions.readWords({ addresses, timeoutMs, signal });
+  // 组装成同一个 RegsReport：configFile / script 留空，logTail = 输出末 12 行
+  notes.unshift("复用调试会话（端口 N）的 openocd，没有另起一个");
+} else {
+  runRegsRead(...);   // 原路径，一点没改
+}
+```
+
+报告形状对调用方不变（还是 `RegsReport`），但 `report.command` 变成那条 gdb 命令行，`logTail` 里能看到 `$1 = 0x8001178` 这样的原始输出，出事时能对着看。
+
+### 4. 真机验证
+
+会话活着时，仓库里的探针脚本（`_probe/probe-holes.mjs`，验证完已删）直接 import `lib/engine/debug-session.js`：
+
+| 项 | 结果 |
+| --- | --- |
+| `debugSessions.start({ projectDir, reset: "halt" })` | ok，`port=3333` |
+| `readWords(["0x4001100C","0x40010004"])` | ok=true，`pc=0x8001178`，两值 `0x0` / `0x0` |
+| 走工具层（省略 `projectDir`，靠会话工作目录） | ok=true，notes = `["复用调试会话（端口 3333）的 openocd，没有另起一个","工程目录缺省取会话工作目录：D:/…/demo"]` |
+
+重启 dsh 后在真宿主里再打一遍（`stm32_debug_session` → `stm32_regs_read` → `stm32_debug_stop`）：
+
+| 字段 | 值 |
+| --- | --- |
+| `message` | 从调试会话（端口 3333）读了 2 个值 |
+| `report.ok` / `durationMs` | `true` / 2124 |
+| `report.command` | `gdb-multiarch … -ex "target extended-remote 127.0.0.1:3333" -ex "monitor halt" -ex "print/x $pc" -ex "print/x *(unsigned int *)0x4001100c" -ex "print/x *(unsigned int *)0x40010004" -ex "monitor resume" -ex detach` |
+| `report.pc` | `0x8001178`（会话停在 `Reset_Handler`） |
+| `report.samples` | `0x4001100c=0x0`、`0x40010004=0x0`，都 `ok: true` |
+| `report.logTail` | 含 `$1 = 0x8001178` / `$2 = 0x0` / `$3 = 0x0` 与 `[Inferior 1 (Remote target) detached]` |
+
+对照：同一地址在**无会话**时走 `runRegsRead` 仍然成功（`0x4001100C = 0x00002000`，那是固件跑到 `while` 之后的值），说明两条路都还在，只是不再同时跑。
+
+### 5. 教训
+
+- 一个探针上只能有一个 openocd。凡是「自己起 openocd 读点东西」的工具，都得先问一句会话是不是活着。
+- 复用会话比新起进程简单得多：gdb 已经连着，`print/x *(unsigned int *)0x…` 一句就够，不用再写 openocd 脚本、不用管 `shutdown`。
+- 会话活着时读值会**暂停再恢复**（`monitor halt` / `monitor resume`），停在断点时读寄存器不会让程序多跑一步——这正是想要的语义，但要写进 notes 里让人知道。
+- 错误要能自己承认：没有会话时返回可读错误，比抛 gdb 的 `transfer count mismatch` 好定位。
+
+### 6. 测试计数
+
+套件 14 → 15，用例 123 → **137 pass / 0 fail**。新增的 `test/tool-contract-units.test.mjs`（14 例）覆盖 `normalizeHexAddress`、`parseGdbPrintedHex`、无会话时 `readWords` 的可读错误，以及工具层省略 `projectDir` 时确实取会话工作目录。

@@ -22,6 +22,7 @@ const suites = [
   "search-roots-units.test.mjs",
   "session-units.test.mjs",
   "thirdparty-units.test.mjs",
+  "tool-contract-units.test.mjs",
   "xcube-units.test.mjs",
   "schema-guard.mjs",
 ];

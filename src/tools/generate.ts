@@ -9,6 +9,7 @@ import { runGenerate } from "../engine/generate.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import type { GenerateReport } from "../engine/generate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const GENERATE_TOOL = "stm32_generate";
 
@@ -184,7 +185,8 @@ export function registerGenerate(ctx: DshContext): void {
       if (subprocess === undefined) {
         return { mode: "report", jobId: "", message: "宿主缺少 subprocess 服务，无法生成代码" };
       }
-      const projectDir = args.projectDir ?? process.cwd();
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const projectDir = resolution.projectDir;
       // CubeMX 生成期间别让 openocd 占着探针（单飞，规格 I5）。
       const released = await releaseProbeFor("stm32_generate");
       const jobs = ctx.get<JobsService>("jobs");
@@ -202,6 +204,7 @@ export function registerGenerate(ctx: DshContext): void {
           signal: exec.signal,
         });
         if (released !== null) report.notes.push(released);
+        if (resolution.note !== null) report.notes.push(resolution.note);
         return { mode: "report", jobId: "", message: summarize(report), report };
       }
 
@@ -213,7 +216,7 @@ export function registerGenerate(ctx: DshContext): void {
         label: "stm32_generate " + projectDir,
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
-          handle.append("开始无头生成：" + projectDir + "\n");
+          handle.append("开始无头生成：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runGenerate(subprocess, {
             projectDir,
             ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),
@@ -246,7 +249,7 @@ export function registerGenerate(ctx: DshContext): void {
       return {
         mode: "job",
         jobId,
-        message: "已在后台开始生成 " + projectDir + "（CubeMX 启动约 90–150 s，整体 3–4 分钟）",
+        message: "已在后台开始生成 " + projectDir + (resolution.note === null ? "" : "（" + resolution.note + "）") + "（CubeMX 启动约 90–150 s，整体 3–4 分钟）",
       };
     },
   });

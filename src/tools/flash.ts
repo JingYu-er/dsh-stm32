@@ -10,6 +10,7 @@ import { runFlash } from "../engine/flash.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import type { FlashReport } from "../engine/flash.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 export const FLASH_TOOL = "stm32_flash";
 
@@ -118,8 +119,9 @@ export function registerFlash(ctx: DshContext): void {
       }
       // 探针只有一块：有调试会话占着就先让它让出来（规格 §6）。
       const released = await releaseProbeFor("stm32_flash");
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const report = await runFlash(subprocess, {
-        projectDir: args.projectDir ?? process.cwd(),
+        projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
         ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
         ...(args.configFile === undefined ? {} : { configFile: args.configFile }),
@@ -130,6 +132,7 @@ export function registerFlash(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (released !== null) report.notes.push(released);
+      if (resolution.note !== null) report.notes.push(resolution.note);
       return { message: report.message, report };
     },
   });

@@ -257,7 +257,8 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | Symptom | Cause and fix |
 | --- | --- |
 | SWD lost after flashing | The firmware generated `__HAL_AFIO_REMAP_SWJ_DISABLE()`. Hold BOOT0 while powering up to enter the system bootloader and reflash, then set SYS back to Serial Wire — `stm32_flash` now blocks this case first |
-| `Error: No device found` / `transfer count mismatch` | Another process holds the probe. Run `/stm32-stop`, then use `stm32_doctor` to inspect openocd / gdb processes and port 3333 |
+| `Error: No device found` / `transfer count mismatch` | Another process holds the probe. Run `/stm32-stop`, then use `stm32_doctor` to inspect openocd / gdb processes and port 3333. Reading registers while a debug session is open no longer hits this: `stm32_regs_read` reuses the session's openocd instead of starting a second one |
+| Reading registers with a live session shows a `gdb-multiarch … target extended-remote 127.0.0.1:3333` `report.command` | That is the normal "reuse" shape: while `stm32_debug_session` is alive, `stm32_regs_read` drives the session's own gdb connection with `print/x $pc` and `print/x *(unsigned int *)0x…`, then `monitor resume` and detach; the first note reads "reusing the openocd of the debug session (port N), not starting another". Only without a session does it start its own openocd. Older builds failed here with `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | Build "succeeds" but the old firmware runs | The project was copied or renamed with `build/` included: the CMakeCache directory no longer matches, yet ninja still exits 0. `stm32_build` treats that as a failure; clean or delete `build/Debug` as prompted |
 | `stm32_doctor` cannot find gcc / openocd | First read the "searched ..." list and the auto-discovery line in the doctor notes / error; if it is installed elsewhere, set `STM32_BIN_DIRS` or pass `binDirs`. **If you do not know what to install, run `stm32_env_probe` first**: every missing component carries `impact` (what stops working), `install` (recommended way, easiest first) and `verify` (self-check after installing), while the top-level `recommendations` gives the install order and offers to install for you |
 | `stm32_generate` feels stuck | The first run (cold start, no cache) legitimately takes 3.5–4 minutes; later runs are skipped (<1 s) while the `.ioc` and outputs are unchanged. It runs as a background job by default — watch it with `job_output`, or pass `foreground: true`. Check `skipped` in the result and the reason in the notes to see whether the cache hit |
@@ -270,12 +271,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 14 offline suites, 123 cases; no board, CubeMX, or toolchain needed
+npm test                 # 15 offline suites, 137 cases; no board, CubeMX, or toolchain needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **121 passed + 2 skipped**, while a developer machine runs all 123. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **135 passed + 2 skipped**, while a developer machine runs all 137. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
