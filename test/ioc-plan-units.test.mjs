@@ -149,6 +149,90 @@ test("rollback 拒绝：不在 backups 目录下的路径", () => {
   assert.match(rolled.message, /backups/u);
 });
 
+test("保留没有 .Signal 的引脚（PB2/BOOT1）：重写引脚表时不剔除，也不留孤儿键", () => {
+  rmSync(TMP, { recursive: true, force: true });
+  mkdirSync(TMP, { recursive: true });
+  const iocPath = join(TMP, "boot1.ioc");
+  writeFileSync(iocPath, [
+    "Mcu.CPN=STM32F103C8T6",
+    "Mcu.PinsNb=3",
+    "Mcu.Pin0=PC13-TAMPER-RTC",
+    "Mcu.Pin1=PB2",
+    "Mcu.Pin2=VP_SYS_VS_ND",
+    "PC13-TAMPER-RTC.Signal=GPIO_Output",
+    "PC13-TAMPER-RTC.GPIO_Label=led",
+    // BOOT1 是复用功能：CubeMX 只写 .Mode，没有 .Signal（正是当初被按 .Signal 过滤掉的那种引脚）。
+    "PB2.Mode=B2-BOOT1",
+    "PB2.GPIO_Label=boot1",
+    "VP_SYS_VS_ND.Mode=No_Debug",
+    "VP_SYS_VS_ND.Signal=SYS_VS_ND",
+    "ProjectManager.TargetToolchain=CMake",
+    "ProjectManager.KeepUserCode=true",
+  ].join("\n") + "\n", "utf8");
+
+  const plan = planIocChanges({
+    projectDir: TMP,
+    serialWire: true,
+    pins: [{ pin: "PA5", label: "led2", signal: "output" }],
+  });
+  assert.equal(plan.ok, true, plan.message);
+  const applied = applyIocPlan({ projectDir: TMP, planId: plan.planId });
+  assert.equal(applied.ok, true, applied.message);
+
+  const text = readFileSync(iocPath, "utf8");
+  const pins = [];
+  for (let index = 0; ; index += 1) {
+    const match = new RegExp("^Mcu\\.Pin" + index + "=(.+)$", "mu").exec(text);
+    if (match === null) break;
+    pins.push((match[1] ?? "").trim());
+  }
+  const declared = Number(/^Mcu\.PinsNb=(\d+)$/mu.exec(text)?.[1]);
+  assert.equal(pins.length, declared, "PinsNb 必须与实际写出的 Mcu.PinN 项数一致");
+  assert.ok(pins.includes("PB2"), "PB2 不能被从引脚表里剔除");
+  assert.ok(pins.includes("PA5"), "新引脚要真的追加进引脚表");
+  assert.ok(pins.includes("PA13") && pins.includes("PA14"), "serialWire 补的调试口也要在表里");
+  assert.equal(pins.includes("VP_SYS_VS_ND"), false, "No_Debug 的虚拟引脚仍要清掉");
+  assert.deepEqual(pins.slice(0, 3), ["PC13-TAMPER-RTC", "PB2", "PA5"], "已有引脚顺序不能乱");
+  assert.match(text, /^PB2\.Mode=B2-BOOT1$/mu, "PB2 的配置不能变成没人指向的孤儿键");
+  assert.match(text, /^PB2\.GPIO_Label=boot1$/mu);
+});
+
+test("引脚表没变就不重写 Mcu.PinN（serialWire 已就位时一个 Mcu.Pin* 键都不碰）", () => {
+  rmSync(TMP, { recursive: true, force: true });
+  mkdirSync(TMP, { recursive: true });
+  const iocPath = join(TMP, "sw-ok.ioc");
+  writeFileSync(iocPath, [
+    "Mcu.CPN=STM32F103C8T6",
+    "Mcu.PinsNb=4",
+    "Mcu.Pin0=PC13-TAMPER-RTC",
+    "Mcu.Pin1=PB2",
+    "Mcu.Pin2=PA13",
+    "Mcu.Pin3=PA14",
+    "PC13-TAMPER-RTC.Signal=GPIO_Output",
+    "PB2.Mode=B2-BOOT1",
+    "PA13.Mode=Serial_Wire",
+    "PA13.Signal=SYS_JTMS-SWDIO",
+    "PA14.Mode=Serial_Wire",
+    "PA14.Signal=SYS_JTCK-SWCLK",
+    "ProjectManager.TargetToolchain=CMake",
+    "ProjectManager.KeepUserCode=true",
+  ].join("\n") + "\n", "utf8");
+
+  const plan = planIocChanges({
+    projectDir: TMP,
+    serialWire: true,
+    entries: [{ key: "ProjectManager.HeapSize", value: "0x400" }],
+  });
+  assert.equal(plan.ok, true, plan.message);
+  const keys = plan.changes.map((change) => change.key);
+  assert.equal(
+    keys.some((key) => key.startsWith("Mcu.Pin")),
+    false,
+    "引脚表没变化时不该出现任何 Mcu.Pin* 改动（否则会白改字节）",
+  );
+  assert.ok(keys.includes("ProjectManager.HeapSize"));
+});
+
 let failed = 0;
 for (const item of cases) {
   try {

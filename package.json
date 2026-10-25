@@ -1,15 +1,17 @@
 {
   "name": "dsh-stm32",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH 插件：STM32（F103C8T6）全流程工具层 —— 环境探测、.ioc 事务、生成工程、编译、只烧录、按需调试",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "client",
     "templates",
     "docs",
     "cordis.patch.yml",
@@ -21,7 +23,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/run-units.mjs",
     "prepublishOnly": "npm run build"
@@ -53,6 +55,9 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "devDependencies": {

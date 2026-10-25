@@ -6,7 +6,7 @@
  * 跑完 reset run 就退出，探针立刻释放，不留后台 server，也不停核。
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
@@ -27,6 +27,8 @@ export interface FlashRequest {
   openOcdPath?: string;
   /** 工程内的 openocd 配置文件（相对 projectDir）；缺省依次找 openocd.cfg、openocd/openocd.cfg。 */
   configFile?: string;
+  /** 显式指定 SWD 守卫要看的 .ioc（工程里有多个 .ioc 时用它指定）。 */
+  iocPath?: string;
   /** 找不到工程配置时的兜底：接口与目标配置文件（相对 openocd scripts 目录）。 */
   interfaceConfig?: string;
   targetConfig?: string;
@@ -74,10 +76,38 @@ export interface NoDebugGuard {
  * 烧完 SWD 就废了，下一次只能靠 BOOT0 进系统 bootloader 救回来。
  * 所以**烧录前**先看 .ioc，宁可拒绝也不要烧成砖。没有 .ioc 时不拦（可能是别人给的 hex 工程）。
  */
-export function checkNoDebugGuard(projectDir: string, allowNoDebug = false): NoDebugGuard {
+export function checkNoDebugGuard(projectDir: string, allowNoDebug = false, explicitIoc = ""): NoDebugGuard {
   if (allowNoDebug) return { blocked: false, errors: [], notes: [] };
-  const iocPath = findIocFile(projectDir);
-  if (iocPath === null) return { blocked: false, errors: [], notes: [] };
+  const iocPath = explicitIoc !== ""
+    ? (isAbsolute(explicitIoc) ? explicitIoc : resolve(projectDir, explicitIoc))
+    : findIocFile(projectDir);
+  if (iocPath === null || !existsSync(iocPath)) {
+    // 审计 A6：findIocFile 只认「唯一」，0 个或有多个都返回 null。以前这里静默放行，
+    // 用户拿别人的工程（或 demo.ioc + demo_backup.ioc）时 SWD 守卫等于不存在，
+    // 烧下去 SWD 被关掉只能 BOOT0 救砖。现在至少要把"守卫没生效"说清楚。
+    let names: string[] = [];
+    try {
+      names = existsSync(projectDir)
+        ? readdirSync(projectDir).filter((name) => name.toLowerCase().endsWith(".ioc"))
+        : [];
+    } catch {
+      names = [];
+    }
+    const why = iocPath !== null && explicitIoc !== ""
+      ? "指定的 .ioc 不存在：" + iocPath
+      : names.length === 0
+        ? "工程里没有 .ioc"
+        : "工程里有 " + String(names.length) + " 个 .ioc（" + names.join("、") + "），分不清用哪个";
+    return {
+      blocked: false,
+      errors: [],
+      notes: [
+        "SWD 守卫没生效：" + why + "。烧录前请自己确认 .ioc 里 PA13 是 SYS_JTMS-SWDIO、PA14 是 SYS_JTCK-SWCLK；" +
+          "没启用 Serial Wire 时烧下去会关掉 SWD，之后只能 BOOT0=1 进系统 bootloader 救回来。",
+        "想让它自动检查：工程根目录只留一个 .ioc，或给 stm32_flash 传 iocPath 指向正确的那份。",
+      ],
+    };
+  }
   let summary;
   try {
     summary = summarizeIoc(readFileSync(iocPath, "utf8"), iocPath);
@@ -152,14 +182,21 @@ export function resolveElf(projectDir: string, request: FlashRequest): { elf: st
 export interface FlashLogVerdict {
   programmed: boolean;
   verified: boolean;
+  /** 真正导致失败的行；成功序列齐全时一律为空（A25）。 */
   errors: string[];
+  /** 成功路径上照样会出现的 Error: 行（DAP / ACK 噪声），只当信息。 */
+  noise: string[];
 }
 
 /** 认 openocd 的 ** Programming Finished ** / ** Verified OK ** 与 Error: 行。 */
 export function parseFlashLog(text: string): FlashLogVerdict {
   const programmed = /\*\*\s*Programming Finished\s*\*\*/u.test(text);
   const verified = /\*\*\s*Verified OK\s*\*\*/u.test(text);
+  // A25：以成功序列为主判据。openocd 成功时也会打 Error: 前缀的行（无关 ACK / DAP 噪声），
+  // 以前把它们一律当失败，于是「烧录成功、已校验」被判成失败。
+  const succeeded = programmed && verified;
   const errors: string[] = [];
+  const noise: string[] = [];
   const seen = new Set<string>();
   for (const raw of text.split(/\r?\n/u)) {
     const line = raw.trim();
@@ -173,9 +210,10 @@ export function parseFlashLog(text: string): FlashLogVerdict {
     if (!isError) continue;
     if (seen.has(line)) continue;
     seen.add(line);
-    errors.push(line);
+    if (succeeded) noise.push(line);
+    else errors.push(line);
   }
-  return { programmed, verified, errors };
+  return { programmed, verified, errors, noise };
 }
 
 const HINT_DP = "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
@@ -199,7 +237,8 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   const elfSize = statSync(elfPath).size;
 
   // A5：先看 .ioc，别把 SWD 烧死。
-  const guard = checkNoDebugGuard(projectDir, request.allowNoDebug === true);
+  const guard = checkNoDebugGuard(projectDir, request.allowNoDebug === true, request.iocPath ?? "");
+  if (!guard.blocked && guard.notes.length > 0) notes.push(...guard.notes);
   if (guard.blocked) {
     return {
       ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
@@ -261,6 +300,12 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   if (outcome.spawnError !== null) errors.push("openocd 启动失败：" + outcome.spawnError);
   if (outcome.timedOut) errors.push("超时（" + String(request.timeoutMs ?? 120_000) + " ms）：烧录没跑完");
 
+  if (verdict.noise.length > 0) {
+    notes.push(
+      "openocd 成功路径上的 " + String(verdict.noise.length) + " 条 Error: 行按噪声处理（首条：" +
+        (verdict.noise[0] ?? "") + "）",
+    );
+  }
   if (errors.some((line) => /Error connecting DP/u.test(line))) notes.push(HINT_DP);
   if (errors.some((line) => /CMSIS-DAP device|no device found/iu.test(line))) notes.push(HINT_PROBE);
 

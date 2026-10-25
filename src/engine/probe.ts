@@ -48,6 +48,15 @@ export interface ProbeResult {
 export interface ProbeOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * 允许在候选目录之外按 PATH 兜底（默认 true，既有调用一律不受影响）。
+   *
+   * 为什么需要这个开关：安装器自检要回答的问题是"工具是不是装进了这个 binDir"。
+   * 默认的 PATH 兜底会把机器上本来就有的一份同名工具算成命中（STM32CubeIDE 自带、
+   * xpack、旧的 msys64……），于是 pacman 明明失败也能显示"装好了"，而配置里指的
+   * 却是个空目录——用户下次编译时才会发现。所以自检必须传 false。
+   */
+  allowPathFallback?: boolean;
 }
 
 const WINDOWS = process.platform === "win32";
@@ -122,6 +131,8 @@ async function resolveCandidate(
   const fromDirs = resolveFromDirs(candidate, config.binDirs);
   if (fromDirs !== null) return fromDirs;
   if (isAbsoluteCandidate(candidate)) return null;
+  // 只认候选目录时到此为止：再往 PATH 退就分不清"装到了这个目录"和"机器上本来就有"。
+  if (options.allowPathFallback === false) return null;
   try {
     return await subprocess.resolveExecutable(candidate, undefined, options.signal);
   } catch {

@@ -98,7 +98,8 @@ export interface StartupChoice {
 /**
  * 从型号（或直接给容量档）推出启动文件与设备宏。
  *
- * STM32F103C8T6 → 容量档 8 → startup_stm32f103x8.s；STM32F103CBT6 → B → startup_stm32f103xb.s。
+ * STM32F103C8T6 → 容量档 8 → 归到 startup_stm32f103xb.s（上游 CMSIS 只有 x6/xB/xE 三套，
+ * 没有 x8）；STM32F103CBT6 → B → startup_stm32f103xb.s；C/D/E 大容量 → startup_stm32f103xe.s。
  * 认不出就返回 null：宁可明说"这一代还没做"，也不要编一个文件名让链接器报一堆奇怪错误。
  */
 export function startupChoiceFor(mcu: string): StartupChoice | null {
@@ -146,18 +147,22 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
   const deviceBase = "Drivers/CMSIS/Device/ST/" + familyDir;
   const targets: FetchTarget[] = [];
 
-  // 1) 设备头：umbrella + system 头 + 具体型号头
+  // markers 是内容特征（A32）：minBytes 只能挡住"太短"，挡不住代理塞进来的登录页、
+  // 或者同名但不同版本的另一个头文件。每个 target 至少命中一个特征才算真拿到。
+  // 1) 设备头：umbrella + system 头 + 具体型号头（都以 #ifndef __STM32 开头）
   for (const header of spec.deviceHeaders) {
     targets.push({
       path: deviceBase + "/Include/" + header,
       urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceIncludeDir + "/" + header),
       minBytes: 200,
+      markers: ["#ifndef __STM32", "#ifndef __SYSTEM_STM32"],
     });
   }
   targets.push({
     path: deviceBase + "/Include/" + choice.deviceHeader,
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceIncludeDir + "/" + choice.deviceHeader),
     minBytes: 10_000,
+    markers: ["#ifndef __STM32", "#ifndef __SYSTEM_STM32"],
   });
 
   // 2) system_stm32f1xx.c 与启动文件
@@ -165,19 +170,22 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
     path: deviceBase + "/Source/Templates/system_stm32f1xx.c",
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceTemplatesDir + "/system_stm32f1xx.c"),
     minBytes: 1_000,
+    markers: ["SystemInit"],
   });
   targets.push({
     path: deviceBase + "/Source/Templates/gcc/" + choice.startup,
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceTemplatesDir + "/gcc/" + choice.startup),
     minBytes: 1_000,
+    markers: ["_estack", ".syntax unified"],
   });
 
-  // 3) CMSIS 内核头（ST 主仓库里就有，不是子模块）
+  // 3) CMSIS 内核头（ST 主仓库里就有，不是子模块）——都带 __CORE_/__CMSIS_/__MPU_ 守卫
   for (const header of [spec.coreHeader, "cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h"]) {
     targets.push({
       path: "Drivers/CMSIS/Include/" + header,
       urls: sourceUrls(spec.cmsisRepo, spec.cmsisRef, spec.coreIncludeDir + "/" + header),
       minBytes: 500,
+      markers: ["__CMSIS", "__CORE_", "__MPU_"],
     });
   }
 

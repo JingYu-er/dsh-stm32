@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 
 import { decodeIocValue, parseIocEntries, summarizeIoc } from "../lib/engine/ioc.js";
 
+import { firmwareGuide, guideFor } from "../lib/data/install-guides.js";
+
 import { FIXTURE_IOC as DEMO, FIXTURE_SCRATCH_IOC as SCRATCH } from "./fixtures.mjs";
 
 const cases = [];
@@ -85,6 +87,35 @@ test("KeepUserCode=false / 非 CMake 工具链 / CoupleFile=true 各报警", () 
   assert.match(summary.warnings.join("\n"), /KeepUserCode/);
   assert.match(summary.warnings.join("\n"), /EWARM/);
   assert.match(summary.warnings.join("\n"), /CoupleFile/);
+});
+
+test("A37 安装指引：guideFor 认得 firmware，cubemx 仍是 CubeMX 那一份", () => {
+  const generic = guideFor("firmware");
+  assert.ok(generic !== null, "只给组件 id 也要能拿到固件包指引");
+  assert.equal(generic.component, "firmware");
+  assert.match(generic.label, /固件包/u);
+
+  const detailed = guideFor("firmware", {
+    family: "F1",
+    packageName: "STM32Cube_FW_F1_V1.8.7",
+    repositoryDir: "D:/app/STM32CubeMX/Repository",
+  });
+  assert.equal(detailed.label, "固件包 STM32Cube_FW_F1_V1.8.7");
+  assert.ok(detailed.steps[0].title.includes("已接入"), detailed.steps[0].title);
+  assert.ok(detailed.steps.some((step) => step.detail.includes("Repository")), "要指出落到哪个目录");
+
+  const cubeMx = guideFor("cubemx");
+  assert.ok(cubeMx !== null);
+  assert.equal(cubeMx.component, "cubemx");
+  assert.equal(guideFor("nonsense"), null, "不认识的组件不能凭空造指引");
+});
+
+test("A37 安装指引：族名大小写不敏感，且不会顺着原型链误判（constructor 不是有效族名）", () => {
+  const lower = firmwareGuide({ family: "f1", packageName: "", repositoryDir: "D:/repo" });
+  assert.ok(lower.steps[0].title.includes("已接入"), lower.steps[0].title);
+
+  const proto = firmwareGuide({ family: "constructor", packageName: "", repositoryDir: "D:/repo" });
+  assert.ok(!proto.steps[0].title.includes("已接入"), "constructor 不能命中原型链：" + proto.steps[0].title);
 });
 
 let failed = 0;

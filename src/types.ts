@@ -161,6 +161,20 @@ export interface SkillsService {
   register(skill: SkillDefinition): () => void;
 }
 
+/**
+ * 宿主 webServer 服务：注册 HTTP 路由（同 dsh-market 的用法），返回注销函数。
+ *
+ * 只声明设置面板用到的那一小块；request/response 用 any 是因为宿主没有发布
+ * IncomingMessage / ServerResponse 的类型（asar 里只有编译后的 JS）。
+ */
+export interface WebServerService {
+  register(route: {
+    kind: "exact" | "prefix";
+    path: string;
+    handler: (request: any, response: any) => void | Promise<void>;
+  }): () => void;
+}
+
 /** 会话工作目录服务：give 我 cwd，别让我猜 process.cwd()。 */
 export interface WorkingDirectoryService {
   ensure(agent: unknown, signal?: AbortSignal): Promise<string>;

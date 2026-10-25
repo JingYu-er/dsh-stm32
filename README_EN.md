@@ -8,7 +8,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 19 tools, 6 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.1`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.2`); after a restart `/stm32-doctor` should respond.
 
 
 **Uninstall**: `dsh plugin --profile desktop remove dsh-stm32`, then restart dsh.
@@ -67,7 +67,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 80 offline cases, no board needed
+npm test                            # optional: 308 offline cases, no board needed
 ```
 
 Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
@@ -225,6 +225,16 @@ An empty `binDirs` is derived from `msys64` as `<msys64>/ucrt64/bin` — the sha
 
 **Precedence**: tool arguments (`binDirs` / `cubeMxRoots`) > environment variables > this config file > built-in defaults; auto-discovered installs are only appended when no argument was given.
 
+### Settings panel (GUI)
+
+The config file above can also be edited without a terminal: **Settings → STM32 toolchain** in DSH (a browser-side panel shipped with the plugin, same origin, no extra dependency). Three cards:
+
+- **Where it is installed**: reads the current config; edit `msys64` / `cubeMxRoot` / extra `binDirs` and save — it writes the same file, and the next tool call picks it up without restarting DSH;
+- **What is missing**: one probe run (it executes each tool's version command, installs nothing) showing the resolved path and version per tool, the `hint` for missing ones, plus four capability badges (build / flash / debug / generate);
+- **Install the toolchain**: first a plan (steps, download size, how PATH and the config file would change), then **a second click to confirm** before anything is installed; progress and the log tail stream into the card. It drives the very same installer as `stm32_env_install`. When the toolchain is already complete, the plan is a single line — "toolchain complete, nothing to install" — instead of seven skipped steps.
+
+The panel talks to six `/dsh-stm32/api/*` routes the plugin registers on the host (read config, save config, probe, install plan, install start, install state). The bundle is `lib/client.js`, source in `client/client.js`, copied verbatim by `npm run build` — hand-written plain JS requiring only `react`, no bundler and no runtime dependency. When the host has no `webServer` service (a pure CLI composition) this layer is skipped silently; tools and slash commands are unaffected.
+
 ### Download cache (register-route template)
 
 What the register route needs — CMSIS device headers, the startup file, core headers — is **not vendored into the plugin** (covering any STM32 part would make the package unusable), so it is downloaded on first use into a searchable cache directory and reused from then on:
@@ -324,12 +334,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 20 offline suites, 220 cases; no board, CubeMX, or toolchain needed
+npm test                 # 24 offline suites, 308 cases; no board, CubeMX, or toolchain needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **218 passed + 2 skipped**, while a developer machine runs all 220. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **306 passed + 2 skipped**, while a developer machine runs all 308. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 

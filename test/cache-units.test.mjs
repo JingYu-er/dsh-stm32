@@ -3,7 +3,7 @@
 // 所以这里全部用**注入的 fetchImpl**（一次网络都不发）+ 临时目录，逐条钉住行为。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,8 +13,11 @@ import {
   findCacheEntry,
   readCacheIndex,
   removeCacheEntry,
+  sha256OfFile,
   upsertCacheEntry,
+  writeCacheIndex,
 } from "../lib/engine/cache.js";
+import { registerCache } from "../lib/tools/cache.js";
 import { fetchAll, fetchOne } from "../lib/engine/fetch.js";
 import { cmsisTemplatePlan, sourceUrls, startupChoiceFor } from "../lib/data/cmsis-sources.js";
 import { createRegisterProject, ensureCmsisTemplate, resolveStartupChoice } from "../lib/engine/register-template.js";
@@ -41,7 +44,15 @@ function payloadFor(name) {
   const line = "/* " + name + " */ ";
   let text = "";
   while (text.length < size) text += line;
-  return text;
+  // 内容特征（A32）：每个文件都要带上"真实文件里一定有"的那行，否则 fetch 会判内容不对。
+  return text + "\n" + markerFor(name);
+}
+
+/** 与 cmsis-sources.ts 里各 target 的 markers 对齐。 */
+function markerFor(name) {
+  if (name === "system_stm32f1xx.c") return "void SystemInit(void);";
+  if (name.endsWith(".s")) return ".syntax unified\n_estack:";
+  return "#ifndef __" + name.replace(/[^a-z0-9]/gi, "_").toUpperCase() + "_H";
 }
 
 /**
@@ -135,6 +146,87 @@ test("缓存条目：upsert 覆盖同 id，checkCacheEntry 能报出缺文件与
     assert.equal(removeCacheEntry("cmsis:F1:demo", env).removed, true);
     assert.equal(readCacheIndex(env).index.entries.length, 0);
     assert.equal(existsSync(entryDir), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("缓存索引：坏 JSON 时 upsert 先备份成 index.json.broken-*，新索引只含新条目", () => {
+  const root = tempDir("cache-broken");
+  const env = { DSH_STM32_CACHE: root };
+  const brokenText = "{ this is not json";
+  try {
+    writeFileSync(join(root, "index.json"), brokenText, "utf8");
+    upsertCacheEntry(
+      {
+        id: "cmsis:F1:broken",
+        kind: "cmsis",
+        family: "F1",
+        label: "broken",
+        root: join(root, "F1", "broken"),
+        createdAt: new Date().toISOString(),
+        totalBytes: 0,
+        files: [],
+        sources: [],
+        license: "",
+      },
+      env,
+    );
+
+    const backups = readdirSync(root).filter((name) => name.startsWith("index.json.broken-"));
+    assert.equal(backups.length, 1, "坏索引要留一份能人工救回来的备份");
+    assert.equal(readFileSync(join(root, backups[0]), "utf8"), brokenText, "备份必须是原来那串坏 JSON");
+
+    const after = readCacheIndex(env);
+    assert.equal(after.error, null);
+    assert.deepEqual(after.index.entries.map((item) => item.id), ["cmsis:F1:broken"], "重建后只含新条目，不是把坏的当空索引又留着备份");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("缓存索引：换索引失败时旧索引逐字节不变、抛可识别的错、不留临时文件", () => {
+  const root = tempDir("cache-write-fail");
+  const env = { DSH_STM32_CACHE: root };
+  const kept = {
+    id: "cmsis:F1:keep",
+    kind: "cmsis",
+    family: "F1",
+    label: "keep",
+    root: join(root, "F1", "keep"),
+    createdAt: new Date().toISOString(),
+    totalBytes: 0,
+    files: [],
+    sources: [],
+    license: "",
+  };
+  const fresh = { ...kept, id: "cmsis:F1:new" };
+  const isWriteError = (error) => error?.name === "CacheIndexWriteError" && /索引写不进去/u.test(error.message);
+  try {
+    writeCacheIndex({ version: 1, updatedAt: "", entries: [kept] }, env);
+    const before = readFileSync(join(root, "index.json"), "utf8");
+
+    // 一、rename 全失败（Windows 上目标被占用就是这种表现）：旧索引逐字节不动，临时文件不残留。
+    const denyRename = () => {
+      const error = new Error("模拟目标被占用（EPERM）");
+      error.code = "EPERM";
+      throw error;
+    };
+    assert.throws(() => writeCacheIndex({ version: 1, updatedAt: "", entries: [fresh] }, env, { rename: denyRename }), isWriteError);
+    assert.equal(readFileSync(join(root, "index.json"), "utf8"), before, "旧索引必须逐字节没动");
+    assert.deepEqual(readdirSync(root), ["index.json"], "失败不许留下 .tmp-* / .bak-*");
+    assert.deepEqual(readCacheIndex(env).index.entries.map((item) => item.id), ["cmsis:F1:keep"]);
+
+    // 二、第一次 rename 失败、备份成功后搬新索引又失败：必须把旧索引原样放回。
+    let calls = 0;
+    const renameThenFail = (from, to) => {
+      calls += 1;
+      if (calls === 1 || calls === 3) throw new Error("模拟第 " + String(calls) + " 次 rename 失败");
+      renameSync(from, to);
+    };
+    assert.throws(() => writeCacheIndex({ version: 1, updatedAt: "", entries: [fresh] }, env, { rename: renameThenFail }), isWriteError);
+    assert.equal(readFileSync(join(root, "index.json"), "utf8"), before, "备份之后再失败要把旧索引放回去");
+    assert.deepEqual(readdirSync(root), ["index.json"], "放回后不该留下备份或临时文件");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -234,14 +326,18 @@ test("ensureCmsisTemplate：下载成功写索引，第二次直接命中缓存�
   const env = { DSH_STM32_CACHE: root };
   try {
     const first = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch() });
-    assert.equal(first.ok, true);
+    assert.equal(first.ok, true, first.message);
     assert.equal(first.cacheHit, false);
-    assert.equal(first.files, 10);
+    assert.equal(first.files, 11, "10 个下载文件 + THIRD_PARTY_NOTICES.md（notices 也要进 files[]，A24）");
     assert.equal(existsSync(join(first.entryDir, "Drivers/CMSIS/Include/core_cm3.h")), true);
     assert.equal(existsSync(join(first.entryDir, "THIRD_PARTY_NOTICES.md")), true);
     const index = readCacheIndex(env).index;
     assert.equal(index.entries.length, 1);
     assert.equal(index.entries[0].id, "cmsis:F1:startup_stm32f103xb");
+    const notices = index.entries[0].files.find((file) => file.path === "THIRD_PARTY_NOTICES.md");
+    assert.ok(notices, "notices 必须在 files[] 里登记，否则 checkCacheEntry 永远不校验它");
+    assert.equal(typeof notices.sha256, "string", "每个文件都要登记 sha256（A38）");
+    assert.equal(checkCacheEntry(index.entries[0]).ok, true);
 
     const neverFetch = async () => {
       throw new Error("命中缓存时不该联网");
@@ -289,12 +385,133 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     const second = await createRegisterProject({ targetDir, projectName: "reg", mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), overwrite: true });
     assert.equal(second.ok, true);
     assert.equal(second.cacheHit, true);
+    assert.equal(readFileSync(join(env.DSH_STM32_CACHE, "F1", "startup_stm32f103xb", "THIRD_PARTY_NOTICES.md"), "utf8").length > 0, true);
 
     // 认不出的芯片：拒绝，而不是编一个启动文件
     const unsupported = await createRegisterProject({ targetDir: join(root, "g4"), projectName: "g4", mcu: "STM32G431CBT6", env, fetchImpl: fakeFetch() });
     assert.equal(unsupported.ok, false);
     assert.match(unsupported.message, /认不出/u);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------- 内容校验 / sha256 / 工具行为 ---------------------- */
+
+function cacheTool() {
+  let definition;
+  registerCache({ tools: { register(def) { definition = def; } } });
+  return definition;
+}
+
+test("checkCacheEntry：同样大小、内容被换掉也要判出来（A38 sha256）", () => {
+  const root = tempDir("sha");
+  try {
+    const dir = join(root, "cmsis", "F1", "x");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "core_cm3.h");
+    writeFileSync(file, "abcde", "utf8");
+    const entry = {
+      id: "cmsis:F1:x",
+      kind: "cmsis",
+      family: "F1",
+      label: "x",
+      root: dir,
+      createdAt: "",
+      totalBytes: 5,
+      files: [{ path: "core_cm3.h", bytes: 5, url: "", sha256: sha256OfFile(file) }],
+      sources: [],
+      license: "",
+    };
+    assert.equal(checkCacheEntry(entry).ok, true);
+    writeFileSync(file, "abXde", "utf8");
+    const health = checkCacheEntry(entry);
+    assert.equal(health.ok, false);
+    assert.match(health.changed.join("；"), /sha256/u);
+
+    // 老条目没有 sha256：退回只看字节数，不能把别人的缓存判死
+    const legacy = { ...entry, files: [{ path: "core_cm3.h", bytes: 5, url: "" }] };
+    assert.equal(checkCacheEntry(legacy).ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fetchOne：字节数够但内容特征不对，换源而不是落盘（A32 markers）", async () => {
+  const root = tempDir("markers");
+  try {
+    const target = {
+      path: "core_cm3.h",
+      urls: ["https://a.example/core_cm3.h", "https://b.example/core_cm3.h"],
+      minBytes: 10,
+      markers: ["__CORE_CM3_H"],
+    };
+    const wrong = fakeFetch({ handler: () => new Response("<!-- 登录页 -->" + "x".repeat(400), { status: 200 }) });
+    const bad = await fetchOne(target, root, { fetchImpl: wrong });
+    assert.equal(bad.ok, false);
+    assert.match(bad.attempts.join("；"), /内容对不上/u);
+    assert.equal(existsSync(join(root, "core_cm3.h")), false, "对不上的内容不许落盘");
+
+    writeFileSync(join(root, "core_cm3.h"), "旧内容", "utf8");
+    const good = fakeFetch({ handler: () => new Response("#ifndef __CORE_CM3_H\n#define __CORE_CM3_H\n" + "x".repeat(400), { status: 200 }) });
+    const ok = await fetchOne(target, root, { fetchImpl: good });
+    assert.equal(ok.ok, true);
+    assert.match(readFileSync(join(root, "core_cm3.h"), "utf8"), /__CORE_CM3_H/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureCmsisTemplate：下载失败不把并发方在读的目录直接抽走，并说清半截目录去哪了（A24）", async () => {
+  const root = tempDir("stale-dir");
+  const env = { DSH_STM32_CACHE: root };
+  try {
+    const result = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch({ handler: () => new Response("nope", { status: 404 }) }) });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /半截目录/u);
+    assert.equal(existsSync(join(root, "F1", "startup_stm32f103xb")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stm32_cache：不认识的 action 不再等于清空缓存；清空要 confirm（A8）", async () => {
+  const root = tempDir("cache-actions");
+  const saved = process.env.DSH_STM32_CACHE;
+  process.env.DSH_STM32_CACHE = root;
+  const entryDir = join(root, "cmsis", "F1", "x");
+  try {
+    mkdirSync(entryDir, { recursive: true });
+    writeCacheIndex(
+      {
+        version: 1,
+        updatedAt: "",
+        entries: [{ id: "cmsis:F1:x", kind: "cmsis", family: "F1", label: "x", root: entryDir, createdAt: "", totalBytes: 0, files: [], sources: [], license: "" }],
+      },
+      process.env,
+    );
+    const tool = cacheTool();
+    const exec = { signal: new AbortController().signal };
+
+    const unknown = await tool.execute({ action: "pruge" }, exec);
+    assert.equal(unknown.ok, false);
+    assert.match(unknown.message, /不认识的 action/u);
+    assert.equal(readCacheIndex(process.env).index.entries.length, 1, "拼错的 action 不许动缓存数据");
+
+    const noConfirm = await tool.execute({ action: "purge" }, exec);
+    assert.equal(noConfirm.ok, false);
+    assert.match(noConfirm.message, /confirm:true/u);
+    assert.equal(readCacheIndex(process.env).index.entries.length, 1, "没确认就不许删");
+    assert.equal(existsSync(entryDir), true);
+
+    const cleared = await tool.execute({ action: "purge", confirm: true }, exec);
+    assert.equal(cleared.ok, true);
+    assert.match(cleared.message, /实际删掉 1 个/u);
+    assert.equal(readCacheIndex(process.env).index.entries.length, 0);
+    assert.equal(existsSync(entryDir), false);
+  } finally {
+    if (saved === undefined) delete process.env.DSH_STM32_CACHE;
+    else process.env.DSH_STM32_CACHE = saved;
     rmSync(root, { recursive: true, force: true });
   }
 });

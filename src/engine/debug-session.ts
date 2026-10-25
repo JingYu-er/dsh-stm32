@@ -36,6 +36,8 @@ export interface SessionStartRequest {
   /** 起会话时对目标做什么：none=不动、halt=复位并停住、run=复位并运行。 */
   reset?: "none" | "halt" | "run";
   binDirs?: string[];
+  /** 起会话的调用方标识（工具层传 exec.agent?.id）：turn 结束时只关自己的会话（审计 A9）。 */
+  owner?: string;
   onProgress?: (line: string) => void;
 }
 
@@ -113,6 +115,8 @@ interface InternalSession {
   logText: string;
   /** 起会话时解析出的工具链目录：eval 必须用同一份，否则换机器/换目录时会"找得到 openocd、找不到 gdb"。 */
   binDirs: string[];
+  /** 起会话的调用方（空串=不知道）：turn/end 只关自己开的那个（审计 A9）。 */
+  owner: string;
 }
 
 const DEFAULT_IDLE_TTL_MS = 90_000;
@@ -141,6 +145,39 @@ export function parseGdbPrintedHex(output: string): string[] {
     if (value !== undefined) values.push(value.toLowerCase());
   }
   return values;
+}
+
+/**
+ * 按 gdb 的 echo 分段标记取回每个地址的值（审计 A7）。
+ *
+ * 老做法是按 `$N = 0x...` 的出现顺序对齐地址，但失败的命令只打一行
+ * "Cannot access memory at address ..."、不产生 `$N`，于是中间有一个地址读失败，
+ * 后面所有值就整体前移、张冠李戴，报告里还标着 ok=true。
+ * 现在每个地址前面先 echo 一个 ===DSH:<address>=== 标记，值只在它自己那一段里找。
+ */
+export function parseMarkedWords(output: string, addresses: readonly string[]): { pc: string; values: Map<string, string> } {
+  const values = new Map<string, string>();
+  let pc = "";
+  const marks: { tag: string; start: number; end: number }[] = [];
+  for (const match of output.matchAll(/===DSH:([A-Za-z0-9_.]+)===/gu)) {
+    const tag = match[1];
+    if (tag === undefined) continue;
+    const start = match.index ?? 0;
+    marks.push({ tag, start, end: start + match[0].length });
+  }
+  for (let index = 0; index < marks.length; index += 1) {
+    const mark = marks[index] as { tag: string; start: number; end: number };
+    const next = marks[index + 1];
+    const segment = output.slice(mark.end, next === undefined ? output.length : next.start);
+    const printed = /\$\d+\s*=\s*(0x[0-9a-fA-F]+)/u.exec(segment);
+    const value = printed === null ? "" : (printed[1] as string).toLowerCase();
+    if (mark.tag === "PC") {
+      if (pc === "" && value !== "") pc = value;
+      continue;
+    }
+    if (value !== "" && !values.has(mark.tag)) values.set(mark.tag, value);
+  }
+  return { pc, values };
 }
 
 function emptyReport(errors: string[], message: string): SessionReport {
@@ -257,6 +294,7 @@ export class DebugSessionManager {
       hardTtlMs: request.hardTtlMs ?? DEFAULT_HARD_TTL_MS,
       logText: "",
       binDirs: config.binDirs,
+      owner: request.owner ?? "",
     };
 
     const listening = await waitForListening(handle, 15_000, (text) => {
@@ -389,18 +427,31 @@ export class DebugSessionManager {
         message: "没读：地址不合法",
       };
     }
-    const commands = ["print/x $pc"];
-    for (const address of addresses) commands.push("print/x *(unsigned int *)" + address);
+    const commands = ["echo ===DSH:PC===", "print/x $pc"];
+    for (const address of addresses) {
+      commands.push("echo ===DSH:" + address + "===");
+      commands.push("print/x *(unsigned int *)" + address);
+    }
     const evaluated = await this.eval({
       commands,
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
-    const printed = parseGdbPrintedHex(evaluated.output);
-    const pc = printed[0] ?? "";
-    const samples: SessionWordSample[] = addresses.map((address, index) => {
-      const value = printed[index + 1];
-      return value === undefined ? { address, value: "", ok: false } : { address, value, ok: true };
+    const marked = parseMarkedWords(evaluated.output, addresses);
+    const values = new Map<string, string>(marked.values);
+    let pc = marked.pc;
+    if (marked.pc === "" && marked.values.size === 0) {
+      // 极老的 gdb 可能不认 echo：退回按顺序对齐（老行为，可能错位），至少不让工具整体失败。
+      const printed = parseGdbPrintedHex(evaluated.output);
+      pc = printed[0] ?? "";
+      addresses.forEach((address, index) => {
+        const value = printed[index + 1];
+        if (value !== undefined) values.set(address, value);
+      });
+    }
+    const samples: SessionWordSample[] = addresses.map((address) => {
+      const value = values.get(address);
+      return value === undefined || value === "" ? { address, value: "", ok: false } : { address, value, ok: true };
     });
     const missing = samples.filter((sample) => !sample.ok).length;
     const errors = [...evaluated.errors];
@@ -425,8 +476,22 @@ export class DebugSessionManager {
     };
   }
 
-  async stop(reason: string): Promise<{ ok: boolean; stopped: boolean; message: string }> {
+  /**
+   * 关会话。options.requireOwner 给定时，只有 owner 对得上才关（审计 A9）。
+   *
+   * 原来 turn/end 一到就无条件关，多 agent 并行时会把别人正在用的探针收走；
+   * 现在监听方带上自己的 agent id，不属于自己的会话就不动。owner 未知（空串）时按老行为处理。
+   */
+  async stop(reason: string, options: { requireOwner?: string } = {}): Promise<{ ok: boolean; stopped: boolean; message: string }> {
     const session = this.current;
+    const required = options.requireOwner ?? "";
+    if (session !== null && required !== "" && session.owner !== "" && session.owner !== required) {
+      return {
+        ok: true,
+        stopped: false,
+        message: "没关：这个会话是另一个调用方起的（" + session.owner + "），不动它（" + reason + "）",
+      };
+    }
     this.current = null;
     this.stopSweeper();
     if (session === null) return { ok: true, stopped: false, message: "本来就没有会话（" + reason + "）" };

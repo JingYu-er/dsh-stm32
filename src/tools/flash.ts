@@ -62,6 +62,7 @@ interface FlashArgs {
   elfPath?: string;
   buildDir?: string;
   configFile?: string;
+  iocPath?: string;
   adapterSpeed?: number;
   timeoutMs?: number;
   binDirs?: string[];
@@ -104,6 +105,7 @@ export function registerFlash(ctx: DshContext): void {
         elfPath: { type: "string", description: "显式指定要烧的 .elf；缺省从构建目录推断。" },
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先 Debug）。" },
         configFile: { type: "string", description: "openocd 配置文件（相对工程目录）；缺省找 openocd.cfg。" },
+        iocPath: { type: "string", description: "SWD 守卫要看的 .ioc（工程里有多个 .ioc 时用它指定）。" },
         adapterSpeed: { type: "number", description: "adapter speed（kHz）；连不上时可降到 1000 或 100。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 120000。" },
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
@@ -128,8 +130,6 @@ export function registerFlash(ctx: DshContext): void {
         const report = emptyReport("宿主缺少 subprocess 服务，无法烧录");
         return { message: report.message, report };
       }
-      // 探针只有一块：有调试会话占着就先让它让出来（规格 §6）。
-      const released = await releaseProbeFor("stm32_flash");
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       // 门禁：烧录只需要 openocd。缺件且 envCheck=block 时连 openocd 都不起，
       // 免得"探针被占 / 连不上"这类假象盖住真正的原因。
@@ -143,11 +143,14 @@ export function registerFlash(ctx: DshContext): void {
         const blocked = blockedReport(resolution.projectDir, gate);
         return { message: blocked.message, report: blocked };
       }
+      // 探针只有一块：门禁通过后才让调试会话让出来（B16：缺件时不该把别人的探针收走）。
+      const released = await releaseProbeFor("stm32_flash");
       const report = await runFlash(subprocess, {
         projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
         ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
         ...(args.configFile === undefined ? {} : { configFile: args.configFile }),
+        ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),
         ...(args.adapterSpeed === undefined ? {} : { adapterSpeed: args.adapterSpeed }),
         ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),

@@ -1,10 +1,13 @@
 // L1 纯逻辑单测：脚本拼装、日志判定、落位映射、USER CODE 合并。
 // 运行：node --test test/engine-units.test.mjs（需先 npm run build）
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { buildGenerateScript, layoutCommand, parseGenerateLog } from "../lib/engine/generate-script.js";
+import { assessGenerateProducts } from "../lib/engine/generate.js";
 import { mapGeneratedPath } from "../lib/engine/layout.js";
 import { canMergeUserCode, mergeUserCode, parseUserCodeRegions } from "../lib/engine/usercode-merge.js";
 
@@ -107,4 +110,25 @@ test("真实文件：用项目 main.c 的 USER CODE 覆盖 CubeMX 生成结果",
   assert.match(result.merged, /g_led_blink_count\+\+/u);
   assert.match(result.merged, /HAL_Delay\(500\);/u);
   assert.deepEqual(result.droppedLabels, [], "两份文件的标签集合相同，不应有丢失");
+});
+
+test("产物判据：CubeMX 说成功但 HAL 目录是空的，不算成功（审计 A10）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-product-"));
+  try {
+    assert.match(assessGenerateProducts(dir, 0).problems.join("；"), /没有任何产物落位/u);
+    mkdirSync(join(dir, "Core", "Src"), { recursive: true });
+    writeFileSync(join(dir, "Core", "Src", "main.c"), "int main(void) { return 0; }", "utf8");
+    assert.deepEqual(assessGenerateProducts(dir, 1), { ok: true, problems: [] });
+
+    mkdirSync(join(dir, "Drivers", "STM32F1xx_HAL_Driver", "Src"), { recursive: true });
+    const empty = assessGenerateProducts(dir, 3);
+    assert.equal(empty.ok, false);
+    assert.match(empty.problems.join("；"), /STM32F1xx_HAL_Driver/u);
+    assert.match(empty.problems.join("；"), /没认到固件包/u);
+
+    writeFileSync(join(dir, "Drivers", "STM32F1xx_HAL_Driver", "Src", "stm32f1xx_hal.c"), "x", "utf8");
+    assert.equal(assessGenerateProducts(dir, 3).ok, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

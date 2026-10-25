@@ -199,6 +199,8 @@ export function registerBuild(ctx: DshContext): void {
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
           if (gateNote !== null) handle.append(gateNote + "\n");
+          // A35：后台模式也要看得到探针让出的说明。
+          if (released !== null) handle.append(released + "\n");
           handle.append("开始编译：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runBuild(subprocess, {
             projectDir,

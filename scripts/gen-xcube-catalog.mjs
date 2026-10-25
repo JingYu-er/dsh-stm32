@@ -70,7 +70,7 @@ export function parsePdscFileNames(names) {
     .sort((a, b) => (a.vendor + "." + a.name).localeCompare(b.vendor + "." + b.name));
 }
 
-function render(packs, source, generatedAt, fileCount) {
+export function render(packs, source, generatedAt, fileCount) {
   const out = [];
   out.push("/**");
   out.push(" * X-CUBE / I-CUBE 第三方包目录（快照）。");
@@ -79,7 +79,7 @@ function render(packs, source, generatedAt, fileCount) {
   out.push(" *");
   out.push(" * 来源：" + source);
   out.push(" * 生成时间：" + generatedAt);
-  out.push(" * 索引文件数：" + String(fileCount));
+  out.push(" * 索引文件数：" + String(fileCount) + "（一个包的每个版本各占一个 .pdsc，所以文件数恒 ≥ 归并后的条目数；条目数看 XCUBE_CATALOG_ENTRY_COUNT）");
   out.push(" *");
   out.push(" * 用途：.ioc 里第三方包的身份有两种写法，都靠这张表认出来 ——");
   out.push(" *   Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0");
@@ -96,11 +96,11 @@ function render(packs, source, generatedAt, fileCount) {
   out.push("  versions: string[];");
   out.push("}");
   out.push("");
-  out.push("/** 生成这份快照时 CubeMX 包索引目录里的 .pdsc 文件数。 */");
+  out.push("/**");
+  out.push(" * 生成这份快照时 CubeMX 包索引目录里的 .pdsc 文件数。");
+  out.push(" * 它和下面的条目数不是一回事：一个包有多个版本就多个文件，归并后只算一条，所以它 > 条目数。");
+  out.push(" */");
   out.push("export const XCUBE_CATALOG_FILE_COUNT = " + String(fileCount) + ";");
-  out.push("");
-  out.push("/** 快照来源（进报告 notes，便于判断新旧）。 */");
-  out.push("export const XCUBE_CATALOG_SOURCE = " + JSON.stringify(source) + ";");
   out.push("");
   out.push("/** 生成时间（ISO 字符串）。 */");
   out.push("export const XCUBE_CATALOG_GENERATED_AT = " + JSON.stringify(generatedAt) + ";");
@@ -111,6 +111,23 @@ function render(packs, source, generatedAt, fileCount) {
     out.push("  { vendor: " + JSON.stringify(pack.vendor) + ", name: " + JSON.stringify(pack.name) + ", versions: [" + versions + "] },");
   }
   out.push("];");
+  out.push("");
+  // 条目数与来源文案都由上面的常量派生：以前是手写 159，数组归并后只有 67 条，
+  // 报告里就出现"收录 159 条但只能匹配 67 条"的自相矛盾（审计 A23）。
+  out.push("/**");
+  out.push(" * 快照里的包条目数（归并后）。");
+  out.push(" * 由数组长度派生而不是另写一个常量：手写的数字迟早会和数组对不上，");
+  out.push(" * 报告里就会出现\"收录 159 条\"但实际只能匹配 67 条的自相矛盾（审计 A23）。");
+  out.push(" */");
+  out.push("export const XCUBE_CATALOG_ENTRY_COUNT = XCUBE_PACK_CATALOG.length;");
+  out.push("");
+  out.push("/** 快照来源（进报告 notes，便于判断新旧）。两个数字都从上面的常量派生，重跑生成脚本不会漂。 */");
+  out.push("export const XCUBE_CATALOG_SOURCE =");
+  out.push("  " + JSON.stringify(source.split("（")[0] + "（上游 ") + "");
+  out.push("  + String(XCUBE_CATALOG_FILE_COUNT)");
+  out.push("  + \" 个 .pdsc，归并成 \"");
+  out.push("  + String(XCUBE_CATALOG_ENTRY_COUNT)");
+  out.push("  + \" 个包）\";");
   out.push("");
   return out.join("\n");
 }

@@ -88,7 +88,7 @@ test("restore 兼容 CubeMX 自建的空 pdsc 目录（实测行为）", () => {
   }
 });
 
-test("restore 遇到非空 pdsc 时保留两份并提示人工处理", () => {
+test("restore 遇到非空 pdsc 时逐项并回去，不把索引卡在 .dsh-parked（审计 B11）", () => {
   const thirdparties = fakeThirdparties(1);
   try {
     const parked = parkThirdpartyDb(thirdparties.dir);
@@ -98,9 +98,9 @@ test("restore 遇到非空 pdsc 时保留两份并提示人工处理", () => {
     const notes = parked.restore();
     assert.equal(notes.length, 1);
     assert.match(notes[0], /非空/u);
-    assert.ok(notes[0].includes(thirdparties.parked.replace(/\\/gu, "\\")) || notes[0].includes(PARKED_NAME));
-    assert.equal(readdirSync(thirdparties.parked).length, 1);
-    assert.equal(readdirSync(thirdparties.pdsc).length, 1);
+    assert.match(notes[0], /并回 1 项/u);
+    assert.equal(existsSync(thirdparties.parked), false, "搬空后停放目录要删掉");
+    assert.deepEqual(readdirSync(thirdparties.pdsc).sort(), ["leftover.pdsc", "pack0.pdsc"]);
   } finally {
     rmSync(thirdparties.home, { recursive: true, force: true });
   }

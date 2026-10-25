@@ -590,3 +590,18 @@ A8、A13、A16、A17、A18、A19、A20、A22、A23、A24、A29、A30、A31、A32
 - 未覆盖：CubeMX 本体行为（只能靠已记录的实测）、宿主 DSH 的 jobs 服务实现、非 Windows 平台（插件主要面向 Windows）。
 - 已排除的疑点（读码确认无问题）：build 的 CMakeCache 路径错位拦截、elf 查找与 Debug 优先、usercode-merge 的标签配对与 CRLF 保留、ioc.ts 的 serialWire 两种写法识别、layout 的路径映射、doctor 的进程与端口判定、flash 对 Tcl 特殊字符的处理（罕见，未列入）。
 - 本机（开发机）环境基线：Windows；msys64 在 D:/app/msys64 且已在用户级与机器级 PATH；CubeMX 在 D:/app/STM32CubeMX（JRE 齐全，Repository 9 个官方包，另有插件组装的 dsh-firmware/STM32Cube_FW_F1_V1.8.8）；~/.dsh-stm32/config.json 存在；工程路径纯 ASCII、源码全 UTF-8；单会话串行操作。B 类条目即以此为「本机不暴露」的判据。
+
+---
+
+## 修复进度
+
+**第 1 批：已修（2026-10-25）。** A1、A2、A3、A4、A5、A6、A7、A12、B2、B3 全部落地，逐条的取证与修法见 `docs/development-notes.md` §15；离线套件 20 → 21、用例 220 → **244 pass / 0 fail**。
+
+**第 2 批：已修（2026-10-25）。** B1、B4、B5、B6、B7、B8、B9、B10、B12、B13、B15 全部落地，逐条取证与修法见 `docs/development-notes.md` §16；离线套件 21 → 22、用例 244 → **269 pass / 0 fail**（CI 267 + 2 skipped）。
+其中 B10 收尾时多补了一处不在原条目里的洞：`scaffold.resolveFirmwareRoot` 原本也只扫 CubeMX 根，装到下载缓存/自定义目录的包在建工程那边同样看不见——现在它和 `generate` 共用 `firmwareExtraDirs()`。
+
+**第 3 批：已修（2026-10-25）。** A9、A10、A14、A21、A25、A26、A27、A28、A36、B11 全部落地，逐条取证与修法见 `docs/development-notes.md` §17；离线套件 22 → 23、用例 269 → **296 pass / 0 fail**（CI 294 + 2 skipped）。
+
+**第 4 批：已修（2026-10-25）。** A8、A13、A16、A17、A18、A19、A20、A22、A23、A24、A29、A30、A31、A32、A33、A34、A35、A37、A38、B14、B16、B17、B18 全部落地（同一份 §17）；A11 与 A15 也随这批修掉。
+
+**还剩：** A/B 两类在 §「建议修复批次」里列出的条目全部关闭；§「方法与局限」里明确排除的几处（CubeMX 本体行为、宿主 jobs 实现、非 Windows 平台）不在审计范围内。

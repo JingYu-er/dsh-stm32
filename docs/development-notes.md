@@ -1415,3 +1415,238 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
 
 **验证。** `test/firmware-units.test.mjs` 18 → **22 例**（`isProtectedSystemDir` 的真/假两个方向、`orderCubeMxRoots` 的排序、plan 在 `[不存在的根, 真根]` 下必须选真根且不建目录、根不存在且祖先受保护时必须退回用户缓存）；套件 20、用例 216 → **220 pass / 0 fail**。宿主级复验（重启后 `stm32_firmware_install` 的 targetDir 应变成 `D:/app/STM32CubeMX/dsh-firmware/...`）还没做。
 
+### 15. 批 1：审计里的数据安全问题（2026-10-25）
+
+按 `docs/logic-audit.md` 的四批计划，批 1 先修「会把用户文件写坏或把假成功当真」的那几条。全部改动都在离线套件里可回归：套件 20 → **21**，用例 220 → **244 pass / 0 fail**（CI 上 242 + 2 skipped）。
+
+**B2 源码按 UTF-8 读写，GBK 工程被写坏。** 新增 `src/engine/text-file.ts`：BOM → `utf8-bom`，严格 UTF-8 解码成功 → `utf8`，严格 GB18030 解码成功 → `gb18030`，都不行 → `unknown`（拒绝改动）。关键取舍：Node 只有 GB18030 **解码器**、没有编码器（`TextEncoder` 只支持 UTF-8），所以 GBK 文件不做整份重编码，而是 `lineStarts()` + `replaceLineRange()` **按字节拼接** —— 没改的行原字节照抄，只把新增行按 ASCII 插进去；新增内容含非 ASCII 时直接拒绝写入。`code-patch.ts` 与 `generate.ts` 的写盘都改用它，BOM 与 CRLF 保留，`unknown` 文件一个字节都不动。
+
+**A6 flash 的 SWD 守卫不再静默放行。** `findIocFile()` 只认唯一一个 `.ioc`，0 个或多个都返回 `null`；原来这条分支直接返回 `blocked:false` 加两个空数组，守卫等于不存在。现在给出两条 notes：「SWD 守卫没生效：工程里没有 .ioc / 有 N 个 .ioc 分不清」+ 手工核对 PA13/PA14 的做法；`runFlash` 也把非 blocked 时的 notes 真的带进报告（以前丢掉）。另加 `stm32_flash` 的 `iocPath` 参数，多 `.ioc` 工程可以点名。
+
+**A7 readWords 的值不再错位。** gdb 失败的命令只打一行 `Cannot access memory`、不产生 `$N`，按出现顺序对齐会让后面的值整体前移、还标 `ok:true`。现在每个地址前先 `echo ===DSH:<address>===`，`parseMarkedWords()` 只在各自那一段里找值；没有标记时（极老 gdb）才回退旧解析。
+
+**A5 写盘不再是未捕获异常。** `regs_read` 的 openocd 临时脚本、`generate` 的 CubeMX 脚本与产物写回全部包 `try/catch` 转成干净失败；工程只读时给「工程目录可能只读」而不是堆栈。产物读不了编码时用新动作 `skipped-encoding`（schema enum 同步），旧文件编码认不出时**不覆盖**，宁可少做一步也不毁用户的中文注释。
+
+**A1 `project_create` 覆盖前先备份。** `preflightTarget()` 把「工程名 → 目录非空 → hal 且已有同名 `.ioc` 直接拒绝（指向 `stm32_ioc_plan` / `stm32_ioc_apply`）」提到门禁之前；`backupBeforeOverwrite()` 只备份**真正会被覆盖**的文件（14 个模板目标 + startup + system，register 路线是 `CMakeLists.txt` / `main.c` / 4 个公共文件），备份失败即 `ok:false` 且一个字节都不写；写盘中途失败按「本次新建」精确回收，原目录存在时只 `rmdir` 空目录，绝不递归删用户文件。
+
+**A2/A12 缓存索引不再丢数据。** 索引读坏时先改名成 `index.json.broken-<ts>`（rename 失败退 copy，两者都失败才拒绝覆盖）再以空索引重建；`writeCacheIndex` 的 tmp 名带 pid + 序号 + 随机后缀，首次 rename 失败不再先删旧索引，而是把旧索引改名成 `index.json.bak-<ts>` 再搬，二次失败把备份原样放回并抛 `CacheIndexWriteError` —— 抛错时旧索引逐字节未动。
+
+**A4 tar 解包只认白名单。** 条目类型只接受常规文件（0 / NUL / 空）与目录（5），x / g / L / K 作元数据前置消费，1 / 2 / 3 / 4 / 6 / 7 一律跳过并记进 `skippedPaths`（以前符号链接会被当 0 字节文件写下并计入成功）；`isSafeRelative()` 补拒反斜杠、冒号、绝对路径与空段 / 点段；声明大小超出实际数据判为截断包，整次失败不留半截文件。
+
+**A3 `.ioc` 引脚表保序。** 原来重写 `Mcu.PinN` 时按 `.Signal` 过滤，PB2/BOOT1 这类只有 `.Mode` 的引脚会被剔除、留下孤儿键。现在复制原顺序、只追加新引脚，且顺序没变时一个 `Mcu.Pin*` 键都不碰。
+
+**B3 用户 PATH 读失败不再当成没有 Path。** `UserPathRead` 增 `readable`：读失败（spawn 出错、超时、非 0 且不像找不到、输出认不出）→ `readable:false`，此时规划阶段就失败并给手工命令，`applyUserPath()` 不写空串备份、不发 `reg add /f`；只有 reg 明确回答没有这个值才允许新建。这条以前会把整条用户 PATH 覆盖成一条目录。
+
+**测试。** 新增 `test/text-encoding-units.test.mjs` 9 例（编码四态、GB18030 解码、编码器拒绝非 ASCII、字节级替换保留 GBK 注释、unknown 拒改且字节不变、BOM 保留）；`session-units` +2（标记分段不错位、无标记时空结果）、`flash-units` +1（守卫不生效要说清楚）、`cache-units` +2、`firmware-units` +2、`ioc-plan-units` +2、`install-units` +2、`scaffold-patch-units` +4。
+
+### 16. 批 2：只在用户机器上暴露的可用性问题（2026-10-25）
+
+批 1 修的是任何机器都会错的写坏数据与假成功；批 2 修的是**在开发机上看不出来**的那一类：开发机的 msys64 同时躺在用户级与机器级 PATH 里、CubeMX 装在 `D:/app`、工程路径纯 ASCII、系统代码页恰好不影响 grep。换台干净机器或中文 Windows，这些地方就露。逐条见 `docs/logic-audit.md` 的 B1/B4–B10/B12/B13/B15；本段只记取证与取舍。
+
+**B1 模板把开发机绝对路径塞进每个新工程。** `templates/scaffold/vscode/launch.json` 原来写死 `svdPath: D:/JingYu/STM32/cmsis-svd-stm32/stm32f1/STM32F103.svd`、`armToolchainPath`/`gdbPath: D:/app/msys64/ucrt64/bin`，`scaffold.ts` 原样拷进用户的 `.vscode/` —— 别人按 F5 必挂，还顺手泄露我的用户名。现在模板只留占位符（`__GDB_PATH__` / `__ARM_TOOLCHAIN_PATH__` / `__CMAKE_PATH__` / `__SVD_PATH__`），由新增的 `src/engine/vscode-config.ts` 在写盘时按**本机探测结果**填充：`detectVscodeFill(binDirs)` 在 `binDirs + PATH` 里找 gdb 与 cmake，`fillVscodeTemplate()` 有值就替换、**没值就把整行删掉**并记进 `dropped`（cortex-debug 会把空字符串当有效路径，写空串比不写更糟），`scaffold` 再把 `describeDroppedPlaceholder()` 的人话塞进 `report.warnings`。SVD 一律不填：插件没有 SVD 来源，模板里留注释教用户自己加一行。
+
+**B6 模板 settings.json 绑死 ST 官方 VS Code 扩展。** 原来是 `cube-cmake`、`-DCMAKE_COMMAND=cube-cmake`、`stm32cube-ide-clangd.path=cube` 加 `${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/...` —— 没装 ST 扩展的用户在 VS Code 里配置与索引全废。现在只留通用三项：`cmake.cmakePath: __CMAKE_PATH__`（探测到的系统 cmake，探测不到就整行删）、`cmake.preferredGenerators` 为 Ninja、`cortex-debug.variableUseNaturalFormat`。
+
+**B4 子进程不注入 env，只有找可执行文件用 binDirs。** 这条最阴：`stm32_env_install` 刚把工具装好、`config.json` 里的 `binDirs` 也写对了，但 DSH 宿主进程的 `PATH` 还是旧快照 —— 门禁 `locateFast` 只 `existsSync` 判齐全，紧接着 `cmake --preset Debug` 里那句裸 `arm-none-eabi-gcc` 找不到。开发机永远不暴露，因为 `ucrt64/bin` 早就在系统 PATH 里。修法：新增 `src/engine/tool-env.ts` 的 `envWithBinDirs(binDirs, base)`（去重去空、`binDirs` 用 `path.delimiter` 拼在原 `PATH` 前、Windows 上只保留一个大小写正确的 `Path` 键），`RunRequest` 加 `env?` 并透传到两处 `subprocess.spawn`，`runBuild()` 把 `envWithBinDirs(config.binDirs)` 传给 configure 与 build 两次调用。为什么不是只给 cmake 一个绝对路径：cmake 还要再调 gcc/g++/ninja/objcopy/size，它们是 cmake 的子进程，得靠 `PATH`。
+
+**B13 门禁快路径只判文件存在。** 快路径（全部候选 `existsSync` 命中就放行、零 spawn）会把下载不完整／被杀毒隔离／架构不对的 exe 也当成齐全。现在命中后对**该能力的主组件**（build→gcc、flash→openocd、debug→gdb、generate→cubemx-java）跑一次轻量版本命令（`smokeTarget()`，同样 60 s 缓存，`resetGateCache()` 一起清）；跑不通就按缺件处理，并在 `warnings` 里写明「文件在（路径），但版本命令没跑通：…」—— 区分没装与装了但跑不起来，这两种给用户的下一步完全不同。
+
+**B15 hal 路线的门禁用了 generate 能力。** `route:"hal"` 只拷 CMake 文件与 `Drivers/`，不需要 `STM32CubeMX.exe` 与它的内置 JRE，但门禁按 `generate` 能力拦人，缺 JRE 的用户会被要求去装 CubeMX。现在 hal 路线**不挂门禁**（缺固件包由 `scaffold` 自己按三条判据报，并列出找过的路径），register 路线仍按 `build` 能力检查（它要真编译），`gate.message` 降级成 `warnings` 一行。
+
+**B7 斜杠命令把带空格的路径切成两段。** `/stm32-build "C:/Program Files/My Proj"` 以前解析成 `C:/Program`，报工程目录不存在让人莫名其妙。`tokenizeCommandLine()` 改成一次扫描的引号感知切词：引号内不切、顺手剥引号、**不做反斜杠转义**（Windows 路径里反斜杠太多，当转义符会把路径吃掉），未闭合引号明确报错；`--flag` 判定加 `!token.quoted`，所以引号里的 `--clean` 是目录名不是开关。
+
+**B8 斜杠命令不走门禁。** 命令是人已经决定要干的动作，所以这里用 `envCheck: "warn"`：缺件照样跑，但把 `gate.message` 放在卡片第一行（`withGateWarning()`，`kind` 原样保留 —— 命令已经执行完，改成 error 会误导）。接了 `/stm32-flash`、`/stm32-debug`（三处返回都包）、`/stm32-build`；`/stm32-stop` 只关会话、`/stm32-doctor` 本身就是体检，不接。顺序是**先门禁再掐探针**，与工具层 `stm32_flash` 相反 —— 缺件时不该先去动别人的调试会话。
+
+**B9 reg.exe 的输出是 GBK，却被当 UTF-8 读。** `readUserPath()` 与 `readRegistryInstallDirs()` 都按 `utf8` 读 `reg.exe` 的管道输出。中文 Windows 上 `REG_SZ` 里的中文会变成 U+FFFD：注册表发现直接失效（`existsSync` 必失败），更糟的是把解坏的旧 PATH 用 `reg add /f` **写回**，用户整条 PATH 永久损坏。修法两条：新增 `decodeRegistryText()`（先严格 UTF-8、再严格 GB18030，都失败就 `ok:false` 且 `text` 留空；string 入参含 U+FFFD 直接拒绝），`readUserPath` 新增 `queryUserPathBytes()` —— 用 `cmd.exe /d /s /c "reg.exe query … > dump.txt 2>&1"` 把**原始字节**落盘再 `readFileSync` 成 Buffer（宿主的 `CollectedReader` 只给 string，拿不到字节），解不出来按读不到处理、拒绝写注册表。为什么不用 powershell 改 `[Console]::OutputEncoding`：多一次进程启动、多一层引号转义，而 EDR 环境下 cmd 与 powershell 的存活概率没区别。
+
+**B5 安装自检走 PATH 兜底，pacman 失败被改判成功。** 自检用 `probeAll`，而 `probeTarget` 在目录里找不到时会回退 `subprocess.resolveExecutable`（≈PATH）—— 于是 PATH 上本来就有 gcc 能让 `verifyState.ok` 变 true，接着把 pacman 的 `failed` 补偿成 `done`，报告写安装完成。修法：`ProbeOptions` 加 `allowPathFallback?: boolean`（默认 true，既有调用不变），自检传 `false`；再加 `isInsideDir()` 过滤器 `strayTools` —— 只有五个工具**都落在目标 `binDir` 里**才允许那条补偿判定。`message` 相应补一句能跑的那几个不在 `<binDir>` 里、这个目录并没有装好。
+
+**B12 install 分支跳过受保护目录判定。** `dirWritable()` 的 plan 分支会拒 `Program Files`（见 §14.2），但 `create=true` 的分支直接 `mkdir` 加写探针 —— 冒烟时正是这样往不存在的 `C:/Program Files/.../dsh-firmware` 里规划落点。现在 `decideTarget()` 的 `repository` 与 `cubeMx` 两支都先过新增的 `hasCubeMxExe(root)`（只判 `<root>/STM32CubeMX.exe`；比 `search-roots.looksLikeCubeMxRoot` 宽松是**故意**的 —— 那个还要 `jre/bin/java.exe`，是给无头生成用的，缺 JRE 但装了 CubeMX 的机器也该能落 `dsh-firmware`），假根跳过并写 note。
+
+**B10 装到 cache 或自定义目录的包，generate 结构上看不到。** `locateFirmwarePackage()` 只扫 `<root>/Repository` 与 `<root>/dsh-firmware`，而 `stm32_firmware_install` 在 CubeMX 根写不进去时会落到 `<cacheRoot>/firmware` 或调用方指定目录，随后 `nextStep` 又让用户直接调 `stm32_generate` —— 必然找不到包。修法：`locateFirmwarePackage` 增 `extraDirs`（来源扩成 `repository | dsh-firmware | cache | custom`，`firmwareSourceLabel()` 统一中文标签），装成功时往 `<cacheRoot>/firmware/installed.json` 记一条落点，`firmwareExtraDirs(env)` 把 `<cacheRoot>/firmware` 与记录里的非 CubeMX 落点拼起来交给生成。`tools/generate.ts` 的 `firmwareSource` enum 与来源标签同步扩到五值。
+
+**B10 的漏网之鱼（原条目没写到）。** `scaffold.resolveFirmwareRoot()` 同样只扫 CubeMX 根 —— 装到缓存的包在**建工程**那边也看不见。现在它和 `generate` 共用同一个 `firmwareExtraDirs()`（先写在 `generate.ts` 里，本段移到 `firmware-install.ts`，避免两处各写一份迟早对不上），并支持 `extra.dir` 本身就是包目录（显式 `targetDir` 指到包上）。三条判据抽成 `isUsableFirmwareRoot()` 共用。
+
+**测试。** 新增 `test/vscode-units.test.mjs` 9 例（模板里没有 `D:/app`/`D:/JingYu`/`C:/Users`、launch 保留 gdb 与 toolchain 占位符、settings 解绑 ST 扩展且去注释后是合法 JSON、`detectVscodeFill` 的 binDirs 命中与 `Path` 兜底与都没有时三项空串、`fillVscodeTemplate` 填值/删行两态且删行后仍可解析、`describeDroppedPlaceholder` 四条人话加未知占位符、`envWithBinDirs` 前置与保留原 PATH 与不改入参、`Path` 与 `PATH` 只留一个键、空 `binDirs` 不凭空造 PATH）；`commands-units` 6 → 11（引号带空格路径、引号内另一种引号、普通多参数不变、未闭合引号报错且命令拒绝执行、缺件时三条命令以工具链警告开头 —— 最后这条在 `try/finally` 里临时把 `STM32_BIN_DIRS` 指到空目录并关掉自动发现与配置，否则开发机上永远齐全，用例等于没测）；`toolchain-units` 22 → 24（快路径只给主组件跑一次版本命令、文件在但跑不通不算齐全且 `missing` 只有 gcc、smoke 缓存 60 s 内只 spawn 一次）；`scaffold-patch-units` 15 → 17（hal 缺 CubeMX 时报找不到固件包而不是缺 STM32CubeMX、固件包在下载缓存里也能被脚手架找到并拷出 `Drivers/`）；`firmware-units` 24 → 28（`extraDirs` 找缓存落点且只给 CubeMX 根时找不到、`installed.json` 记录、假根不建 `dsh-firmware`、install 分支祖先受保护不建目录）；`install-units` 8 → 10（PATH 上能跑的 gcc 不许把 pacman 失败改判成功且 `--version` 调用次数为 0、GBK 字节的中文 PATH 解得对且写回幂等）；`search-roots-units` 11 → 12（`decodeRegistryText` 四态）。套件 21 → **22**，用例 244 → **269 pass / 0 fail**（CI 上 267 加 2 skipped）。
+
+**还没验证的。** ① 真中文 Windows 上 `cmd.exe` 重定向落 `dump.txt` 的语义只在假 subprocess 加人工拼的 GBK 字节上验过，没在实机跑过一条真 `reg query`；EDR 拦截导致 `dump.txt` 缺失、且旧值含中文的组合没有专门用例（行为落在安全侧：不写注册表、给手工命令）。② 非中日英代码页（CP932／CP1251）的字节可能能被严格 UTF-8 解码但语义是乱码，零依赖识别不出来，与改前一致。③ `decodeRegistryText` 与 `text-file.detectEncoding` 是两套同类探测，合并要连 `text-file.ts` 一起改，留到批 4。④ 宿主级复验（重启后按 F5 看 `.vscode` 是否真能调试、`/stm32-build` 带空格路径）还没做。
+
+### 17. 批 3/批 4：假成功、状态一致性与一致性清理（2026-10-25）
+
+批 3（10 条）修「报告说成功但其实是假的、状态谁拥有说不清」；批 4（23 条）修剩下的文案、边界与清理问题。全部改动的可回归证据在离线套件：套件 22 → **23**，用例 269 → **296 pass / 0 fail**（CI 上 294 + 2 skipped）。逐条编号见 `docs/logic-audit.md` 的「建议修复批次」。
+
+**A10 生成成功的判据。** §14 的实测已经证明：`.ioc` 里的 `FirmwarePackage` 指向一个 CubeMX 不认识的版本时，它**不报错**、照样打印 `Code succesfully generated`，只是不拷 HAL。`parseGenerateLog()` 又规定「有成功行就把 ERROR 全部降级成噪音」，两件事叠起来就是稳定的假成功。新增 `assessGenerateProducts(projectDir, appliedCount)`：没有任何产物落位 / 缺 `Core/Src/main.c` / 工程有 `Drivers/*_HAL_Driver` 但其 `Src` 下没有 `.c`（说明包没被认到）→ 直接 `fail()`，并且这步排在**写生成缓存之前**，下次不会用缓存把假成功复读一遍。`ok = successLine !== ""` 的老判据原样保留，产物判据是额外的必要条件。
+
+**A25 flash 的成功判据。** `openocd` 在成功路径上也会打 `Error:` 行（无效 ACK 之类），原来任何 `Error:` 都判失败，等于成功也报错。现在先算 `succeeded = programmed && verified`：成功时命中 `Error:` 的行进 `noise`（首条写进 notes，别让用户以为没看见），失败时照旧进 `errors`。判定 `ok` 的条件没放松（`exitCode === 0` + `programmed` + `verified` + 无 errors）。
+
+**A26 debug_run 的 `ok` 与 `errors` 自相矛盾。** 原来只看 `spawnError === null`、没超时、断点命中，完全无视 gdb 退出码与 `probe.errors`，于是报告写「调试快照完成」同时挂着一串 `Cannot access memory`。现在 `ok` 追加 `gdbOutcome.exitCode === 0 && probe.errors.length === 0`。
+
+**A9 会话归属：turn/end 不能掐别人的调试会话。** 原来 `session/event` 收到任何 `turn/end` 就无条件 `debugSessions.stop()`。现在 `SessionStartRequest` 与 `InternalSession` 都带 `owner`（工具层填 `exec.agent.id`），`stop(reason, { requireOwner })` 在「会话有 owner 且与 requireOwner 不同」时不关并说明原因；`index.ts` 用新增的 `callerIdOf(event, session)` 依次读 `agentId` / `owner` / `agent.id` / `session.id`，**取不到就按旧行为无条件关**（宁可多关一次也别把探针留着不放 —— 单会话场景本来就没这个问题）。
+
+**A27 探测被取消时不写 60 s 缓存。** 慢路径 `for (const target of wanted)` 里 `break` 之后仍然 `probeCache.set(cacheKey, ...)`，于是一次取消会让「缺 gcc」这个错误结论被缓存一分钟。现在 `signal.aborted` 时直接返回 `ok:false` 加「工具链检查被取消：这次没探完，也不缓存结果」，`cacheHit` 保持 false。
+
+**A28 配置写回的 CAS。** `readToolchainConfig()` 记录 `mtimeMs`，`writeToolchainConfig(config, { expect })` 在 mtime 变了时返回 `conflict` 而不覆盖；`updateToolchainConfig()` 先读、冲突就重读重写一次（两次都冲突才失败）。tmp 文件名加 `randomBytes(4)`，两个进程同时写也不会互相踩。安装器与「写 cubeMxRoot」都走这条路。
+
+**A29/A30 取消与 pacman 失败的人话。** 取消时 `exitCode` 是 `null`，原来会落进「退出码 1 失败」分支并把暂存目录删掉 —— 现在是 `ExtractOutcome.cancelled` + `EXTRACT_CANCELLED`，暂存留着方便续跑，文案写「取消≠失败」。pacman 失败时补两条对症提示：`db.lck` 存在给出 `rm -f /var/lib/pacman/db.lck`，出现 conflicting files 给出 `--overwrite`。
+
+**A21 job 卡片不再是计划快照。** 真装返回的 `report` 原来是 `plan` 的副本（`mode: "install"` 但步骤全是 `pending`、`targetDir` 是计划值），看一眼以为没动。现在返回 `runningReport`：步骤 `pending`、抬头「安装进行中」，真正的结果在 job 输出里。
+
+**A36 取消桥接。** `exec.signal` 的 abort 监听在 `jobs.start()` 返回后立刻 `removeEventListener` —— 工具调用一返回，取消就再也传不进 job。现在监听一直留到 job 的 `done` 结算（`.finally` 里摘），`done` 补 `.catch` 把异常转成 `failed` 而不是永远 `running`（`firmware-install` 的 job 这条也一起补了）。
+
+**A14 CubeMX 单飞锁要看进程活没活。** 原来只看 `pid` 加「30 分钟内一律占用」：进程崩了要等半小时，或者用户手删 `.dsh-stm32/lock.json`。现在锁里多写 `host`，`isProcessAlive(pid)` 用 `process.kill(pid, 0)` 真探一次（`EPERM` 按活着算）；同机且进程不在了就接管，并在进度里说明「接管了上次没释放的单飞锁（…进程已不在／来自另一台机器）」；另一台机器的锁仍然不抢。
+
+**B11 pdsc 索引不再卡在 `.dsh-parked`。** 生成期间把第三方包索引整体 rename 走，还原依赖 `generate.ts` 的 `finally`；断电或被杀就留在停放态，而还原分支以前遇到「CubeMX 重建了非空 pdsc」只会让人手工合并。新增 `mergeDirectoryInto()` 逐项 rename 并回（目标已存在算 kept、失败计数），搬空后删停放目录，notes 写「已把停放的索引并回 N 项」。
+
+**A11/A15 下载与替换的原子性。** 暂存目录改成唯一名 `.dsh-download-<pid>-<ts>` 并在下次启动时清扫陈旧目录（`sweepStaleTemps`），主流程补 `catch`；落盘改成「旧文件改名 `.old-<pid>-<seq>` → 新文件 rename → 成功删 `.old`／失败把旧文件还原」，中途失败不会留下半个文件。
+
+**A22 单位。** `formatBytes()` 用 1024 进制却标 MB，41,060,000 字节显示成 39.2 MB。现在十进制（43060392 B → **43.1 MB**），与 GitHub 页面上写的大小一致。
+
+**A23 「159 个包」是文件数不是条目数。** 索引目录里一个包每个版本占一个 `.pdsc`，159 个文件归并成 67 个包；原来报告写「收录 159 条」但实际只能匹配 67 条。现在 `XCUBE_CATALOG_ENTRY_COUNT = XCUBE_PACK_CATALOG.length`，`XCUBE_CATALOG_SOURCE` 由两个常量拼；`scripts/gen-xcube-catalog.mjs` 的 `render()` 同步改成同一布局（否则重跑生成器会把修复回退），并用 3 个假 pdsc 验证过输出。
+
+**A24 缓存条目的 notices 也是文件。** 写进缓存条目的 `files` 列表与计数时漏了 `THIRD_PARTY_NOTICES.md`（10 个文件报成 10、磁盘上是 11）；重下时上一份先改名 `.stale-<ts>` 再删，删失败不阻塞新版本落盘。
+
+**A32 下载内容真校验。** 只比字节数抓不到「返回了一个 200 的漂亮错误页」。`FetchTarget` 加 `markers[]`，每个 CMSIS 目标声明自己必须含的特征串（`system_stm32f1xx.h` 的守卫是 `__SYSTEM_STM32F1XX_H`，第一版只写 `__STM32` 全挂）；tar 先查 gzip 魔数 `1f 8b` 与条目数，解出 0 个条目直接判失败。
+
+**A38 缓存完整性用 sha256。** `CacheFile` 加 `sha256`，`checkCacheEntry()` 不再只比字节数（大小相同但内容被改过的缓存会被继续用）。
+
+**A8/A34 缓存工具的边界。** `stm32_cache` 的 `else` 兜底原来会落进 `purge`，未知 action 现在返回 `ok:false`；清空整份缓存要求 `confirm:true`（不传只报「要删什么」）；`action: fetch/verify` 把 `exec.signal` 真的传下去，取消能停。
+
+**A13 下一步提示按落点分档。** 装到 `cache` / 自定义目录时 `nextStep` 还写着「直接调 stm32_generate」—— 现在 `nextStepFor()` 按 `targetKind` 给不同的话（缓存落点会说明生成靠 `setCustomFWPath` 指过去）。`existing` 分支仍是旧文案，属于已知未整理项。
+
+**A16 `route_plan` 的四处。** `isConcurrencySafe` 从 true 改 false（它要探工具链）；`verdict === "unclear"` 时不再跑门禁（没有外设可评估时查工具链没意义），`guides` 相应为空、`toolchainCapability` 为 `"none"`；`ok` 不再被 `gate.ok` 拽住（寄存器路线不需要 CubeMX）；本机没探测到 CubeMX 根时给 `fallbackRepository: ""` 并说明「固件包落位要你自己填」。
+
+**A17/A18/A31 契约与参数。** skill 正文把 `plan_id` 改成 `planId`（仓库里没有 `plan_id` 这个参数名，模型照抄就会失败）；`stm32_ioc_apply` 回滚时 `appliedChanges` 记 0（回滚不是应用变更）并新增 required 字段 `rolledBack`；`ioc_apply` / `ioc_plan` / `debug_session` / `debug_eval` 四处 `execute(rawArgs: X | undefined)` 加 `const args = rawArgs ?? {}`，宿主传 undefined 时不再 TypeError。
+
+**A19 `regs_read` 借用会话时的参数说明。** `configFile` / `adapterSpeed` 在借用已有调试会话时**不生效**（openocd 是会话里那个），原来静默忽略；现在写进 notes 并给「先 stm32_debug_stop 再读」的做法。
+
+**A20 死代码。** `debug.ts` 里 `REGISTER_NAMES` 只做 `some()` 再 `continue` 的空循环、`tools/generate.ts` 里 `report` 变量只写不读的两处全部删掉。
+
+**A35 job 路径丢了 `released` 说明。** 同步路径会在 notes 里写「已释放探针」，job 路径把那句话丢了；现在 job 的 `run` 一开始就 `handle.append(released)`，`build` 与 `generate` 都补上。
+
+**A37 安装指引的分支。** `install-guides.ts` 用 `in` 判族名（`"constructor"` 会命中原型链）改成 `Object.hasOwn`；`guideFor()` 原来只认 `cubemx` / `cubemx-java`，缺件矩阵里真实的第 7 个组件 `firmware` 取不到指引，现在支持它（`guidesFor` 调用不变）。
+
+**B14 新装的 MSYS2 先整体升级一次。** 基包解压后立刻 `pacman -S --needed <5 包>` 在久未整体升级的镜像上会解不开依赖（实测「无法满足依赖关系」）。现在空库路径先 `pacman -Syu --noconfirm` 再装；已有一份完整 MSYS2 的机器**不**替用户升级（只 `-Q` 查、缺件才 `--needed`）。
+
+**B16 缺件时不该收走别人的探针。** `releaseProbeFor()` 原来排在门禁之前：`stm32_flash` 因缺 openocd 被拦下，却顺手把别人开着的调试会话关了。现在先门禁、`block` 分支直接返回，之后才释放探针（斜杠命令侧是相反顺序，见 §16 B8）。
+
+**B17 长路径复制。** `Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/…` 这样的层级碰上深目录就超 260 字符。新增 `src/engine/fs-longpath.ts`：`toLongPath()` 给绝对路径加 `\\?\`（UNC 走 `\\?\UNC\`，非 win32 原样），`copyFileLong()` / `copyTreeLong()` 失败时给中文说明（两侧路径、`ENAMETOOLONG`、改短目录的建议）；`scaffold.ts` 的整树复制与两处单文件复制全部改走它，`mkdirTracked` 变薄壳保持 `register-template` 的调用签名。
+
+**B18 CubeMX 脚本里的中文路径。** 脚本是 UTF-8 写的，而 CubeMX 是 Java 程序，读脚本用平台默认字符集（中文 Windows = GBK），路径里有中文就乱码。现在启动参数加 `-Dfile.encoding=UTF-8`，不动脚本内容、也不给用户添 BOM。
+
+**D1（宿主验收发现，不在审计清单里）：填进 JSON 的 Windows 路径没转义。** §16 的占位符填充把 `D:\app\msys64\ucrt64\bin` 原样插进 `launch.json`，反斜杠在 JSON 字符串里是转义符 —— 生成的 `.vscode` 不是合法 JSON，VS Code 直接打不开。`fillVscodeTemplate()` 现在先把值里的反斜杠统一成正斜杠再替换（VS Code 与 CMake 都认正斜杠，且不再需要关心 JSON 转义）。引擎级复验：`createProjectScaffold` 建出的 `launch.json` / `settings.json` 剥注释后 `JSON.parse` 成功、反斜杠计数 0、`cmake.cmakePath` 是 `D:/app/msys64/ucrt64/bin/cmake.exe`。顺带一提：验证这一步的队友还确认了 GBK 文件经 `stm32_code_patch` 后中文逐字节不变（含反证：编码认不出的文件被拒且零改动）、register 覆盖前备份目录的 tag 是 `-register`、hal 且已有同名 `.ioc` 会被 preflight 拒绝且零写入、含空格目录 `demo\.accept space\reg proj` 里能正常编译出 elf。
+
+**测试。** `engine-units` +1（CubeMX 说成功但 HAL 目录为空不算成功）、`flash-units` +1（成功序列齐全时 `Error:` 行进 noise）、`session-units` +2（别人的会话不关 / owner 未知照旧关）、`toolchain-units` +1（abort 后不写 60 s 缓存）、`thirdparty-units` 改写 1 例（停放索引逐项并回）、`xcube-units` +1（生成脚本重跑不会把条目数写死）、`vscode-units` +1（填进 JSON 的路径必须合法）、`scaffold-patch-units` +5（长路径三态 + 回滚 `rolledBack` + 四个工具接受 undefined）、`ioc-units` +2（`guideFor` 的 firmware 分支与 `Object.hasOwn`）、`install-units` 到 17、`cache-units` 到 16、`firmware-units` 到 30。最终 **23 套件 296 pass / 0 fail**（CI 294 + 2 skipped）。
+
+**宿主级烟测（2026-10-25，重启后新 lib）。** 五项全部通过：
+① `stm32_firmware_install({family:"F1", version:"1.8.8"})` 的计划落点是 `D:/app/STM32CubeMX/dsh-firmware/STM32Cube_FW_F1_V1.8.8`、`targetKind: "cubeMx"` —— §14.2 那条选址缺陷在宿主里确实修好了（以前会规划到不存在的 `C:/Program Files/...`）。
+② `stm32_cache({action:"purge"})` 在有 1 个条目、1.0 MB 且没带 `confirm` 时 `ok:false`，message「要清空整个缓存（1 个条目、共 1.0 MB）必须带 confirm:true；只想删一个条目就给 id。什么都没删。」——A8 生效且零副作用。
+③ `stm32_project_create({route:"hal", firmwarePackage:"STM32Cube_FW_F1_V1.8.8"})` 建出 14 个工程文件 + 238 个固件文件，`firmwareRoot` 指向 `dsh-firmware` 那份（scaffold 双层查找在宿主里生效）。
+④ 该工程的 `.vscode/launch.json` 与 `settings.json` 剥注释后都是合法 JSON、反斜杠计数 0、占位符 0、不含 `D:/JingYu`（`D:/app` 会出现，那是本机探测到的工具链真路径，不是模板写死）——D1 修好。
+⑤ `stm32_ioc_plan`（`ProjectManager.HeapSize` 0x200 → 0x800）+ `stm32_ioc_apply` 写入 1 个键变化，再 `stm32_ioc_apply({rollbackFrom})` 回滚：`appliedChanges: 0`、`rolledBack: true`，`.ioc` 回到 0x200 —— A18 生效。
+
+**还没做的。** ② `firmware-install` 的 `existing` 分支 `nextStep` 还是旧文案。③ 只有 F1 在 `FIRMWARE_FAMILIES`，其他族要 curl 核实仓库名。④ `SetCopyLibrary "copy all"` 要不要补发仍未决（见 §14.1）。
+
+## 18. 设置面板：宿主 web-api + 浏览器端 bundle（2026-10-25）
+
+用户要的是「别只靠命令行改配置」：把 `~/.dsh-stm32/config.json` 搬到 DSH 的 **设置** 页里，能读、能改、能探测、能一键装。结论是先做**面板**（配置 + 探测 + 安装），不做卸载与目录浏览。
+
+### 18.1 先摸清宿主的两条契约（决定技术路线）
+
+**客户端插件不是插件里的一段 React，而是一个"外壳直接执行的 bundle"。** 宿主读已启用 Loader 条目 `package.json` 里的 `dsh.client`（要求 `platform: "web"`）与 `exports["./client"]`，把那个文件以 `/plugins/<包名>/client.js` 提供给浏览器。所以：
+
+- 不需要打包器。`dsh-skill-mcp-panel` 的构建就是 `tsc -p tsconfig.json && node scripts/strip-client-export.mjs`，产物直接是 `lib/client.js`；
+- 产物形状固定：`window.__ModuleLoader__.load({ id: "<包名>", factory: (require) => { var module = { exports: {} }; ...; return module.exports; } })`，`exports.apply` 是入口、`exports.inject` 是客户端服务依赖；
+- `factory(require)` 只认外壳种子：`react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`。要用别的模块得在 `dsh.client.external` 里声明——我们只用 `react`，没碰这一层。
+
+**设置页的挂载点是 slot，不是路由。** 官方账户页的写法是 `ctx.effect(() => ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: "account", order: -10, label: () => t("nav"), locale: "settings.account", inject: () => operations }, AccountSection)), "<label>")`。`label` / `locale` / `inject` 都是可选的：我们只给 `{ name, id: "stm32", order: 40, label: () => "STM32 工具链" }`，不传 `locale`（中文写死）也不传 `inject`（组件自己 fetch）。
+
+**顺带纠正一条早期的错误判断**：profile 的 `cordis.patch.yml` 里 `ui-settings` 的 `config.enabled: false` 是「代码工作工具开关」这条偏好，**不是**把设置页关掉。设置页一直存在。
+
+**为什么客户端不声明 `dsh.client.inject`**：`dshmarket` 与 `dsh-skill-mcp-panel` 都列了 `@deepseek-ai/dsh-client-ui-layout` / `-sidebar` 之类的客户端服务，因为它们要用侧栏与主题；我们只需要 `slots`，它由外壳核心提供。**也不需要往 `cordis.patch.yml` 加 client loader 行**：这两个已装好的客户端插件同样只是 `dsh.profile.bundles` 里的一项 + 包自己的 `dsh.client` 声明（对比它们的 `package.json`：`dsh.bundle.patch` + `dsh.client.platform`，patch 里没有它们的 loader 条目）。
+
+### 18.2 宿主侧：HTTP 而不是 remote / configForms
+
+面板要读写的配置在 `~/.dsh-stm32/config.json`，**不在**宿主 settings 命名空间里——`ctx.configForms` 只对后者有效；走 typert 的 `ctx.remote` 又要另加一层协议定义与类型生成，对三个按钮的页面不值。所以照 `dshmarket` 的做法用宿主的 `webServer` 服务：
+
+`register(route: { kind: "exact" | "prefix"; path: string; handler: (IncomingMessage, ServerResponse) => void | Promise<void> }): () => void`
+
+分两层落地（`src/engine/web-api.ts` + `src/engine/web-routes.ts`）：
+
+- **web-api.ts（纯逻辑，可离线单测）**：`configSnapshot` / `saveConfig` / `capabilitiesOf` / `summarizeProbe` / `probeTools` / `installPlan` / `installStart` / `installTaskState` / `handleWebApi` / `resetInstallTasks`，六条路由 = `GET /dsh-stm32/api/config`、`POST .../config/save`、`POST .../probe`、`POST .../install/plan`、`POST .../install/start`、`GET .../install/state`；
+- **web-routes.ts（薄适配）**：`ctx.inject(["webServer"], scope => ...)` 里对每条路由 `server.register({ kind: "exact", path, handler })`，只负责拼 URL、读请求体（上限 1 MB）、写 JSON（`cache-control: no-store`）。宿主没组合 `webServer`（纯 CLI）时静默跳过。
+- `src/types.ts` 新增 `WebServerService`，request/response 用 `any`：asar 里的宿主包**没有 .d.ts**（`node_modules/@deepseek-ai/*` 下 d.ts 数为 0），类型只能按 `dshmarket/src/routes.ts` 的用法自写。
+
+**安全边界写在 web-api 里而不是面板里**（面板是浏览器代码，谁都能改）：`packages` 拒绝以 `-` 开头的名字（否则等于把 `pacman` 变成任意标志注入）与含空白 / `"'|&;<>` 的名字；`binDirs` 必须是字符串数组；`saveConfig` 的空补丁直接 400（不然会写出一个"看起来保存了"的假成功）；`installStart` 没有 `confirm: true` 一律拒。安装任务是进程内 `Map`（留最近 20 个、每个日志尾巴 200 行），真装复用 `planOrInstallMsys2`，与 `stm32_env_install` 同一个安装器。
+
+### 18.3 浏览器端：手写纯 JS
+
+`client/client.js`（674 行）三张卡：**装在哪**（读配置 / 改 `msys64` `cubeMxRoot` `binDirs` / 保存）、**缺什么**（探测 + 四项能力徽章 + 逐项路径版本与 `hint`）、**装工具链**（出计划 → 二次确认 → `install/start` → 轮询 `install/state` 到结束）。`scripts/copy-client.mjs` 把它原样复制到 `lib/client.js`；`package.json` 只加四处（`exports["./client"]`、`files += "client"`、`build` 串上复制脚本、`dsh.client.platform = "web"`），零新依赖。
+
+不做 TS/JSX：这个文件的正确产物就是它自己；写成 TS 只会多一层「tsc 决定产物路径」的中间层，还要额外引入 jsx 运行时配置。
+
+**队友桩测逮到一个真缺陷**：安装结果块原来用 `taskId === "" ? null : …` 判渲染，而轮询结束时组件会清掉 `taskId` 去重读配置——于是「安装成功 / 失败」连同日志整块从面板消失。改成 `(taskId !== "" || installState !== null)` 才渲染，任务号那一行单独判别。
+
+### 18.4 测试与文档
+
+新增 `test/web-api-units.test.mjs`（9 例）：配置快照（无文件 → `ok:false`、路径仍给出）、保存后读回且 `binDirs` 由 `msys64` 推出、四类非法输入都在动手前拒掉且不创建文件、能力归纳（缺 gdb 时 `debug:false` 而 `build:true`、`missingRequired` 只收必需项）、分发层 405 / 404 / 坏 JSON 400 / 缺 `taskId` 400、`confirm` 门槛（直接调与走 HTTP 都拒、且不登记任务）、探测与安装计划的入参校验、路由表六条无重复。`test/run-units.mjs` 的 `suites` 加一行。
+
+**24 套件 305 pass / 0 fail**（CI 303 + 2 skipped）。README / README_EN 的计数与新增小节「设置面板（GUI）」同步。
+
+**还没验证的**：面板在真 GUI 里的渲染与三步操作（要重启 DSH 后在 **设置 → STM32 工具链** 里点），以及宿主是否自动发现 `link:` 安装包里的 `dsh.client`（按 `dshmarket` / `dsh-skill-mcp-panel` 的同形安装推断会自动，重启后看 `/plugins/dsh-stm32/client.js` 能不能取到即可）。
+
+## 19. 安装计划只报缺件：计划模式也要真的看一眼本机（2026-10-25）
+
+**用户的反馈**（面板上线后第一句）：「我电脑已经有完整工具链了，安装计划应该只显示缺少的吧」。当时卡片写的是「把 MSYS2 装到 D:/app/msys64（来源：配置里的 msys64），再补 5 个组件；安装包 43.1 MB（需要下载）」，7 个步骤全 pending，用量估算「43.1 MB + 121 MB / 磁盘约 491 MB」——而这台机器上 5 个组件、`usr/bin/bash.exe`、用户 PATH、`config.json` 全都已经就位。
+
+**根因是"计划零副作用"被理解得太宽。** 早期实现为了绝对安全，计划模式只做纯计算：不读 `pacman -Q`、不跑版本命令，于是它对"已装了什么"一无所知，只能按最坏情况（全新安装）出文案。真正的边界应该是「不写」而不是「不看」——`pacman -Q` 只看、`gcc --version` 只跑、`reg query` 只读，都不改变系统。
+
+### 19.1 现在计划模式会做的只读动作
+
+- `isMsys2Root(msys64)` + `usr/bin/bash.exe` 存在 → 真跑一次查询（优先 `usr/bin/pacman.exe -Q <5 包>`，没有才 `bash -lc`；与真装第 4 步同一个命令），`parsePacmanQuery` 得出 `installed` / `missing`；问不了（spawnError / 超时 / pacman 自己报错）就标 `pacmanUnknown`，**不编缺件清单**，并在 `notes` 里写明原因；
+- `binDir` 存在 → `probeAll(..., { binDirs: [binDir], allowPathFallback: false })` 只跑 `VERIFY_IDS` 那五个版本命令（不越过目标目录去 PATH 上找，B5 的规矩照样守）；`verify.ok` 与「缺 X」直接进卡片的第 6 步，`report.verify` 不再是恒 `{ok:false, tools:[]}`；
+- `configMatches`：现配置的 `msys64` 与 `binDirs` 对得上、`packages` 全含 → 第 7 步标 skipped「配置已经是这个样子，不用改」；
+- `download`：已有 MSYS2 时恒为「`bytes: 0`」（安装包根本不会碰）；
+- PATH 那一步复用已有的 `reg query` 读（只读一次，用于预告「会不会重复写」）。
+
+### 19.2 文案按"实际要做什么"分四档
+
+| 现场 | 首句 | 第 4 步（pacman） |
+| --- | --- | --- |
+| 已装齐 | **只回一句**「工具链完整，不需要装任何东西：5 个组件都能跑，PATH 与配置都已就位（D:/app/msys64/ucrt64/bin）。」——`steps: []`、`notes: []`、`nextStep: ""`，不列步骤也不贴 notes | （不出现） |
+| 已有 MSYS2、缺 N 个 | 「计划（还没动手）：复用 … 里已有的 MSYS2，只补 N 个组件（缺 …）；不用下载安装包，已装的 K 个不动、也不升级。」 | `pending`：「先 pacman -Q 问过一遍：缺 N 个（…）；将跑 pacman -S --noconfirm --needed <缺的包>（已装的 K 个不动，也不升级）」 |
+| 已有 MSYS2、问不出装没装 | 「计划（还没动手）：复用 … 里已有的 MSYS2；计划里没问出这 5 个组件装没装（pacman 超时或起不来），真装时会先 pacman -Q 问一遍，只补缺的，已装的包不动、也不升级。」 | `pending`：「计划里没问出来（pacman 超时或起不来）：真装时会先 pacman -Q 问一遍，只补缺的包…」 |
+| 全新 | 原文案（下载安装包 + 补 5 个组件） | 原文案（整机空库时先 `pacman -Syu` 再补，不做 `-Sy` 后立刻 `-S` 的局部升级） |
+
+**为什么完整时连步骤都不列**：把「没有可做的事」画成七行「已跳过」+ 三条 notes，卡片比真要装的还长，用户第一反应是「还有一堆动作在排队」。所以 `nothingToDo && verifyOk` 时直接返回紧凑结果（`steps: []` / `notes: []` / `nextStep: ""`），浏览器端 `client/client.js` 在 `steps.length === 0` 时也不再渲染「目标：… · 包：… · 下载：…」那行和步骤列表。另有一处兜底：`tools/env-install.ts` 在计划 steps 为空时用新导出的 `msys2StepSkeleton()` 补出 7 步骨架，真装 job 的「安装中」卡片照样列得出步骤（A21 的断言依赖这一点）。
+
+`usageNote(facts, …)` 同步四档：已装齐 →「不用下载任何东西（MSYS2 与 5 个组件都已在本机）」；缺件 →「不用下载安装包；只补 N 个包，pacman 下载约 …」；全新 → 原公式。`nextStep` 也分档，已装齐时直接给「去看 `stm32_env_probe` 或 `stm32_build`，要换一份 MSYS2 就传 `targetDir`」，不再劝人确认安装。
+
+### 19.3 现场实测又逮到一层：pacman 比版本命令慢得多
+
+第一版计划问包状态用的是 `bash -lc "pacman -Q …"` 加 15 s 预算（直接照抄版本命令的 `PROBE_TIMEOUT_MS`）——在这台机器上**一律超时**，于是计划又退回「缺 5 个」，看起来和没改一样。实测：`bash.exe -lc "pacman -Q <包>"` 要 **11.0 s**（`-lc` 会起一遍 profile），直接跑 `D:/app/msys64/usr/bin/pacman.exe -Q` 要 **6.5 s**（首跑含安全软件扫描）。两条改法：
+
+- 优先直接跑 `<msys64>/usr/bin/pacman.exe -Q <包…>`（存在才用），没有才退回 `bash -lc`——省掉 shell 与 profile；
+- 单独的 `PACMAN_QUERY_TIMEOUT_MS = 60_000`，不再挤占版本命令那份预算。
+
+再加一个新事实 `pacmanUnknown`：问不出来（超时 / pacman 自己报错且一条都没解析出来）时**不再按「全部未装」编清单**——卡片改说「计划里没问出这 5 个组件装没装（pacman 超时或起不来），真装时会先 `pacman -Q` 问一遍，只补缺的，已装的包不动、也不升级」，用量估算也只说「缺几个包要等真装时才知道」。编一份看起来精确的假清单比不给清单更糟。
+
+### 19.4 真机复验（2026-10-25，引擎级直调 lib）
+
+同一台机器、同一份配置（`~/.dsh-stm32/config.json` → `msys64: D:/app/msys64`），`planOrInstallMsys2({ mode: "plan" })` 现在的输出：
+
+- `ok = true`、`steps = []`、`notes = []`、`nextStep = ""`、`download.bytes = 0`、`verify.ok = true`（tools 5 项全 found）；
+- 卡片全文只有一句：「工具链完整，不需要装任何东西：5 个组件都能跑，PATH 与配置都已就位（D:/app/msys64/ucrt64/bin）。」
+- 对照：缺件 / pacman 问不出来 / 全新安装时仍走详细卡片（步骤 + 用量 + nextStep），因为那时每一步都有信息量。
+
+### 19.5 测试
+
+`install-units` 17 → **20 例**：新增「已有完整 MSYS2 + 5 个组件 → 说『什么都不用装』、`download.bytes` 为 0、prepare/download/extract/pacman/config 五步全 skipped」、「只缺 1 个包 → 只说 `openocd`、不列已装的 4 个、`download.bytes` 为 0、nextStep 是『只补缺的 1 个包』」、「pacman 问不出来（超时 / 报错）→ 不猜缺哪个，只说真装时会先问」。既有那例「计划里的 pacman 步骤说的是真会跑的事」跟着改了断言：计划模式允许**一条**只读查询，但绝不能出现 `pacman -S` / `-Sy`。
+
+**24 套件 308 pass / 0 fail**（CI 306 + 2 skipped）。README / README_EN 的计数同步到 308。
+
+**还没验证的**：重启 DSH 后在面板里点「生成安装计划」，确认卡片首句变成「什么都不用装」。
+
+
+
+
+

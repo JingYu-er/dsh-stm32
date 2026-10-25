@@ -101,8 +101,6 @@ interface GdbProbe {
   errors: string[];
 }
 
-const REGISTER_NAMES = ["pc", "sp", "lr", "xpsr"];
-
 /** 从 gdb -batch 输出里抠出断点位置、寄存器、调用栈。 */
 export function parseGdbOutput(text: string): GdbProbe {
   const errors: string[] = [];
@@ -139,9 +137,6 @@ export function parseGdbOutput(text: string): GdbProbe {
       continue;
     }
     if (/^(Remote communication error|Cannot access memory|No symbol|error:|\.gdbinit)/iu.test(line)) errors.push(line);
-  }
-  for (const name of REGISTER_NAMES) {
-    if (!registers.some((item) => item.name === name)) continue;
   }
   return { hitBreakpoint, location, registers, backtrace, locals, errors };
 }
@@ -282,7 +277,13 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     if (gdbOutcome.timedOut) errors.push("gdb 超时（" + String(request.timeoutMs ?? 45_000) + " ms）：断点没命中或目标没在跑");
     if (gdbOutcome.exitCode !== 0) errors.push("gdb 退出码 " + String(gdbOutcome.exitCode));
 
-    const ok = gdbOutcome.spawnError === null && !gdbOutcome.timedOut && (breakAt === "none" || probe.hitBreakpoint);
+    // A26：ok 必须和 errors 一致 —— 退出码非 0、gdb 报的错（Cannot access memory 之类）都不算成功。
+    const ok =
+      gdbOutcome.spawnError === null
+      && !gdbOutcome.timedOut
+      && gdbOutcome.exitCode === 0
+      && probe.errors.length === 0
+      && (breakAt === "none" || probe.hitBreakpoint);
     if (ok) notes.push("已在 " + (probe.location === "" ? breakAt : probe.location) + " 停住并抓过快照；收尾是 monitor reset run + detach，芯片现在自由运行，探针已释放");
     if (!ok && probe.hitBreakpoint) notes.push("命中了断点，但收尾阶段有问题");
     if (breakAt !== "none" && !probe.hitBreakpoint && errors.length === 0) {

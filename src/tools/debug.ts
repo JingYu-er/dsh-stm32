@@ -169,8 +169,6 @@ export function registerDebugRun(ctx: DshContext): void {
         const report = emptyReport("宿主缺少 subprocess 服务，无法调试");
         return { message: report.message, report };
       }
-      // debug_run 自己也要独占探针。
-      const released = await releaseProbeFor("stm32_debug_run");
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       // 门禁：调试要 openocd + GDB 两件。缺件且 envCheck=block 时不占探针、不起进程。
       const gate = await ensureToolchain(ctx, {
@@ -183,6 +181,8 @@ export function registerDebugRun(ctx: DshContext): void {
         const blocked = blockedReport(resolution.projectDir, gate);
         return { message: blocked.message, report: blocked };
       }
+      // debug_run 自己也要独占探针；缺件退出时不动别人的会话（B16）。
+      const released = await releaseProbeFor("stm32_debug_run");
       const report = await runDebugRun(subprocess, {
         projectDir: resolution.projectDir,
         ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),

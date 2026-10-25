@@ -31,10 +31,35 @@ import { registerIocPlan } from "./tools/ioc-plan.js";
 import { registerProjectCreate } from "./tools/project-create.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
+import { registerWebRoutes } from "./engine/web-routes.js";
 import type { DshContext } from "./types.js";
 
 export const name = "dsh-stm32";
 export const inject = ["tools", "subprocess", "jobs"];
+
+/**
+ * A9：从 turn/end 事件里尽量挖出发起方的 agent id。
+ *
+ * 宿主没公开事件结构，所以这里按可能的位置逐个试；全都取不到就返回空串
+ * （debug-session 见到空串会退回原来的「无条件关会话」行为，不会漏关）。
+ */
+export function callerIdOf(event: unknown, session: unknown): string {
+  const sources: unknown[] = [event, session];
+  for (const source of sources) {
+    if (source === null || typeof source !== "object") continue;
+    const record = source as Record<string, unknown>;
+    const nested = [record["agent"], record["session"]];
+    for (const candidate of [record["agentId"], record["owner"], ...nested]) {
+      if (candidate === null || typeof candidate !== "object") {
+        if (typeof candidate === "string" && candidate !== "") return candidate;
+        continue;
+      }
+      const id = (candidate as Record<string, unknown>)["id"];
+      if (typeof id === "string" && id !== "") return id;
+    }
+  }
+  return "";
+}
 
 export function apply(ctx: DshContext): void {
   registerEnvProbe(ctx);
@@ -54,6 +79,8 @@ export function apply(ctx: DshContext): void {
   registerRoutePlan(ctx);
   registerCache(ctx);
   registerDoctor(ctx);
+  // 设置面板的宿主 API（浏览器端 lib/client.js 用）。宿主没 webServer 服务时静默跳过。
+  registerWebRoutes(ctx);
 
   // 斜杠命令与 SKILL 是"锦上添花"的层：宿主没组合 commands / skills 服务时静默跳过，
   // 工具本身照常可用（用 ctx.inject 而不是顶层 inject，避免整个插件因缺服务不加载）。
@@ -70,9 +97,15 @@ export function apply(ctx: DshContext): void {
   }
 
   if (typeof ctx.on === "function") {
-    ctx.on("session/event", (_session: unknown, event: { type?: string } | undefined) => {
+    ctx.on("session/event", (session: unknown, event: { type?: string } | undefined) => {
       if (event?.type !== "turn/end") return;
-      void debugSessions.stop("turn/end：本轮输出结束，把探针还给你");
+      // A9：只关这条会话自己开的调试会话。事件结构宿主没公开，所以按可能的位置逐个试；
+      // 全都取不到就传空串，debug-session 会退回原来的「无条件关」行为。
+      const owner = callerIdOf(event, session);
+      void debugSessions.stop(
+        "turn/end：本轮输出结束，把探针还给你",
+        owner === "" ? {} : { requireOwner: owner },
+      );
     });
     ctx.on("session/disposed", () => {
       void debugSessions.stop("session/disposed");

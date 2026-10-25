@@ -7,8 +7,24 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { createProjectScaffold, resolveFirmwareRoot, DEFAULT_FIRMWARE_PACKAGE } from "../lib/engine/scaffold.js";
+import { firmwareExtraDirs } from "../lib/engine/firmware-install.js";
+import { createRegisterProject } from "../lib/engine/register-template.js";
+import { upsertCacheEntry } from "../lib/engine/cache.js";
+import { cmsisTemplatePlan, startupChoiceFor } from "../lib/data/cmsis-sources.js";
+import { registerProjectCreate } from "../lib/tools/project-create.js";
 import { listUserCodeLabels, patchUserCode } from "../lib/engine/code-patch.js";
 import { checkNoDebugGuard } from "../lib/engine/flash.js";
+import { copyTreeLong, describeCopyFailure, toLongPath } from "../lib/engine/fs-longpath.js";
+import { registerIocApply } from "../lib/tools/ioc-apply.js";
+import { registerIocPlan } from "../lib/tools/ioc-plan.js";
+import { registerDebugSession } from "../lib/tools/debug-session.js";
+
+/** 取工具定义：注册器会把 definition 交给 ctx.tools.register，其余服务一律返回 undefined。 */
+function captureTools(register) {
+  const out = new Map();
+  register({ tools: { register: (definition) => out.set(definition.name, definition) }, get: () => undefined });
+  return out;
+}
 
 const CUBE_ROOT = "D:/app/STM32CubeMX";
 
@@ -176,6 +192,52 @@ test("scaffold：固件包在预期位置、能被解析到", { skip: !fs.exists
   assert.equal(resolveFirmwareRoot(["D:/nope"]).root, undefined);
 });
 
+/** 造一个"形状够用"的固件包：三条判据都满足即可（内容不重要，只测找包）。 */
+function makeFirmwarePackage(root) {
+  for (const rel of [
+    "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h",
+    "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
+    "Drivers/CMSIS/Include/core_cm3.h",
+    "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h",
+    "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/system_stm32f1xx.c",
+    "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s",
+  ]) {
+    const abs = path.join(root, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, "");
+  }
+  return root;
+}
+
+test("scaffold：固件包在下载缓存里也要找得到（审计 B10：只扫 CubeMX 根会漏）", () => {
+  const root = tempDir("fw-cache");
+  const before = process.env.DSH_STM32_CACHE;
+  try {
+    process.env.DSH_STM32_CACHE = path.join(root, "cache");
+    const inCache = makeFirmwarePackage(path.join(root, "cache", "firmware", DEFAULT_FIRMWARE_PACKAGE));
+    // 只给一个不存在的 CubeMX 根：能找到就证明走的是 extraDirs 这条路。
+    const resolved = resolveFirmwareRoot([path.join(root, "no-cube")], DEFAULT_FIRMWARE_PACKAGE, firmwareExtraDirs());
+    assert.equal(resolved.root, inCache);
+    // 不带 extraDirs 时仍然只认 CubeMX 根（保留显式行为，避免别处误以为"随便哪都能找到"）。
+    assert.equal(resolveFirmwareRoot([path.join(root, "no-cube")], DEFAULT_FIRMWARE_PACKAGE).root, undefined);
+
+    // 显式 targetDir 指到包本身：basename 就是包名，要认。
+    const direct = makeFirmwarePackage(path.join(root, "custom-place", DEFAULT_FIRMWARE_PACKAGE));
+    assert.equal(resolveFirmwareRoot([], DEFAULT_FIRMWARE_PACKAGE, [{ dir: direct, source: "custom" }]).root, direct);
+
+    // 真建一次工程：Drivers 必须来自缓存里那份，不是空的。
+    const targetDir = path.join(root, "blink");
+    const report = createProjectScaffold({ targetDir, projectName: "blink", cubeMxRoots: [path.join(root, "no-cube")] });
+    assert.equal(report.ok, true, report.message);
+    assert.equal(report.firmwareRoot, inCache, "工程要指到缓存里那份：" + String(report.firmwareRoot));
+    assert.ok(fs.existsSync(path.join(targetDir, "Drivers", "STM32F1xx_HAL_Driver", "Src", "stm32f1xx_hal.c")));
+  } finally {
+    if (before === undefined) delete process.env.DSH_STM32_CACHE;
+    else process.env.DSH_STM32_CACHE = before;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("scaffold：空目录 → 骨架（工程名替换 / .ioc 改名 / Drivers 全量 / 拒绝非空目录）", { skip: !fs.existsSync(path.join(CUBE_ROOT, "Repository", DEFAULT_FIRMWARE_PACKAGE)) }, () => {
   const root = tempDir("scaffold");
   const targetDir = path.join(root, "blink");
@@ -226,3 +288,258 @@ test("scaffold：工程名不是 C 标识符时拒绝", () => {
   assert.equal(report.ok, false);
   assert.match(report.message, /C 标识符/u);
 });
+
+// —— 批 1（A1/A5）：overwrite 覆盖前必须备份、.ioc 不许被模板覆盖、写盘/备份失败要干净收场 ——
+
+const CACHE_TEST_FILES = [
+  ["Drivers/CMSIS/Include/core_cm3.h", "/* core */\n"],
+  ["Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h", "/* device */\n"],
+  ["Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s", "/* startup */\n"],
+];
+
+/** 在临时目录里种一份"已经下好"的 CMSIS 缓存条目：register 路线因此不联网，测试也就与网络无关。 */
+function seedCmsisCache(root) {
+  const cacheRoot = path.join(root, "cache");
+  const entryDir = path.join(root, "tpl");
+  const files = [];
+  for (const [rel, text] of CACHE_TEST_FILES) {
+    const abs = path.join(entryDir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, text);
+    files.push({ path: rel, bytes: Buffer.byteLength(text), url: "https://example.invalid/" + rel });
+  }
+  const plan = cmsisTemplatePlan(startupChoiceFor("STM32F103C8T6"));
+  const env = { ...process.env, DSH_STM32_CACHE: cacheRoot };
+  upsertCacheEntry(
+    {
+      id: plan.id,
+      kind: "cmsis",
+      family: plan.family,
+      label: "测试模板",
+      root: entryDir,
+      createdAt: new Date().toISOString(),
+      totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
+      files,
+      sources: ["https://example.invalid"],
+      license: "test",
+    },
+    env,
+  );
+  return { env, entryDir };
+}
+
+test("A1 覆盖备份：register 路线 overwrite=true 时，被覆盖的旧文件先备份再写", async () => {
+  const root = tempDir("a1-register");
+  const { env } = seedCmsisCache(root);
+  const targetDir = path.join(root, "blink");
+  const oldMain = "/* 用户自己写的 main.c */\r\nint main(void) { return 0; }\r\n";
+  const oldCMake = "# 旧 CMakeLists\nset(CMAKE_PROJECT_NAME old)\n";
+  fs.mkdirSync(path.join(targetDir, "Core/Src"), { recursive: true });
+  fs.writeFileSync(path.join(targetDir, "Core/Src/main.c"), oldMain);
+  fs.writeFileSync(path.join(targetDir, "CMakeLists.txt"), oldCMake);
+  // 寄存器路线不写 .ioc：它必须原样留着（被"顺手覆盖掉"就是 A1 的另一半）
+  fs.writeFileSync(path.join(targetDir, "blink.ioc"), "Mcu.CPN=STM32F103C8T6\n");
+
+  const report = await createRegisterProject({ targetDir, projectName: "blink", mcu: "STM32F103C8T6", overwrite: true, env, download: false });
+  assert.equal(report.ok, true, report.message);
+
+  const backupsDir = path.join(targetDir, ".dsh-stm32", "backups");
+  const stamps = fs.readdirSync(backupsDir);
+  assert.equal(stamps.length, 1, "只该有一次备份目录");
+  const backupDir = path.join(backupsDir, stamps[0]);
+  assert.ok((report.warnings[0] ?? "").includes(backupDir), "warnings 第一条要说清备份到哪：" + String(report.warnings[0]));
+  assert.equal(fs.readFileSync(path.join(backupDir, "Core/Src/main.c"), "utf8"), oldMain);
+  assert.equal(fs.readFileSync(path.join(backupDir, "CMakeLists.txt"), "utf8"), oldCMake);
+
+  // 新文件已写入，旧内容不再藏在里面
+  const fresh = fs.readFileSync(path.join(targetDir, "Core/Src/main.c"), "utf8");
+  assert.ok(!fresh.includes("用户自己写的"), "main.c 应被模板覆盖");
+  assert.ok(fresh.length > 0);
+  assert.ok(!fs.readFileSync(path.join(targetDir, "CMakeLists.txt"), "utf8").includes("旧 CMakeLists"));
+  assert.equal(fs.readFileSync(path.join(targetDir, "blink.ioc"), "utf8"), "Mcu.CPN=STM32F103C8T6\n");
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("A1 .ioc 保护：hal 路线遇到已有同名 .ioc 时直接拒绝，一个字节都不动", () => {
+  const root = tempDir("a1-hal");
+  const targetDir = path.join(root, "blink");
+  fs.mkdirSync(targetDir, { recursive: true });
+  const iocPath = path.join(targetDir, "blink.ioc");
+  fs.writeFileSync(iocPath, IOC_SERIAL_WIRE);
+  // 不传 cubeMxRoots：拒绝发生在找固件包之前，所以这个用例不依赖本机装没装 CubeMX
+  const report = createProjectScaffold({ targetDir, projectName: "blink", overwrite: true });
+  assert.equal(report.ok, false);
+  assert.match(report.message, /stm32_ioc_plan/u);
+  assert.match(report.message, /stm32_ioc_apply/u);
+  assert.match(report.message, /先自己备份或删掉/u);
+  assert.equal(fs.readFileSync(iocPath, "utf8"), IOC_SERIAL_WIRE);
+  assert.ok(!fs.existsSync(path.join(targetDir, ".dsh-stm32")), "拒绝时不该留下备份目录或半成品");
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("A5 备份失败：一个字都不写、旧文件不变、报告里带路径", async () => {
+  const root = tempDir("a1-backupfail");
+  const { env } = seedCmsisCache(root);
+  const targetDir = path.join(root, "blink");
+  const oldMain = "/* 旧 main */\n";
+  fs.mkdirSync(path.join(targetDir, "Core/Src"), { recursive: true });
+  fs.writeFileSync(path.join(targetDir, "Core/Src/main.c"), oldMain);
+  // 把 .dsh-stm32 做成普通文件：备份目录 mkdir 必然 ENOTDIR，等价于"备份做不了"
+  fs.writeFileSync(path.join(targetDir, ".dsh-stm32"), "not a dir");
+
+  const report = await createRegisterProject({ targetDir, projectName: "blink", overwrite: true, env, download: false });
+  assert.equal(report.ok, false);
+  assert.match(report.message, /备份失败/u);
+  assert.ok(report.message.includes(targetDir), "报告里要有路径：" + report.message);
+  assert.equal(fs.readFileSync(path.join(targetDir, "Core/Src/main.c"), "utf8"), oldMain);
+  assert.ok(!fs.existsSync(path.join(targetDir, "CMakeLists.txt")), "备份失败时不许写任何文件");
+  assert.ok(!fs.existsSync(path.join(targetDir, "Drivers")), "备份失败时不许拷 Drivers");
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("A1 顺序：目标目录非空先于工具链门禁（不会先让人去装 CubeMX）", async () => {
+  let definition = null;
+  registerProjectCreate({ tools: { register: (value) => { definition = value; } } });
+  assert.ok(definition !== null);
+  const dir = tempDir("a1-order");
+  fs.writeFileSync(path.join(dir, "keep.txt"), "x");
+  const value = await definition.execute(
+    { targetDir: dir, projectName: "blink", envCheck: "block" },
+    { signal: new AbortController().signal },
+  );
+  assert.equal(value.report.ok, false);
+  assert.match(value.message, /不是空的/u, "应先报目录非空：" + value.message);
+  assert.ok(!value.message.includes("CubeMX"), "不该先要求装 CubeMX：" + value.message);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("B15 hal 路线不再要 CubeMX 启动器：缺 CubeMX 时报「找不到固件包」而不是「缺 STM32CubeMX」", async () => {
+  let definition = null;
+  registerProjectCreate({ tools: { register: (value) => { definition = value; } }, get: () => undefined });
+  assert.ok(definition !== null);
+  const dir = tempDir("b15-hal");
+  const value = await definition.execute(
+    {
+      targetDir: dir,
+      projectName: "blink",
+      route: "hal",
+      cubeMxRoots: [path.join(dir, "no-such-cubemx")],
+      envCheck: "block",
+    },
+    { signal: new AbortController().signal },
+  );
+  assert.equal(value.report.ok, false);
+  // 拷 CMake 文件 / Drivers 不需要 STM32CubeMX.exe 与它的 JRE，所以门禁不该以 generate 能力拦人；
+  // 真正缺的是固件包，由 scaffold 自己报（并列出找过的路径）。
+  assert.match(value.message, /找不到 CubeMX 固件包/u, value.message);
+  assert.ok(!value.message.includes("缺 STM32CubeMX"), "拷文件不需要 CubeMX 启动器：" + value.message);
+  assert.ok(!fs.existsSync(path.join(dir, "CMakeLists.txt")), "失败时不该留下半成品");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("B17 fs-longpath：toLongPath 只给 Windows 绝对路径加 \\\\?\\ 前缀", () => {
+  if (process.platform !== "win32") return;
+  const abs = path.join(os.tmpdir(), "blink");
+  const expected = "\\\\?\\" + abs.replace(/\//gu, "\\");
+  assert.equal(toLongPath(abs), expected);
+  assert.equal(toLongPath(expected), expected, "已经带前缀的不能再加一层");
+  assert.equal(toLongPath("relative/dir"), "relative/dir");
+  assert.equal(toLongPath(""), "");
+});
+
+test("B17 fs-longpath：目标路径超过 260 字符时仍能把整棵树拷过去", () => {
+  const src = tempDir("b17-src");
+  fs.mkdirSync(path.join(src, "a", "b"), { recursive: true });
+  fs.writeFileSync(path.join(src, "a", "b", "hello.txt"), "长路径也能写\n");
+
+  const root = tempDir("b17-dst");
+  // 每级 40 字符 × 8 级：加上临时目录前缀必然超过 MAX_PATH，正是审计里"深目录 + 深固件包层级"的形状。
+  const deep = path.join(root, ...Array.from({ length: 8 }, () => "d".repeat(40)));
+  assert.ok(deep.length > 260, "这个用例要真的超过 260 字符：" + String(deep.length));
+
+  const created = [];
+  const count = copyTreeLong(src, deep, [], created);
+  assert.equal(count, 1);
+  const copied = path.join(deep, "a", "b", "hello.txt");
+  assert.equal(fs.readFileSync(toLongPath(copied), "utf8"), "长路径也能写\n");
+  assert.ok(created.length > 0, "新建的目录要记下来，失败时才好精确清理");
+
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(src, { recursive: true, force: true });
+});
+
+test("B17 fs-longpath：复制失败的中文说明同时给出两侧路径与 260 字符这条线索", () => {
+  const error = Object.assign(new Error("boom"), { code: "ENAMETOOLONG" });
+  const text = describeCopyFailure("D:\\a\\very\\long\\src.s", "D:\\b\\dst.s", error);
+  assert.match(text, /ENAMETOOLONG/u);
+  assert.match(text, /260/u);
+  assert.ok(text.includes("D:\\a\\very\\long\\src.s") && text.includes("D:\\b\\dst.s"), text);
+});
+
+test("A18：回滚报告 appliedChanges 记 0 且 rolledBack=true（不再拿 1 冒充改了一处）", async () => {
+  const dir = tempDir("a18");
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n");
+  const backupDir = path.join(dir, ".dsh-stm32", "backups", "20260101-000000-auto");
+  fs.mkdirSync(backupDir, { recursive: true });
+  fs.writeFileSync(path.join(backupDir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Restored=1\n");
+
+  const tool = captureTools(registerIocApply).get("stm32_ioc_apply");
+  const value = await tool.execute({ projectDir: dir, rollbackFrom: path.join(backupDir, "demo.ioc") }, { signal: new AbortController().signal });
+
+  assert.equal(value.ok, true, value.message);
+  assert.equal(value.mode, "rollback");
+  assert.equal(value.appliedChanges, 0);
+  assert.equal(value.rolledBack, true);
+  assert.match(fs.readFileSync(path.join(dir, "demo.ioc"), "utf8"), /Mcu\.Restored=1/u);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("A31：rawArgs 为 undefined 时四个工具给报告而不是 TypeError", async () => {
+  const tool = captureTools(registerIocApply).get("stm32_ioc_apply");
+  const applied = await tool.execute(undefined, { signal: new AbortController().signal });
+  assert.equal(applied.ok, false);
+  assert.match(applied.message, /planId/u);
+  assert.equal(applied.appliedChanges, 0);
+  assert.equal(applied.rolledBack, false);
+
+  const plan = captureTools(registerIocPlan).get("stm32_ioc_plan");
+  const planned = await plan.execute(undefined, { signal: new AbortController().signal });
+  assert.equal(planned.ok, false, "没有工程/参数时应当是「没计划」的报告");
+
+  const sessionTools = captureTools(registerDebugSession);
+  const evaluated = await sessionTools.get("stm32_debug_eval").execute(undefined, { signal: new AbortController().signal });
+  assert.equal(evaluated.report.ok, false);
+  assert.match(evaluated.message, /没有会话/u);
+
+  // 只剩 stm32_debug_session：它会真的去起 openocd，所以先把门禁逼成"缺件"。
+  // 本机 PATH 里有全套工具，不这么做用例会变成"真的开会话"。
+  const savedEnv = {
+    bins: process.env.STM32_BIN_DIRS,
+    discover: process.env.STM32_NO_DISCOVER,
+    config: process.env.DSH_STM32_NO_CONFIG,
+    path: process.env.PATH,
+  };
+  const emptyBins = tempDir("a31-bins");
+  process.env.STM32_BIN_DIRS = emptyBins;
+  process.env.STM32_NO_DISCOVER = "1";
+  process.env.DSH_STM32_NO_CONFIG = "1";
+  process.env.PATH = emptyBins;
+  try {
+    const session = await sessionTools.get("stm32_debug_session").execute(undefined, { signal: new AbortController().signal });
+    assert.equal(session.session.ok, false, session.message);
+    assert.equal(session.session.active, false);
+  } finally {
+    const restore = (key, value) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore("STM32_BIN_DIRS", savedEnv.bins);
+    restore("STM32_NO_DISCOVER", savedEnv.discover);
+    restore("DSH_STM32_NO_CONFIG", savedEnv.config);
+    restore("PATH", savedEnv.path);
+    fs.rmSync(emptyBins, { recursive: true, force: true });
+  }
+});
+

@@ -265,9 +265,39 @@ test("CAPABILITY_COMPONENTS / normalizeEnvCheck：能力映射固定，未知 en
   assert.equal(normalizeEnvCheck("随便什么"), "block", "认不出的值不能变成放行");
 });
 
-test("快路径：gcc/cmake/ninja 都在时直接放行，一次都不 spawn", async () => {
+/** 假 subprocess：按 argv 回答版本命令（不真的起进程），记下每次 spawn 的 argv。 */
+function versionSubprocess(answer) {
+  const spawns = [];
+  const reader = (text) => ({
+    readFrom: (offset) => ({ text: text.slice(offset), lossy: false, nextOffset: text.length }),
+  });
+  return {
+    spawns,
+    subprocess: {
+      resolveExecutable: () => {
+        throw new Error("文件已经在 binDirs 里，不该回退到 PATH 解析");
+      },
+      spawn(spec) {
+        spawns.push(spec.argv);
+        const reply = answer(spec.argv) ?? {};
+        return {
+          done: Promise.resolve({ exitCode: reply.exitCode ?? 0, signal: null }),
+          collected: { stdout: reader(reply.stdout ?? ""), stderr: reader(reply.stderr ?? "") },
+          terminate() {
+            return undefined;
+          },
+          waitForExit() {
+            return Promise.resolve();
+          },
+        };
+      },
+    },
+  };
+}
+
+test("快路径：文件都在时只给主组件跑一次版本命令，其余组件零成本放行", async () => {
   const bin = fakeBin("full", ["arm-none-eabi-gcc.exe", "cmake.exe", "ninja.exe"]);
-  const fake = forbiddingSubprocess();
+  const fake = versionSubprocess(() => ({ stdout: "arm-none-eabi-gcc (GCC) 13.3.0" }));
   try {
     await withEnv({ DSH_STM32_NO_CONFIG: "1" }, async () => {
       const result = await ensureToolchain(gateCtx(fake.subprocess), { capability: "build", binDirs: [bin] });
@@ -275,9 +305,47 @@ test("快路径：gcc/cmake/ninja 都在时直接放行，一次都不 spawn", a
       assert.deepEqual(result.missing, []);
       assert.deepEqual(result.checked, ["gcc", "cmake", "ninja"]);
       assert.match(result.message, /工具链齐全/u);
-      assert.equal(fake.calls.spawn, 0, "快路径不许 spawn 进程");
-      assert.equal(fake.calls.resolve, 0, "快路径只做文件存在性检查");
+      assert.equal(fake.spawns.length, 1, "只该为 gcc 跑一次版本命令，不是每个组件都跑");
+      assert.match(String(fake.spawns[0][0]), /gcc/iu);
       assert.deepEqual(gateReportNotes(result), [], "成功路径不往报告里塞噪音");
+    });
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("快路径：文件在、但版本命令跑不通时不算齐全（审计 B13）", async () => {
+  const bin = fakeBin("broken", ["arm-none-eabi-gcc.exe", "cmake.exe", "ninja.exe"]);
+  const fake = versionSubprocess((argv) =>
+    String(argv[0]).toLowerCase().includes("gcc")
+      ? { exitCode: 1, stderr: "cannot execute binary file" }
+      : { stdout: "ok" },
+  );
+  try {
+    await withEnv({ DSH_STM32_NO_CONFIG: "1" }, async () => {
+      const result = await ensureToolchain(gateCtx(fake.subprocess), { capability: "build", binDirs: [bin] });
+      assert.equal(result.ok, false, "半截下载/被杀软隔离的 exe 不能被当成齐全");
+      assert.deepEqual(result.missing.map((item) => item.id), ["gcc"]);
+      assert.ok(
+        result.warnings.some((line) => line.includes("版本命令没跑通")),
+        "要写明是「跑不通」而不是「没装」：" + result.warnings.join(" | "),
+      );
+      assert.ok(result.warnings.some((line) => line.includes("文件在")), result.warnings.join(" | "));
+    });
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("快路径的版本确认带 60 s 缓存：连着调两次只 spawn 一次", async () => {
+  const bin = fakeBin("smoke-cache", ["openocd.exe"]);
+  const fake = versionSubprocess(() => ({ stdout: "Open On-Chip Debugger 0.12.0" }));
+  try {
+    await withEnv({ DSH_STM32_NO_CONFIG: "1" }, async () => {
+      const request = { capability: "flash", binDirs: [bin] };
+      assert.equal((await ensureToolchain(gateCtx(fake.subprocess), request)).ok, true);
+      assert.equal((await ensureToolchain(gateCtx(fake.subprocess), request)).ok, true);
+      assert.equal(fake.spawns.length, 1, "第二次应命中 smoke 缓存，不再 spawn");
     });
   } finally {
     rmSync(bin, { recursive: true, force: true });
@@ -524,4 +592,26 @@ test("配置里的 msys64 来自别的机器（盘符不存在）时：不当安
   assert.equal(local.msys64, "C:/msys64", "本机存在的盘符照常当目标");
   assert.equal(local.via, "config");
   assert.equal(local.warning, "");
+});
+
+test("探测被取消时不写 60 s 缓存（审计 A27）", async () => {
+  const bin = tempDir("gate-abort");
+  try {
+    await withEnv({ DSH_STM32_NO_CONFIG: "1" }, async () => {
+      const cancelled = await ensureToolchain(gateCtx(undefined), {
+        capability: "flash",
+        binDirs: [bin],
+        signal: AbortSignal.abort(),
+      });
+      assert.equal(cancelled.ok, false);
+      assert.match(cancelled.message, /取消/u);
+      assert.equal(cancelled.cacheHit, false);
+
+      const next = await ensureToolchain(gateCtx(undefined), { capability: "flash", binDirs: [bin] });
+      assert.equal(next.cacheHit, false, "取消的那次不该留下缓存，否则缺件会被记 60 s");
+      assert.equal(next.ok, false, "空目录里当然找不到 openocd");
+    });
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
 });

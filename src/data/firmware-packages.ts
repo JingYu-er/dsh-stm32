@@ -350,7 +350,34 @@ export function looksLikeFirmwarePackage(root: string): boolean {
   return names.some((name) => /_HAL_Driver$/u.test(name) && existsSync(driversDir + "/" + name + "/Src"));
 }
 
-export type FirmwarePackageSource = "repository" | "dsh-firmware" | "";
+export type FirmwarePackageSource = "repository" | "dsh-firmware" | "cache" | "custom" | "";
+
+/**
+ * 额外搜索位置（generate 用）：下载缓存 <cacheRoot>/firmware 里放的是包目录们，
+ * 而调用方指定的 targetDir 本身就是包目录 —— 两种形状都由 locateFirmwarePackage 认。
+ * 为什么需要：固件包装到 cache 或自定义目录后，只搜 CubeMX 根的 generate 结构上看不见它，
+ * 于是打印「可以用 stm32_firmware_install 装到 dsh-firmware 下」把用户指回刚做过的事。
+ */
+export interface FirmwareExtraDir {
+  dir: string;
+  source: "cache" | "custom";
+}
+
+/** 来源的人话。报告、进度、终端文案都从这里取，避免各处各写一份两值三元把 cache/custom 漏成空标签。 */
+export function firmwareSourceLabel(source: FirmwarePackageSource): string {
+  switch (source) {
+    case "repository":
+      return "CubeMX 仓库";
+    case "dsh-firmware":
+      return "插件的 dsh-firmware 目录";
+    case "cache":
+      return "插件的下载缓存";
+    case "custom":
+      return "调用方指定的目录";
+    default:
+      return "";
+  }
+}
 
 export interface FirmwareLocation {
   found: boolean;
@@ -372,35 +399,48 @@ export interface FirmwareLocation {
  */
 export function locateFirmwarePackage(
   cubeMxRoots: readonly string[],
-  request: { packageName?: string; family?: string } = {},
+  request: { packageName?: string; family?: string; extraDirs?: readonly FirmwareExtraDir[] } = {},
 ): FirmwareLocation {
   const wanted = (request.packageName ?? "").trim();
   const family = (request.family ?? "").trim().toUpperCase();
   const checked: string[] = [];
   const found: { dir: string; dirName: string; source: FirmwarePackageSource }[] = [];
+  const accept = (parent: string, source: FirmwarePackageSource): void => {
+    let names: string[];
+    try {
+      names = readdirSync(parent);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!/^STM32Cube_FW_[A-Za-z0-9]+_V[0-9.]+$/u.test(name)) continue;
+      if (family !== "" && !name.startsWith("STM32Cube_FW_" + family + "_")) continue;
+      const dir = parent + "/" + name;
+      if (!looksLikeFirmwarePackage(dir)) continue;
+      found.push({ dir, dirName: name, source });
+    }
+  };
   for (const root of cubeMxRoots) {
     const base = root.trim().replace(/[\\/]+$/u, "");
     if (base === "") continue;
-    const bases: { source: FirmwarePackageSource; dir: string }[] = [
-      { source: "repository", dir: base + "/Repository" },
-      { source: "dsh-firmware", dir: dshFirmwareDir(base) },
-    ];
-    for (const candidate of bases) {
-      checked.push(candidate.dir);
-      let names: string[];
-      try {
-        names = readdirSync(candidate.dir);
-      } catch {
-        continue;
-      }
-      for (const name of names) {
-        if (!/^STM32Cube_FW_[A-Za-z0-9]+_V[0-9.]+$/u.test(name)) continue;
-        if (family !== "" && !name.startsWith("STM32Cube_FW_" + family + "_")) continue;
-        const dir = candidate.dir + "/" + name;
-        if (!looksLikeFirmwarePackage(dir)) continue;
-        found.push({ dir, dirName: name, source: candidate.source });
-      }
+    // <root>/Repository 里是包目录们；<root>/dsh-firmware 同理。
+    checked.push(base + "/Repository");
+    accept(base + "/Repository", "repository");
+    checked.push(dshFirmwareDir(base));
+    accept(dshFirmwareDir(base), "dsh-firmware");
+  }
+  for (const extra of request.extraDirs ?? []) {
+    const dir = extra.dir.trim().split("\\").join("/").replace(/\/+$/u, "");
+    if (dir === "") continue;
+    checked.push(dir);
+    const own = dir.split("/").pop() ?? "";
+    if (/^STM32Cube_FW_[A-Za-z0-9]+_V[0-9.]+$/u.test(own)) {
+      // 显式 targetDir 就是包本身，不是包目录的父目录。
+      if (family !== "" && !own.startsWith("STM32Cube_FW_" + family + "_")) continue;
+      if (looksLikeFirmwarePackage(dir)) found.push({ dir, dirName: own, source: extra.source });
+      continue;
     }
+    accept(dir, extra.source);
   }
   const ranked = found.sort((left, right) => {
     const leftExact = wanted !== "" && left.dirName === wanted ? 1 : 0;
@@ -409,7 +449,10 @@ export function locateFirmwarePackage(
     const leftVersion = left.dirName.replace(/^.*_V/u, "");
     const rightVersion = right.dirName.replace(/^.*_V/u, "");
     if (leftVersion !== rightVersion) return rightVersion.localeCompare(leftVersion, "en", { numeric: true });
-    if (left.source !== right.source) return left.source === "repository" ? -1 : 1;
+    // 同一个包名+版本出现在多处时：官方仓库 > dsh-firmware > 指定目录 > 下载缓存。
+    const rank = (source: FirmwarePackageSource): number =>
+      source === "repository" ? 0 : source === "dsh-firmware" ? 1 : source === "custom" ? 2 : source === "cache" ? 3 : 9;
+    if (left.source !== right.source) return rank(left.source) - rank(right.source);
     return 0;
   });
   const best = ranked[0];

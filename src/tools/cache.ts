@@ -59,6 +59,8 @@ interface CacheArgs {
   id?: string;
   mcu?: string;
   family?: string;
+  /** purge 不给 id 时表示"清空整个缓存"，必须显式确认（A8）。 */
+  confirm?: boolean;
 }
 
 interface CacheValue {
@@ -120,6 +122,7 @@ export function registerCache(ctx: DshContext): void {
         id: { type: "string", description: "条目 id，例如 cmsis:F1:startup_stm32f103xb（purge/verify 用）。" },
         mcu: { type: "string", description: "芯片型号，例如 STM32F103C8T6（fetch 用）。" },
         family: { type: "string", description: "只给族时写这里，例如 F1（fetch 用；按中容量档处理）。" },
+        confirm: { type: "boolean", description: "purge 且不给 id 时（清空整个缓存）必须为 true；只删一条用 id 即可。" },
       },
       required: [],
     },
@@ -140,7 +143,6 @@ export function registerCache(ctx: DshContext): void {
       },
     },
     async execute(rawArgs: CacheArgs | undefined, exec: ToolExec): Promise<CacheValue> {
-      void exec;
       const args = rawArgs ?? {};
       const action = (args.action ?? "list").trim().toLowerCase();
       const info = cacheRootInfo(process.env);
@@ -190,6 +192,8 @@ export function registerCache(ctx: DshContext): void {
         const result = await ensureCmsisTemplate({
           ...(args.mcu === undefined ? {} : { mcu: args.mcu }),
           ...(args.family === undefined ? {} : { family: args.family }),
+          // 取消要能真的传到网络层（A34）：模板 10 个文件、4 个候选源，用户按取消时不能还慢慢下。
+          signal: exec.signal,
         });
         const after = readCacheIndex(process.env).index;
         const entries = listEntries(after, false);
@@ -203,6 +207,11 @@ export function registerCache(ctx: DshContext): void {
           entries: entries.filter((entry) => result.id === "" || entry.id === result.id),
           message: result.message,
         };
+      }
+
+      if (action !== "purge") {
+        // 以前这里直接掉进 purge 分支：action 拼错一个字母（或模型传了不认识的值）就等于清空缓存（A8）。
+        return empty("不认识的 action：" + action + "（只有 list / verify / fetch / purge）。什么都没动。");
       }
 
       // purge
@@ -222,7 +231,25 @@ export function registerCache(ctx: DshContext): void {
         };
       }
       const all = readCacheIndex(process.env).index.entries;
-      for (const entry of all) removeCacheEntry(entry.id, process.env);
+      if (all.length === 0) {
+        return empty("缓存本来就是空的。", true);
+      }
+      if (args.confirm !== true) {
+        // 清空是破坏性操作：没有 confirm 就说清楚要什么，不删（A8）。
+        const entries = listEntries(index, false);
+        return {
+          action: "purge",
+          ok: false,
+          cacheRoot: info.root,
+          indexPath: info.indexPath,
+          origin: info.origin,
+          totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
+          entries,
+          message: "要清空整个缓存（" + String(all.length) + " 个条目、共 " + describeCacheBytes(entries.reduce((sum, entry) => sum + entry.bytes, 0)) + "）必须带 confirm:true；只想删一个条目就给 id。什么都没删。",
+        };
+      }
+      let removed = 0;
+      for (const entry of all) if (removeCacheEntry(entry.id, process.env).removed) removed += 1;
       return {
         action: "purge",
         ok: true,
@@ -231,7 +258,8 @@ export function registerCache(ctx: DshContext): void {
         origin: info.origin,
         totalBytes: 0,
         entries: [],
-        message: all.length === 0 ? "缓存本来就是空的。" : "已清空缓存（删了 " + String(all.length) + " 个条目）。下次建工程会重新下载。",
+        message: "已清空缓存（索引里原有 " + String(all.length) + " 个条目，实际删掉 " + String(removed) + " 个）。下次建工程会重新下载。"
+          + (removed === all.length ? "" : "剩下 " + String(all.length - removed) + " 个只删了索引记录（目录可能不在了或被占用）。"),
       };
     },
   });

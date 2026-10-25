@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   DEFAULT_BIN_DIRS,
   DEFAULT_CUBEMX_ROOTS,
+  decodeRegistryText,
   dedupePaths,
   discoverBinDirs,
   discoverCubeMxRoots,
@@ -147,4 +148,40 @@ test("searchConfigWarnings：点名了但本机不存在的目录要报出来（
     [],
     "存在的目录不该报",
   );
+});
+
+test("decodeRegistryText：reg.exe 的 GBK 字节要解对，解不出来时宁可拒绝也不交乱码", () => {
+  // 中文 Windows 上 reg.exe 往管道/文件写的是系统代码页（936/GBK）的字节。
+  // 「张三」的 GBK 是 D5 C5 C8 FD：按 UTF-8 严格解码必然抛错，所以要能回落到 GB18030。
+  const gbk = Buffer.concat([
+    Buffer.from("C:\\Users\\", "latin1"),
+    Buffer.from([0xd5, 0xc5, 0xc8, 0xfd]),
+    Buffer.from("\\bin", "latin1"),
+  ]);
+  const decoded = decodeRegistryText(gbk, "测试输出");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.encoding, "gb18030", "GBK 字节该被认出不是 UTF-8");
+  assert.equal(decoded.text, "C:\\Users\\张三\\bin", "中文不能被解成乱码");
+
+  // 纯 ASCII：UTF-8 与 GB18030 等价，先试 UTF-8 是零成本的。
+  const ascii = decodeRegistryText(Buffer.from("C:\\msys64", "latin1"));
+  assert.equal(ascii.ok, true);
+  assert.equal(ascii.encoding, "utf-8");
+  assert.equal(ascii.text, "C:\\msys64");
+
+  // 宿主已经按 UTF-8 解过的字符串里带 U+FFFD：字节救不回来，必须拒绝 ——
+  // 调用方据此不写注册表（把乱码写回去就是永久损坏用户的 PATH）。
+  const lossy = decodeRegistryText("C:\\Users\\\u{FFFD}\u{FFFD}\\bin");
+  assert.equal(lossy.ok, false);
+  assert.equal(lossy.text, "");
+  assert.match(lossy.error, /乱码/u);
+
+  // 两种编码都解不出来（0x81 0x20 在 GB18030 里非法，0xFF 在两套里都非法）：
+  // 不许返回"尽力而为"的文本。
+  const broken = decodeRegistryText(Buffer.from([0x81, 0x20, 0xff, 0xff]));
+  assert.equal(broken.ok, false);
+  assert.equal(broken.text, "");
+
+  assert.equal(decodeRegistryText(null).ok, false);
+  assert.equal(decodeRegistryText(Buffer.alloc(0)).ok, false, "空输出等于什么都没读到");
 });

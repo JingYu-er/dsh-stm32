@@ -1,16 +1,10 @@
 {
-    "cmake.cmakePath": "cube-cmake",
-    "cmake.configureArgs": [
-        "-DCMAKE_COMMAND=cube-cmake"
-    ],
+    // 通用配置：只用 CMake Tools + cortex-debug，不依赖任何 ST 官方扩展。
+    // cmake 路径由 stm32_project_create 按本机探测结果填；这台机器没找到 cmake 时这一行会被删掉，
+    // CMake Tools 会回退到 PATH 里的 cmake。
+    "cmake.cmakePath": "__CMAKE_PATH__",
     "cmake.preferredGenerators": [
         "Ninja"
-    ],
-    "stm32cube-ide-clangd.path": "cube",
-    "stm32cube-ide-clangd.arguments": [
-        "starm-clangd",
-        "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gcc*",
-        "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-g++*"
     ],
     "cortex-debug.variableUseNaturalFormat": true
 }

@@ -5,7 +5,7 @@
  *
  * 来源：CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）
  * 生成时间：2026-10-24T03:04:36.542Z
- * 索引文件数：159
+ * 索引文件数：159（一个包的每个版本各占一个 .pdsc，所以文件数恒 ≥ 归并后的条目数；条目数看 XCUBE_CATALOG_ENTRY_COUNT）
  *
  * 用途：.ioc 里第三方包的身份有两种写法，都靠这张表认出来 ——
  *   Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0
@@ -22,11 +22,11 @@ export interface XCubeCatalogEntry {
   versions: string[];
 }
 
-/** 生成这份快照时 CubeMX 包索引目录里的 .pdsc 文件数。 */
+/**
+ * 生成这份快照时 CubeMX 包索引目录里的 .pdsc 文件数。
+ * 它和下面的条目数不是一回事：一个包有多个版本就多个文件，归并后只算一条，所以它 > 条目数。
+ */
 export const XCUBE_CATALOG_FILE_COUNT = 159;
-
-/** 快照来源（进报告 notes，便于判断新旧）。 */
-export const XCUBE_CATALOG_SOURCE = "CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（159 个 .pdsc）";
 
 /** 生成时间（ISO 字符串）。 */
 export const XCUBE_CATALOG_GENERATED_AT = "2026-10-24T03:04:36.542Z";
@@ -100,3 +100,18 @@ export const XCUBE_PACK_CATALOG: XCubeCatalogEntry[] = [
   { vendor: "wolfSSL", name: "I-CUBE-wolfSSL", versions: ["5.8.2"] },
   { vendor: "wolfSSL", name: "I-CUBE-wolfTPM", versions: ["3.8.0"] },
 ];
+
+/**
+ * 快照里的包条目数（归并后）。
+ * 由数组长度派生而不是另写一个常量：手写的数字迟早会和数组对不上，
+ * 报告里就会出现"收录 159 条"但实际只能匹配 67 条的自相矛盾（审计 A23）。
+ */
+export const XCUBE_CATALOG_ENTRY_COUNT = XCUBE_PACK_CATALOG.length;
+
+/** 快照来源（进报告 notes，便于判断新旧）。两个数字都从上面的常量派生，重跑生成脚本不会漂。 */
+export const XCUBE_CATALOG_SOURCE =
+  "CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（上游 "
+  + String(XCUBE_CATALOG_FILE_COUNT)
+  + " 个 .pdsc，归并成 "
+  + String(XCUBE_CATALOG_ENTRY_COUNT)
+  + " 个包）";

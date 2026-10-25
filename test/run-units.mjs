@@ -25,9 +25,12 @@ const suites = [
   "scaffold-patch-units.test.mjs",
   "search-roots-units.test.mjs",
   "session-units.test.mjs",
+  "text-encoding-units.test.mjs",
   "thirdparty-units.test.mjs",
   "tool-contract-units.test.mjs",
   "toolchain-units.test.mjs",
+  "vscode-units.test.mjs",
+  "web-api-units.test.mjs",
   "xcube-units.test.mjs",
   "schema-guard.mjs",
 ];

@@ -533,6 +533,10 @@ test("stm32_firmware_install 的计划报告符合 output schema，且不建目�
   const work = e2eWorkDir("firmware-tool");
   try {
     const cubemxRoot = join(work, "cubemx");
+    // 审计 B12 之后，decideTarget 只在"像 CubeMX 安装根"的目录里建 dsh-firmware（判据：有 STM32CubeMX.exe）。
+    // 不写这个桩，计划会保守地退到下载缓存，targetKind 就不是 cubeMx 了。
+    mkdirSync(cubemxRoot, { recursive: true });
+    writeFileSync(join(cubemxRoot, "STM32CubeMX.exe"), "stub");
     const planned = await tool.execute({ family: "F1", cubeMxRoot: cubemxRoot }, exec);
     reportProblems("stm32_firmware_install(计划)", firmwareInstallSchema, planned);
     assert.equal(planned.mode, "report");

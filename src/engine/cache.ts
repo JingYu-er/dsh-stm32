@@ -9,6 +9,7 @@
  * 目录：DSH_STM32_CACHE 覆盖，默认 %LOCALAPPDATA%\dsh-stm32\cache。
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,12 @@ export interface CacheFile {
   bytes: number;
   /** 实际下载成功的那个 URL（换过源也能追溯）。 */
   url: string;
+  /**
+   * 下载完成时的内容 sha256（小写 hex）。老条目没有这一项，校验时退回只看字节数（A38）。
+   * 字节数挡不住"同样大小、内容被换掉"——代理塞登录页、杀软替换文件、同名不同版本的启动文件，
+   * 大小都可能刚好一样。
+   */
+  sha256?: string;
 }
 
 export interface CacheEntry {
@@ -115,25 +122,144 @@ function isCacheEntry(value: unknown): value is CacheEntry {
   return typeof entry.id === "string" && typeof entry.kind === "string" && typeof entry.root === "string" && Array.isArray(entry.files);
 }
 
-export function writeCacheIndex(index: CacheIndex, env: NodeJS.ProcessEnv = process.env): string {
-  const info = cacheRootInfo(env);
-  fs.mkdirSync(path.dirname(info.indexPath), { recursive: true });
-  const next: CacheIndex = { version: CACHE_INDEX_VERSION, updatedAt: new Date().toISOString(), entries: index.entries };
-  const tmp = info.indexPath + ".tmp-" + String(process.pid);
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
-  try {
-    fs.renameSync(tmp, info.indexPath);
-  } catch {
-    // Windows 上目标已存在时 rename 可能失败：先删再搬（索引是纯元数据，重算代价为零）。
-    fs.rmSync(info.indexPath, { force: true });
-    fs.renameSync(tmp, info.indexPath);
+/**
+ * 写索引失败（可识别、带路径）。单独一个类型是为了让调用方把「索引没写成」和
+ * 「网络挂了」分开，并且能依赖一条硬承诺：抛错时旧索引逐字节没动。
+ */
+export class CacheIndexWriteError extends Error {
+  readonly indexPath: string;
+
+  constructor(indexPath: string, detail: string) {
+    super("缓存索引写不进去（" + indexPath + "）：" + detail);
+    this.name = "CacheIndexWriteError";
+    this.indexPath = indexPath;
   }
-  return info.indexPath;
 }
 
-/** 同 id 覆盖写（缓存条目重建时用）。 */
+/** 注入点：单测里换掉 rename 才能确定性地验证「写失败时旧索引没变」（只读属性/独占锁不可移植）。 */
+export interface CacheIndexIo {
+  rename?: (from: string, to: string) => void;
+  writeFile?: (file: string, text: string) => void;
+  remove?: (file: string) => void;
+}
+
+let tmpSeq = 0;
+
+/** 唯一的临时名：pid + 自增序号 + 随机，同进程连续写、多进程同时写都不会撞。 */
+function uniqueIndexTmp(indexPath: string): string {
+  tmpSeq += 1;
+  const rand = Math.random().toString(16).slice(2, 10);
+  return indexPath + ".tmp-" + String(process.pid) + "-" + String(tmpSeq) + "-" + rand;
+}
+
+/** Windows 文件名不允许冒号，时间戳里的 : 与 . 都换成 -。 */
+function stamp(): string {
+  return new Date().toISOString().replace(/[:.]/gu, "-");
+}
+
+/** 备份名：index.json.broken-<ts> / index.json.bak-<ts>；同一毫秒撞上就加序号。 */
+function freeBackupPath(indexPath: string, tag: "broken" | "bak"): string {
+  const base = indexPath + "." + tag + "-" + stamp();
+  if (!fs.existsSync(base)) return base;
+  for (let extra = 2; extra < 1000; extra += 1) {
+    const candidate = base + "-" + String(extra);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return base + "-" + String(Date.now());
+}
+
+function safeRemove(remove: (file: string) => void, file: string): void {
+  try {
+    remove(file);
+  } catch {
+    // 临时文件删不掉不影响结论。
+  }
+}
+
+/**
+ * 索引读不出来时先留一份 index.json.broken-<ts> 再重建：
+ * 坏文件里其它条目还有人工救回来的价值，直接覆盖等于把它们一起抹掉。
+ */
+function preserveBrokenIndex(indexPath: string, reason: string): string {
+  const backup = freeBackupPath(indexPath, "broken");
+  try {
+    fs.renameSync(indexPath, backup);
+    return backup;
+  } catch (renameError) {
+    try {
+      fs.copyFileSync(indexPath, backup);
+      return backup;
+    } catch (copyError) {
+      throw new CacheIndexWriteError(
+        indexPath,
+        reason + "；留一份备份也没成功（" + errorText(renameError) + " / " + errorText(copyError) + "），为免覆盖掉还能救回来的条目，这次不写索引。",
+      );
+    }
+  }
+}
+
+/**
+ * 原子换索引：tmp 用唯一名 → rename；rename 失败（Windows 上目标被占用是常见原因）
+ * 就先把旧索引改名成 index.json.bak-<ts>（**不删**）再搬一次；第二次仍失败就把备份原样放回。
+ * 硬承诺：函数抛错时旧索引仍在，绝不出现「删了好索引、新的又没搬过来」。
+ */
+export function writeCacheIndex(index: CacheIndex, env: NodeJS.ProcessEnv = process.env, io: CacheIndexIo = {}): string {
+  const info = cacheRootInfo(env);
+  const rename = io.rename ?? ((from: string, to: string): void => { fs.renameSync(from, to); });
+  const writeFile = io.writeFile ?? ((file: string, text: string): void => { fs.writeFileSync(file, text, "utf8"); });
+  const remove = io.remove ?? ((file: string): void => { fs.rmSync(file, { force: true }); });
+
+  fs.mkdirSync(path.dirname(info.indexPath), { recursive: true });
+  const next: CacheIndex = { version: CACHE_INDEX_VERSION, updatedAt: new Date().toISOString(), entries: index.entries };
+  const tmp = uniqueIndexTmp(info.indexPath);
+  try {
+    writeFile(tmp, JSON.stringify(next, null, 2) + "\n");
+  } catch (error) {
+    safeRemove(remove, tmp);
+    throw new CacheIndexWriteError(info.indexPath, "临时文件写不进去（" + errorText(error) + "），旧索引没有动。");
+  }
+
+  try {
+    rename(tmp, info.indexPath);
+    return info.indexPath;
+  } catch (first) {
+    if (!fs.existsSync(info.indexPath)) {
+      safeRemove(remove, tmp);
+      throw new CacheIndexWriteError(info.indexPath, "换索引失败（" + errorText(first) + "），旧索引没有动。");
+    }
+  }
+
+  const backup = freeBackupPath(info.indexPath, "bak");
+  try {
+    rename(info.indexPath, backup);
+  } catch (error) {
+    safeRemove(remove, tmp);
+    throw new CacheIndexWriteError(info.indexPath, "旧索引既换不动也备份不了（" + errorText(error) + "），旧索引没有动。");
+  }
+  try {
+    rename(tmp, info.indexPath);
+    return info.indexPath;
+  } catch (second) {
+    let restored = false;
+    try {
+      rename(backup, info.indexPath);
+      restored = true;
+    } catch {
+      restored = false;
+    }
+    safeRemove(remove, tmp);
+    throw new CacheIndexWriteError(
+      info.indexPath,
+      "换索引失败（" + errorText(second) + "）" + (restored ? "，旧索引已原样放回。" : "，旧索引备份留在 " + backup + "，请手工改回 index.json。"),
+    );
+  }
+}
+
+/** 同 id 覆盖写（缓存条目重建时用）。索引读坏了先备份成 index.json.broken-<ts> 再重建。 */
 export function upsertCacheEntry(entry: CacheEntry, env: NodeJS.ProcessEnv = process.env): CacheIndex {
-  const { index } = readCacheIndex(env);
+  const read = readCacheIndex(env);
+  if (read.error !== null && fs.existsSync(read.path)) preserveBrokenIndex(read.path, read.error);
+  const index = read.index;
   const entries = index.entries.filter((item) => item.id !== entry.id);
   entries.push(entry);
   entries.sort((a, b) => a.id.localeCompare(b.id));
@@ -143,7 +269,10 @@ export function upsertCacheEntry(entry: CacheEntry, env: NodeJS.ProcessEnv = pro
 }
 
 export function removeCacheEntry(id: string, env: NodeJS.ProcessEnv = process.env): { removed: boolean; indexPath: string } {
-  const { index } = readCacheIndex(env);
+  const read = readCacheIndex(env);
+  // 索引读坏时删条目同样会把别的条目一起写没：先备份坏文件再动手（A2 同源缺陷）。
+  if (read.error !== null && fs.existsSync(read.path)) preserveBrokenIndex(read.path, read.error);
+  const index = read.index;
   const target = index.entries.find((item) => item.id === id);
   if (target === undefined) return { removed: false, indexPath: cacheRootInfo(env).indexPath };
   const rest = index.entries.filter((item) => item.id !== id);
@@ -164,8 +293,9 @@ export interface CacheHealth {
 }
 
 /**
- * 校验条目里的文件还在不在、大小对不对。
- * 只比字节数：模板文件来自公网、每次下载都要重算 sha256 太贵；大小不符几乎必然是半截文件或被替换。
+ * 校验条目里的文件还在不在、内容对不对。
+ * 有 sha256 的条目比内容哈希（A38）：字节数只能挡半截文件，挡不住"同样大小、内容被换掉"。
+ * 老条目没有 sha256 时退回只比字节数，不把已存在的缓存判死。
  */
 export function checkCacheEntry(entry: CacheEntry): CacheHealth {
   const missing: string[] = [];
@@ -177,9 +307,27 @@ export function checkCacheEntry(entry: CacheEntry): CacheHealth {
       continue;
     }
     const size = fs.statSync(full).size;
-    if (size !== file.bytes) changed.push(file.path + "（" + String(size) + " ≠ " + String(file.bytes) + " 字节）");
+    if (size !== file.bytes) {
+      changed.push(file.path + "（" + String(size) + " ≠ " + String(file.bytes) + " 字节）");
+      continue;
+    }
+    if (file.sha256 !== undefined && file.sha256 !== "") {
+      let actual = "";
+      try {
+        actual = sha256OfFile(full);
+      } catch {
+        missing.push(file.path);
+        continue;
+      }
+      if (actual !== file.sha256) changed.push(file.path + "（内容 sha256 对不上，可能被替换过）");
+    }
   }
   return { entry, missing, changed, ok: missing.length === 0 && changed.length === 0 };
+}
+
+/** 算文件内容的 sha256（小写 hex）。缓存登记与校验共用同一口径。 */
+export function sha256OfFile(file: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
 export function describeCacheBytes(bytes: number): string {

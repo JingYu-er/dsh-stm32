@@ -161,7 +161,9 @@ export function firmwareSizeHint(family: string): string {
  */
 export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
   const prefix = familyPrefix(input.family);
-  const autoDownloadable = input.family !== "" && input.family.toUpperCase() in FIRMWARE_FAMILIES;
+  // 用 Object.hasOwn 而不是 `in`：`in` 会命中原型链（"constructor" / "__proto__" 之类会被当成有效族名，
+  // 于是给出一份"插件能代下"的错误承诺）。审计 A37。
+  const autoDownloadable = input.family !== "" && Object.hasOwn(FIRMWARE_FAMILIES, input.family.toUpperCase());
   const name = input.packageName === "" ? "STM32Cube_FW_" + (input.family === "" ? "<族>" : input.family) + "_V<版本>" : input.packageName;
   return {
     component: "firmware",
@@ -202,9 +204,19 @@ export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
   };
 }
 
-/** 组件 id → 指引；auto 组件没有指引（它们走 stm32_env_install）。cubemx 与 cubemx-java 共用一份。 */
-export function guideFor(component: string): InstallGuide | null {
+/**
+ * 组件 id → 指引；auto 组件没有指引（它们走 stm32_env_install）。cubemx 与 cubemx-java 共用一份。
+ *
+ * firmware 需要族名/包名/仓库目录才说得具体，所以第二个参数是可选的补充信息：
+ * 调用方（route_plan）手里有这些字段就传，只拿组件 id 的人（门禁、命令卡）也能拿到通用指引 ——
+ * 否则 firmware 在这里恒为 null，和 route_plan 实际能给的东西不一致（审计 A37）。
+ */
+export function guideFor(
+  component: string,
+  firmware: FirmwareGuideInput = { family: "", packageName: "", repositoryDir: "" },
+): InstallGuide | null {
   if (component === "cubemx" || component === "cubemx-java") return cubeMxGuide();
+  if (component === "firmware") return firmwareGuide(firmware);
   return null;
 }
 

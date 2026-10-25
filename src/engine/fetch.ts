@@ -19,6 +19,12 @@ export interface FetchTarget {
   urls: string[];
   /** 低于这个字节数就当作下载失败（防止把 404 页面当文件）。 */
   minBytes?: number;
+  /**
+   * 内容特征：至少命中其中一个才算数（A32）。
+   * 字节数和「不是网页」都只是粗筛——代理换成登录页、CDN 返回同名但不同版本的文件，
+   * 字节数照样对得上。这里钉的是「这份内容里必须有这个东西」。
+   */
+  markers?: string[];
 }
 
 export interface FetchOutcome {
@@ -42,9 +48,26 @@ export interface FetchOptions {
 
 const HTML_HEAD_BYTES = 512;
 
+let partSeq = 0;
+
 function looksLikeHtml(buffer: Buffer): boolean {
   const head = buffer.subarray(0, HTML_HEAD_BYTES).toString("utf8").trimStart().toLowerCase();
   return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
+/** 内容特征校验：markers 是"至少命中一个"，命中返回空数组，否则返回没命中的那几个（给报错用）。 */
+function missingMarkers(buffer: Buffer, markers: string[]): string[] {
+  if (markers.length === 0) return [];
+  const text = buffer.toString("utf8");
+  return markers.some((marker) => text.includes(marker)) ? [] : markers;
+}
+
+function removeQuietly(file: string): void {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // 临时文件删不掉不影响这次的结论。
+  }
 }
 
 /** 下载单个文件（多候选）。失败不抛，把原因写进 outcome —— 上层要一次性报告所有失败。 */
@@ -76,11 +99,38 @@ export async function fetchOne(target: FetchTarget, destRoot: string, options: F
         attempts.push(url + " → 拿回来是网页（代理拦截或 404 页），不是文件");
         continue;
       }
+      const missed = missingMarkers(buffer, target.markers ?? []);
+      if (missed.length > 0) {
+        attempts.push(url + " → 内容对不上（找不到 " + missed.join(" / ") + "），不是要的那个文件");
+        continue;
+      }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      const part = dest + ".part-" + String(process.pid);
+      partSeq += 1;
+      const tag = String(process.pid) + "-" + String(partSeq);
+      const part = dest + ".part-" + tag;
+      const old = dest + ".old-" + tag;
       fs.writeFileSync(part, buffer);
-      fs.rmSync(dest, { force: true });
-      fs.renameSync(part, dest);
+      // 先给旧文件改名、再把新课搬上来（A15）：旧写法是「先删旧文件再 rename」，
+      // 第二步失败（Windows 上杀软扫描、目录只读、权限刚变）就新旧一起没了。
+      let movedOld = false;
+      try {
+        if (fs.existsSync(dest)) {
+          fs.renameSync(dest, old);
+          movedOld = true;
+        }
+        fs.renameSync(part, dest);
+      } catch (error) {
+        try {
+          if (movedOld && !fs.existsSync(dest)) fs.renameSync(old, dest);
+        } catch {
+          // 放不回去就只能留着 .old：把路径写进 attempts，至少人能手工找回。
+        }
+        removeQuietly(part);
+        const message = error instanceof Error ? error.message : String(error);
+        attempts.push(url + " → 写盘失败（" + message + "）" + (movedOld ? "，旧文件已改名成 " + old : ""));
+        continue;
+      }
+      if (movedOld) removeQuietly(old);
       return { path: target.path, ok: true, bytes: buffer.byteLength, url, error: "", attempts };
     } catch (error) {
       const name = error instanceof Error ? error.name : "";

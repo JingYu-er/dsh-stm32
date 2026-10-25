@@ -14,9 +14,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CMSIS_FAMILIES, cmsisTemplatePlan, startupChoiceFor, type StartupChoice } from "../data/cmsis-sources.js";
-import { cacheRootInfo, checkCacheEntry, findCacheEntry, readCacheIndex, upsertCacheEntry, type CacheEntry, type CacheFile } from "./cache.js";
+import { cacheRootInfo, checkCacheEntry, findCacheEntry, readCacheIndex, sha256OfFile, upsertCacheEntry, type CacheEntry, type CacheFile } from "./cache.js";
 import { fetchAll, type FetchOptions, type FetchOutcome } from "./fetch.js";
-import { SCAFFOLD_PROJECT_NAME, templateDir } from "./scaffold.js";
+import { backupBeforeOverwrite, backupWarning, cleanupAfterFailure, mkdirTracked, preflightTarget, templateDir, type OverwriteBackup } from "./scaffold.js";
 
 /** 寄存器版模板目录：lib/engine/register-template.js → ../../templates/register。 */
 export function registerTemplateDir(): string {
@@ -79,10 +79,16 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
   const info = cacheRootInfo(env);
   const choice = resolveStartupChoice(request);
   if (choice === null) {
+    const asked = (request.mcu ?? request.family ?? "").trim();
+    // F103 家族里上游没有的容量档要单独说清楚（A24）：说"认不出"会让人以为插件坏了。
+    const f103 = /^STM32F103([A-Z])([0-9A-Z])/u.exec(asked.toUpperCase());
+    const densityNote = f103 !== null
+      ? "上游 CMSIS 只有 x6 / xB / xE 三套启动文件，没有容量档 " + (f103[2] ?? "") + " 这一套：F103 的 4/8/6 档归到 x6 或 xB，C/D/E 档归到 xE。换 STM32F103C8T6 / CBT6 这类型号，"
+      : "换 F103 型号，";
     return emptyResult(
       info.root,
       "unsupported-mcu",
-      "认不出这颗芯片的启动文件（目前只做 STM32F1 的 F103 系列）：" + ((request.mcu ?? request.family ?? "") || "(没给型号)") + "。换 F103 型号，或改用 HAL 路线（.ioc + CubeMX）。",
+      "认不出这颗芯片的启动文件（目前只做 STM32F1 的 F103 系列）：" + (asked || "(没给型号)") + "。" + densityNote + "或改用 HAL 路线（.ioc + CubeMX）。",
     );
   }
   const plan = cmsisTemplatePlan(choice);
@@ -144,12 +150,33 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
     const failedResults = fetched.results.filter((item) => !item.ok);
     const allNotFound = failedResults.length > 0 && failedResults.every((item) => item.attempts.length > 0 && item.attempts.every((line) => line.includes("HTTP 404")));
     // 半截缓存比没有缓存更糟：下一次会把不完整的目录当成模板用。
-    fs.rmSync(entryDir, { recursive: true, force: true });
+    // 但直接 rm 会把并发方正在读的目录抽走（A24）：先改名成 .stale-<时间戳>，再删；
+    // 改名失败（被占用）就留着，至少不删到一半。
+    const staleDir = entryDir + ".stale-" + new Date().toISOString().replace(/[:.]/gu, "-");
+    let renamed = false;
+    try {
+      fs.renameSync(entryDir, staleDir);
+      renamed = true;
+    } catch {
+      renamed = false;
+    }
+    let cleaned = false;
+    if (renamed) {
+      try {
+        fs.rmSync(staleDir, { recursive: true, force: true });
+        cleaned = true;
+      } catch {
+        cleaned = false;
+      }
+    }
+    const cleanupNote = renamed
+      ? (cleaned ? "已把半截目录改名后清掉（" + staleDir + "）。" : "半截目录已改名成 " + staleDir + "，但没删掉（可能被占用），可以手工删。")
+      : "半截目录 " + entryDir + " 被占用，改名失败也没删（下次会重下覆盖）。";
     return {
       ...emptyResult(
         info.root,
         "download-failed",
-        "模板没下下来（" + String(fetched.failed) + "/" + String(plan.targets.length) + " 个文件失败），已清掉半截目录。第一条失败原因：" + (failures[0] ?? "(未知)") + "。"
+        "模板没下下来（" + String(fetched.failed) + "/" + String(plan.targets.length) + " 个文件失败）。" + cleanupNote + "第一条失败原因：" + (failures[0] ?? "(未知)") + "。"
         + (allNotFound ? "这几个文件在上游就是 404：多半是这一代/这一档的模板清单写错了（插件 bug），换型号没用，先走 HAL 路线或报告这个问题。" : "多半是网络/代理问题：换网络重试，或手动把 ST 固件包（STM32Cube_FW_F1_*）装到 CubeMX 的 Repository 里走 HAL 路线。"),
       ),
       family: plan.family,
@@ -160,11 +187,32 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
     };
   }
 
-  const files: CacheFile[] = fetched.results.map((outcome) => ({ path: outcome.path, bytes: outcome.bytes, url: outcome.url }));
+  // 每个下载的文件登记 sha256（A38）：字节数挡不住"同样大小、内容被换掉"。
+  const files: CacheFile[] = fetched.results.map((outcome) => {
+    const item: CacheFile = { path: outcome.path, bytes: outcome.bytes, url: outcome.url };
+    try {
+      item.sha256 = sha256OfFile(path.join(entryDir, ...outcome.path.split("/")));
+    } catch {
+      // 落盘文件读不出来就别登记哈希，校验时退回只看字节数。
+    }
+    return item;
+  });
   const upstream = new Set<string>();
   for (const target of plan.targets) for (const url of target.urls) upstream.add(url);
 
-  fs.writeFileSync(path.join(entryDir, "THIRD_PARTY_NOTICES.md"), plan.license, "utf8");
+  // notices 也是条目的一部分，必须进 files[]（A24）：否则 checkCacheEntry 永远不校验它，
+  // 人手删掉之后索引照样显示"完整"。
+  const noticesName = "THIRD_PARTY_NOTICES.md";
+  const noticesPath = path.join(entryDir, noticesName);
+  fs.writeFileSync(noticesPath, plan.license, "utf8");
+  const noticesFile: CacheFile = { path: noticesName, bytes: Buffer.byteLength(plan.license, "utf8"), url: "" };
+  try {
+    noticesFile.sha256 = sha256OfFile(noticesPath);
+  } catch {
+    // 同上。
+  }
+  files.push(noticesFile);
+  const totalBytes = fetched.bytes + noticesFile.bytes;
 
   const entry: CacheEntry = {
     id: plan.id,
@@ -173,7 +221,7 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
     label: plan.family + " / " + choice.startup.replace(/\.s$/u, "") + "（CMSIS 设备头 + 启动文件 + 内核头）",
     root: entryDir,
     createdAt: new Date().toISOString(),
-    totalBytes: fetched.bytes,
+    totalBytes,
     files,
     sources: Array.from(upstream).sort(),
     license: plan.license,
@@ -192,7 +240,7 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
     deviceDefine: choice.define,
     deviceHeader: choice.deviceHeader,
     files: files.length,
-    bytes: fetched.bytes,
+    bytes: totalBytes,
     error: "",
     message: "已下载 " + String(files.length) + " 个模板文件到缓存（" + entryDir + "），下次直接用。",
   };
@@ -271,12 +319,16 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     message,
   });
 
-  if (!SCAFFOLD_PROJECT_NAME.test(projectName)) {
-    return fail("工程名必须是 C 标识符（字母/下划线开头，只含字母数字下划线）：" + projectName);
-  }
-  if (fs.existsSync(targetDir) && request.overwrite !== true && fs.readdirSync(targetDir).length > 0) {
-    return fail("目标目录不是空的：" + targetDir + "。换一个目录，或显式 overwrite=true。");
-  }
+  // 先判"能不能写"（工程名 / 目录非空），下载和写盘都在后面：
+  // 工具层会在门禁之前先跑同一个判定（免得用户先装工具再撞第二个错），这里再来一次是为了
+  // 让直接调用引擎的人（测试、别的工具）也拿到同一套拒绝理由。
+  const refusal = preflightTarget({
+    targetDir,
+    projectName,
+    route: "register",
+    ...(request.overwrite === undefined ? {} : { overwrite: request.overwrite }),
+  });
+  if (refusal !== null) return fail(refusal);
 
   const template = await ensureCmsisTemplate({
     ...(request.mcu === undefined ? {} : { mcu: request.mcu }),
@@ -299,8 +351,27 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   const halTpl = templateDir();
   if (!fs.existsSync(regTpl)) return fail("插件模板目录缺失：" + regTpl + "（重新安装插件）");
 
-  fs.mkdirSync(path.join(targetDir, "Core", "Src"), { recursive: true });
-  fs.mkdirSync(path.join(targetDir, "Core", "Inc"), { recursive: true });
+  // 要读的模板文件、要拷的 Drivers，全部在**写盘之前**检查一遍：
+  // 半路才发现插件包缺文件，留下的就是一个比没有更糟的半成品工程。
+  const sourcesToCheck = [
+    path.join(regTpl, "CMakeLists.txt"),
+    path.join(regTpl, "Core", "Src", "main.c"),
+    ...SHARED_TEMPLATE_FILES.map((rel) => path.join(halTpl, rel)),
+  ];
+  for (const source of sourcesToCheck) {
+    if (!fs.existsSync(source)) return fail("插件模板缺文件：" + source + "（重新安装插件）");
+  }
+  const driversSrc = path.join(template.entryDir, "Drivers");
+  if (!fs.existsSync(driversSrc)) return fail("缓存的模板目录不完整（缺 Drivers）：" + template.entryDir + "。删掉它再试一次会重新下载。");
+
+  // 覆盖前先备份将被覆盖的同名文件；备份失败就一个字节都不写（否则用户的 main.c 就没了）。
+  let backup: OverwriteBackup;
+  try {
+    backup = backupBeforeOverwrite(targetDir, ["CMakeLists.txt", "Core/Src/main.c", ...SHARED_TEMPLATE_FILES], "register");
+  } catch (error) {
+    return fail("没写任何文件：覆盖前的备份失败（" + String((error as Error).message) + "）。目标目录 " + targetDir + " 未被改动。");
+  }
+  const backupNote = backupWarning(backup);
 
   // 1) 寄存器版 CMakeLists：替换四个占位符
   const replacements: Record<string, string> = {
@@ -314,32 +385,55 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     for (const [key, value] of Object.entries(replacements)) out = out.split(key).join(value);
     return out;
   };
-  fs.writeFileSync(path.join(targetDir, "CMakeLists.txt"), fill(fs.readFileSync(path.join(regTpl, "CMakeLists.txt"), "utf8")), "utf8");
 
-  // 2) 寄存器版 main.c（PC13 蓝丸示例，无占位符）
-  fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8"), "utf8");
-
-  // 3) 与 HAL 无关的公共文件：工具链 / presets / 链接脚本 / .gitignore
+  const targetExistedBefore = fs.existsSync(targetDir);
+  const driversExistedBefore = fs.existsSync(path.join(targetDir, "Drivers"));
+  const createdDirs: string[] = [];
   let templateFiles = 2;
-  for (const rel of SHARED_TEMPLATE_FILES) {
-    const source = path.join(halTpl, rel);
-    if (!fs.existsSync(source)) return fail("插件模板缺文件：" + source + "（重新安装插件）");
-    const dest = path.join(targetDir, rel);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(source, dest);
-    templateFiles += 1;
-  }
+  try {
+    mkdirTracked(path.join(targetDir, "Core", "Src"), createdDirs);
+    mkdirTracked(path.join(targetDir, "Core", "Inc"), createdDirs);
 
-  // 4) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
-  const driversSrc = path.join(template.entryDir, "Drivers");
-  if (!fs.existsSync(driversSrc)) return fail("缓存的模板目录不完整（缺 Drivers）：" + template.entryDir + "。删掉它再试一次会重新下载。");
-  fs.cpSync(driversSrc, path.join(targetDir, "Drivers"), { recursive: true });
+    // 1) CMakeLists.txt
+    fs.writeFileSync(path.join(targetDir, "CMakeLists.txt"), fill(fs.readFileSync(path.join(regTpl, "CMakeLists.txt"), "utf8")), "utf8");
+
+    // 2) 寄存器版 main.c（PC13 蓝丸示例，无占位符）
+    fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8"), "utf8");
+
+    // 3) 与 HAL 无关的公共文件：工具链 / presets / 链接脚本 / .gitignore
+    for (const rel of SHARED_TEMPLATE_FILES) {
+      const dest = path.join(targetDir, rel);
+      mkdirTracked(path.dirname(dest), createdDirs);
+      fs.copyFileSync(path.join(halTpl, rel), dest);
+      templateFiles += 1;
+    }
+
+    // 4) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
+    fs.cpSync(driversSrc, path.join(targetDir, "Drivers"), { recursive: true });
+  } catch (error) {
+    // Drivers 整棵是本次拷的（原来没有）→ 可以整棵删；原来就有（覆盖场景）则一个都不动。
+    if (!driversExistedBefore) {
+      try {
+        fs.rmSync(path.join(targetDir, "Drivers"), { recursive: true, force: true });
+      } catch {
+        // 删不掉就留着：下面 cleanup 会说清哪个目录没清干净，但绝不递归删用户的文件。
+      }
+    }
+    const cleanup = cleanupAfterFailure(targetDir, targetExistedBefore, createdDirs);
+    return fail(
+      "写盘失败（已写 " + String(templateFiles) + " 个工程文件）：" + String((error as Error).message) + "；路径：" + targetDir + "。" + cleanup,
+      backupNote === null ? [] : [backupNote],
+    );
+  }
   const driverFiles = countFiles(path.join(targetDir, "Drivers"));
 
-  const warnings = [
+  const warnings: string[] = [];
+  // 备份清单放第一条：用户看到"覆盖成功"时，第一眼得知道旧文件去哪了。
+  if (backupNote !== null) warnings.push(backupNote);
+  warnings.push(
     "模板里的 LED 是蓝丸的 PC13；换板子改 Core/Src/main.c 顶部的 LED_PORT / LED_PIN。",
     "寄存器版没有 .ioc：不需要 CubeMX，也不需要固件包；要换成 HAL 版就用 stm32_project_create route=hal。",
-  ];
+  );
   if (template.cacheHit) warnings.push("这次用的是缓存模板（" + template.entryDir + "），没有联网。");
   else warnings.push("模板已下载到缓存（" + template.entryDir + "），以后再建工程不联网。");
 
@@ -358,6 +452,8 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     driverFiles,
     durationMs: Date.now() - startedAt,
     warnings,
-    message: "寄存器版工程已建好（" + String(templateFiles) + " 个工程文件 + " + String(driverFiles) + " 个 CMSIS 文件）：" + targetDir,
+    message:
+      "寄存器版工程已建好（" + String(templateFiles) + " 个工程文件 + " + String(driverFiles) + " 个 CMSIS 文件）：" + targetDir +
+      (backupNote === null ? "" : "；" + backupNote),
   };
 }

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { parsePdscFileNames } from "../scripts/gen-xcube-catalog.mjs";
+import { parsePdscFileNames, render } from "../scripts/gen-xcube-catalog.mjs";
 import {
   XCUBE_CATALOG_FILE_COUNT,
   XCUBE_CATALOG_SOURCE,
@@ -208,4 +208,21 @@ test("needsThirdpartyPacks：纯 HAL 工程（nb=0、无包证据）→ 不需�
   assert.deepEqual(d.packs, []);
   assert.deepEqual(d.warnings, []);
   assert.deepEqual(d.evidence, []);
+});
+
+test("生成脚本重跑不会把条目数写死回 159（审计 A23）", () => {
+  const packs = parsePdscFileNames([
+    "STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0.pdsc",
+    "STMicroelectronics.X-CUBE-ALGOBUILD.1.5.0.pdsc",
+    "wolfSSL.I-CUBE-wolfMQTT.pdsc",
+  ]);
+  const text = render(packs, "CubeMX 包索引 ~/.stm32cubemx/thirdparties/pdsc（3 个 .pdsc）", "2026-01-01T00:00:00.000Z", 3);
+  assert.match(text, /XCUBE_CATALOG_ENTRY_COUNT = XCUBE_PACK_CATALOG\.length;/u);
+  assert.equal(/XCUBE_CATALOG_ENTRY_COUNT = [0-9]+/u.test(text), false, "条目数必须由数组派生");
+  assert.ok(
+    text.indexOf("export const XCUBE_CATALOG_ENTRY_COUNT") > text.indexOf("export const XCUBE_PACK_CATALOG"),
+    "常量要放在数组之后，否则运行时报未定义",
+  );
+  assert.match(text, /XCUBE_CATALOG_FILE_COUNT = 3;/u);
+  assert.match(text, /归并成 /u);
 });

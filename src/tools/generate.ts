@@ -35,7 +35,7 @@ const fileSchema: JsonSchema = {
     target: { type: "string" },
     action: {
       type: "string",
-      enum: ["created", "overwritten", "skipped-no-user-code-markers", "would-write", "unchanged-cached"],
+      enum: ["created", "overwritten", "skipped-no-user-code-markers", "skipped-encoding", "would-write", "unchanged-cached"],
     },
     preserved: { type: "array", items: { type: "string" } },
     droppedLabels: { type: "array", items: { type: "string" } },
@@ -65,7 +65,7 @@ const reportSchema: JsonSchema = {
     },
     firmwareDir: { type: "string" },
     firmwarePackage: { type: "string" },
-    firmwareSource: { type: "string", enum: ["repository", "dsh-firmware", ""] },
+    firmwareSource: { type: "string", enum: ["repository", "dsh-firmware", "cache", "custom", ""] },
     message: { type: "string" },
     script: { type: "string" },
     command: { type: "string" },
@@ -117,6 +117,15 @@ interface ToolValue {
   report?: GenerateReport;
 }
 
+/** 固件包来源的中文标签；引擎侧的 firmwareSourceLabel 是同一套措辞（工具层不额外依赖引擎模块）。 */
+function firmwareSourceText(source: GenerateReport["firmwareSource"]): string {
+  if (source === "repository") return "CubeMX 仓库";
+  if (source === "dsh-firmware") return "插件的 dsh-firmware 目录";
+  if (source === "cache") return "插件的下载缓存";
+  if (source === "custom") return "调用方指定的目录";
+  return "来源未知";
+}
+
 function formatReport(report: GenerateReport): string[] {
   const lines: string[] = [];
   lines.push((report.ok ? "生成成功" : "生成失败") + "：" + report.message);
@@ -125,7 +134,7 @@ function formatReport(report: GenerateReport): string[] {
   if (report.durationMs > 0) lines.push("耗时：" + (report.durationMs / 1000).toFixed(1) + " s");
   if (report.skipped) lines.push("本次没有跑 CubeMX：直接复用上次生成结果（产物 hash 全部一致）");
   if (report.firmwareDir !== "") {
-    lines.push("固件包：" + report.firmwarePackage + "（" + (report.firmwareSource === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") + "）");
+    lines.push("固件包：" + report.firmwarePackage + "（" + firmwareSourceText(report.firmwareSource) + "）");
   }
   if (report.thirdparty.detail !== "") lines.push("第三方包索引：" + report.thirdparty.detail);
   if (report.verdict.successLine !== "") lines.push("CubeMX：" + report.verdict.successLine);
@@ -253,13 +262,14 @@ export function registerGenerate(ctx: DshContext): void {
 
       const registry = jobs as JobsService;
       const controller = new AbortController();
-      let report: GenerateReport | null = null;
       const jobId = registry.start({
         kind: "stm32-generate",
         label: "stm32_generate " + projectDir,
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
           if (gateNote !== null) handle.append(gateNote + "\n");
+          // A35：后台模式下也要看得到「探针已让出 / 会话已停」，否则之后 eval 报没会话时无从追溯。
+          if (released !== null) handle.append(released + "\n");
           handle.append("开始无头生成：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
           const done = runGenerate(subprocess, {
             projectDir,
@@ -273,11 +283,10 @@ export function registerGenerate(ctx: DshContext): void {
             signal: controller.signal,
             onProgress: (line) => handle.append(line + "\n"),
           }).then((result) => {
-            report = result;
             handle.append("\n" + formatReport(result).join("\n") + "\n");
             return {
               status: result.ok ? ("completed" as const) : ("failed" as const),
-              detail: result.ok ? result.message : result.message,
+              detail: result.message,
             };
           });
           return {
@@ -289,7 +298,6 @@ export function registerGenerate(ctx: DshContext): void {
           };
         },
       });
-      void report;
       return {
         mode: "job",
         jobId,

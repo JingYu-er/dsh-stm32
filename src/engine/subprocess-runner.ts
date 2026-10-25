@@ -19,6 +19,14 @@ export interface RunRequest {
   signal?: AbortSignal;
   /** 结算后是否等待进程范围完全停稳（长命进程如 openocd 需要）。 */
   awaitQuiescence?: boolean;
+  /**
+   * 子进程的环境变量（给就整体替换，不给就是宿主的 env）。
+   *
+   * 审计 B4：binDirs 以前只用来**找可执行文件**，找到之后 spawn 的还是宿主 env ——
+   * 用户刚用安装器装好、PATH 写进了注册表但宿主进程没重启时，cmake 内部调
+   * `arm-none-eabi-gcc` 会 not found。要用 envWithBinDirs() 构造这份 env（见 tool-env.ts）。
+   */
+  env?: Record<string, string | undefined>;
 }
 
 export interface RunOutcome {
@@ -83,6 +91,7 @@ export async function runCapture(
       },
       graceMs: 3_000,
       signal: controller.signal,
+      ...(request.env === undefined ? {} : { env: request.env }),
     });
     const outcome = await handle.done;
     const stdout = handle.collected.stdout?.readFrom(0).text ?? "";
@@ -178,6 +187,7 @@ export async function runStreaming(
       stdio: { stdin: "ignore", stdout: { maxBytes }, stderr: { maxBytes } },
       graceMs: 5_000,
       signal: controller.signal,
+      ...(request.env === undefined ? {} : { env: request.env }),
     });
     const current = handle;
     let settled = false;

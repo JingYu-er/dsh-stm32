@@ -14,6 +14,7 @@
 
 import {
   formatBytes,
+  msys2StepSkeleton,
   planOrInstallMsys2,
   viaLabel,
   type Msys2InstallResult,
@@ -48,6 +49,18 @@ const STEP_MARK: Record<Msys2InstallStep["status"], string> = {
   skipped: "[--]",
   failed: "[!!]",
 };
+
+/**
+ * 合法的 pacman 包名形状：字母/数字/@/./_/+，且不以 - 开头。
+ * 为什么必须自己校验：包名会被原样拼进 "pacman -S --noconfirm --needed <包…>" 再交给 bash -lc——
+ * 以 - 开头会被 pacman 当成选项（等于把开关交给调用方），带空格/引号/& | ; $ 的还会被 bash 二次解释。
+ */
+const PACKAGE_NAME_PATTERN = /^[A-Za-z0-9@._+][A-Za-z0-9@._+-]*$/u;
+
+/** 挑出不合法的包名（原样返回，便于报错里点名）；全部合法时是空数组。 */
+export function invalidPackageNames(packages: readonly string[]): string[] {
+  return packages.filter((name) => !PACKAGE_NAME_PATTERN.test(name));
+}
 
 /* ------------------------------ schema ------------------------------ */
 
@@ -238,10 +251,13 @@ function toToolReport(report: Msys2InstallResult): Msys2InstallResult {
 
 /* ------------------------------ 文字卡 ------------------------------ */
 
-export function formatInstallReport(report: Msys2InstallResult): string[] {
+export function formatInstallReport(report: Msys2InstallResult, running = false): string[] {
   const lines: string[] = [];
-  const headline =
-    report.mode === "install"
+  // running：后台 job 还没跑完就返回的那张卡片。此时 report 是"要做的事"的骨架，
+  // 套「安装未完成」会读成失败，所以单独给一个「安装进行中」的抬头。
+  const headline = running
+    ? "安装进行中"
+    : report.mode === "install"
       ? report.ok
         ? "安装完成"
         : "安装未完成"
@@ -284,7 +300,9 @@ export function formatInstallReport(report: Msys2InstallResult): string[] {
   } else if (report.path.done) {
     lines.push("用户 PATH：已包含目标 bin 目录，没有重复写");
   } else if (report.path.error !== "") {
-    lines.push("用户 PATH：没写成功 —— " + (report.path.error.split("\n")[0] ?? ""));
+    // 计划模式根本没去写注册表：措辞不能是「没写成功」（那读起来像写坏了）。
+    const head = report.mode === "plan" ? "用户 PATH：不会写 —— " : "用户 PATH：没写成功 —— ";
+    lines.push(head + (report.path.error.split("\n")[0] ?? ""));
   } else if (report.path.after !== "" && report.path.after !== report.path.before) {
     lines.push("用户 PATH：真装时会追加一条（写前先备份旧值）");
   } else {
@@ -372,10 +390,10 @@ export function registerEnvInstall(ctx: DshContext): void {
       schema: outputSchema,
       render: (_args, value) => {
         const typed = value as ToolValue;
-        const lines = formatInstallReport(typed.report);
+        // job 模式的 report 已经是 mode="install" 的骨架，抬头由 running 控制（不能再叠一遍 message）。
+        const lines = formatInstallReport(typed.report, typed.mode === "job");
         if (typed.mode === "job") {
-          // 后台作业时 report 只是"将要做什么"的计划；真正的进度在 job 里。
-          lines.unshift(typed.message);
+          // 真正的进度在 job 输出里，卡片只负责说清"去哪儿看"。
           lines.push("job：" + typed.jobId + "（用 job_output 读进度，job_kill 停止）");
         }
         return [{ type: "text", text: lines.join("\n") }];
@@ -390,6 +408,26 @@ export function registerEnvInstall(ctx: DshContext): void {
       if (subprocess === undefined) {
         const report = emptyReport("宿主缺少 subprocess 服务，无法安装工具链", mode);
         return { mode: "report", jobId: "", message: report.message, report };
+      }
+
+      // A33：包名先过一遍白名单。绝不把调用方给的字符串直接拼进 pacman 命令行（也不做猜测式改名）。
+      if (args.packages !== undefined) {
+        const invalid = invalidPackageNames(args.packages);
+        if (invalid.length > 0) {
+          const report = emptyReport(
+            "包名不合法：" +
+              invalid.map((name) => JSON.stringify(name)).join("、") +
+              "；没有执行任何命令，也没下载任何东西（不会替你猜或改名）。",
+            mode,
+          );
+          report.nextStep =
+            "用 pacman 的完整包名重试，例如 mingw-w64-ucrt-x86_64-cmake；多个包用数组分别给。";
+          report.notes = [
+            "包名会原样拼进 pacman 的命令行：以 - 开头会被 pacman 当成选项，带空格或引号、& | ; $ 等字符会被 bash 二次解释，所以这里先拒掉。",
+            "合法形状：字母 / 数字 / @ / . / _ / +，且第一个字符不能是 -。",
+          ];
+          return { mode: "report", jobId: "", message: report.message, report };
+        }
       }
 
       const base = {
@@ -436,6 +474,12 @@ export function registerEnvInstall(ctx: DshContext): void {
         ...(exec.agent === undefined ? {} : { owner: exec.agent.id }),
         run: (handle: JobHandleForRun) => {
           handle.append("开始安装 MSYS2：" + plan.msys64 + "（来源：" + viaLabel(plan.resolvedVia) + "）\n");
+          // A36：工具被取消时 job 也得停。job_kill 走下面的 cancel()，宿主取消整个工具（或用户按了停止）
+          // 走 exec.signal —— 两条路都要把 controller 掐掉，否则后台还在下载/解压。
+          const bridgeAbort = (): void => controller.abort();
+          if (exec.signal.aborted) controller.abort();
+          exec.signal.addEventListener("abort", bridgeAbort);
+          const detach = (): void => exec.signal.removeEventListener("abort", bridgeAbort);
           const done = planOrInstallMsys2(
             subprocess,
             {
@@ -446,14 +490,25 @@ export function registerEnvInstall(ctx: DshContext): void {
               onProgress: (line: string) => handle.append(line + "\n"),
             },
             process.env,
-          ).then((result) => {
-            const report = toToolReport(result);
-            handle.append("\n" + formatInstallReport(report).join("\n") + "\n");
-            return {
-              status: report.ok ? ("completed" as const) : ("failed" as const),
-              detail: report.message,
-            };
-          });
+          )
+            .then((result) => {
+              detach();
+              const report = toToolReport(result);
+              handle.append("\n" + formatInstallReport(report).join("\n") + "\n");
+              return {
+                status: report.ok ? ("completed" as const) : ("failed" as const),
+                detail: report.message,
+              };
+            })
+            // 引擎正常情况下不抛（失败都写进 report），但取消/内部异常若漏出来，
+            // 不能让 job 卡在 running：留一句中文原因，job 标记失败。
+            .catch((error: unknown) => {
+              detach();
+              const reason = error instanceof Error ? error.message : String(error);
+              const text = (controller.signal.aborted ? "已取消：" : "安装异常终止：") + reason;
+              handle.append("\n" + text + "\n");
+              return { status: "failed" as const, detail: text };
+            });
           return {
             done,
             cancel: (reason?: string) => {
@@ -470,16 +525,26 @@ export function registerEnvInstall(ctx: DshContext): void {
         "（来源：" +
         viaLabel(plan.resolvedVia) +
         "）：7 步依次跑，进度看 job 输出。";
-      return {
-        mode: "job",
-        jobId,
+      // A21：卡片不能贴计划快照（那会写着"还没动手 / 全 pending / 配置没写"，跟真在跑的 job 打架）。
+      // 这里给"安装中"的骨架：mode=install、步骤全 pending（detail 保留将要执行的命令）、
+      // 配置/自检/PATH 的结论都留空，等 job 输出里再报。
+      const runningReport: Msys2InstallResult = {
+        ...plan,
+        mode: "install",
+        ok: false,
+        // 计划在"什么都不用做"时只回一句话（steps 为空），但真装 job 仍要把 7 步列出来。
+        steps: (plan.steps.length > 0 ? plan.steps : msys2StepSkeleton()).map((step) => ({
+          ...step,
+          status: "pending" as const,
+        })),
+        path: { done: false, changed: false, before: plan.path.before, after: plan.path.after, backup: "", error: "" },
+        config: { path: plan.config.path, written: false, error: "" },
+        verify: { ok: false, tools: [] },
         message: startMessage,
-        report: {
-          ...plan,
-          message: startMessage,
-          notes: plan.notes.filter((note) => !note.startsWith("这只是计划")),
-        },
+        nextStep: "",
+        notes: plan.notes.filter((note) => !note.startsWith("这只是计划")),
       };
+      return { mode: "job", jobId, message: startMessage, report: runningReport };
     },
   });
 }

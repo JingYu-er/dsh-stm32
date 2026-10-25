@@ -166,6 +166,13 @@ export function registerRegsRead(ctx: DshContext): void {
         });
         const notes = gate.ok ? [] : [gate.message];
         notes.push("复用调试会话（端口 " + String(words.port) + "）的 openocd，没有另起一个");
+        // A19：借用会话时 openocd 是会话里那个，这两个参数没法改，别让用户以为生效了。
+        if ((args.configFile !== undefined && args.configFile !== "") || args.adapterSpeed !== undefined) {
+          notes.push(
+            "这次借用了已有会话：configFile / adapterSpeed 不生效（openocd 是会话里那个，已按会话参数在跑）。" +
+              "要按新参数读，先 stm32_debug_stop 再调 stm32_regs_read。",
+          );
+        }
         if (resolution.note !== null) notes.push(resolution.note);
         if (words.projectDir !== "" && words.projectDir !== resolution.projectDir) {
           notes.push("会话的工程目录是 " + words.projectDir + "，与本次参数的 " + resolution.projectDir + " 不同（读值用的是会话里的那个）");

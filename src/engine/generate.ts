@@ -11,19 +11,29 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
-import { firmwareNeedFromIoc, locateFirmwarePackage } from "../data/firmware-packages.js";
+import {
+  firmwareNeedFromIoc,
+  firmwareSourceLabel,
+  locateFirmwarePackage,
+  type FirmwareExtraDir,
+  type FirmwarePackageSource,
+} from "../data/firmware-packages.js";
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { buildGenerateScript, parseGenerateLog } from "./generate-script.js";
 import type { GenerateLayout, GenerateVerdict } from "./generate-script.js";
+import { cacheRoot } from "./cache.js";
+import { firmwareExtraDirs } from "./firmware-install.js";
 import { cacheHit, cacheKeyFor, entryFromFiles, readCache, writeCache } from "./generate-cache.js";
 import { cubeMxUserHome, needsThirdpartyPacks, parkThirdpartyDb } from "./thirdparty.js";
 import type { ParkHandle } from "./thirdparty.js";
 import { listGeneratedFiles, mapGeneratedPath } from "./layout.js";
 import { canMergeUserCode, mergeUserCode } from "./usercode-merge.js";
 import { runStreaming } from "./subprocess-runner.js";
+import { readTextFile } from "./text-file.js";
 
 /** 工程内保存插件自身状态（锁、备份、临时脚本）的目录。 */
 export const STATE_DIR = ".dsh-stm32";
@@ -60,7 +70,7 @@ export interface GeneratedFileReport {
   source: string;
   /** 工程内相对路径，例如 Core/Src/main.c。 */
   target: string;
-  action: "created" | "overwritten" | "skipped-no-user-code-markers" | "would-write" | "unchanged-cached";
+  action: "created" | "overwritten" | "skipped-no-user-code-markers" | "skipped-encoding" | "would-write" | "unchanged-cached";
   /** 从旧文件保活过来的 USER CODE 标签。 */
   preserved: string[];
   /** 旧文件有、新文件没有的标签（内容未搬运，旧文件已备份）。 */
@@ -83,8 +93,8 @@ export interface GenerateReport {
   firmwareDir: string;
   /** 本次用的固件包名（STM32Cube_FW_F1_V1.8.7）。 */
   firmwarePackage: string;
-  /** 那份包在哪：repository（官方仓库）/ dsh-firmware（插件组装）/ 空串。 */
-  firmwareSource: "repository" | "dsh-firmware" | "";
+  /** 那份包在哪：repository（官方仓库）/ dsh-firmware（插件组装）/ cache（下载缓存）/ custom（指定目录）/ 空串。 */
+  firmwareSource: FirmwarePackageSource;
   /** CubeMX 日志结论。 */
   verdict: GenerateVerdict;
   /** 生成脚本全文（便于复现）。 */
@@ -139,6 +149,37 @@ export function findIocFile(projectDir: string): string | null {
   return join(projectDir, names[0] as string);
 }
 
+export interface GenerateProductCheck {
+  ok: boolean;
+  problems: string[];
+}
+
+/**
+ * 产物判据（审计 A10）。CubeMX 缺包或包版本不认时会照样打「Code succesfully generated」，
+ * 只是不拷 HAL —— 所以日志成功行不能当成功。这里按磁盘上的东西再判一次。
+ */
+export function assessGenerateProducts(projectDir: string, appliedCount: number): GenerateProductCheck {
+  const problems: string[] = [];
+  if (appliedCount === 0) problems.push("没有任何产物落位");
+  if (!existsSync(join(projectDir, "Core", "Src", "main.c"))) problems.push("没有 Core/Src/main.c");
+  // 工程自带 HAL 目录（脚手架拷过、或用过 LibraryCopy）时，Src 不能是空的：
+  // 那正是「CubeMX 没认到固件包」的痕迹。
+  const drivers = join(projectDir, "Drivers");
+  if (existsSync(drivers)) {
+    for (const entry of readdirSync(drivers, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/_HAL_Driver$/u.test(entry.name)) continue;
+      const src = join(drivers, entry.name, "Src");
+      const cFiles = existsSync(src) ? readdirSync(src).filter((name) => name.toLowerCase().endsWith(".c")).length : 0;
+      if (cFiles === 0) {
+        problems.push(
+          "工程里有 Drivers/" + entry.name + " 但 Src 下没有 .c 文件：CubeMX 多半没认到固件包（日志照样会打成功行）",
+        );
+      }
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}
+
 /**
  * 推断生成布局：现有 main.c 里出现形如 USER CODE BEGIN MX_GPIO_Init_1 的标签
  * 说明工程用的是"外设初始化并入 main.c"的耦合布局（ST VS Code 扩展默认）。
@@ -154,17 +195,37 @@ interface LockInfo {
   pid: number;
   startedAt: number;
   purpose: string;
+  /** 哪个主机写的锁：锁文件被整目录拷到别的机器时，pid 可能撞上本地活进程（A14）。 */
+  host?: string;
 }
 
-function acquireLock(projectDir: string, purpose: string): { release: () => void } | { error: string } {
+const LOCK_HOST = hostname();
+
+/** A14：锁里记的 pid 还活着吗。EPERM 说明进程在（只是不归我们管），按活着算。 */
+export function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function acquireLock(projectDir: string, purpose: string): { release: () => void; note?: string } | { error: string } {
   const dir = join(projectDir, STATE_DIR);
   mkdirSync(dir, { recursive: true });
   const lockPath = join(dir, "lock.json");
+  let staleNote: string | undefined;
   if (existsSync(lockPath)) {
     try {
       const info = JSON.parse(readFileSync(lockPath, "utf8")) as LockInfo;
       const age = Date.now() - info.startedAt;
-      if (age < 30 * 60 * 1000) {
+      // A14：以前只看时间，DSH 崩溃/断电后 30 分钟内所有生成都被挡，要用户手删锁文件。
+      // 现在同时看进程是否活着；锁文件从别的机器拷来时 pid 没有参考价值，直接按陈旧处理。
+      const sameHost = info.host === undefined || info.host === "" || info.host === LOCK_HOST;
+      const alive = sameHost && isProcessAlive(info.pid);
+      if (age < 30 * 60 * 1000 && alive) {
         return {
           error:
             "已有任务占用 CubeMX 单飞锁：" +
@@ -178,11 +239,18 @@ function acquireLock(projectDir: string, purpose: string): { release: () => void
             " 后重试。",
         };
       }
+      staleNote =
+        "接管了上次没释放的 CubeMX 单飞锁（" +
+        String(info.purpose) +
+        "，pid " +
+        String(info.pid) +
+        (sameHost ? "，进程已不在" : "，来自另一台机器 " + String(info.host)) +
+        "）";
     } catch {
       // 锁文件损坏按陈旧处理
     }
   }
-  const info: LockInfo = { pid: process.pid, startedAt: Date.now(), purpose };
+  const info: LockInfo = { pid: process.pid, startedAt: Date.now(), purpose, host: LOCK_HOST };
   writeFileSync(lockPath, JSON.stringify(info, null, 1), "utf8");
   return {
     release: () => {
@@ -192,6 +260,7 @@ function acquireLock(projectDir: string, purpose: string): { release: () => void
         // 释放失败不影响结论
       }
     },
+    ...(staleNote === undefined ? {} : { note: staleNote }),
   };
 }
 
@@ -233,21 +302,48 @@ function applyGeneratedFiles(
     }
     const sourceAbs = join(projectDir, source);
     const targetAbs = join(projectDir, target);
-    const newText = readFileSync(sourceAbs, "utf8");
+    // CubeMX 的产物是 UTF-8；旧文件可能是 Keil 编辑过的 GB18030（审计 B2）。
+    const newFile = readTextFile(sourceAbs);
+    if (!newFile.ok) {
+      files.push({ source, target, action: "skipped-encoding", preserved: [], droppedLabels: [] });
+      notes.push(target + " 的生成物读不了（" + newFile.error + "），未覆盖");
+      continue;
+    }
+    const newText = newFile.text;
     const existing = existsSync(targetAbs);
     if (!existing) {
       files.push({ source, target, action: dryRun ? "would-write" : "created", preserved: [], droppedLabels: [] });
       if (!dryRun) {
-        mkdirSync(dirname(targetAbs), { recursive: true });
-        writeFileSync(targetAbs, newText, "utf8");
+        try {
+          mkdirSync(dirname(targetAbs), { recursive: true });
+          writeFileSync(targetAbs, newText, "utf8");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error("写不了 " + targetAbs + "：" + message);
+        }
       }
       continue;
     }
-    const oldText = readFileSync(targetAbs, "utf8");
+    const oldFile = readTextFile(targetAbs);
+    if (!oldFile.ok) {
+      files.push({ source, target, action: "skipped-encoding", preserved: [], droppedLabels: [] });
+      notes.push(
+        target + " 的旧文件编码认不出来（" + oldFile.error + "）：本次不覆盖，免得把它的中文注释写坏；" +
+          "先转成 UTF-8 再重跑生成。",
+      );
+      continue;
+    }
+    const oldText = oldFile.text;
     if (!canMergeUserCode(newText)) {
       files.push({ source, target, action: "skipped-no-user-code-markers", preserved: [], droppedLabels: [] });
       notes.push(target + " 的新内容没有 USER CODE 标记，未覆盖（旧文件保持原样）");
       continue;
+    }
+    if (oldFile.encoding !== "utf8" && oldFile.encoding !== "utf8-bom") {
+      notes.push(
+        target + " 原来是 " + oldFile.encoding + " 编码（多半是 Keil 编辑过的 GBK 文件）：本次按 UTF-8 写回，" +
+          "中文内容无损；如果你的编辑器仍按 GBK 打开会看到乱码，把它设成 UTF-8 即可。",
+      );
     }
     const merged = mergeUserCode(oldText, newText);
     files.push({
@@ -262,8 +358,13 @@ function applyGeneratedFiles(
     }
     if (!dryRun) {
       backupFile(projectDir, backupRoot, target);
-      mkdirSync(dirname(targetAbs), { recursive: true });
-      writeFileSync(targetAbs, merged.merged, "utf8");
+      try {
+        mkdirSync(dirname(targetAbs), { recursive: true });
+        writeFileSync(targetAbs, merged.merged, "utf8");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error("写不了 " + targetAbs + "：" + message + "（旧文件已备份到 " + backupRoot + "）");
+      }
     }
   }
   return { files, notes };
@@ -357,10 +458,17 @@ export async function runGenerate(
         "；可用 STM32_CUBEMX_ROOT 指定安装根，或把 STM32CubeMX 装到这些位置之一",
     );
   }
-  const iocText = readFileSync(iocPath, "utf8");
+  const iocFile = readTextFile(iocPath);
+  if (!iocFile.ok) return fail(request, "读不了 .ioc（" + iocPath + "）：" + iocFile.error);
+  const iocText = iocFile.text;
   // 先认 .ioc 要哪个固件包，再在 CubeMX 根下找它（官方 Repository 与插件的 dsh-firmware 都找）。
   // 找到就通过脚本命令 setCustomFWPath 明确指过去：CubeMX 不认目录名时只会静默用别的版本（docs §14）。
-  const firmware = locateFirmwarePackage(config.cubeMxRoots, firmwareNeedFromIoc(iocText));
+  // 除了 CubeMX 根，还要认 stm32_firmware_install 的另外两种落点：<cacheRoot>/firmware 与显式 targetDir，
+  // 否则装完包这里又说"没找到"（B10）。
+  const firmware = locateFirmwarePackage(config.cubeMxRoots, {
+    ...firmwareNeedFromIoc(iocText),
+    extraDirs: firmwareExtraDirs(process.env),
+  });
   const cacheKey = cacheKeyFor(iocText, launch.java, launch.jar, layout);
   const stateDir = join(projectDir, STATE_DIR);
   const enteredAt = Date.now();
@@ -413,6 +521,7 @@ export async function runGenerate(
 
   const lock = acquireLock(projectDir, "generate " + basename(iocPath));
   if ("error" in lock) return fail(request, lock.error, { iocPath, layout });
+  if (lock.note !== undefined) progress(lock.note);
 
   // 第三方包索引：没有 X-CUBE 就临时停放，省掉两次 159 包枚举（实测约 25 s）。
   const thirdparty: { parked: boolean; detail: string } = { parked: false, detail: "" };
@@ -445,11 +554,19 @@ export async function runGenerate(
 
   const stamp = nowStamp();
   const tmpDir = join(stateDir, "tmp");
-  mkdirSync(tmpDir, { recursive: true });
   const scriptPath = join(tmpDir, "gen-" + stamp + ".txt");
   const script = buildGenerateScript(iocPath.replace(/\\/g, "/"), projectDir.replace(/\\/g, "/"), layout, firmware.dir);
-  writeFileSync(scriptPath, script, "utf8");
-  const argv = [launch.java, "-jar", launch.jar, "-q", scriptPath];
+  // A5：工程盘只读 / .dsh-stm32 被删 / 权限不足时，这里以前会抛未捕获异常把工具打成崩溃。
+  try {
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(scriptPath, script, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(request, "写不了 CubeMX 脚本（" + scriptPath + "）：" + message + "；工程目录可能只读，或 .dsh-stm32 被占用。");
+  }
+  // B18：脚本里是绝对路径，CubeMX 是 Java，按平台默认字符集读脚本（中文 Windows = GBK）。
+  // 路径含中文时脚本会乱码，这里逼 JVM 用 UTF-8 读文件。
+  const argv = [launch.java, "-Dfile.encoding=UTF-8", "-jar", launch.jar, "-q", scriptPath];
   const command = argv.map((part) => (part.includes(" ") ? '"' + part + '"' : part)).join(" ");
   const startedAt = Date.now();
   if (skipMiss !== "") progress("未跳过 CubeMX：" + skipMiss);
@@ -459,7 +576,7 @@ export async function runGenerate(
       "固件包：" +
         firmware.packageName +
         "（" +
-        (firmware.source === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") +
+        firmwareSourceLabel(firmware.source) +
         "）→ 脚本里用 setCustomFWPath 明确指过去",
     );
   } else {
@@ -509,8 +626,9 @@ export async function runGenerate(
     failureNotes.push(
       "没找到 .ioc 要的固件包（找过 " +
         firmware.checked.join("、") +
-        "）：CubeMX 会退回它自己认识的版本，生成出来的 Drivers 可能不是你期望的那份；可以用 stm32_firmware_install 装到 <CubeMX>/" +
-        "dsh-firmware 下。",
+        "）：CubeMX 会退回它自己认识的版本，生成出来的 Drivers 可能不是你期望的那份；" +
+        "可以用 stm32_firmware_install 装一次 —— 它会落到 <CubeMX>/dsh-firmware（CubeMX 根写不进去时落到下载缓存），" +
+        "之后再生成时这里会连 CubeMX 根、下载缓存、安装记录一起搜。",
     );
   }
   const baseReport = {
@@ -558,6 +676,15 @@ export async function runGenerate(
   }
   const backupRoot = join(stateDir, "backups", stamp);
   const applied = applyGeneratedFiles(projectDir, generated, backupRoot, request.dryRun === true);
+  // A10：日志成功行只作附加信息，产物不对就不算成功（也不写生成缓存）。
+  const product = assessGenerateProducts(projectDir, applied.files.length);
+  if (!product.ok) {
+    return fail(request, "CubeMX 报告成功，但产物不对：" + product.problems.join("；"), {
+      ...baseReport,
+      files: applied.files,
+      backupDir: request.dryRun === true ? "" : backupRoot,
+    });
+  }
   const notes = [...applied.notes];
   if (verdict.knownNoise.length > 0) {
     notes.push("CubeMX 噪音 " + String(verdict.knownNoise.length) + " 条（与本芯片无关，已忽略）");
@@ -568,7 +695,7 @@ export async function runGenerate(
       "本次指定固件包：" +
         firmware.dir +
         "（来源：" +
-        (firmware.source === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") +
+        firmwareSourceLabel(firmware.source) +
         "）- 脚本里用 project setCustomFWPath 传的，不写进 .ioc。",
     );
   }

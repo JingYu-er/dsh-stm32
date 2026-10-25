@@ -165,6 +165,73 @@ export function discoverCubeMxRoots(probe: DiscoverProbe): string[] {
   return dedupePaths(found);
 }
 
+/** 解码结果：ok=false 时 text 一律是空串——调用方只能当"读不到"，绝不许拿它去比对或写回。 */
+export interface RegistryTextDecode {
+  ok: boolean;
+  text: string;
+  /** 实际用的解码方式；没解出来时是空串（"没试过"与"试了失败"不混）。 */
+  encoding: "utf-8" | "gb18030" | "";
+  error: string;
+}
+
+/** 解码失败的痕迹：非法字节被换成 U+FFFD。 */
+const REPLACEMENT_CHAR = "\u{FFFD}";
+
+/**
+ * 把 reg.exe 的输出（原始字节，或已经被宿主解码过的字符串）变成可用文本。
+ *
+ * 为什么必须有这一步：reg.exe 是控制台程序，输出到管道/文件时用的是系统 ANSI 代码页
+ * （中文 Windows 是 936/GBK），而宿主按 UTF-8 解码子进程 stdout。中文用户名下的安装路径
+ * 于是变成一串 U+FFFD：existsSync 必然失败（CubeMX 发现退化成目录扫描），更糟的是这串乱码
+ * 会被当成"用户原来的 PATH 旧值"原样写回注册表，把用户原有的中文条目永久写坏。
+ *
+ * 为什么按顺序探测而不是先读代码页：零依赖下拿不到 GetConsoleOutputCP / GetACP，而
+ * "UTF-8 严格解码失败才回落 GB18030"对纯 ASCII 输出永远成立（两种编码对 ASCII 等价），
+ * 只有真的有非 ASCII 字节时才需要判断，判断依据也就只有"解不解得出来"。
+ * 两种都解不出来就返回 ok:false —— 宁可让用户手写一条，也不把乱码写进注册表。
+ *
+ * 备选方案（没采用）：用 powershell 先把 [Console]::OutputEncoding 设成 UTF8 再调 reg.exe。
+ * 不用的原因：多一层 PowerShell 启动开销与引号转义，而且字节其实已经拿到了，直接探测更短。
+ */
+export function decodeRegistryText(
+  value: string | Uint8Array | null | undefined,
+  label = "reg.exe 输出",
+): RegistryTextDecode {
+  if (value === null || value === undefined) {
+    return { ok: false, text: "", encoding: "", error: label + "是空的（什么都没读到）" };
+  }
+  if (typeof value === "string") {
+    // 宿主已经用 UTF-8 解过一遍：真乱码在这里就已经变成 U+FFFD 了，原始字节救不回来。
+    if (value.includes(REPLACEMENT_CHAR)) {
+      return {
+        ok: false,
+        text: "",
+        encoding: "",
+        error: label + "里有无法解码的字节（已被替换成乱码字符），系统代码页可能不是 UTF-8",
+      };
+    }
+    return { ok: true, text: value, encoding: "utf-8", error: "" };
+  }
+  if (value.length === 0) {
+    return { ok: false, text: "", encoding: "", error: label + "是空的（什么都没读到）" };
+  }
+  for (const encoding of ["utf-8", "gb18030"] as const) {
+    try {
+      const text = new TextDecoder(encoding, { fatal: true }).decode(value);
+      if (text.includes(REPLACEMENT_CHAR)) continue;
+      return { ok: true, text, encoding, error: "" };
+    } catch {
+      // 这个编码解不出来，试下一个
+    }
+  }
+  return {
+    ok: false,
+    text: "",
+    encoding: "",
+    error: label + "既不是合法 UTF-8 也不是合法 GB18030（系统代码页可能不是中文/英文）",
+  };
+}
+
 /** 读注册表里 ST 记下的安装位置；没有这些键是最常见的情况，不算错误。 */
 function readRegistryInstallDirs(): string[] {
   if (process.platform !== "win32") return [];
@@ -177,14 +244,19 @@ function readRegistryInstallDirs(): string[] {
   const out: string[] = [];
   for (const entry of keys) {
     try {
-      const text = execFileSync("reg.exe", ["query", entry.key, "/v", entry.value], {
-        encoding: "utf8",
+      // 按 buffer 收：reg.exe 写的是系统代码页的字节（中文系统是 GBK），交给宿主按 UTF-8
+      // 解会把中文安装路径变成乱码，existsSync 随后必然失败。
+      const raw = execFileSync("reg.exe", ["query", entry.key, "/v", entry.value], {
+        encoding: "buffer",
         timeout: 4000,
         windowsHide: true,
         // 键不存在时 reg 会往 stderr 写字；默认继承会让这堆噪音漏到调用方终端里。
         stdio: ["ignore", "pipe", "pipe"],
       });
-      for (const line of text.split(/\r?\n/u)) {
+      const decoded = decodeRegistryText(raw, "reg query " + entry.key + " /v " + entry.value);
+      // 解不出来就当这条没读到：一串乱码路径交给 existsSync 只是污染"查过哪些地方"的说明。
+      if (!decoded.ok) continue;
+      for (const line of decoded.text.split(/\r?\n/u)) {
         const trimmed = line.trim();
         if (!trimmed.startsWith(entry.value)) continue;
         const parts = trimmed.split(/\s{2,}/u);

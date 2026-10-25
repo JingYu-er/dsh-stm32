@@ -23,6 +23,11 @@ export const outputSchema: JsonSchema = {
     iocPath: { type: "string" },
     planId: { type: "string" },
     appliedChanges: { type: "number" },
+    /**
+     * 这一趟是不是回滚。为什么要单独一个字段：回滚不改配置，却和"应用了变更"共用一张报告，
+     * 只靠 mode 判断的话调用方很容易把回滚读成"改了 1 处"（审计 A18）。
+     */
+    rolledBack: { type: "boolean" },
     shaBefore: { type: "string" },
     shaAfter: { type: "string" },
     backupPath: { type: "string" },
@@ -31,7 +36,7 @@ export const outputSchema: JsonSchema = {
   },
   required: [
     "message", "mode", "ok", "projectDir", "iocPath", "planId", "appliedChanges",
-    "shaBefore", "shaAfter", "backupPath", "warnings", "notes",
+    "rolledBack", "shaBefore", "shaAfter", "backupPath", "warnings", "notes",
   ],
 };
 
@@ -62,24 +67,28 @@ export function registerIocApply(ctx: DshContext): void {
       render: (_args, value) => {
         const typed = value as {
           message: string; mode: string; backupPath: string; shaBefore: string; shaAfter: string;
-          warnings: string[]; notes: string[];
+          rolledBack: boolean; warnings: string[]; notes: string[];
         };
         const lines: string[] = [typed.message];
         if (typed.shaBefore !== "" && typed.shaAfter !== "") {
           lines.push("SHA-256：" + typed.shaBefore.slice(0, 16) + "… -> " + typed.shaAfter.slice(0, 16) + "…");
         }
+        if (typed.rolledBack) lines.push("这是回滚：appliedChanges 记 0（回滚不是应用变更）。");
         if (typed.backupPath !== "") lines.push("备份：" + typed.backupPath);
         for (const note of typed.notes) lines.push("· " + note);
         for (const warning of typed.warnings) lines.push("! " + warning);
         return [{ type: "text", text: lines.join("\n") }];
       },
     },
-    async execute(rawArgs: IocApplyArgs, exec: ToolExec) {
-      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
+    async execute(rawArgs: IocApplyArgs | undefined, exec: ToolExec) {
+      // 宿主可能不传 arguments（工具无参数调用）→ rawArgs 是 undefined。
+      // 这里兜成 {} 而不是相信它一定有值：缺参数的正常表现应该是"报告说缺 planId"，不是 TypeError（审计 A31）。
+      const args = rawArgs ?? {};
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       const extraNotes = resolution.note === null ? [] : [resolution.note];
-      if (rawArgs.rollbackFrom !== undefined && rawArgs.rollbackFrom !== "") {
-        const rollback = rollbackIoc({ projectDir, backupFrom: rawArgs.rollbackFrom });
+      if (args.rollbackFrom !== undefined && args.rollbackFrom !== "") {
+        const rollback = rollbackIoc({ projectDir, backupFrom: args.rollbackFrom });
         return {
           message: rollback.message,
           mode: "rollback",
@@ -87,7 +96,9 @@ export function registerIocApply(ctx: DshContext): void {
           projectDir: rollback.projectDir,
           iocPath: rollback.iocPath,
           planId: "",
-          appliedChanges: rollback.ok ? 1 : 0,
+          // 回滚没有"应用变更"这回事：原来记 rollback.ok ? 1 : 0 是拿数字编事实（审计 A18）。
+          appliedChanges: 0,
+          rolledBack: rollback.ok,
           shaBefore: rollback.shaBefore,
           shaAfter: rollback.shaAfter,
           backupPath: rollback.backupPath,
@@ -95,11 +106,11 @@ export function registerIocApply(ctx: DshContext): void {
           notes: [...(rollback.ok ? ["回滚后建议 stm32_generate 重新生成，让代码与 .ioc 一致"] : []), ...extraNotes],
         };
       }
-      const planId = rawArgs.planId ?? "";
+      const planId = args.planId ?? "";
       if (planId === "") {
         return {
           message: "没写入：必须带 planId（先 stm32_ioc_plan 拿到计划 ID）；要回滚请用 rollbackFrom。",
-          mode: "apply", ok: false, projectDir, iocPath: "", planId: "", appliedChanges: 0,
+          mode: "apply", ok: false, projectDir, iocPath: "", planId: "", appliedChanges: 0, rolledBack: false,
           shaBefore: "", shaAfter: "", backupPath: "", warnings: [], notes: extraNotes,
         };
       }
@@ -112,6 +123,7 @@ export function registerIocApply(ctx: DshContext): void {
         iocPath: applied.iocPath,
         planId: applied.planId,
         appliedChanges: applied.appliedChanges,
+        rolledBack: false,
         shaBefore: applied.shaBefore,
         shaAfter: applied.shaAfter,
         backupPath: applied.backupPath,

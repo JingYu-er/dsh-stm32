@@ -3,7 +3,7 @@
 // 半截包被当成装好了。所以这里全部用注入的 fetchImpl + 临时目录，逐条钉住行为。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -29,11 +29,22 @@ import {
   installFirmware,
   isProtectedSystemDir,
   orderCubeMxRoots,
+  readFirmwareInstallRecords,
 } from "../lib/engine/firmware-install.js";
 import { FIRMWARE_INSTALL_TOOL, registerFirmwareInstall } from "../lib/tools/firmware-install.js";
 
 function tempDir(tag) {
   return mkdtempSync(join(tmpdir(), "dsh-fw-" + tag + "-"));
+}
+
+/**
+ * 造一个"看起来装过 CubeMX"的根：插件只对含 STM32CubeMX.exe 的根建 dsh-firmware，
+ * 少了这个标记文件就会被当成假根跳过（B12）。
+ */
+function cubeMxRoot(tag) {
+  const root = tempDir(tag);
+  writeFileSync(join(root, "STM32CubeMX.exe"), "stub");
+  return root;
 }
 
 /* --------------------------- 内存里造 tar.gz --------------------------- */
@@ -44,8 +55,8 @@ function octal(value, width) {
   return value.toString(8).padStart(width, "0");
 }
 
-/** 一个 ustar 条目头（名字不超过 100 字节，测试足够）。 */
-function tarHeader(name, size, typeflag) {
+/** 一个 ustar 条目头（名字不超过 100 字节，测试足够）。linkname 只对链接类条目有意义。 */
+function tarHeader(name, size, typeflag, linkname = "") {
   const buf = Buffer.alloc(BLOCK);
   buf.write(name.slice(0, 100), 0, 100, "utf8");
   buf.write("0000644\0", 100);
@@ -55,6 +66,7 @@ function tarHeader(name, size, typeflag) {
   buf.write("00000000000\0", 136);
   buf.write("        ", 148);
   buf.write(typeflag, 156);
+  if (linkname !== "") buf.write(linkname.slice(0, 100), 157, 100, "utf8");
   buf.write("ustar\0", 257);
   buf.write("00", 263);
   let sum = 0;
@@ -63,15 +75,21 @@ function tarHeader(name, size, typeflag) {
   return buf;
 }
 
-/** entries: { path, data?, type?: "file"|"dir" } */
+/** 条目类型 → typeflag（只列测试会用到的）。 */
+const TYPEFLAGS = { file: "0", dir: "5", hardlink: "1", symlink: "2", device: "3", fifo: "6" };
+
+/** entries: { path, data?, type?: "file"|"dir"|"symlink"|"hardlink"|"device"|"fifo", link? } */
 function makeTar(entries) {
   const chunks = [];
   for (const entry of entries) {
-    const isDir = entry.type === "dir";
-    const data = Buffer.from(entry.data ?? "", "utf8");
+    const typeflag = TYPEFLAGS[entry.type ?? "file"] ?? "0";
+    const isDir = typeflag === "5";
+    const isLink = typeflag === "1" || typeflag === "2";
+    // 链接/设备/FIFO 没有数据段；目录也没有。
+    const data = Buffer.from(isDir || isLink || typeflag !== "0" ? "" : entry.data ?? "", "utf8");
     const name = isDir && !entry.path.endsWith("/") ? entry.path + "/" : entry.path;
-    chunks.push(tarHeader(name, isDir ? 0 : data.length, isDir ? "5" : "0"));
-    if (!isDir) {
+    chunks.push(tarHeader(name, data.length, typeflag, isLink ? entry.link ?? "" : ""));
+    if (data.length > 0) {
       chunks.push(data);
       const pad = (BLOCK - (data.length % BLOCK)) % BLOCK;
       if (pad > 0) chunks.push(Buffer.alloc(pad));
@@ -179,6 +197,49 @@ test("extractTarGz：不是 tar.gz 就明说；带 .. 的条目整次失败、�
   }
 });
 
+test("extractTarGz：符号链接 / 硬链接不落盘，名字记进 skippedPaths，其余文件照解", () => {
+  const root = tempDir("tar-link");
+  try {
+    const archive = makeTarGz([
+      { path: "root", type: "dir" },
+      { path: "root/Inc", type: "dir" },
+      { path: "root/Inc/a.h", data: "/* a */\n" },
+      { path: "root/Inc/link.h", type: "symlink", link: "../../escape.h" },
+      { path: "root/Inc/hard.h", type: "hardlink", link: "a.h" },
+    ]);
+    const result = extractTarGz(archive, root, { stripComponents: 1 });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(existsSync(join(root, "Inc/a.h")), true);
+    assert.equal(existsSync(join(root, "Inc/link.h")), false, "符号链接不能变成 0 字节假文件");
+    assert.equal(existsSync(join(root, "Inc/hard.h")), false, "硬链接同样不能变成 0 字节假文件");
+    assert.equal(result.files.some((item) => item.path.includes("link.h")), false, "files 里不许出现链接条目");
+    assert.ok((result.skippedPaths ?? []).some((item) => item.includes("link.h")), "跳过的名字要能报出来");
+    assert.ok((result.skippedPaths ?? []).some((item) => item.includes("hard.h")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("extractTarGz：条目名用反斜杠上跳也整次失败，目标目录外一个文件都不落", () => {
+  const outside = tempDir("tar-backslash");
+  const root = join(outside, "dest");
+  try {
+    const archive = makeTarGz([
+      { path: "root", type: "dir" },
+      { path: "root/ok.txt", data: "ok\n" },
+      { path: "root/..\\..\\escape.txt", data: "boom\n" },
+    ]);
+    const result = extractTarGz(archive, root, { stripComponents: 1 });
+    assert.equal(result.ok, false, "反斜杠穿越必须整次失败");
+    assert.match(result.error, /可疑路径/u);
+    assert.equal(existsSync(join(outside, "escape.txt")), false);
+    assert.equal(existsSync(join(outside, "..", "escape.txt")), false);
+    assert.equal(existsSync(join(root, "ok.txt")), false, "命中穿越就整次失败，不留半成品");
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 /* --------------------------- 包计划与判据 --------------------------- */
 
 test("firmwarePlanFor：F1 的目录名、版本串、归档与内核头都对得上真包", () => {
@@ -245,7 +306,7 @@ test("verifyFirmwarePackage：空目录必须判不过，并把缺的条目标�
 /* ------------------------- 计划：零副作用 ------------------------- */
 
 test("firmwareInstallPlan：只读——不建目录、不联网，五步全 pending", async () => {
-  const root = tempDir("plan");
+  const root = cubeMxRoot("plan");
   try {
     const result = firmwareInstallPlan({ family: "F1", cubeMxRoots: [root], env: { DSH_STM32_CACHE: join(root, "cache") } });
     assert.equal(result.ok, true, result.message);
@@ -318,7 +379,11 @@ test("installFirmware：假 fetch 装出一个自检全过的包（只留要的�
     assert.equal(existsSync(join(target, "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s")), true);
     assert.equal(existsSync(join(target, "Drivers/CMSIS/Include/core_cm3.h")), true);
     assert.equal(existsSync(join(target, ".github")), false, "仓库里的 .github 不该落盘");
-    assert.equal(existsSync(join(target, ".dsh-download")), false, "下载临时目录要清掉");
+    assert.deepEqual(
+      readdirSync(target).filter((name) => name.startsWith(".dsh-download")),
+      [],
+      "下载临时目录要清掉（固定名 .dsh-download 与每次唯一的 .dsh-download-<pid>-<ts> 都算）",
+    );
     assert.ok(progress.some((line) => line.includes("解包")), "进度里要看得到解包");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -376,7 +441,7 @@ function fakeContext() {
 }
 
 test("stm32_firmware_install：注册契约与计划模式（不联网、不建目录）", async () => {
-  const root = tempDir("tool");
+  const root = cubeMxRoot("tool");
   try {
     const { tools, ctx } = fakeContext();
     registerFirmwareInstall(ctx);
@@ -484,7 +549,7 @@ test("locateFirmwarePackage：包名精确匹配优先；同版本优先官方�
 });
 
 test("firmwareInstallPlan：默认落 dsh-firmware，target=cache 才落用户缓存，显式目录优先", () => {
-  const root = tempDir("target");
+  const root = cubeMxRoot("target");
   try {
     const env = { DSH_STM32_CACHE: join(root, "cache") };
     const auto = firmwareInstallPlan({ family: "F1", version: "1.8.8", cubeMxRoots: [root], env });
@@ -556,7 +621,7 @@ test("orderCubeMxRoots：本机真存在的排前面（别让不存在的默认�
 });
 
 test("firmwareInstallPlan：候选根里排在前面的不存在时，落点要选本机真有的那份 CubeMX", () => {
-  const root = tempDir("pickexisting");
+  const root = cubeMxRoot("pickexisting");
   try {
     const env = { DSH_STM32_CACHE: join(root, "cache") };
     const ghost = join(root, "no-such-cubemx");
@@ -577,13 +642,166 @@ test("firmwareInstallPlan：根不存在、祖先又是受保护的系统目录�
     // 祖先正是"受保护目录"，plan 模式下必须判不可写，而不是一路 accessSync 报 ok。
     process.env["ProgramFiles"] = root;
     const env = { DSH_STM32_CACHE: join(root, "cache") };
+    // 根自身存在、也像 CubeMX（有 STM32CubeMX.exe），这样才能验证"祖先受保护"这条判据本身。
     const ghostRoot = join(root, "STMicroelectronics", "STM32CubeMX");
+    mkdirSync(ghostRoot, { recursive: true });
+    writeFileSync(join(ghostRoot, "STM32CubeMX.exe"), "stub");
     const plan = firmwareInstallPlan({ family: "F1", version: "1.8.8", cubeMxRoots: [ghostRoot], env });
     assert.equal(plan.targetKind, "cache");
     assert.match(plan.notes.join("\n"), /dsh-firmware|写不进去|受保护/u);
   } finally {
     if (saved === undefined) delete process.env["ProgramFiles"];
     else process.env["ProgramFiles"] = saved;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* ------------------- B10/B12：落点与 generate 的搜索要对齐 ------------------- */
+
+test("locateFirmwarePackage：装到下载缓存里的包，靠 extraDirs 也要找得到（B10）", () => {
+  const root = tempDir("locate-cache");
+  try {
+    // 模拟 stm32_firmware_install 的 cache 兜底：<cacheRoot>/firmware/<包名>
+    const cacheFw = join(root, "cache", "firmware");
+    const pkg = join(cacheFw, "STM32Cube_FW_F1_V1.8.7");
+    makePackage(pkg);
+
+    // 只搜 CubeMX 根：看不见（这正是审计里 generate 说"没找到"的那个洞）
+    const blind = locateFirmwarePackage([join(root, "cubemx")], { packageName: "STM32Cube_FW_F1_V1.8.7" });
+    assert.equal(blind.found, false);
+
+    const seen = locateFirmwarePackage([join(root, "cubemx")], {
+      packageName: "STM32Cube_FW_F1_V1.8.7",
+      extraDirs: [{ dir: cacheFw, source: "cache" }],
+    });
+    assert.equal(seen.found, true);
+    assert.equal(seen.source, "cache");
+    assert.equal(seen.dir, pkg.split("\\").join("/"));
+
+    // 显式 targetDir 是"包本身"，不是包的父目录，也要认
+    const customPkg = join(root, "mine", "STM32Cube_FW_F1_V1.8.8");
+    makePackage(customPkg);
+    const custom = locateFirmwarePackage([], {
+      packageName: "STM32Cube_FW_F1_V1.8.8",
+      extraDirs: [{ dir: customPkg, source: "custom" }],
+    });
+    assert.equal(custom.found, true);
+    assert.equal(custom.source, "custom");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：cache 落点会记进 installed.json，generate 再靠记录找回来（B10）", async () => {
+  const root = tempDir("install-record");
+  const env = { DSH_STM32_CACHE: join(root, "cache") };
+  try {
+    const result = await installFirmware({
+      family: "F1",
+      version: "1.8.8",
+      cubeMxRoots: [join(root, "no-cubemx")],
+      mode: "install",
+      env,
+      fetchImpl: firmwareFetch(),
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.targetKind, "cache");
+    // nextStep 按落点分档（A13）：落到缓存时必须说清"包不在 CubeMX 安装目录里"。
+    assert.match(result.nextStep, /setCustomFWPath/u);
+    assert.match(result.nextStep, /缓存/u);
+    const records = readFirmwareInstallRecords(env);
+    const mine = records.find((record) => record.packageName === "STM32Cube_FW_F1_V1.8.8");
+    assert.ok(mine !== undefined, "装完必须留一条落点记录");
+    assert.equal(mine.kind, "cache");
+    assert.equal(mine.dir, result.targetDir);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("firmwareInstallPlan：候选根里没有 STM32CubeMX.exe 时不当它是 CubeMX（B12）", () => {
+  const root = tempDir("fake-root");
+  try {
+    const env = { DSH_STM32_CACHE: join(root, "cache") };
+    const fake = join(root, "empty-cubemx");
+    mkdirSync(fake, { recursive: true });
+    const plan = firmwareInstallPlan({ family: "F1", version: "1.8.8", cubeMxRoots: [fake], env });
+    assert.equal(plan.targetKind, "cache", "不往没有 STM32CubeMX.exe 的假根里造包");
+    assert.match(plan.notes.join("\n"), /STM32CubeMX\.exe/u);
+    assert.equal(existsSync(join(fake, "dsh-firmware")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：install 模式下祖先受保护时不建目录、不报 cubeMx（B12）", async () => {
+  const root = tempDir("install-protected");
+  const saved = process.env["ProgramFiles"];
+  try {
+    process.env["ProgramFiles"] = root;
+    const ghostRoot = join(root, "Vendor", "STM32CubeMX");
+    const result = await installFirmware({
+      family: "F1",
+      version: "1.8.8",
+      cubeMxRoots: [ghostRoot],
+      mode: "install",
+      env: { DSH_STM32_CACHE: join(root, "cache") },
+      fetchImpl: firmwareFetch(),
+    });
+    assert.notEqual(result.targetKind, "cubeMx");
+    assert.notEqual(result.targetKind, "repository");
+    assert.equal(existsSync(join(ghostRoot, "dsh-firmware")), false, "受保护祖先下不许 mkdir");
+    assert.equal(result.targetKind, "cache");
+  } finally {
+    if (saved === undefined) delete process.env["ProgramFiles"];
+    else process.env["ProgramFiles"] = saved;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("extractTarGz：不是 gzip 的内容与空归档都判失败，不当作装好了（A32）", () => {
+  const root = tempDir("tar-magic");
+  try {
+    const notGzip = extractTarGz(Buffer.from("<!doctype html><html>proxy</html>", "utf8"), join(root, "a"));
+    assert.equal(notGzip.ok, false);
+    assert.match(notGzip.error, /魔数|tar\.gz/u);
+    assert.equal(existsSync(join(root, "a")), false, "魔数不对时一个文件都不许落盘");
+
+    const empty = extractTarGz(gzipSync(Buffer.alloc(0)), join(root, "b"));
+    assert.equal(empty.ok, false);
+    assert.match(empty.error, /空归档/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：暂存目录每次唯一，结束时不留残渣，老残留会被清掉（A11）", async () => {
+  const root = tempDir("temp-clean");
+  const target = join(root, "pkg");
+  try {
+    mkdirSync(target, { recursive: true });
+    const stale = join(target, ".dsh-download-123-456");
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, "half.tgz"), "old", "utf8");
+    const old = Date.now() / 1000 - 2 * 60 * 60;
+    utimesSync(stale, old, old);
+
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      env: { DSH_STM32_CACHE: join(root, "cache") },
+      fetchImpl: firmwareFetch(),
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(
+      readdirSync(target).filter((name) => name.startsWith(".dsh-download")),
+      [],
+      "结束时暂存目录不能留在包里",
+    );
+    assert.equal(existsSync(stale), false, "超过 1 小时的老残留要清掉");
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

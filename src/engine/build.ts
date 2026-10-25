@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { runStreaming } from "./subprocess-runner.js";
+import { envWithBinDirs } from "./tool-env.js";
 import type { SubprocessService } from "../types.js";
 
 export interface BuildRequest {
@@ -235,6 +236,9 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
   if (!existsSync(projectDir)) return fail(request, "工程目录不存在：" + projectDir);
   const config = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
   const cmake = resolveCmake(subprocess, config.binDirs);
+  // 子进程带上 binDirs 组成的 PATH：cmake 会再去调 arm-none-eabi-gcc / ninja / objcopy，
+  // 只把这些目录用于"找 cmake 本身"是不够的（宿主进程的 PATH 可能还是安装前的旧值）。
+  const childEnv = envWithBinDirs(config.binDirs);
   const progress = request.onProgress ?? ((): void => undefined);
   const preNotes: string[] = [];
   let buildDir = request.buildDir === undefined ? detectBuildDir(projectDir) : resolve(projectDir, request.buildDir);
@@ -257,6 +261,7 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
       cwd: projectDir,
       timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBytes: 1024 * 1024,
+      env: childEnv,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       onOutput: (stream, text) => {
         for (const line of text.split(/\r?\n/u)) {
@@ -306,6 +311,7 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     cwd: projectDir,
     timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxBytes: 2 * 1024 * 1024,
+    env: childEnv,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     onOutput: (stream, text) => {
       for (const line of text.split(/\r?\n/u)) {

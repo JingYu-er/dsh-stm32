@@ -138,15 +138,18 @@ export function registerIocPlan(ctx: DshContext): void {
         return [{ type: "text", text: format(typed.changes, typed.message, typed.warnings, typed.errors, typed.nextStep).join("\n") }];
       },
     },
-    async execute(rawArgs: IocPlanArgs, exec: ToolExec) {
-      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
+    async execute(rawArgs: IocPlanArgs | undefined, exec: ToolExec) {
+      // 宿主可能不传 arguments（无参数调用）→ 兜成 {}：缺参数要表现成"报告说没事可做"，
+      // 而不是 rawArgs.projectDir 上的 TypeError（审计 A31）。
+      const args = rawArgs ?? {};
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const report = planIocChanges({
         projectDir: resolution.projectDir,
-        ...(rawArgs.iocPath === undefined ? {} : { iocPath: rawArgs.iocPath }),
-        ...(rawArgs.entries === undefined ? {} : { entries: rawArgs.entries }),
-        ...(rawArgs.unset === undefined ? {} : { unset: rawArgs.unset }),
-        ...(rawArgs.pins === undefined ? {} : { pins: rawArgs.pins }),
-        ...(rawArgs.serialWire === undefined ? {} : { serialWire: rawArgs.serialWire }),
+        ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),
+        ...(args.entries === undefined ? {} : { entries: args.entries }),
+        ...(args.unset === undefined ? {} : { unset: args.unset }),
+        ...(args.pins === undefined ? {} : { pins: args.pins }),
+        ...(args.serialWire === undefined ? {} : { serialWire: args.serialWire }),
       });
       if (resolution.note !== null) report.notes.push(resolution.note);
       const changes = toViews(report.changes);

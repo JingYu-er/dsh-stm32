@@ -1,8 +1,18 @@
 // 单元测试：flash 引擎的纯函数（不连板子）。用 node test\flash-units.test.mjs 跑。
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
-import { buildProgramCommand, findProjectConfig, parseFlashLog, resolveElf, toOpenOcdPath } from "../lib/engine/flash.js";
+import {
+  buildProgramCommand,
+  checkNoDebugGuard,
+  findProjectConfig,
+  parseFlashLog,
+  resolveElf,
+  toOpenOcdPath,
+} from "../lib/engine/flash.js";
 
 import { FIXTURE_PROJECT } from "./fixtures.mjs";
 
@@ -64,4 +74,50 @@ test("resolveElf 从构建目录推断出 .elf，显式不存在时报错", () =
   const missing = resolveElf(projectDir, { projectDir, elfPath: "build/Debug/none.elf" });
   assert.equal(missing.elf, null);
   assert.match(missing.note, /不存在/u);
+});
+
+test("checkNoDebugGuard：找不到唯一 .ioc 时明确说守卫没生效（审计 A6）", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-flash-guard-"));
+  const none = checkNoDebugGuard(dir);
+  assert.equal(none.blocked, false, "没有 .ioc 时不拦，但必须说清楚");
+  assert.equal(none.notes.length, 2);
+  assert.match(none.notes[0] ?? "", /SWD 守卫没生效/u);
+  assert.match(none.notes[0] ?? "", /没有 .ioc/u);
+  assert.match(none.notes[1] ?? "", /iocPath/u);
+
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "");
+  fs.writeFileSync(path.join(dir, "demo_backup.ioc"), "");
+  const multi = checkNoDebugGuard(dir);
+  assert.equal(multi.blocked, false);
+  assert.match(multi.notes[0] ?? "", /2 个 .ioc/u);
+  assert.match(multi.notes[0] ?? "", /demo.ioc/u);
+
+  const explicit = checkNoDebugGuard(dir, false, "nope.ioc");
+  assert.match(explicit.notes[0] ?? "", /指定的 .ioc 不存在/u);
+
+  const allowed = checkNoDebugGuard(dir, true);
+  assert.deepEqual(allowed, { blocked: false, errors: [], notes: [] });
+});
+
+test("parseFlashLog：成功序列齐全时 Error: 行进 noise，不判失败（审计 A25）", () => {
+  // openocd 在成功路径上也会打 Error: 前缀的行（无效 ACK 之类），原来一律判失败。
+  const okLog = [
+    "Info : device id = 0x20036410",
+    "Error: invalid ack received",
+    "** Programming Started **",
+    "** Programming Finished **",
+    "** Verified OK **",
+    "** Resetting Target **",
+  ].join("\n");
+  const verdict = parseFlashLog(okLog);
+  assert.equal(verdict.programmed, true);
+  assert.equal(verdict.verified, true);
+  assert.deepEqual(verdict.errors, []);
+  assert.equal(verdict.noise.length, 1);
+
+  const failLog = ["** Programming Started **", "Error: flash write failed", "** Programming Failed **"].join("\n");
+  const failed = parseFlashLog(failLog);
+  assert.equal(failed.programmed, false);
+  assert.equal(failed.errors.length > 0, true);
+  assert.deepEqual(failed.noise, []);
 });

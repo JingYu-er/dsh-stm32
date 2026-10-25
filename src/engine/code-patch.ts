@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { STATE_DIR } from "./generate.js";
+import { decodeText, detectEncoding, replaceLineRange } from "./text-file.js";
 
 const MARKER = /^[ \t]*\/\* USER CODE (BEGIN|END) (.+?) \*\/[ \t]*$/u;
 
@@ -121,7 +122,15 @@ export function patchUserCode(request: CodePatchRequest): CodePatchReport {
   if (!fs.existsSync(absPath)) return fail("文件不存在：" + absPath);
   if (!fs.statSync(absPath).isFile()) return fail("不是文件：" + absPath);
 
-  const original = fs.readFileSync(absPath, "utf8");
+  const originalBuffer = fs.readFileSync(absPath);
+  const encoding = detectEncoding(originalBuffer);
+  if (encoding === "unknown") {
+    return fail(
+      "文件 " + fileRel + " 的编码认不出来（既不是 UTF-8 也不是 GB18030）：为避免把中文注释写坏，不做改动。" +
+        "先把它转成 UTF-8（VS Code 右下角编码 → 通过编码保存 → UTF-8）再试。",
+    );
+  }
+  const original = decodeText(originalBuffer, encoding);
   const lines = splitLines(original);
   const labels = listUserCodeLabels(original);
   const range = findBlock(lines, request.block);
@@ -137,8 +146,6 @@ export function patchUserCode(request: CodePatchRequest): CodePatchReport {
   // 行尾必须跟随原文件：CubeMX 生成的是 CRLF，混入 LF 会让 git diff 整文件飘红。
   const eol = original.includes("\r\n") ? "\r\n" : "\n";
   const body = splitLines(request.code.replace(/\r?\n$/u, ""));
-  const before = lines.slice(0, range.begin + 1);
-  const after = lines.slice(range.end);
   const previousBody = lines.slice(range.begin + 1, range.end);
 
   // replace 会删掉块内原有的行。CubeMX 的 `USER CODE BEGIN 3` / `END 3` 之间夹着 while(1) 的收尾 `}`，
@@ -167,8 +174,14 @@ export function patchUserCode(request: CodePatchRequest): CodePatchReport {
     mode === "append"
       ? [...previousBody.slice(0, tailStart), ...body, ...previousBody.slice(tailStart)]
       : body;
-  const rebuilt = [...before, ...nextBody, ...after].join(eol);
-  if (rebuilt === original) {
+  // 写回走**字节级拼接**：没改到的行原字节照抄，所以 GB18030 文件里的中文注释不会被动到，
+  // 带 BOM 的 UTF-8 文件的 BOM 也还在（审计 B2）。
+  const blockStart = range.begin + 1;
+  const spliced = mode === "append"
+    ? replaceLineRange(originalBuffer, blockStart + tailStart, blockStart + tailStart, body, eol, encoding)
+    : replaceLineRange(originalBuffer, blockStart, range.end, body, eol, encoding);
+  if (!spliced.ok) return fail(spliced.error);
+  if (spliced.bytes.equals(originalBuffer)) {
     return {
       ok: true, file: fileRel, block: request.block, mode, labels,
       linesBefore: previousBody.length, linesAfter: nextBody.length, errors: [],
@@ -182,7 +195,7 @@ export function patchUserCode(request: CodePatchRequest): CodePatchReport {
   const backupPath = path.join(backupDir, path.basename(fileRel));
   fs.copyFileSync(absPath, backupPath);
   const tmpPath = absPath + ".dsh-stm32-tmp";
-  fs.writeFileSync(tmpPath, rebuilt);
+  fs.writeFileSync(tmpPath, spliced.bytes);
   fs.renameSync(tmpPath, absPath);
 
   return {

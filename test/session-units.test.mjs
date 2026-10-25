@@ -1,7 +1,7 @@
 // 调试会话租约单测：node test/session-units.test.mjs（不要用 node --test：沙箱下 spawn EPERM）
 import assert from "node:assert/strict";
 
-import { DebugSessionManager } from "../lib/engine/debug-session.js";
+import { DebugSessionManager, parseMarkedWords } from "../lib/engine/debug-session.js";
 
 import { FIXTURE_PROJECT, fakeBinDirs } from "./fixtures.mjs";
 
@@ -186,6 +186,59 @@ test("openocd 起不来：明确报错，不留下 active 会话", async () => {
   const report = await manager.start({ projectDir: FIXTURE_PROJECT, binDirs: BIN_DIRS });
   assert.equal(report.ok, false);
   assert.equal(manager.isActive(), false);
+});
+
+test("parseMarkedWords：中间地址读失败时后面的值不能往前串（审计 A7）", () => {
+  const addresses = ["0x4001100c", "0x40010004", "0xe000ed04"];
+  const output = [
+    "===DSH:PC===",
+    "$1 = 0x8001178",
+    "===DSH:0x4001100c===",
+    "$2 = 0x00000020",
+    "===DSH:0x40010004===",
+    "Cannot access memory at address 0x40010004",
+    "===DSH:0xe000ed04===",
+    "$3 = 0x00000000",
+  ].join("\n");
+  const parsed = parseMarkedWords(output, addresses);
+  assert.equal(parsed.pc, "0x8001178");
+  assert.equal(parsed.values.get("0x4001100c"), "0x00000020");
+  assert.equal(parsed.values.has("0x40010004"), false, "读不到的地址不能拿到别人的值");
+  assert.equal(parsed.values.get("0xe000ed04"), "0x00000000", "最后一个值不能被前移");
+  assert.equal(parsed.values.size, 2);
+});
+
+test("stop(requireOwner)：别的调用方起的会话不关，对得上才关（审计 A9）", async () => {
+  const fake = makeSubprocess();
+  const manager = new DebugSessionManager();
+  manager.configure(fake.service, BIN_DIRS);
+  await manager.start({ projectDir: FIXTURE_PROJECT, binDirs: BIN_DIRS, owner: "agent-a" });
+  const other = await manager.stop("turn/end", { requireOwner: "agent-b" });
+  assert.equal(other.stopped, false);
+  assert.match(other.message, /另一个调用方/u);
+  assert.equal(manager.isActive(), true, "别人的对话结束不该收走这块探针");
+  assert.equal(fake.spawned[0].terminated, false);
+
+  const mine = await manager.stop("turn/end", { requireOwner: "agent-a" });
+  assert.equal(mine.stopped, true);
+  assert.equal(fake.spawned[0].terminated, true);
+  assert.equal(manager.isActive(), false);
+});
+
+test("stop：没记 owner 的会话在带 requireOwner 时照旧关掉（老行为兜底）", async () => {
+  const fake = makeSubprocess();
+  const manager = new DebugSessionManager();
+  manager.configure(fake.service, BIN_DIRS);
+  await manager.start({ projectDir: FIXTURE_PROJECT, binDirs: BIN_DIRS });
+  const stopped = await manager.stop("turn/end", { requireOwner: "agent-a" });
+  assert.equal(stopped.stopped, true, "owner 未知时不能漏关");
+  assert.equal(manager.isActive(), false);
+});
+
+test("parseMarkedWords：没有标记时返回空（调用方才知道要回退老解析）", () => {
+  const parsed = parseMarkedWords("$1 = 0x1\n$2 = 0x2\n", ["0x1"]);
+  assert.equal(parsed.pc, "");
+  assert.equal(parsed.values.size, 0);
 });
 
 let failed = 0;

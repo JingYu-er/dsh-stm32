@@ -169,6 +169,46 @@ function dirIsEmpty(dir: string): boolean {
 }
 
 /**
+ * B11：把停放的索引逐项并回目标目录。
+ *
+ * 原来只肯在目标目录是空的时候整目录改名回去，CubeMX 一旦重建了一个非空 pdsc，
+ * 索引就只能靠用户手动合并（插件再也不会还原它）。这里逐项搬，搬不动的留在原地并报出来。
+ */
+function mergeDirectoryInto(from: string, to: string): { moved: number; kept: number; failed: number } {
+  let moved = 0;
+  let kept = 0;
+  let failed = 0;
+  let names: string[] = [];
+  try {
+    names = readdirSync(from);
+  } catch {
+    return { moved, kept, failed };
+  }
+  for (const name of names) {
+    const src = join(from, name);
+    const dst = join(to, name);
+    if (existsSync(dst)) {
+      kept += 1;
+      continue;
+    }
+    try {
+      renameSync(src, dst);
+      moved += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  if (failed === 0 && dirIsEmpty(from)) {
+    try {
+      rmdirSync(from);
+    } catch {
+      // 删不掉空目录不影响结论
+    }
+  }
+  return { moved, kept, failed };
+}
+
+/**
  * 把 <thirdparties>/pdsc 停放到 <thirdparties>/pdsc.dsh-parked。
  *
  * 只在确实需要停放时调用；失败一律返回 ok:false（调用方照常跑生成，只是没省下这 25 s）。
@@ -220,8 +260,12 @@ export function parkThirdpartyDb(thirdpartiesDir: string): ParkHandle | ParkFail
             return notes;
           }
         } else {
+          // CubeMX 运行中重建了非空 pdsc：逐项并回去，不让索引卡在 .dsh-parked 里。
+          const merged = mergeDirectoryInto(parkedPath, dbPath);
           notes.push(
-            "CubeMX 运行中重新生成了 " + dbPath + "（非空），原索引仍在 " + parkedPath + "，请手动合并或删除其一",
+            "CubeMX 运行中重新生成了 " + dbPath + "（非空），已把停放的索引并回 " + String(merged.moved) + " 项" +
+              (merged.kept === 0 ? "" : "；" + String(merged.kept) + " 项两边都有（保留现有的）") +
+              (merged.failed === 0 ? "" : "；" + String(merged.failed) + " 项没搬成，仍在 " + parkedPath),
           );
           return notes;
         }

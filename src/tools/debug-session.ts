@@ -105,6 +105,14 @@ interface SessionArgs {
   envCheck?: string;
 }
 
+/** stm32_debug_eval 的参数。单独一个类型是为了让 execute 能显式接受 undefined（审计 A31）。 */
+interface EvalArgs {
+  commands?: string[];
+  expression?: string;
+  keepHalted?: boolean;
+  timeoutMs?: number;
+}
+
 function describeSession(report: SessionReport): string[] {
   const lines: string[] = [report.message];
   if (report.active) {
@@ -159,30 +167,34 @@ export function registerDebugSession(ctx: DshContext): void {
         return [{ type: "text", text: describeSession(typed.session).join("\n") }];
       },
     },
-    async execute(rawArgs: SessionArgs, exec: ToolExec) {
-      const resolution = await resolveProjectDir(ctx, rawArgs.projectDir, exec);
+    async execute(rawArgs: SessionArgs | undefined, exec: ToolExec) {
+      // 宿主可能不传 arguments（无参数调用）→ 兜成 {}，让"缺参数"表现成正常报告而不是 TypeError（审计 A31）。
+      const args = rawArgs ?? {};
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       // 门禁：长调试会话同样要 openocd + GDB。开着会话再报"缺 openocd"只会让人以为探针坏了。
       const gate = await ensureToolchain(ctx, {
         capability: "debug",
-        ...(rawArgs.binDirs === undefined ? {} : { binDirs: rawArgs.binDirs }),
-        envCheck: rawArgs.envCheck,
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        envCheck: args.envCheck,
         signal: exec.signal,
       });
       if (!gate.ok && gate.mode === "block") {
         return { message: gate.message, session: blockedSession(resolution.projectDir, gate) };
       }
-      debugSessions.configure(ctx.subprocess, rawArgs.binDirs ?? []);
+      debugSessions.configure(ctx.subprocess, args.binDirs ?? []);
       const session = await debugSessions.start({
         projectDir,
-        ...(rawArgs.elfPath === undefined ? {} : { elfPath: rawArgs.elfPath }),
-        ...(rawArgs.port === undefined ? {} : { port: rawArgs.port }),
-        ...(rawArgs.adapterSpeed === undefined ? {} : { adapterSpeed: rawArgs.adapterSpeed }),
-        ...(rawArgs.configFile === undefined ? {} : { configFile: rawArgs.configFile }),
-        ...(rawArgs.idleTtlMs === undefined ? {} : { idleTtlMs: rawArgs.idleTtlMs }),
-        ...(rawArgs.hardTtlMs === undefined ? {} : { hardTtlMs: rawArgs.hardTtlMs }),
-        ...(rawArgs.reset === undefined ? {} : { reset: rawArgs.reset }),
-        ...(rawArgs.binDirs === undefined ? {} : { binDirs: rawArgs.binDirs }),
+        ...(args.elfPath === undefined ? {} : { elfPath: args.elfPath }),
+        ...(args.port === undefined ? {} : { port: args.port }),
+        ...(args.adapterSpeed === undefined ? {} : { adapterSpeed: args.adapterSpeed }),
+        ...(args.configFile === undefined ? {} : { configFile: args.configFile }),
+        ...(args.idleTtlMs === undefined ? {} : { idleTtlMs: args.idleTtlMs }),
+        ...(args.hardTtlMs === undefined ? {} : { hardTtlMs: args.hardTtlMs }),
+        ...(args.reset === undefined ? {} : { reset: args.reset }),
+        ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
+        // A9：记下是谁开的会话，turn/end 只关自己的那个。
+        ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
       });
       void exec;
       const base = resolution.note === null ? session.message : session.message + "\n· " + resolution.note;
@@ -218,12 +230,14 @@ export function registerDebugSession(ctx: DshContext): void {
         return [{ type: "text", text: lines.filter((line) => line !== "").join("\n") }];
       },
     },
-    async execute(rawArgs: { commands?: string[]; expression?: string; keepHalted?: boolean; timeoutMs?: number }, exec: ToolExec) {
+    async execute(rawArgs: EvalArgs | undefined, exec: ToolExec) {
+      // 同 A31：无参数调用兜成 {}。没带 commands/expression 时引擎会给出"没执行"的报告，不是崩溃。
+      const args = rawArgs ?? {};
       const report = await debugSessions.eval({
-        ...(rawArgs.commands === undefined ? {} : { commands: rawArgs.commands }),
-        ...(rawArgs.expression === undefined ? {} : { expression: rawArgs.expression }),
-        ...(rawArgs.keepHalted === undefined ? {} : { keepHalted: rawArgs.keepHalted }),
-        ...(rawArgs.timeoutMs === undefined ? {} : { timeoutMs: rawArgs.timeoutMs }),
+        ...(args.commands === undefined ? {} : { commands: args.commands }),
+        ...(args.expression === undefined ? {} : { expression: args.expression }),
+        ...(args.keepHalted === undefined ? {} : { keepHalted: args.keepHalted }),
+        ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
         signal: exec.signal,
       });
       return { message: report.message, report };

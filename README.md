@@ -10,7 +10,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 19 个工具、6 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
 
-装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.1`；重启后 `/stm32-doctor` 有输出。
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.2`；重启后 `/stm32-doctor` 有输出。
 
 
 **卸载**：`dsh plugin --profile desktop remove dsh-stm32`，重启 dsh。
@@ -68,7 +68,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：220 个离线用例，不需要板子
+npm test                            # 可选：308 个离线用例，不需要板子
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -228,6 +228,16 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 **内置默认值里没有任何"某台机器专属"的路径**：只有 `C:/msys64/...` 与 `C:/Program Files/...` 这种 Windows 默认安装位置，装在别处靠自动发现兜底。配置或环境变量里点名的目录如果在本机不存在（典型情况：配置是从别的机器拷过来的，带着 `D:/app/msys64` 这种路径），门禁与 `stm32_env_probe` 会明确写一句「配置文件里的 X 在本机不存在……这一条搜不到工具」，而**不会**悄悄改你的配置；安装器也不会拿这种路径当安装目标（盘符都没有时只提示、并要求你给 `targetDir`）。
 
+### 设置面板（GUI）
+
+上面那个配置文件也能不碰命令行改：DSH 的 **设置 → STM32 工具链**（插件自带的浏览器端面板，与宿主同源，零额外依赖）。三张卡：
+
+- **装在哪**：读当前配置，改 `msys64` / `cubeMxRoot` / 额外 `binDirs` 后保存——写的就是上面那个文件，下一条工具调用就读得到，不用重开 DSH；
+- **缺什么**：跑一次探测（会执行各工具的版本命令，不装任何东西），逐项显示找到的路径与版本、缺件的 `hint`，以及编译 / 烧录 / 调试 / 生成四项能力徽章；
+- **装工具链**：先出计划（步骤、下载体积、PATH 与配置会怎么改），**再点一次确认**才真装；装的过程实时显示步骤与日志尾巴，实际执行与 `stm32_env_install` 是同一个安装器。工具链已经完整时，计划只回一句话「工具链完整，不需要装任何东西」，不列那七行「已跳过」。
+
+接口是插件注册在宿主上的六条 `/dsh-stm32/api/*`（读配置、存配置、探测、安装计划、开始安装、安装进度）；面板产物是 `lib/client.js`，源码在 `client/client.js`，由 `npm run build` 原样复制——手写纯 JS、只 `require("react")`，不引入打包器或运行时依赖。宿主没有 `webServer` 服务时（纯 CLI 组合）这层注册自动跳过，工具与斜杠命令不受影响。
+
 ### 下载缓存（寄存器版模板）
 
 寄存器版工程要的 CMSIS 设备头、启动文件、内核头**不预置进插件**（要覆盖任意 STM32，每颗都打一份会让包大到不可用），而是第一次用时从网上下载，落到一个可检索的缓存目录，之后一直复用：
@@ -327,12 +337,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 20 个离线套件、220 个用例；不需要板子、CubeMX、工具链
+npm test                 # 24 个离线套件、308 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **218 pass + 2 skipped**，开发机上是 220 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **306 pass + 2 skipped**，开发机上是 308 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 
