@@ -63,6 +63,9 @@ const reportSchema: JsonSchema = {
       },
       required: ["parked", "detail"],
     },
+    firmwareDir: { type: "string" },
+    firmwarePackage: { type: "string" },
+    firmwareSource: { type: "string", enum: ["repository", "dsh-firmware", ""] },
     message: { type: "string" },
     script: { type: "string" },
     command: { type: "string" },
@@ -121,6 +124,9 @@ function formatReport(report: GenerateReport): string[] {
   if (report.iocPath !== "") lines.push(".ioc：" + report.iocPath + "（布局 " + report.layout + "）");
   if (report.durationMs > 0) lines.push("耗时：" + (report.durationMs / 1000).toFixed(1) + " s");
   if (report.skipped) lines.push("本次没有跑 CubeMX：直接复用上次生成结果（产物 hash 全部一致）");
+  if (report.firmwareDir !== "") {
+    lines.push("固件包：" + report.firmwarePackage + "（" + (report.firmwareSource === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") + "）");
+  }
   if (report.thirdparty.detail !== "") lines.push("第三方包索引：" + report.thirdparty.detail);
   if (report.verdict.successLine !== "") lines.push("CubeMX：" + report.verdict.successLine);
   for (const error of report.verdict.errors.slice(0, 5)) lines.push("! " + error);
@@ -152,6 +158,7 @@ function blockedReport(projectDir: string, gate: GateResult): GenerateReport {
     ok: false, projectDir, iocPath: "", layout: "coupled", durationMs: 0, skipped: false,
     cacheKey: "",
     thirdparty: { parked: false, detail: "" },
+    firmwareDir: "", firmwarePackage: "", firmwareSource: "",
     message: gate.message, script: "", command: "", logTail: "", backupDir: "",
     verdict: { ok: false, successLine: "", errors: [], knownNoise: [] },
     files: [], notes: gateReportNotes(gate),

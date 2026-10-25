@@ -16,6 +16,13 @@ import {
   type SearchConfig,
 } from "../data/search-roots.js";
 import { readToolchainConfig, toolchainConfigPath } from "../data/toolchain-config.js";
+import {
+  COMPONENT_INSTALLABILITY,
+  guideLines,
+  guidesFor,
+  type InstallGuide,
+  type Installability,
+} from "../data/install-guides.js";
 import type { DshContext, SubprocessService } from "../types.js";
 import {
   buildTargets,
@@ -57,6 +64,11 @@ export interface GateMissing {
   install: string[];
   /** 装完怎么自检。 */
   verify: string;
+  /**
+   * 怎么装：auto = MSYS2 里 pacman 就能补（插件可代装）；manual = 只能人装（GUI 向导 / ST 账号 / 包管理器）。
+   * 门禁据此决定是"回一句装"还是"给指引"，这两句混着说会让用户以为插件什么都能装。
+   */
+  installability: Installability;
   /** 探测时的错误（诊断用；「宿主没 subprocess」这类信息就落在这里）。 */
   error?: string;
 }
@@ -82,7 +94,17 @@ export interface GateResult {
   detail: string;
   /** 配置/环境变量里点名但本机不存在的目录（只提示，不改配置）。 */
   warnings: string[];
+  /**
+   * 这批缺件整体怎么解决：none = 不缺；auto = 插件能代装；manual = 至少有一项只能人装。
+   * 有 manual 项时不接"回一句装"，否则用户会等一个永远等不到的自动安装。
+   */
+  installability: GateInstallability;
+  /** manual 缺件的安装指引（cubemx 与 cubemx-java 合并成一份；auto 缺件不在这里）。 */
+  guides: InstallGuide[];
 }
+
+/** 缺件整体安装方式：none 不缺 / auto 可代装 / manual 至少一项只能人装。 */
+export type GateInstallability = "none" | "auto" | "manual";
 
 export interface ToolchainGateRequest {
   capability: ToolchainCapability;
@@ -127,6 +149,12 @@ function locateFast(target: ProbeTarget, config: SearchConfig): string | null {
   return null;
 }
 
+/** 组件 → 安装方式；表里没有的按 auto（pacman 能补的居多）。 */
+function installabilityOf(id: string): Installability {
+  const entry = (COMPONENT_INSTALLABILITY as Record<string, Installability>)[id];
+  return entry === undefined ? "auto" : entry;
+}
+
 function toMissing(target: ProbeTarget, probe?: ProbeResult): GateMissing {
   const missing: GateMissing = {
     id: target.id,
@@ -135,6 +163,7 @@ function toMissing(target: ProbeTarget, probe?: ProbeResult): GateMissing {
     impact: target.impact,
     install: target.install,
     verify: target.verify,
+    installability: installabilityOf(target.id),
   };
   const error = probe?.error ?? "";
   if (error !== "") missing.error = error;
@@ -165,11 +194,25 @@ function buildMessage(
       nextStep: "失败原因大概率就是这个；装好再重跑，或把 envCheck 设成 block 先拦住。",
     };
   }
+  const auto = missing.filter((item) => item.installability === "auto");
+  const manual = missing.filter((item) => item.installability === "manual");
+  let nextStep: string;
+  if (manual.length === 0) {
+    nextStep =
+      "要我装吗？回一句「装」，我先跑 stm32_env_install 出计划（只列大小与步骤、不下载），确认后才真装；"
+      + "想自己装就看下面 missing[0].install 的第一条。";
+  } else if (auto.length === 0) {
+    nextStep =
+      "这几项插件不代装（CubeMX 是 GUI 向导 + 要 ST 账号，固件包只由 CubeMX 的包管理器维护）："
+      + "照着 guides[].steps 走，装完把路径写进配置再重跑；离线机器可以整目录拷过来（看 guides[].portable）。";
+  } else {
+    nextStep =
+      "能自动装的（" + joinLabels(auto) + "）回一句「装」，我先出计划（不下载）；"
+      + joinLabels(manual) + " 得你自己装，步骤见 guides[].steps。";
+  }
   return {
     message: "缺 " + names + "，这次没有开始" + label + "：" + effect + "。",
-    nextStep:
-      "要我装吗？回一句「装」，我先跑 stm32_env_install 出计划（只列大小与步骤、不下载），确认后才真装；"
-      + "想自己装就看下面 missing[0].install 的第一条。",
+    nextStep,
   };
 }
 
@@ -182,6 +225,7 @@ function buildDetail(
   configPath: string,
   cacheHit: boolean,
   warnings: readonly string[],
+  guides: readonly InstallGuide[],
 ): string {
   const lines: string[] = [];
   lines.push("能力：" + CAPABILITY_LABEL[capability] + "（" + capability + "），envCheck=" + mode);
@@ -192,9 +236,13 @@ function buildDetail(
     lines.push("结果：缺 " + String(missing.length) + " 项 ——");
     for (const item of missing) {
       lines.push("  · " + item.label + "：" + item.hint);
+      lines.push("    方式：" + (item.installability === "auto" ? "自动（插件可代装：stm32_env_install）" : "手动（插件不代装，按下面的指引）"));
       lines.push("    影响：" + item.impact);
       lines.push("    安装：" + (item.install[0] ?? "（无建议）"));
       lines.push("    自检：" + item.verify);
+    }
+    for (const guide of guides) {
+      for (const line of guideLines(guide)) lines.push(line);
     }
   }
   lines.push("MSYS2 配置：" + (msys64 === "" ? "未配置" : msys64) + "（" + configPath + "）");
@@ -239,6 +287,8 @@ export async function ensureToolchain(
       durationMs: Date.now() - started,
       detail: "envCheck=off：跳过工具链检查。",
       warnings,
+      installability: "none",
+      guides: [],
     };
   }
 
@@ -267,8 +317,10 @@ export async function ensureToolchain(
       configPath,
       cacheHit: false,
       durationMs: Date.now() - started,
-      detail: buildDetail(capability, mode, checked, [], msys64, configPath, false, warnings),
+      detail: buildDetail(capability, mode, checked, [], msys64, configPath, false, warnings, []),
       warnings,
+      installability: "none",
+      guides: [],
     };
   }
 
@@ -322,6 +374,9 @@ export async function ensureToolchain(
     missing.push(toMissing(target, probe));
   }
   const { message, nextStep } = buildMessage(capability, mode, missing);
+  const guides = guidesFor(missing.map((item) => item.id));
+  const installability: GateInstallability =
+    missing.length === 0 ? "none" : missing.some((item) => item.installability === "manual") ? "manual" : "auto";
   return {
     ok: missing.length === 0,
     capability,
@@ -334,8 +389,10 @@ export async function ensureToolchain(
     configPath,
     cacheHit,
     durationMs: Date.now() - started,
-    detail: buildDetail(capability, mode, checked, missing, msys64, configPath, cacheHit, warnings),
+    detail: buildDetail(capability, mode, checked, missing, msys64, configPath, cacheHit, warnings, guides),
     warnings,
+    installability,
+    guides,
   };
 }
 
@@ -350,6 +407,10 @@ export function gateReportNotes(result: GateResult): string[] {
     if (item.install[0] !== undefined) lines.push("  安装：" + item.install[0]);
   }
   if (result.nextStep !== "") lines.push(result.nextStep);
+  // manual 缺件：卡片上就给前两步，够用户判断"这事要不要我自己动手"。
+  for (const guide of result.guides) {
+    for (const line of guideLines(guide, 2)) lines.push(line);
+  }
   for (const warning of result.warnings) lines.push("⚠ " + warning);
   return lines;
 }

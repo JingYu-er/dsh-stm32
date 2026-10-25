@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DSH_FIRMWARE_DIR_NAME } from "../data/firmware-packages.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
 export const DEFAULT_MCU_CUBE_VERSION = "6.15.0";
@@ -113,13 +114,16 @@ function copyTree(from: string, to: string): number {
 export function resolveFirmwareRoot(cubeMxRoots: string[], packageName = DEFAULT_FIRMWARE_PACKAGE): { root?: string; checked: string[] } {
   const checked: string[] = [];
   for (const cubeRoot of cubeMxRoots) {
-    const candidate = path.join(cubeRoot, "Repository", packageName);
-    checked.push(candidate);
-    const drivers = path.join(candidate, "Drivers", "STM32F1xx_HAL_Driver");
-    const cmsis = path.join(candidate, "Drivers", "CMSIS", "Include");
-    const templates = path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates");
-    if (fs.existsSync(drivers) && fs.existsSync(cmsis) && fs.existsSync(path.join(templates, "gcc", "startup_stm32f103xb.s"))) {
-      return { root: candidate, checked };
+    // 官方仓库优先，其次插件自己的 dsh-firmware（与 Repository 并列，见 firmware-packages.ts）。
+    for (const parent of ["Repository", DSH_FIRMWARE_DIR_NAME]) {
+      const candidate = path.join(cubeRoot, parent, packageName);
+      checked.push(candidate);
+      const drivers = path.join(candidate, "Drivers", "STM32F1xx_HAL_Driver");
+      const cmsis = path.join(candidate, "Drivers", "CMSIS", "Include");
+      const templates = path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates");
+      if (fs.existsSync(drivers) && fs.existsSync(cmsis) && fs.existsSync(path.join(templates, "gcc", "startup_stm32f103xb.s"))) {
+        return { root: candidate, checked };
+      }
     }
   }
   return { checked };

@@ -12,7 +12,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 16 个工具、6 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
+这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 19 个工具、6 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
 ## 为什么需要它
 
@@ -68,7 +68,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：170 个离线用例，不需要板子
+npm test                            # 可选：220 个离线用例，不需要板子
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -130,7 +130,8 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 环境体检 | `stm32_env_probe`（只读）、`stm32_doctor`（工具链 + 探针占用 + 端口 + 工程告警） |
 | 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
 | 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
-| 从零建工程 | `stm32_project_create`：模板快照 + 固件包 Drivers，与 CubeMX GUI 新建的工程逐字节一致 |
+| 选技术路线 | `stm32_route_plan`：先按**这个工程**的需求，把每个外设的 HAL 版与寄存器版代价摆出来（效率 / 可读性 / 排错），再告诉你缺的是「能代装的」还是「只能人装的」（CubeMX 是 GUI 向导 + 要 ST 账号、固件包只由 CubeMX 包管理器维护） |
+| 从零建工程 | `stm32_project_create`：`route: "hal"` 用模板快照 + 固件包 Drivers（与 CubeMX GUI 新建的工程逐字节一致）；`route: "register"` 建不用 CubeMX 的寄存器版工程，CMSIS 模板首次从网上下到缓存、之后复用 |
 | `.ioc` 事务 | `stm32_ioc_inspect`（只读解析）→ `stm32_ioc_plan`（算 diff，不写盘）→ `stm32_ioc_apply`（SHA 校验 + 备份 + 回滚） |
 | 只改 USER CODE | `stm32_code_patch`：只写 `/* USER CODE BEGIN X */` 与 `END X` 之间，块外逐字节不动 |
 | 生成代码 | `stm32_generate`：无头 CubeMX + 按 ST 结构落位 + USER CODE 按标签搬回 |
@@ -148,8 +149,11 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | --- | --- |
 | `stm32_env_probe` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
 | `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
+| `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
-| `stm32_project_create` | 空目录 → 完整 CMake 工程（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
+| `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号，CMSIS 头与启动文件从缓存取）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
+| `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
+| `stm32_firmware_install` | 缺固件包时的一条龙：`dryRun`（默认）只出计划——装到哪、下哪两个源码仓、几条自检判据；`dryRun: false` + `confirm: true` 才真下（GitHub 上 HAL 驱动与 CMSIS 设备支持两个源码包 + 内核头，合计约 2 MB），组装成与官方同构的 `STM32Cube_FW_<族>_V<版本>` 包（自写 `package.xml`）并过五条自检。已有官方包时什么都不做；默认装到 `<CubeMX 根>/dsh-firmware`（不是 `Repository`——塞自造版本号会被 CubeMX 静默忽略），生成时由 `stm32_generate` 用 `setCustomFWPath` 指过去 |
 
 ### .ioc：只读与事务
 
@@ -224,6 +228,27 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 **内置默认值里没有任何"某台机器专属"的路径**：只有 `C:/msys64/...` 与 `C:/Program Files/...` 这种 Windows 默认安装位置，装在别处靠自动发现兜底。配置或环境变量里点名的目录如果在本机不存在（典型情况：配置是从别的机器拷过来的，带着 `D:/app/msys64` 这种路径），门禁与 `stm32_env_probe` 会明确写一句「配置文件里的 X 在本机不存在……这一条搜不到工具」，而**不会**悄悄改你的配置；安装器也不会拿这种路径当安装目标（盘符都没有时只提示、并要求你给 `targetDir`）。
 
+### 下载缓存（寄存器版模板）
+
+寄存器版工程要的 CMSIS 设备头、启动文件、内核头**不预置进插件**（要覆盖任意 STM32，每颗都打一份会让包大到不可用），而是第一次用时从网上下载，落到一个可检索的缓存目录，之后一直复用：
+
+- 位置：`DSH_STM32_CACHE`（支持 `~`）> `%LOCALAPPDATA%\dsh-stm32\cache`；
+- 索引：缓存根下 `index.json` 记录每条源 URL、字节数、许可（`THIRD_PARTY_NOTICES.md` 随条目一起写）；
+- 下载源：按 `fastly.jsdelivr` → `cdn.jsdelivr` → `raw.githubusercontent` → `ghproxy` 的顺序回退，HTTP 错误 / 内容像网页 / 字节数明显不对都算该源失败；
+- 半截缓存会被整条删掉（比没有缓存更糟）；条目文件缺失或大小对不上时下次自动重下；
+- 看得见、清得掉：`stm32_cache` 的 `list` / `verify` / `fetch` / `purge`。
+
+### 固件包下载（HAL 路线）
+
+CubeMX 装好也不一定有**这一颗芯片**的固件包（安装包里不带，得在包管理器里另装）。插件能代下的那一代，`stm32_firmware_install` 会从 GitHub 拉两个源码包组装出来：
+
+- 下什么：`stm32f1xx-hal-driver`（HAL 驱动，BSD-3-Clause）+ `cmsis-device-f1`（设备头与启动文件，Apache-2.0）+ 5 个 CMSIS 内核头，合计约 2 MB、几秒钟；
+- 为什么不能直接解压 `STM32CubeF1` 的源码包：它的 HAL 与 CMSIS 设备目录是 **git 子模块**，tarball 里是空目录——解压出来编译必挂（缺 startup、缺 HAL 源文件）；
+- 装到哪：默认 `<CubeMX 根>/dsh-firmware/<包名>`（与 `Repository` 并列、插件自建，不动官方包）；这个根写不进去才退回用户缓存目录。**别往 `Repository` 里塞自造版本号**——实测 CubeMX 认不出那个版本名，不报错地退回它自己认识的包（生成「成功」，HAL 却是旧版）；
+- 生成时怎么用上它：`stm32_generate` 按 `.ioc` 的 `ProjectManager.FirmwarePackage` 找包（`Repository` 与 `<CubeMX 根>/dsh-firmware` 都找），并在 CubeMX 脚本里发 `project setCustomFWPath <包目录>`——这是唯一被实测有效的机制，不往 `.ioc` 里写绝对路径；
+- 组装包与官方包同构：自写 6 行 `package.xml`（版本串 `FW.<族>.<x.y.z>`）与 `THIRD_PARTY_NOTICES.md`，**不含任何哈希/清单**——CubeMX 也不校验来源（已实测：用 `setCustomFWPath` 指过去生成，拷出的 HAL 源文件逐字节来自我们目录）；
+- 但「生成成功」不能当验收：`.ioc` 点名了不存在的包时 CubeMX 不报错、退出码 0、只是不拷 HAL。所以装完必须过五条判据（内核头 / HAL Inc / HAL Src / 设备头 / `startup_*.s`），插件装完自己就验一遍。
+
 ### 环境变量（可选）
 
 | 变量 | 作用 | 默认 |
@@ -233,6 +258,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `STM32_NO_DISCOVER` | 设为 `1` / `true` 关掉下面的自动发现（CI、只想用内置列表时） | 不设 = 开着 |
 | `DSH_STM32_CONFIG` | 换一个配置文件路径（多份工具链 / 多工程隔离） | `%USERPROFILE%\.dsh-stm32\config.json` |
 | `DSH_STM32_NO_CONFIG` | 设为 `1` / `true` 完全不读配置文件（只想走环境变量时） | 不设 = 读 |
+| `DSH_STM32_CACHE` | 下载缓存根目录（寄存器版模板等），支持 `~` | `%LOCALAPPDATA%\dsh-stm32\cache` |
 | `DSH_STM32_E2E_PROJECT` | 真机 e2e 用的工程（含 `openocd.cfg` 与 `build/Debug/*.elf`） | 无 |
 | `DSH_STM32_E2E_ROOT` | e2e 临时副本目录 | 系统临时目录 |
 
@@ -301,12 +327,12 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 17 个离线套件、170 个用例；不需要板子、CubeMX、工具链
+npm test                 # 20 个离线套件、220 个用例；不需要板子、CubeMX、工具链
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **168 pass + 2 skipped**，开发机上是 170 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **218 pass + 2 skipped**，开发机上是 220 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 
@@ -322,7 +348,7 @@ node test\e2e-flash.mjs
 ```text
 src/
   index.ts                 插件入口（name / inject / apply）
-  tools/                   16 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
+  tools/                   19 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
   engine/                  纯逻辑与工作流（generate / build / flash / debug / ioc / scaffold …）
   commands/register.ts     6 条斜杠命令
   skill/stm32-workflow.ts  随插件下发的 SKILL

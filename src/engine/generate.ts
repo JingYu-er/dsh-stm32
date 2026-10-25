@@ -13,6 +13,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
+import { firmwareNeedFromIoc, locateFirmwarePackage } from "../data/firmware-packages.js";
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { buildGenerateScript, parseGenerateLog } from "./generate-script.js";
@@ -78,6 +79,12 @@ export interface GenerateReport {
   cacheKey: string;
   /** 第三方包索引处理情况。 */
   thirdparty: { parked: boolean; detail: string };
+  /** 本次让 CubeMX 用的固件包目录（空的 = 没找到，没发 setCustomFWPath）。 */
+  firmwareDir: string;
+  /** 本次用的固件包名（STM32Cube_FW_F1_V1.8.7）。 */
+  firmwarePackage: string;
+  /** 那份包在哪：repository（官方仓库）/ dsh-firmware（插件组装）/ 空串。 */
+  firmwareSource: "repository" | "dsh-firmware" | "";
   /** CubeMX 日志结论。 */
   verdict: GenerateVerdict;
   /** 生成脚本全文（便于复现）。 */
@@ -109,6 +116,9 @@ function fail(request: GenerateRequest, message: string, extra: Partial<Generate
     skipped: false,
     cacheKey: "",
     thirdparty: { parked: false, detail: "" },
+    firmwareDir: "",
+    firmwarePackage: "",
+    firmwareSource: "",
     verdict: { ok: false, successLine: "", errors: [], knownNoise: [] },
     script: "",
     command: "",
@@ -348,6 +358,9 @@ export async function runGenerate(
     );
   }
   const iocText = readFileSync(iocPath, "utf8");
+  // 先认 .ioc 要哪个固件包，再在 CubeMX 根下找它（官方 Repository 与插件的 dsh-firmware 都找）。
+  // 找到就通过脚本命令 setCustomFWPath 明确指过去：CubeMX 不认目录名时只会静默用别的版本（docs §14）。
+  const firmware = locateFirmwarePackage(config.cubeMxRoots, firmwareNeedFromIoc(iocText));
   const cacheKey = cacheKeyFor(iocText, launch.java, launch.jar, layout);
   const stateDir = join(projectDir, STATE_DIR);
   const enteredAt = Date.now();
@@ -367,6 +380,9 @@ export async function runGenerate(
         skipped: true,
         cacheKey: cacheKey.key,
         thirdparty: { parked: false, detail: "未探测（本次跳过 CubeMX）" },
+        firmwareDir: firmware.dir,
+        firmwarePackage: firmware.packageName,
+        firmwareSource: firmware.source,
         verdict: { ok: true, successLine: "（跳过 CubeMX：复用上次生成结果）", errors: [], knownNoise: [] },
         script: "",
         command: "",
@@ -386,6 +402,7 @@ export async function runGenerate(
           " 的生成结果，耗时 0 s）",
         notes: [
           "想强制重新生成就传 skipIfUnchanged=false（会再跑一次 CubeMX，3–4 分钟）。",
+          "生成缓存只认 .ioc / CubeMX 版本 / 布局：换了固件包内容（例如重下同一个包）也要传 skipIfUnchanged=false。",
           "缓存文件：.dsh-stm32/" + "generate-cache.json" + "；删掉它等效于强制重跑。",
         ],
         logTail: "",
@@ -430,13 +447,30 @@ export async function runGenerate(
   const tmpDir = join(stateDir, "tmp");
   mkdirSync(tmpDir, { recursive: true });
   const scriptPath = join(tmpDir, "gen-" + stamp + ".txt");
-  const script = buildGenerateScript(iocPath.replace(/\\/g, "/"), projectDir.replace(/\\/g, "/"), layout);
+  const script = buildGenerateScript(iocPath.replace(/\\/g, "/"), projectDir.replace(/\\/g, "/"), layout, firmware.dir);
   writeFileSync(scriptPath, script, "utf8");
   const argv = [launch.java, "-jar", launch.jar, "-q", scriptPath];
   const command = argv.map((part) => (part.includes(" ") ? '"' + part + '"' : part)).join(" ");
   const startedAt = Date.now();
   if (skipMiss !== "") progress("未跳过 CubeMX：" + skipMiss);
   progress("使用布局：" + (layout === "coupled" ? "coupled（外设初始化并入 main.c）" : "per-ip（每外设一对 .c/.h）"));
+  if (firmware.found) {
+    progress(
+      "固件包：" +
+        firmware.packageName +
+        "（" +
+        (firmware.source === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") +
+        "）→ 脚本里用 setCustomFWPath 明确指过去",
+    );
+  } else {
+    progress(
+      "固件包：没找到 " +
+        (firmware.packageName === "" ? "任何一个固件包" : firmware.packageName) +
+        "（找过 " +
+        firmware.checked.join("、") +
+        "）；脚本里不发 setCustomFWPath，CubeMX 会自己挑一个版本",
+    );
+  }
   progress("脚本：" + scriptPath);
   progress("命令：" + command);
 
@@ -471,6 +505,14 @@ export async function runGenerate(
   const failureNotes: string[] = [];
   if (thirdparty.detail !== "") failureNotes.push("第三方包索引：" + thirdparty.detail);
   failureNotes.push(...parkNotes);
+  if (!firmware.found) {
+    failureNotes.push(
+      "没找到 .ioc 要的固件包（找过 " +
+        firmware.checked.join("、") +
+        "）：CubeMX 会退回它自己认识的版本，生成出来的 Drivers 可能不是你期望的那份；可以用 stm32_firmware_install 装到 <CubeMX>/" +
+        "dsh-firmware 下。",
+    );
+  }
   const baseReport = {
     projectDir,
     iocPath,
@@ -479,6 +521,9 @@ export async function runGenerate(
     skipped: false,
     cacheKey: cacheKey.key,
     thirdparty,
+    firmwareDir: firmware.dir,
+    firmwarePackage: firmware.packageName,
+    firmwareSource: firmware.source,
     verdict,
     notes: failureNotes,
     script,
@@ -518,6 +563,15 @@ export async function runGenerate(
     notes.push("CubeMX 噪音 " + String(verdict.knownNoise.length) + " 条（与本芯片无关，已忽略）");
   }
   if (request.dryRun !== true) notes.push(...cleanupGenerated(projectDir, generated));
+  if (firmware.found) {
+    notes.push(
+      "本次指定固件包：" +
+        firmware.dir +
+        "（来源：" +
+        (firmware.source === "repository" ? "CubeMX 仓库" : "插件的 dsh-firmware 目录") +
+        "）- 脚本里用 project setCustomFWPath 传的，不写进 .ioc。",
+    );
+  }
   if (thirdparty.detail !== "") notes.push("第三方包索引：" + thirdparty.detail);
   notes.push(...parkNotes);
   if (request.dryRun !== true) {

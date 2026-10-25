@@ -1,6 +1,6 @@
 # 开发笔记（原 README）
 
-> 这是 0.1.0 发布前的开发记录：里程碑、宿主契约踩坑、16 个工具的实现细节、A1–A13 验收与宿主侧复验。
+> 这是 0.1.0 发布前的开发记录：里程碑、宿主契约踩坑、19 个工具的实现细节、A1–A13 验收与宿主侧复验。
 > 面向使用者的说明已移到仓库根目录的 [README.md](../README.md)。
 # dsh-stm32
 
@@ -339,7 +339,7 @@ node test\flash-units.test.mjs    # 6 个烧录用例：openocd 命令拼装 / �
 node test\doctor-regs-units.mjs   # 5 个用例：tasklist 解析 / 地址归一化 / regs 的 Tcl 脚本 / openocd 真实日志格式
 node test\ioc-plan-units.test.mjs  # 9 个事务用例：plan 不写源文件 / apply 核 SHA / 引脚校验 / rollback
 node test\session-units.test.mjs  # 8 个会话用例：租约、续租、超时自动关、重复 start、无会话时 eval
-node test\schema-guard.mjs        # 16 个工具的输出契约守卫（未声明键 / null / 类型），离线复刻宿主校验
+node test\schema-guard.mjs        # 17 个工具的输出契约守卫（未声明键 / null / 类型），离线复刻宿主校验
 node test\e2e-generate.mjs D:\tmp\copy-of-demo   # 真调 CubeMX（2–4 分钟），在副本上验证落位与 USER CODE 保活
 node test\e2e-build.mjs          # 真编译 demo（clean，约 1 分钟）
 node test\e2e-flash.mjs          # 真烧录 demo（会写板子）
@@ -1298,4 +1298,120 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
   6. **计划文案与实际执行对齐**：pacman 步原本预告的是 `bash.exe -lc "pacman -Sy --noconfirm && pacman -S …"`——真跑已经不是这条了。改成「先 `pacman -Q <5 个包>` 问一遍装没装，已装的直接跳过（不重复安装、也不升级…）；只对缺的包跑 `pacman -S --noconfirm --needed <缺的包>`；整机一件都没有时才先 `pacman -Sy` 同步一次」。用户是先看计划再决定装不装，计划里的命令必须就是会跑的命令。
 - **验证**：`test/install-units.test.mjs` 6 例（假 `spawn`，按命令内容回答）；修完后再真机跑一次 `stm32_env_install({dryRun:false, confirm:true})`（job `stm32-env-install-7d8c8295473445d7`）：卡片首行「已在后台安装 MSYS2 到 D:/app/msys64（来源：配置里的 msys64）：7 步依次跑，进度看 job 输出。」，job 状态 **completed**，pacman 步 `[--]` 跳过（detail 列出 5 个包与版本）、PATH 步「已经有 D:\app\msys64\ucrt64\bin，没有重复写」、自检 5/5、config 写入，结尾「现在可以编译 / 烧录 / 调试」；再用真 `subprocess` 在本机复跑一次（临时脚本、`DSH_STM32_CONFIG` 指临时文件、`writePath: false`）：pacman 步 `skipped`、detail 列出 5 个包与版本、`ok` true、`verify.ok` true，**全程没有第二条 `pacman -S`**。
 - **教训**：安装器对"已经装好一部分"的机器最危险——很容易把"再确认一次"写成"再动一遍手"。凡是 pacman / apt / npm install 这类命令，先查状态再决定执行，且默认永不隐式升级。
+
+### 12. 动手前先选路线：installability 分流 + `stm32_route_plan`
+
+- **问题**（用户 2026-10-24 在阿里云 Windows 服务器上实测 0.1.1 时提出）：插件默认只会「缺什么就想着装什么」。但缺件其实分两类——一类是 pacman 装得上的（gcc / cmake / ninja / openocd / gdb），另一类**根本装不了**：CubeMX 是 InstallAnywhere GUI 向导（没有官方静默参数、要 ST 账号并同意许可、装完约 1.5 GB），固件包不在安装包里且在 CubeMX 之外没有任何权威来源。旧门禁对这两类说同一句话「回一句「装」，我先跑 stm32_env_install 出计划」，用户照做只会拿到一个必然失败的 job。用户的原话要求是三条：必须用 CubeMX 的程序要有引导安装步骤；HAL 与寄存器都能做的程序要把两版的效率/可读性评估给他选；选了 HAL 又缺 CubeMX 就要引导他自己装。
+- **取证（为什么固件包不能靠 GitHub 下载代替）**：`STMicroelectronics/STM32CubeF1` 有 `v1.8.7` tag，但仓库挂 22 个 git 子模块，编译必需的 `Drivers/CMSIS/Device/ST/STM32F1xx` 与 `Drivers/STM32F1xx_HAL_Driver` 都是子模块——**tarball / zip 里是空目录**。本机官方包顶层的 `package.xml` 只有 7 行（`DBVersion="2.0"` + `Release="FW.F1.1.8.0"` + `Patch="FW.F1.1.8.7"`），需要自造；而 CubeMX 认不认这种手工组装的包**尚未验证**（要往真实 `Repository` 放一次再 `-q` 生成才算数，属于会动用户安装目录的操作，等授权）。所以本期只做「说清楚 + 指路」，不做自动组装。
+- **路由判断为什么必须绑工程**：同一个外设在不同工程里代价完全不同——USART 轮询 20 行，USART + DMA + 空闲中断收不定长帧就是另一回事。所以 `stm32_route_plan` 的 `requirement` 是必填项，不提供「通用 HAL vs 寄存器对照表」；给不出结论时宁可 `unclear` 也不瞎猜。
+- **实现**（三块，互不依赖）：
+  1. `src/data/install-guides.ts`：`COMPONENT_INSTALLABILITY`（前五个 `auto`，`cubemx` / `cubemx-java` / `firmware` 是 `manual`）+ `cubeMxGuide()` / `firmwareGuide({family,packageName,repositoryDir})`（字段化步骤：标题、说明、可粘贴命令、自检、`portable` 的「整目录拷过去免重装」）+ `guidesFor(components)`（`cubemx` 与 `cubemx-java` 合成一份）。
+  2. `src/engine/toolchain-gate.ts`：`GateResult` 增 `installability: "none" | "auto" | "manual"` 与 `guides: InstallGuide[]`；`GateMissing` 每条也带 `installability`。block 档的 `nextStep` 按缺件成分分流：全 auto → 原文案「回一句「装」」；全 manual → 「插件不代装，照着 guides[].steps 走」；混合 → 两句话分开说，并把「能自动装的是哪几个」点名。`buildDetail` 每条缺件多一行「方式：自动（插件可代装）/ 手动（插件不代装，按下面的指引）」，`gateReportNotes` 在放行时也贴前两步——**用户往往是在"编译成功但可能有坑"的那一刻才需要这条指引**。
+  3. `src/tools/route-plan.ts` + `src/engine/route-plan.ts`：`PERIPHERAL_RULES` 28 条规则（`family` + `rank` 同族只留最具体的一条：说「串口中断」就不再单列「串口轮询」），每条给 HAL 与寄存器两套 `{effort, risk, setup}`（1 最省 → 5 最费），寄存器为 `null` 的是协议栈级外设（CAN / USB / ETH / SD / FSMC / 低功耗 / RTOS），`regGap` 写清「为什么没有寄存器版」。判定：`reg.effort<=2 && reg.risk<=2` 才建议寄存器，否则建议 HAL；有 `hal-required` 就 `hal-only`，全 `register` 就 `register-ok`，其余 `both-viable`。工具把门禁的 `capability` 也跟着路线走：`register-ok` 查 `build`（gcc/cmake/ninja），否则查 `generate`（CubeMX + JRE），再叠一层 `findFirmwarePackage`（三条判据与 `scaffold.ts:113-126` 保持一致，同族多版本取字典序最大，只有半成品时 `incomplete: true` 并提示「多半是只解压了 GitHub 源码包」）。
+- **踩坑**：`matchText` 最初只把来源记成 `"requirement"`，`iocPeripherals` 分支又拿外设名去查规则 id，导致 `matchedBy` 永远没有 `"ioc"`（单测直接红）。改成 `matchText(text, into, source)` 三参数后，来源才如实反映「这句话是需求里说的还是 .ioc 里已使能的」。另一条：写中文文案时用 ASCII 双引号当引号会把 TS 字符串写断（tsc 一片 `TS1005`/`TS1127`），全项目统一用「」。
+- **验证**：`test/route-plan-units.test.mjs` 15 例（四条 verdict 判定、同族去重、`unknown` 提示、`.ioc` 证据、`familyOf`、固件包完整/半成品/无 Repository 三种、门禁 manual 与 auto 两档文案、`guidesFor` 合并规则）；`test/schema-guard.mjs` 20 → 21（`stm32_route_plan` 缺 `requirement` 的早退形状 + 正常评估形状，`envCheck: "off"` 保证不 spawn）。套件 17 → 18，用例 170 → **186 pass / 0 fail**（CI 上 184 + 2 skipped）。
+- **顺手补的三处**：① `.ioc` 里的 `NVIC` / `RCC` / `SYS` 是 CubeMX 的虚拟系统条目，原先被当成"已使能外设的证据"，于是正文写「已把 3 个外设算作证据」而表里只有 2 行——现在按 `VIRTUAL_IOC_IPS` 过滤掉；② 随插件下发的 SKILL 顶部加了「〇、先定路线」，把手写代码前先跑 `stm32_route_plan` 写成工作流第一步，否则模型会直接闷头写代码，评估工具的结论永远用不上；③ 固件包指引的 `sizeHint` 原先把「F1 一代约 293 MB」写死，真机上给 H7 看照样这么讲——现在按系列查 `FIRMWARE_SIZE_HINTS`（2026-10 在 `D:\app\STM32CubeMX\Repository` 直接量的：F1 v1.8.7 = 293.4 MB / 10,778 文件、G4 v1.6.2 = 471.3 MB / 23,089、F4 v1.28.3 = 1,674.0 MB / 43,397、L0 v1.12.4 = 258.4 MB / 17,504、C0 v1.4.1 = 380.6 MB / 21,535），没实测过的系列给 250 MB – 1.7 GB 区间而不是编数字；`cubeMxGuide()` 里的「F1 约 293 MB」也一并去掉。
+- **还没验证的**：CubeMX 是否接受手工组装的 `Repository` 包（见上）；`stm32_route_plan` 在真机上还没跟着一条真实工程走过完整流程；寄存器模板当时仍未落地（用户 2026-10-24 决定：**不预置进插件目录**，改为首次从 GitHub 拉到可检索的缓存目录，之后复用——已由 §13 落地）。
+
+### 13. 缓存目录 + 下载器 + 寄存器版模板
+
+- **要求（用户 2026-10-24）**：「寄存器版本文件不能提前放进插件目录，因为后续要拓展至任意 stm32 单片机，不可能每一个都放进插件，可以设置一个缓存目录，每次从网上下载下来模板啊什么的，都放到一个可检索的目录里，这样就只第一次需要下载，后面就复用缓存区模板了。」——所以本期三块：可检索缓存、下载器、寄存器版脚手架，**模板一个字节都不进插件包**。
+- **取证一（下载源，本机实测 `curl.exe`）**：`raw.githubusercontent.com/.../stm32f1xx.h` **超时（curl 28）不可用**；`github.com` 206、`api.github.com` 206、`codeload.github.com/.../tar.gz` 200 / 1,086,613 B / 2.8 s；`fastly.jsdelivr.net/gh/...` 206 / 0.94 s；`ghproxy.net/https://raw.githubusercontent.com/...` 206 / 1.9 s。于是 `sourceUrls()` 固定四候选顺序：jsDelivr fastly → jsDelivr cdn → raw.githubusercontent → ghproxy。逐文件用 jsDelivr 核过 10 个文件全 200（`core_cm3.h` 109,913 B、`stm32f103xb.h` 842,883 B、`startup_stm32f103xb.s` 9,725 B 等）。
+- **取证二（ST 上游到底有哪几套文件，直接决定模板清单）**：F1 只有三套，`x8` / `xC` / `xD` 三种写法在 Include 与 startup 目录**全是 404**：`Include/{stm32f103x6.h 832,603 B, stm32f103xb.h 842,883 B, stm32f103xe.h 962,263 B}`、`Source/Templates/gcc/{startup_stm32f103x6.s 9,272 B, startup_stm32f103xb.s 9,725 B, startup_stm32f103xe.s 12,022 B}`。中等容量（C8/CB）归 `xB` 那一组。`F1_STARTUP_BY_DENSITY` 因此是 `{6:x6, 8:xb, B:xb, C/D/E:xe}`，每条直接带 `{startup, define, header}` 三元组，不再拼串。
+- **实现（六个文件）**：
+  1. `src/engine/cache.ts`：缓存根 `DSH_STM32_CACHE`（支持 `~` 展开）> `%LOCALAPPDATA%\dsh-stm32\cache` > `%USERPROFILE%\AppData\Local\...` > `os.tmpdir()/dsh-stm32-cache`；`index.json` 可检索（`CacheEntry{id,kind,family,label,root,createdAt,totalBytes,files,sources,license}`）；`writeCacheIndex` 走 `.tmp` + rename 原子替换；坏 JSON **不抛**——返回空索引 + 一句中文错误（缓存是加速手段，坏了就当没缓存）。
+  2. `src/engine/fetch.ts`：`fetchOne(target, destRoot, {fetchImpl, timeoutMs, signal})` 按 `urls` 顺序试，HTTP 非 2xx / 字节数 < `minBytes`（默认 16）/ 内容前 512 字节像 HTML 都记为该源失败并进 `attempts`；成功走 `.part-<pid>` + rename，不留半截文件；`fetchAll` 并发 3、`onProgress(outcome, done, total)`。**只用全局 `fetch`，零运行时依赖**，测试注入 `fetchImpl`。
+  3. `src/data/cmsis-sources.ts`：`CMSIS_FAMILIES` 目前只有 F1（`cmsis-device-f1@master` + `STM32CubeF1@master` 的 CMSIS Core 头 + `core_cm3.h`）；`startupChoiceFor(mcu)` 认 `STM32F103C8T6` 与 `F1:B` 两种写法，**认不出返回 null**（宁可说"这版不支持"，也不编一个文件名）；`cmsisTemplatePlan(choice)` 产出 10 个 `FetchTarget`，落盘路径按 ST 固件包布局（`Drivers/CMSIS/Device/ST/STM32F1xx/...`、`Drivers/CMSIS/Include/...`），每项带自己的 `minBytes`（头 200、`stm32f103xb.h` 10,000、startup 500…）。
+  4. `src/engine/register-template.ts`：`ensureCmsisTemplate()` 查缓存 → `checkCacheEntry` 全好即 `cacheHit` → 否则 `fetchAll` → 写 `THIRD_PARTY_NOTICES.md`（Apache-2.0 + 两个 ST 仓库地址 + 「本目录是下载缓存，不是插件源码」）→ `upsertCacheEntry`。下载失败时**把整条缓存条目删掉**（半截缓存比没有缓存更糟）。`createRegisterProject()` 复用 `templates/scaffold` 的四个公共文件（`CMakePresets.json`、`.gitignore`、`STM32F103XX_FLASH.ld`、`cmake/gcc-arm-none-eabi.cmake`），CMSIS 从缓存 `cpSync` 整棵 `Drivers`。
+  5. `templates/register/{CMakeLists.txt,Core/Src/main.c}`：`CMakeLists.txt` 只四个占位（`__PROJECT_NAME__` / `__FAMILY_DIR__` / `__STARTUP_FILE__` / `__DEVICE_DEFINE__`）；`main.c` 是纯 CMSIS 的 PC13 翻转 + `g_led_blink_count` 计数，`delay_ms` 用 `SysTick->LOAD/VAL/CTRL` + `COUNTFLAG` 轮询，**一个 HAL 符号都没有**。
+  6. `src/tools/cache.ts`（`stm32_cache`，`action: list|verify|fetch|purge`）+ `stm32_project_create` 增 `route: "hal" | "register"`（门禁按路线分流：寄存器版查 `build`、HAL 查 `generate`）。
+- **两个真 bug（都是 e2e 首次运行才暴露的）**：
+  1. **容量档拼串**：第一版把 C8 拼成 `stm32f103x8.s` / `stm32f1038.h`，四个源全 404。修法见上「取证二」。顺带在下载失败分支加了判断：所有 `attempts` 都是 `HTTP 404` 时提示「上游就是 404，多半是模板清单写错了（插件 bug）」，别让用户去换网络。
+  2. **`system_stm32f1xx.c` 路径错**：`CMakeLists.txt` 里引用 `Core/Src/system_stm32f1xx.c`（那是 CubeMX 生成工程的布局），缓存里的模板在 `Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/system_stm32f1xx.c`，配置阶段直接 `Cannot find source file` + `No SOURCES given to target`。改成直接引用 `Drivers` 路径。
+- **决策与理由**：
+  - **只比字节数、不比 sha256**：文件来自 GitHub 的 tag/branch，四个源同一份内容；sha256 对每个文件要多读一遍盘，而缓存损坏的典型形态就是"截断/缺失"——字节数足够抓住这两种。真要验完整性，`stm32_cache verify` 报告的 `missing` / `changed` 已经能让人一眼看出问题。
+  - **不照抄 `templates/scaffold/.vscode`**：那份 `launch.json` 里 `svdPath` 是 `D:/JingYu/STM32/...`、`armToolchainPath` / `gdbPath` 是 `D:/app/msys64/ucrt64/bin`（§10 同一类毛病）。寄存器版工程跑在**别人的机器**上，宁可没有 `.vscode` 也不能带着我的路径。
+  - **半截缓存整条删**：缓存命中判据是"文件都在且大小对"，半截条目会让后续每次 `checkCacheEntry` 都判不命中却又不重下，变成永久坏状态。
+- **e2e 实测**：首次 `createRegisterProject` → 1,221 ms、10 个文件下载成功、`templateFiles: 6`、`driverFiles: 10`；紧接着 `cmake --preset Debug` + `cmake --build --preset Debug` → 4 步构建，`reg.elf` 431,076 B，**FLASH 760 B / 64 KB（1.16%）、RAM 1,576 B / 20 KB（7.70%）**；第二次调用 `cacheHit: true`、153 ms，注入的 `neverFetch` 一次都没被调用。
+- **一次事故（值得单独记）**：用 PowerShell `Add-Content` 往 `test/schema-guard.mjs` 追加中文用例。Windows PowerShell 5.1 的 `Add-Content` 默认按 ANSI(936) 编码写，把一个 UTF-8 文件写成了混合编码，`tools.read` 直接 `invalid UTF-8 text`；随后"用 GBK 读回来再写 UTF-8"的补救把原本正常的整片中文变成不可逆 mojibake。恢复手段是**不碰 git 命令**（git 由用户全权负责）：用 Node + `zlib` 直接读 `.git` 对象库（`HEAD` → commit → tree → 逐层解析 `mode SP name NUL 20-byte sha`）把已提交版本 inflate 回来，再补未提交的改动。**落盘规范**：仓库里的中文文件只走 `write` / `edit` 工具，禁止 `Add-Content` / `Set-Content` / `Out-File` / `>` 写文本。
+- **验证**：新增 `test/cache-units.test.mjs` 10 例（缓存根四种来源与 `~` 展开、坏 JSON、`upsert` 幂等 + `checkCacheEntry` 缺文件/大小不符、`fetchOne` 首源 404 回退次源、网页/过短不算成功、`fetchAll` 并发统计、`startupChoiceFor` 六种写法、`cmsisTemplatePlan` 10 文件与四候选、离线明说 `not-cached`、下载后命中且删文件会重下、`createRegisterProject` 产物齐全 + G431 被拒）；`schema-guard` 20 → 22（`stm32_route_plan` 与 `stm32_cache`）；套件 18 → 19，用例 186 → **197 pass / 0 fail**（CI 上 195 + 2 skipped）。
+- **还没验证的**：
+  - `stm32_cache` 与 `stm32_project_create route:"register"` 在真宿主里还没跑过（本段只做了工具级 e2e，用的假 ctx）；宿主加载新 `lib/` 需要重启。
+  - 只有 F1 在 `CMSIS_FAMILIES` 里。G4/H7 等系列缺的不是"下哪个文件"的想象力，而是**上游真实文件名**——F1 这次就因为 `x8`/`xC`/`xD` 猜错而四个源全 404，别的系列必须同样先 `curl` 核一遍再补表。
+  - 固件包（`STM32Cube_FW_*`）当时只报告、不下载：`package.xml` 要自造，CubeMX 认不认这种手工组装的 `Repository` 包尚未实测——这一点已在 §14 实测并落地。
+
+### 14. 固件包下载器（`stm32_firmware_install`）
+
+- **要解决的问题**：CubeMX 装好不等于有**这一颗芯片**的固件包。安装包本身不带固件包，`<CubeMX 根>/Repository/` 是空的，用户得在包管理器里另下 200–300 MB；离线或慢网机器上这一步经常卡住整条 HAL 路线。
+- **先定性地问一句「CubeMX 认不认手工组装的包」**（这决定了下载器值不值得做）。取证：
+  - UM1718（`pdftotext -layout` 抽文本）里固件仓库是**单一**路径（Help → Updater settings），没有多目录列表；但脚本命令 `project setCustomFWPath` 可以让**单个工程**指向任意目录（`.ioc` 键 `CustomFwLocation`）。
+  - 真包 `package.xml` 只有 257 B：`<Package DBVersion="2.0"><PackDescription Release="FW.F1.1.8.0" Patch="FW.F1.1.8.7">…</PackDescription></Package>`，顶层再没有任何 manifest / 哈希 / 与下载源绑定的文件。
+  - 对照实验：同一个 `.ioc`、同一套脚本，A 组 `setCustomFWPath` 指向真包、B 组指向自造的同构包（`Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c` 末尾塞了注释标记）。两组都生成成功，B 组生成的工程里那条标记**命中**（A 组不命中）→ **CubeMX 认我们组装的包，内容逐字节来自我们目录**。
+  - 顺带挖到一个危险行为：把 `.ioc` 的 `ProjectManager.FirmwarePackage` 改成不存在的包名，CubeMX **不报错**、退出码 0、照样打印 `Code succesfully generated`，只是**不拷 HAL**（只出 Inc/Src）。所以生成成功不能当验收，必须按判据自查——这也正是 `src/engine/scaffold.ts` 的 `resolveFirmwareRoot()` 一直在做的事。
+- **为什么不能直接解 `STM32CubeF1` 的 tarball**：主仓挂 22 个 git 子模块，`Drivers/CMSIS/Device/ST/STM32F1xx` 与 `Drivers/STM32F1xx_HAL_Driver` 在 zip/tar 里是**空目录**，解出来编译必挂。所以下载器改为拉两个独立源仓（`stm32f1xx-hal-driver`、`cmsis-device-f1`）加 5 个 CMSIS 内核头，自己摆成固件包布局。
+- **取证（体积与源）**：codeload 的 `stm32f1xx-hal-driver` 818,831 B（顶层 `Inc/` 与 `Src/`）、`cmsis-device-f1` 1,086,613 B（顶层 `Include/` 与 `Source/`），加 5 个内核头，一个包约 2 MB——秒级，不需要断点续传。codeload 的 HEAD 不回 `content-length`（chunked），所以计划模式只能给约 2 MB 的估值，真实字节数装完才知道。仓库名要用规范写法 `stm32f1xx-hal-driver`（下划线旧名会 302）。
+- **实现（四个文件）**：
+  1. `src/engine/tar.ts`：自写 tar.gz 解包（`extractTarGz`），支持常规文件、目录、ustar `prefix`、pax `x`（取 `path=` 与 `size=`）、GNU 长名 `L`；符号链接与设备文件只计数跳过。**两遍**：先把所有条目校验完（拒绝绝对路径、盘符、含 `..`），全部通过才建目录写文件——第一版边解析边写，踩到 `../escape.txt` 时前面的文件已经落盘，调用方会看到一个看起来解完了的假目录。另有 `maxBytes`（默认 512 MiB）防炸弹。不依赖机器上有没有 `tar`。
+  2. `src/data/firmware-packages.ts`：`FIRMWARE_FAMILIES.F1`（包前缀、版本、HAL 目录、设备目录、内核头清单、两个源码归档的 `mapPath` 规则）；`archiveUrls()` 三候选 `codeload` → `ghproxy` → `api.github.com`；`firmwareVersionTags()` 按 `FW.<族>.<x.y.z>` 规则给 `{release: FW.F1.1.8.0, patch: FW.F1.1.8.7}`；`packageXmlText()` 生成与官方同构的 6 行；`verifyFirmwarePackage()` 五项判据（内核头 5 个、HAL Inc 非空、HAL Src 非空、设备 Include 非空、`Source/Templates/gcc` 有 `startup_*.s`）。未接入的族在联网前就返回「插件还不会给 X 自动组装固件包（目前只会：F1）」。
+  3. `src/engine/firmware-install.ts`：`decideTarget()` 三档落点——已有官方包 → `existing`（什么都不做）；仓库可写 → `repository`；否则 → 缓存目录 `firmware/<包名>` 并追加「要靠工程级 `CustomFwLocation` 指过去，这个绝对路径会写进 `.ioc`」的 notes（**落点顺序已被 14.1 的真机复验推翻：现在默认落 CubeMX 目录里的 dsh-firmware**）。`firmwareInstallPlan()` 零副作用（计划模式连目录都不建），`installFirmware()` 才下载解包写 `package.xml` 与 `THIRD_PARTY_NOTICES.md` 并自检。**计划模式判可写**要沿 `dirname` 向上找最近存在的祖先再 `accessSync(W_OK)`——Repository 还没建时直接 access 会抛 ENOENT，把可写的根误判成不可写而错落缓存（这个 bug 是测试抓出来的）。
+  4. `src/tools/firmware-install.ts`（`stm32_firmware_install`）：`dryRun` 默认出计划，`dryRun: false` 加 `confirm: true` 才真装；真装走 `jobs.start` 后台 job（进度 `handle.append`），`foreground: true` 或没有 jobs 服务时同步。纯 fetch 加 fs，不需要 `subprocess`。
+- **决策与理由**：
+  - ~~**优先落 Repository 而不是缓存**~~（已被 14.1 否定）：`CustomFwLocation` 会把机器绝对路径写进 `.ioc`，换机器或清缓存就失效；而 Repository 是 CubeMX 与插件都直接认的位置。缓存只是仓库不可写时的退路。
+  - **不把已装的包拷进缓存**：同族多版本并存（本机 `Repository` 里 F1 就有 V1.8.5 与 V1.8.7）会让缓存涨到数 GB，且 CubeMX 升级或删包后缓存副本立刻陈旧。缓存里只放寄存器版那套约 1 MB 的 CMSIS 模板。
+  - **自写解包器而不是调系统 `tar`**：单测能用内存造的 tar.gz 完整覆盖（含路径穿越、坏 gzip），也不依赖用户机器上有没有 tar。
+- **e2e 实测（真网络加真编译）**：`installFirmware({family: F1, target: repository, mode: install})` → `ok: true`、`kind: repository`、**7 个文件 / 2,047 KB / 4,751 ms**、五项判据全过；接着 `createProjectScaffold()` 从这个组装包拷出 14 个工程文件加 **238 个固件文件**；`stm32_generate`（CubeMX 无头，154,298 ms，冷启）落位 6 个 Core 文件；`cmake --preset Debug` 加 `cmake --build --preset Debug` → 19 步构建成功，`fwe2e.elf` 654,232 B，**FLASH 4,704 B / 64 KB（7.18%）、RAM 1,584 B / 20 KB（7.73%）**。整条「下载 → 组装 → 生成 → 编译」在组装包上闭环。
+- **验证**：新增 `test/firmware-units.test.mjs` 12 例（自带 ustar 构造器 `makeTar` 与 `makeTarGz`；归档里塞 120 KB 随机数据才能过 `minBytes: 100_000`；覆盖解包映射与路径穿越整次失败、坏包、`firmwarePlanFor` 的版本串与文件表、未接入族与错版本、五项判据、计划零副作用、假网络整装、下载失败不许假装成功、已装时零网络、工具契约与 H7 联网前早退）；`schema-guard` 22 → 23（19 个工具）；套件 19 → 20，用例 197 → **215 pass / 0 fail**（`firmware-units` 后来补到 17 例，见 14.1；CI 上跑 213 加 2 skipped）。
+- **踩坑记录**：
+  - `scaffold` 只出骨架，`Core/Src/main.c` 要 `stm32_generate` 才生成；拿骨架直接 `cmake --preset Debug` 会报 `target_sources: Cannot find source file: .../Core/Src/main.c`——**不是 bug**，别把它当下载器的问题查。
+  - 手工用 `execFileSync` 跑 CubeMX 时 120 s 不够、240 s 也可能不够：冷启动一次实测 154 s，加上初始化能到 4 分钟以上。要么走插件的 `stm32_generate`（默认 600 s），要么把 `run_code` 的 `timeoutMs` 一起放宽。
+  - 一次被 kill 的 CubeMX 会在目标目录里留下半个 `Drivers`（这次是 61–62 个 HAL 源文件），重跑会补齐；但别拿文件数对不对当成功判据——用 `verifyFirmwarePackage()`。
+- **还没验证的**：
+  - 只有 F1 在 `FIRMWARE_FAMILIES` 里，别的系列要先 `curl` 核过真实仓库名与顶层目录（F1 这次就因下划线旧名 302 踩过）。
+  - ~~`repository` 落点在**真 CubeMX 安装目录**里还没跑过~~ —— 已跑过（真 Repository 装 1.8.8），结论是**会被 CubeMX 静默忽略**，见 14.1。`cache` 落点加 `CustomFwLocation` 的全链路不做了：那条路会挂死，改用 `setCustomFWPath`。
+  - ~~CubeMX 认组装包这一条是用 `setCustomFWPath`（工程级）验的，插件的 `stm32_generate` 目前并不发这条命令~~ —— **已补齐**：`stm32_generate` 现在按 `.ioc` 的 `ProjectManager.FirmwarePackage` 找包，并在脚本里发 `project setCustomFWPath <包目录>`（见 14.1）。
+
+#### 14.1 真机复验与三处更正（2026-10-25）
+
+把上文的「组装包放进真 Repository → 直接生成」这条链路拿到真机上跑，结论与设计时的假设相反，据此改了三处代码。
+
+**① 落进真 Repository 的包会被 CubeMX 静默忽略。** 把组装好的 `STM32Cube_FW_F1_V1.8.8`（HAL 源文件里带标记）放进 `D:/app/STM32CubeMX/Repository`，`.ioc` 写 `ProjectManager.FirmwarePackage=STM32Cube FW_F1 V1.8.8`，再带 `LibraryCopy=1` 重跑 `stm32_generate`（173,557 ms 与 123,121 ms 两次都 `ok`）：工程里 `Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c` 是 **20,257 B**（官方 1.8.7 的大小），我们那份带标记的是 **20,293 B**，标记一次都没出现 —— CubeMX 认不出这个版本名，无报错地退回它自己认识的 1.8.7。旁证：CubeMX 日志里 `CubeFinder database FW Pack versions=[…]` 是**线上**清单，不含自造版本；`~/.stm32cubemx` 下也没有本地包注册记录。
+
+**② 只改 `.ioc` 指自定义目录会挂死。** 改 `ProjectManager.CustomerFirmwarePackage=<包目录>` 加 `DefaultFWLocation=false` 后重跑：`ok:false`、**421,600 ms「CubeMX 生成超时」**，HAL 一个都没拷（多半弹了迁移对话框，无头模式没人应答）。
+
+**③ 唯一被证实有效的机制是脚本命令。** `project setCustomFWPath "<包目录>"`。现在 `buildGenerateScript()` 多一个 `firmwareDir` 参数，非空就在 `config load` 之后、`generate code` 之前插这一行（路径含空格会加引号）。找包交给 `locateFirmwarePackage()`：`<root>/Repository` 与 `<root>/dsh-firmware` 都找，包名精确匹配优先、其次版本号大的、同版本优先官方；`firmwareNeedFromIoc()` 从 `.ioc` 读 `ProjectManager.FirmwarePackage`，缺这条时退回 `Mcu.CPN` 推族加该族默认版本。
+
+**落点改为 `<CubeMX>/dsh-firmware`。** `decideTarget()` 现在是：显式 `targetDir` → `existing` → `cubeMx`（插件自建，与 Repository 并列，不动官方包）→ 写不进去才退回用户缓存 `cache`。`target:"repository"` 保留，但 notes 会明说「CubeMX 不会自动认这个版本号，生成靠 setCustomFWPath」。这样生命周期跟着 CubeMX、整目录可搬、不同盘也不怕跨卷。
+
+**顺带加的防线。** `parseGenerateLog()` 现在把 `Unknown command` / `Unrecognized command` / `Invalid command` 之类判为**失败** —— 万一日后 CubeMX 改命令名、`setCustomFWPath` 被忽略，也不会拿到「成功但用错固件包」的结果（这种结果比直接失败更难查）。
+
+**报告与卡片。** `GenerateReport` 增 `firmwareDir` / `firmwarePackage` / `firmwareSource`（`repository` | `dsh-firmware` | 空），工具卡片多一行「固件包：…（CubeMX 仓库 / 插件的 dsh-firmware 目录）」；找不到包时 notes 里写找过哪些目录，以及可以用 `stm32_firmware_install` 装到 `dsh-firmware` 下。
+
+**验证。** `test/firmware-units.test.mjs` 12 → **18 例**（选址缺陷修复后又加到 22，见 §14.2）（新增 `buildGenerateScript` 发不发那行命令与插入位置、`parseGenerateLog` 未知命令判失败、`firmwareNeedFromIoc` 两种来源、`locateFirmwarePackage` 的优先序与不完整包过滤、`firmwareInstallPlan` 三种落点且计划模式不建目录、`resolveFirmwareRoot` 在 `Repository` 缺失时回落到 `<CubeMX>/dsh-firmware`）；`schema-guard` 同步改期望；套件 20、用例 210 → **216 pass / 0 fail**（§14.2 修完是 **220**）。
+
+### 14.1 真机验收（2026-10-25）：装到 dsh-firmware → 脚手架 → 生成 → 编译
+
+**装。** `installFirmware({family:"F1", version:"1.8.8", cubeMxRoots:["D:/app/STM32CubeMX"], mode:"install"})` → `ok`、`targetKind` **cubeMx**、目录 `D:/app/STM32CubeMX/dsh-firmware/STM32Cube_FW_F1_V1.8.8`、**7 个文件 / 2047 KB**、五项判据全过。`Repository` 保持原样（9 个官方包），官方地面一点没动。
+
+**脚手架。** `stm32_project_create route:"hal"` → `templateFiles` 14、`driverFiles` 238，`firmwareRoot` 指向 dsh-firmware 那份 —— 这是本段补的 `resolveFirmwareRoot()` 双层查找（先 `Repository`、再 `dsh-firmware`）在起作用；原来只查 `Repository`，装到 dsh-firmware 的包会被判「找不到固件包」。`.ioc` 里 `ProjectManager.FirmwarePackage=STM32Cube FW_F1 V1.8.8`、`LibraryCopy=1`。
+
+**生成。** `runGenerate`（注入真 spawn 的 `SubprocessService`）：第一次 394,518 ms，`ok` 但 **CubeMX 没把 HAL 拷回工程**（先删掉了工程里的 `stm32f1xx_hal.c` 做基线，结果没回来）；第二次不删（200,194 ms）→ `ok`、`firmwareDir` 指向 dsh-firmware 目录、`firmwareSource` 为 `dsh-firmware`、`verdict.ok` true、`errors` 空，notes 写着「本次指定固件包：…（来源：插件的 dsh-firmware 目录）- 脚本里用 project setCustomFWPath 传的，不写进 .ioc。」
+
+**编译。** `cd demo/.verify-fw2; cmake --preset Debug; cmake --build --preset Debug` → 配置 58.5 s、19 步构建、`fw2.elf`：**RAM 1,584 B / 20 KB（7.73%）、FLASH 4,704 B / 64 KB（7.18%）**。整条链在真机成立。
+
+**新发现的限制（还没改）。** 只靠 `.ioc` 的 `ProjectManager.LibraryCopy=1` **不会**让 CubeMX 从 `setCustomFWPath` 指的自定义包把 HAL 拷进工程（上面第一次实验就是证据）；§14 那次能拷，是因为脚本里另外发了 `SetCopyLibrary "copy all"`，而插件现在**不发**这条命令。对 `project_create route:hal` 够用（Drivers 由脚手架提供），对「CubeMX GUI 建的、没拷库的工程」不覆盖 —— 待定：`buildGenerateScript()` 在工程缺 `<Drivers>/<族>_HAL_Driver/Src` 时补发它，或至少在报告里提示。
+
+### 14.2 修：自动选址把固件包往不存在的 Program Files 里塞（2026-10-25）
+
+**现象。** 宿主里调 `stm32_firmware_install({family:"F1", version:"1.8.8"})`，计划落点是 `C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/dsh-firmware/STM32Cube_FW_F1_V1.8.8`，而本机 CubeMX 实际装在 `D:/app/STM32CubeMX`（`C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX` 根本不存在）。计划模式零副作用，所以没写坏东西，但真装会往一个要管理员权限的地方撞。
+
+**两条根因，缺一不可。**
+1. **候选根顺序**：`resolveSearchConfig` 的自动发现把 `DEFAULT_CUBEMX_ROOTS` 里那些「别的机器上的默认安装位置」也追加进来，且排在本机真装的那份前面；`decideTarget()` 是按列表顺序撞第一个「可写」的根，于是先撞上 Program Files 那条。
+2. **可写性判据在 Windows 上不成立**：plan 模式用 `accessSync(最近一个已存在的祖先, constants.W_OK)` 探测。Windows 上 `access(W_OK)` 只看文件的**只读属性**，不看 ACL —— `C:/Program Files` 对普通用户是只读的，但它的只读属性是关的，于是被判成「可写」。install 模式没这个毛病（它是真 mkdir + 写探针文件）。
+
+**修法（`src/engine/firmware-install.ts`）。**
+- 新增 `isProtectedSystemDir(dir, env)`：把 env 里的 `ProgramFiles` / `ProgramFiles(x86)` / `ProgramW6432` / `ProgramData` / `SystemRoot` 归一成小写正斜杠前缀，落在其下即算受保护。`dirWritable()` 的 plan 分支一旦发现最近存在的祖先受保护，直接返回不可写并说明原因，不再信 `access(W_OK)`。
+- **刻意不把整块系统盘 `C:/` 算进来**：`%TEMP%`、`%LOCALAPPDATA%` 都在 C: 上，算进来会把所有临时目录判成不可写（第一版加了 drive-root 逻辑，测试立刻红，这正是它该红的理由）。
+- 新增 `orderCubeMxRoots(roots)`：本机 `existsSync` 为真的排前面（组内保序），不存在的排后面；`decideTarget()` 改用它。这样「哪台机器的默认路径」不会再压过「真有 CubeMX 的那份」。
+
+**验证。** `test/firmware-units.test.mjs` 18 → **22 例**（`isProtectedSystemDir` 的真/假两个方向、`orderCubeMxRoots` 的排序、plan 在 `[不存在的根, 真根]` 下必须选真根且不建目录、根不存在且祖先受保护时必须退回用户缓存）；套件 20、用例 216 → **220 pass / 0 fail**。宿主级复验（重启后 `stm32_firmware_install` 的 targetDir 应变成 `D:/app/STM32CubeMX/dsh-firmware/...`）还没做。
 

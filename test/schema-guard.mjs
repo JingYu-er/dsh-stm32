@@ -6,7 +6,7 @@
 // 之前 stm32_flash 少了 args 声明、stm32_build 用 null 顶替 exitCode/elf，
 // 都是"副作用已经发生、调用却报 ToolCallError"。除 stm32_env_probe 外，本测试只走失败早退路径
 // （不 spawn 进程）；env_probe 的成功形状用一个假 subprocess 喂版本号（也不起进程）。
-// 覆盖范围是全部 16 个工具 + 6 条斜杠命令里的工具部分；真宿主里的成功路径仍要靠 e2e 复验。
+// 覆盖范围是全部 19 个工具 + 6 条斜杠命令里的工具部分；真宿主里的成功路径仍要靠 e2e 复验。
 //
 // 运行：node test/schema-guard.mjs（需先 npm run build）
 import assert from "node:assert/strict";
@@ -44,6 +44,12 @@ import { outputSchema as flashSchema } from "../lib/tools/flash.js";
 import { outputSchema as generateSchema } from "../lib/tools/generate.js";
 import { registerProjectCreate } from "../lib/tools/project-create.js";
 import { outputSchema as projectCreateSchema } from "../lib/tools/project-create.js";
+import { registerRoutePlan } from "../lib/tools/route-plan.js";
+import { outputSchema as routePlanSchema } from "../lib/tools/route-plan.js";
+import { registerCache } from "../lib/tools/cache.js";
+import { outputSchema as cacheSchema } from "../lib/tools/cache.js";
+import { registerFirmwareInstall } from "../lib/tools/firmware-install.js";
+import { outputSchema as firmwareInstallSchema } from "../lib/tools/firmware-install.js";
 import { outputSchema as regsSchema } from "../lib/tools/regs.js";
 
 const MISSING_DIR = "D:/__dsh_stm32_missing_project__";
@@ -339,6 +345,41 @@ test("stm32_code_patch 失败 / 成功报告都符合 output schema", async () =
   }
 });
 
+test("stm32_route_plan 缺 requirement / 正常评估都符合 output schema（不 spawn）", async () => {
+  const tool = collectTools(registerRoutePlan).get("stm32_route_plan");
+  assert.ok(tool, "stm32_route_plan 应已注册");
+
+  const empty = await tool.execute({ projectDir: FIXTURE_PROJECT }, exec);
+  reportProblems("stm32_route_plan(缺 requirement)", routePlanSchema, empty);
+  assert.equal(empty.ok, false);
+  assert.ok(empty.message.includes("requirement"));
+  assert.equal(empty.verdict, "unclear");
+
+  // 正常评估：envCheck=off 关掉门禁探测，保证这条用例只走形状校验、不起进程。
+  const value = await tool.execute({ requirement: "按键控制 LED，串口每秒打印一次状态", projectDir: FIXTURE_PROJECT, envCheck: "off" }, exec);
+  reportProblems("stm32_route_plan(寄存器版)", routePlanSchema, value);
+  assert.equal(value.verdict, "register-ok");
+  assert.ok(value.devices.length >= 2);
+  for (const device of value.devices) {
+    assert.equal(typeof device.halEffort, "number", device.id + " 的 HAL 代价要拍平成数字");
+    assert.equal(typeof device.regEffort, "number", device.id + " 的寄存器代价要拍平成数字");
+    assert.ok(["hal", "register", "hal-required"].includes(device.advice));
+  }
+
+  // 必须 HAL 的工程在关掉门禁时也不许报 ok（固件包没验过），但要给出指引而不是空指针。
+  const hal = await tool.execute({ requirement: "用 FreeRTOS 跑两个任务，并通过 USB HID 上报状态", projectDir: FIXTURE_PROJECT, envCheck: "off" }, exec);
+  reportProblems("stm32_route_plan(HAL 版)", routePlanSchema, hal);
+  assert.equal(hal.verdict, "hal-only");
+  assert.equal(typeof hal.firmware.found, "boolean");
+  // 不变量：没找到该芯片的固件包，就必须贴出"怎么自己装"的指引（否则用户只剩一句干瞪眼）。
+  if (!hal.firmware.found) {
+    const firmwareGuide = hal.guides.find((guide) => guide.component === "firmware");
+    assert.ok(firmwareGuide, "缺固件包时要贴手动安装指引：" + JSON.stringify(hal.guides.map((g) => g.component)));
+    assert.equal(typeof firmwareGuide.steps[0].title, "string");
+    assert.equal(typeof firmwareGuide.steps[0].command, "string");
+  }
+});
+
 // ── 补齐 env_probe / ioc_inspect：这两个工具此前没进守卫，README 却按"15 个工具"写────────
 
 const ENV_PROBE_VERSION = "arm-none-eabi-gcc (GNU Arm Embedded) 13.2.1\n";
@@ -443,5 +484,73 @@ test("stm32_ioc_inspect 找不到 .ioc 与解析成功都符合 output schema", 
   assert.equal(typeof value.entryCount, "number");
   for (const pin of value.pins) {
     assert.ok(["gpio", "debug", "clock", "virtual", "other"].includes(pin.kind), "pin.kind 越界：" + pin.kind);
+  }
+});
+
+// ── stm32_cache：L3 里唯一"用户可以直接看到缓存状态"的入口 ─────────────────────
+
+test("stm32_cache list / fetch 缺参 / fetch 认不出型号 / purge 都符合 output schema（不联网）", async () => {
+  const tool = collectTools(registerCache, forbiddenSubprocess).get("stm32_cache");
+  assert.ok(tool, "stm32_cache 应已注册");
+  const work = e2eWorkDir("cache-tool");
+  const before = process.env.DSH_STM32_CACHE;
+  process.env.DSH_STM32_CACHE = join(work, "cache");
+  try {
+    const listed = await tool.execute({}, exec);
+    reportProblems("stm32_cache(list)", cacheSchema, listed);
+    assert.equal(listed.action, "list");
+    assert.equal(listed.ok, true);
+    assert.equal(listed.entries.length, 0);
+    assert.match(listed.message, /缓存是空的/u);
+
+    const noArgs = await tool.execute({ action: "fetch" }, exec);
+    reportProblems("stm32_cache(fetch 缺参数)", cacheSchema, noArgs);
+    assert.equal(noArgs.ok, false);
+    assert.ok(noArgs.message.includes("mcu"), noArgs.message);
+
+    // 认不出的型号必须在联网之前就停住（否则一次拼错的型号会白下 1 MB）。
+    const unknown = await tool.execute({ action: "fetch", mcu: "STM32G999XX" }, exec);
+    reportProblems("stm32_cache(fetch 认不出型号)", cacheSchema, unknown);
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.entries.length, 0);
+
+    const purge = await tool.execute({ action: "purge" }, exec);
+    reportProblems("stm32_cache(purge 空缓存)", cacheSchema, purge);
+    assert.equal(purge.ok, true);
+    assert.match(purge.message, /本来就是空的/u);
+  } finally {
+    if (before === undefined) delete process.env.DSH_STM32_CACHE;
+    else process.env.DSH_STM32_CACHE = before;
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// ── stm32_firmware_install：固件包下载器（只走不联网的计划路径）──────────────
+
+test("stm32_firmware_install 的计划报告符合 output schema，且不建目录 / 不联网", async () => {
+  const tool = collectTools(registerFirmwareInstall, forbiddenSubprocess).get("stm32_firmware_install");
+  assert.ok(tool, "stm32_firmware_install 应已注册");
+  const work = e2eWorkDir("firmware-tool");
+  try {
+    const cubemxRoot = join(work, "cubemx");
+    const planned = await tool.execute({ family: "F1", cubeMxRoot: cubemxRoot }, exec);
+    reportProblems("stm32_firmware_install(计划)", firmwareInstallSchema, planned);
+    assert.equal(planned.mode, "report");
+    assert.equal(planned.jobId, "");
+    assert.equal(planned.report.mode, "plan");
+    assert.equal(planned.report.targetKind, "cubeMx");
+    assert.match(planned.report.targetDir, /dsh-firmware/u);
+    assert.equal(planned.report.steps.length, 5);
+    assert.equal(planned.report.download.files, 0);
+    assert.match(planned.report.message, /还没动手/u);
+
+    // 没接入的族：必须在联网前停下，并把话说清楚（不能瞎下）。
+    const unknown = await tool.execute({ family: "STM32H743VIT6", cubeMxRoot: cubemxRoot }, exec);
+    reportProblems("stm32_firmware_install(没接入的族)", firmwareInstallSchema, unknown);
+    assert.equal(unknown.report.ok, false);
+    assert.match(unknown.report.message, /目前只会/u);
+    assert.equal(unknown.report.steps.length, 0);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
 });

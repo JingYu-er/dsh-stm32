@@ -14,23 +14,31 @@ export function layoutCommand(layout: GenerateLayout): string {
   return layout === "coupled" ? "generate all_code_in_main" : "generate one_file_per_ip";
 }
 
+/** 路径里有空格就加引号（CubeMX 脚本按空格切参数）。 */
+function quoteArg(value: string): string {
+  return value.includes(" ") ? '"' + value + '"' : value;
+}
+
 /**
  * CubeMX -q 脚本正文。
  *
  * 注意：generate code 的参数必须是**目录**；传 .ioc 路径会静默无操作（M0 E3）。
+ *
+ * firmwareDir 非空时插一行 project setCustomFWPath —— 这是实测**唯一**能让 CubeMX
+ * 真的用上指定固件包的机制（docs §14：丢进 Repository 会被静默忽略、只改 .ioc 会挂死）。
+ * 它必须排在 config load 之后、generate code 之前。
  */
 export function buildGenerateScript(
   iocPath: string,
   outDir: string,
   layout: GenerateLayout,
+  firmwareDir = "",
 ): string {
-  return [
-    "config load " + iocPath,
-    layoutCommand(layout),
-    "generate code " + outDir,
-    "exit",
-    "",
-  ].join("\n");
+  const lines = ["config load " + iocPath];
+  const firmware = firmwareDir.trim();
+  if (firmware !== "") lines.push("project setCustomFWPath " + quoteArg(firmware));
+  lines.push(layoutCommand(layout), "generate code " + outDir, "exit", "");
+  return lines.join("\n");
 }
 
 export interface GenerateVerdict {
@@ -61,14 +69,26 @@ function isKnownNoise(line: string): boolean {
   return KNOWN_NOISE.some((entry) => entry.pattern.test(line));
 }
 
+/**
+ * 脚本命令不认（CubeMX 版本换了命令名）时的标志。
+ * 为什么单独判：setCustomFWPath 被忽略时 CubeMX 照样打印生成成功，
+ * 于是会拿到一个「成功但用错固件包」的结果 —— 比直接失败更难查。
+ */
+const UNKNOWN_COMMAND_PATTERN = /Unknown command|Unrecognized command|Invalid command|command not found|Command not recognized/iu;
+
 /** 把 CubeMX 输出判成结论。只要出现成功行就算成功，其余按错误归类。 */
 export function parseGenerateLog(text: string): GenerateVerdict {
   const errors: string[] = [];
+  const commandErrors: string[] = [];
   const knownNoise: string[] = [];
   let successLine = "";
   for (const rawLine of text.split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (line === "") continue;
+    if (UNKNOWN_COMMAND_PATTERN.test(line)) {
+      commandErrors.push(line.slice(0, 300));
+      continue;
+    }
     if (SUCCESS_PATTERN.test(line)) {
       successLine = line;
       continue;
@@ -81,6 +101,10 @@ export function parseGenerateLog(text: string): GenerateVerdict {
     const looksLikeError = /\bERROR\b|\bError\s*:|\bException\b|\bFAILED\b|\bFATAL\b/u.test(line);
     if (!looksLikeError) continue;
     errors.push(line.slice(0, 300));
+  }
+  // 脚本命令不被认（例如 setCustomFWPath）时，成功行也不作数。
+  if (commandErrors.length > 0) {
+    return { ok: false, successLine, errors: [...commandErrors, ...errors], knownNoise };
   }
   // 有成功行就以成功行为准：CubeMX 过程中偶发的 ERROR（如 Updater is busy）不代表生成失败。
   if (successLine !== "") {

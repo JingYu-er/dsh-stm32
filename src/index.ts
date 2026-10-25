@@ -15,12 +15,14 @@ import { registerCommands } from "./commands/register.js";
 import { debugSessions } from "./engine/debug-session.js";
 import { registerStm32Skill } from "./skill/stm32-workflow.js";
 import { registerBuild } from "./tools/build.js";
+import { registerCache } from "./tools/cache.js";
 import { registerCodePatch } from "./tools/code-patch.js";
 import { registerDebugRun } from "./tools/debug.js";
 import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
 import { registerEnvInstall } from "./tools/env-install.js";
 import { registerEnvProbe } from "./tools/env-probe.js";
+import { registerFirmwareInstall } from "./tools/firmware-install.js";
 import { registerFlash } from "./tools/flash.js";
 import { registerGenerate } from "./tools/generate.js";
 import { registerIocApply } from "./tools/ioc-apply.js";
@@ -28,6 +30,7 @@ import { registerIocInspect } from "./tools/ioc-inspect.js";
 import { registerIocPlan } from "./tools/ioc-plan.js";
 import { registerProjectCreate } from "./tools/project-create.js";
 import { registerRegsRead } from "./tools/regs.js";
+import { registerRoutePlan } from "./tools/route-plan.js";
 import type { DshContext } from "./types.js";
 
 export const name = "dsh-stm32";
@@ -36,6 +39,7 @@ export const inject = ["tools", "subprocess", "jobs"];
 export function apply(ctx: DshContext): void {
   registerEnvProbe(ctx);
   registerEnvInstall(ctx);
+  registerFirmwareInstall(ctx);
   registerProjectCreate(ctx);
   registerCodePatch(ctx);
   registerGenerate(ctx);
@@ -47,6 +51,8 @@ export function apply(ctx: DshContext): void {
   registerDebugRun(ctx);
   registerDebugSession(ctx);
   registerRegsRead(ctx);
+  registerRoutePlan(ctx);
+  registerCache(ctx);
   registerDoctor(ctx);
 
   // 斜杠命令与 SKILL 是"锦上添花"的层：宿主没组合 commands / skills 服务时静默跳过，

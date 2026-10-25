@@ -10,7 +10,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 16 tools, 6 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 19 tools, 6 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -129,7 +129,8 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Environment health check | `stm32_env_probe` (read-only), `stm32_doctor` (toolchain + busy probes + ports + project warnings) |
 | Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
 | Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
-| Project from scratch | `stm32_project_create`: template snapshot + firmware Drivers, byte-identical to a project created in the CubeMX GUI |
+| Choose the technical route | `stm32_route_plan`: for **this project's** requirements, lays out the HAL and register cost per peripheral (effort / readability / debugging), then says whether what is missing is installable-by-the-plugin or human-only (CubeMX is a GUI wizard needing an ST account; firmware packages are only maintained by the CubeMX package manager) |
+| Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use |
 | `.ioc` as a transaction | `stm32_ioc_inspect` (read-only parse) → `stm32_ioc_plan` (diff, no writes) → `stm32_ioc_apply` (SHA check + backup + rollback) |
 | USER CODE only | `stm32_code_patch`: writes only between `/* USER CODE BEGIN X */` and `END X`; everything else untouched |
 | Code generation | `stm32_generate`: headless CubeMX + ST project layout + USER CODE carried over by label |
@@ -147,8 +148,11 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | --- | --- |
 | `stm32_env_probe` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions; for anything missing it states the impact (cannot build / flash / debug / generate), the recommended install command (pacman / winget, paste-ready), a self-check command, plus `capabilities` (which of the four jobs work) and `recommendations` (install order and an offer to install for you). Read-only, repeatable |
 | `stm32_env_install` | One-stop install when the toolchain is missing: `dryRun` (default) only returns a plan — size of the official MSYS2 installer, the five packages, the PATH entry it would add; only `dryRun: false` + `confirm: true` actually work (download → install MSYS2 → `pacman -S` → user-level PATH → self-check → write `~/.dsh-stm32/config.json`). With an existing msys64 it only adds the packages. No uninstall |
+| `stm32_route_plan` | Settle the route before writing code: `requirement` is required (e.g. "a button drives the LED, UART prints its state once a second"), and it returns `verdict` (`register-ok` / `both-viable` / `hal-only` / `unclear`), per-peripheral `halEffort`/`regEffort` with `advice`, how the two routes differ, the next concrete step, and toolchain gaps tagged `installability` (`auto` = the plugin can install it / `manual` = human only) plus the full manual install guide. No generic comparison table — the verdict only holds for the requirement you gave |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
-| `stm32_project_create` | Empty directory → full CMake project (including both "flash only" and "flash and debug" launch configs in `.vscode`). Refuses a non-empty target unless `overwrite: true` |
+| `stm32_project_create` | Empty directory → full CMake project. `route: "hal"` (default) is the CubeMX route (including both "flash only" and "flash and debug" launch configs in `.vscode`); `route: "register"` builds a **no-CubeMX, no-HAL** register-level project (`mcu` picks the part, CMSIS headers and startup file come from the cache). Refuses a non-empty target unless `overwrite: true` |
+| `stm32_cache` | Inspect / verify / fetch / purge the download cache: `action: "list"` (default), `"verify"` (per-file check), `"fetch"` (pull the template for an `mcu`, reusing the cache without touching the network), `"purge"` (drop entries; clears everything without an `id`). The cache holds what the register route needs but the plugin does not ship — CMSIS device headers, startup file, core headers — downloaded once, reused forever |
+| `stm32_firmware_install` | One-stop firmware-package install: `dryRun` (default) returns only the plan — where it would land, which two source repos it would download, which checks must pass; `dryRun: false` + `confirm: true` actually downloads (HAL driver + CMSIS device support + core headers, ~2 MB total from GitHub), assembles an official-shaped `STM32Cube_FW_<family>_V<version>` package (writing `package.xml` itself) and runs five checks. Does nothing when the official package is already installed; installs into `<CubeMX root>/dsh-firmware` by default (not `Repository` — a self-made version there is silently ignored), and `stm32_generate` points CubeMX at it with `setCustomFWPath` |
 
 ### .ioc: read-only and transactions
 
@@ -221,6 +225,27 @@ An empty `binDirs` is derived from `msys64` as `<msys64>/ucrt64/bin` — the sha
 
 **Precedence**: tool arguments (`binDirs` / `cubeMxRoots`) > environment variables > this config file > built-in defaults; auto-discovered installs are only appended when no argument was given.
 
+### Download cache (register-route template)
+
+What the register route needs — CMSIS device headers, the startup file, core headers — is **not vendored into the plugin** (covering any STM32 part would make the package unusable), so it is downloaded on first use into a searchable cache directory and reused from then on:
+
+- Location: `DSH_STM32_CACHE` (supports `~`) > `%LOCALAPPDATA%\dsh-stm32\cache`;
+- Index: `index.json` under the cache root records each entry's source URLs, byte counts and license (`THIRD_PARTY_NOTICES.md` is written alongside);
+- Sources: tried in the order `fastly.jsdelivr` → `cdn.jsdelivr` → `raw.githubusercontent` → `ghproxy`; an HTTP error, HTML-looking body or an implausible byte count counts as a failed source;
+- A partial download is deleted outright (a half cache is worse than none); missing or size-mismatched files trigger a re-download on the next run;
+- Visible and removable: `stm32_cache` with `list` / `verify` / `fetch` / `purge`.
+
+### Firmware packages (HAL route)
+
+Having CubeMX installed does not mean the package for **this particular part** is there — it is not part of the installer and has to be added in the package manager. For the families the plugin can fetch, `stm32_firmware_install` assembles it from two GitHub source archives:
+
+- What it downloads: `stm32f1xx-hal-driver` (HAL driver, BSD-3-Clause) + `cmsis-device-f1` (device headers and startup file, Apache-2.0) + five CMSIS core headers — about 2 MB, a few seconds;
+- Why the `STM32CubeF1` source archive is not enough: its HAL and CMSIS device directories are **git submodules**, so the tarball ships them empty — unpacking it yields a package that cannot compile (no startup file, no HAL sources);
+- Where it lands: `<CubeMX root>/dsh-firmware/<package>` by default (a plugin-owned folder next to `Repository`, official packages untouched); only if that root is not writable does it fall back to the user cache. **Do not drop self-made version names into `Repository`** — measured: CubeMX does not recognise that version, silently falls back to the package it knows, and reports a successful generation with stale HAL files;
+- How generation picks it up: `stm32_generate` resolves the package named in the `.ioc` (`ProjectManager.FirmwarePackage`), looking in both `Repository` and `<CubeMX root>/dsh-firmware`, and passes `project setCustomFWPath <package dir>` to the CubeMX script — the only mechanism proven to work, and it leaves no absolute path in the `.ioc`;
+- The assembled package matches the official layout: a six-line `package.xml` (version tags `FW.<family>.<x.y.z>`) and `THIRD_PARTY_NOTICES.md`, with **no manifest or hashes** — CubeMX does not verify provenance either (measured: generating with `setCustomFWPath` copies HAL sources byte-for-byte out of our directory);
+- But "generation succeeded" proves nothing: with a non-existent package name in the `.ioc`, CubeMX prints no error, exits 0 and simply skips copying HAL. So five checks are mandatory (core headers / HAL Inc / HAL Src / device headers / `startup_*.s`), and the installer runs them right after assembling.
+
 ### Environment variables (optional)
 
 | Variable | Purpose | Default |
@@ -230,6 +255,7 @@ An empty `binDirs` is derived from `msys64` as `<msys64>/ucrt64/bin` — the sha
 | `STM32_NO_DISCOVER` | Set to `1` / `true` to turn auto-discovery off (CI, or when you only want the built-in list) | unset = on |
 | `DSH_STM32_CONFIG` | Point the config file elsewhere (several toolchains / project isolation) | `%USERPROFILE%\.dsh-stm32\config.json` |
 | `DSH_STM32_NO_CONFIG` | Set to `1` / `true` to ignore the config file entirely (environment variables only) | unset = read |
+| `DSH_STM32_CACHE` | Download cache root (register-route template etc.), supports `~` | `%LOCALAPPDATA%\dsh-stm32\cache` |
 | `DSH_STM32_E2E_PROJECT` | Project used by hardware e2e runs (with `openocd.cfg` and `build/Debug/*.elf`) | none |
 | `DSH_STM32_E2E_ROOT` | Scratch directory for e2e copies | system temp |
 
@@ -298,12 +324,12 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 17 offline suites, 170 cases; no board, CubeMX, or toolchain needed
+npm test                 # 20 offline suites, 220 cases; no board, CubeMX, or toolchain needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **168 passed + 2 skipped**, while a developer machine runs all 170. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **218 passed + 2 skipped**, while a developer machine runs all 220. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
@@ -319,7 +345,7 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 16 tools, L3 (parameter schema + output contract + rendering)
+  tools/                   the 19 tools, L3 (parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
   commands/register.ts     the 6 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
