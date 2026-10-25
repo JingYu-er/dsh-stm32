@@ -292,6 +292,42 @@ test("计划：本机已有完整 MSYS2 + 5 个组件 → 说「什么都不用�
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("缺 CubeMX：紧凑卡片补一句 HAL 提示；装了就自动消失", async () => {
+  const dir = tempDir("plan-cubemx");
+  const root = makeMsys64(join(dir, "msys64"));
+  // 5 个包都报"已装"，这样才走得到"什么都不用装"的紧凑分支。
+  const subprocess = scriptedSubprocess((line) =>
+    isPacmanQuery(line)
+      ? { exitCode: 0, stdout: PACKAGES.map((name) => name + " 13.3.0-1").join("\n") + "\n" }
+      : {},
+  );
+
+  process.env.STM32_CUBEMX_ROOT = join(dir, "no-cubemx").replace(/\\/g, "/");
+  const without = await planOrInstallMsys2(
+    subprocess,
+    { mode: "plan", targetDir: root, writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  assert.equal(without.steps.length, 0, "仍然是一句话的紧凑卡片");
+  assert.match(without.message, /工具链完整/u);
+  assert.match(without.message, /STM32CubeMX/u, "缺 CubeMX 时要提示去 ST 官网装");
+  assert.match(without.message, /HAL/u);
+
+  const cubeRoot = join(dir, "cubemx");
+  mkdirSync(join(cubeRoot, "jre", "bin"), { recursive: true });
+  writeFileSync(join(cubeRoot, "STM32CubeMX.exe"), "");
+  writeFileSync(join(cubeRoot, "jre", "bin", "java.exe"), "");
+  process.env.STM32_CUBEMX_ROOT = cubeRoot.replace(/\\/g, "/");
+  const withCube = await planOrInstallMsys2(
+    subprocess,
+    { mode: "plan", targetDir: root, writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  assert.doesNotMatch(withCube.message, /STM32CubeMX/u, "装了 CubeMX 就不该再提示去装");
+  delete process.env.STM32_CUBEMX_ROOT;
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("计划：只缺 1 个包 → 只说这 1 个，且不下载安装包", async () => {
   const dir = tempDir("plan-partial");
   const root = makeMsys64(join(dir, "msys64"));

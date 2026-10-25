@@ -41,6 +41,7 @@ import {
   discoverInstalls,
   discoveryDisabled,
   normalizePathEntry,
+  resolveSearchConfig,
   splitList,
 } from "../data/search-roots.js";
 import {
@@ -1355,9 +1356,14 @@ export async function planOrInstallMsys2(
     let planProbed: ProbeResult[] = [];
     let verifyOk = false;
     let verifyText = "";
+    // CubeMX 不在这 5 件里，但它决定能不能走 HAL 路线：缺它时紧凑卡片必须补一句，
+    // 否则"工具链完整"会让人以为 HAL 工程也能直接生成。
+    let cubemxReady = false;
     if (binDir !== "" && existsSync(binDir)) {
-      const probeConfig = { binDirs: [binDir], cubeMxRoots: [] };
-      const probeWanted = buildTargets(probeConfig).filter((item) => VERIFY_IDS.includes(item.id));
+      const searchConfig = resolveSearchConfig(env);
+      const probeConfig = { binDirs: [binDir], cubeMxRoots: [...searchConfig.cubeMxRoots] };
+      const wanted = buildTargets(probeConfig);
+      const probeWanted = wanted.filter((item) => VERIFY_IDS.includes(item.id));
       planProbed = await probeAll(subprocess, probeWanted, probeConfig, {
         timeoutMs: PROBE_TIMEOUT_MS,
         allowPathFallback: false,
@@ -1372,6 +1378,18 @@ export async function planOrInstallMsys2(
             .filter((tool) => !tool.found)
             .map((tool) => tool.label)
             .join("、");
+      // 两项都要找到才算装好：只有 STM32CubeMX.exe、没有 jre/bin/java.exe 时无头生成仍会失败。
+      const cubemxProbed = await probeAll(
+        subprocess,
+        wanted.filter((item) => item.id === "cubemx" || item.id === "cubemx-java"),
+        probeConfig,
+        {
+          timeoutMs: PROBE_TIMEOUT_MS,
+          allowPathFallback: false,
+          ...(request.signal === undefined ? {} : { signal: request.signal }),
+        },
+      );
+      cubemxReady = cubemxProbed.length === 2 && cubemxProbed.every((item) => item.found);
     }
 
     const currentConfig = configRead.config;
@@ -1419,7 +1437,11 @@ export async function planOrInstallMsys2(
           packages.length +
           " 个组件都能跑，PATH 与配置都已就位（" +
           (binDir === "" ? msys64 : binDir) +
-          "）。",
+          "）。" +
+          (cubemxReady
+            ? ""
+            : "要写 HAL 库程序还需要从 ST 官网装 STM32CubeMX（含内置 JRE，约 1.5 GB，" +
+              "https://www.st.com/en/development-tools/stm32cubemx.html）；纯寄存器程序不需要它。"),
         nextStep: "",
         notes: [],
         durationMs: Date.now() - started,

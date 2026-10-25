@@ -1619,6 +1619,8 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
 
 **为什么完整时连步骤都不列**：把「没有可做的事」画成七行「已跳过」+ 三条 notes，卡片比真要装的还长，用户第一反应是「还有一堆动作在排队」。所以 `nothingToDo && verifyOk` 时直接返回紧凑结果（`steps: []` / `notes: []` / `nextStep: ""`），浏览器端 `client/client.js` 在 `steps.length === 0` 时也不再渲染「目标：… · 包：… · 下载：…」那行和步骤列表。另有一处兜底：`tools/env-install.ts` 在计划 steps 为空时用新导出的 `msys2StepSkeleton()` 补出 7 步骨架，真装 job 的「安装中」卡片照样列得出步骤（A21 的断言依赖这一点）。
 
+**CubeMX 不在那 5 件里**：编译 / 烧录 / 调试都不需要它，但 HAL 路线要用它生成代码。所以紧凑卡片在 `cubemx` 与 `cubemx-java` 两项都没找到时补一句：「要写 HAL 库程序还需要从 ST 官网装 STM32CubeMX（含内置 JRE，约 1.5 GB，https://www.st.com/en/development-tools/stm32cubemx.html）；纯寄存器程序不需要它。」——否则「工具链完整」会被读成「HAL 工程也能直接生成」。
+
 `usageNote(facts, …)` 同步四档：已装齐 →「不用下载任何东西（MSYS2 与 5 个组件都已在本机）」；缺件 →「不用下载安装包；只补 N 个包，pacman 下载约 …」；全新 → 原公式。`nextStep` 也分档，已装齐时直接给「去看 `stm32_env_probe` 或 `stm32_build`，要换一份 MSYS2 就传 `targetDir`」，不再劝人确认安装。
 
 ### 19.3 现场实测又逮到一层：pacman 比版本命令慢得多
@@ -1640,9 +1642,9 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
 
 ### 19.5 测试
 
-`install-units` 17 → **20 例**：新增「已有完整 MSYS2 + 5 个组件 → 说『什么都不用装』、`download.bytes` 为 0、prepare/download/extract/pacman/config 五步全 skipped」、「只缺 1 个包 → 只说 `openocd`、不列已装的 4 个、`download.bytes` 为 0、nextStep 是『只补缺的 1 个包』」、「pacman 问不出来（超时 / 报错）→ 不猜缺哪个，只说真装时会先问」。既有那例「计划里的 pacman 步骤说的是真会跑的事」跟着改了断言：计划模式允许**一条**只读查询，但绝不能出现 `pacman -S` / `-Sy`。
+`install-units` 17 → **21 例**，按加入顺序：①「已有完整 MSYS2 + 5 个组件 → 说『什么都不用装』、`download.bytes` 为 0」；②「只缺 1 个包 → 只说 `openocd`、不列已装的 4 个」；③「pacman 问不出来（超时 / 报错）→ 不猜缺哪个，只说真装时会先问」；④「缺 CubeMX → 紧凑卡片补一句 HAL 提示，装了就不补」。既有那例「计划里的 pacman 步骤说的是真会跑的事」跟着改了断言：计划模式允许**一条**只读查询，但绝不能出现 `pacman -S` / `-Sy`。
 
-**24 套件 308 pass / 0 fail**（CI 306 + 2 skipped）。README / README_EN 的计数同步到 308。
+**24 套件 309 pass / 0 fail**（CI 307 + 2 skipped）。README / README_EN 的计数同步到 309。
 
 **还没验证的**：重启 DSH 后在面板里点「生成安装计划」，确认卡片首句变成「什么都不用装」。
 
