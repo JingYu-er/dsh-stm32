@@ -353,14 +353,33 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
 
   // 要读的模板文件、要拷的 Drivers，全部在**写盘之前**检查一遍：
   // 半路才发现插件包缺文件，留下的就是一个比没有更糟的半成品工程。
+  // 例外：.gitignore 不在检查列表里——npm 打包永远排除点文件（.gitignore 同时是它的
+  // 忽略过滤器），npm 安装的用户模板里必然没有它；缺它只影响 git 状态观感，工程照建。
+  const missingOptional: string[] = [];
   const sourcesToCheck = [
     path.join(regTpl, "CMakeLists.txt"),
     path.join(regTpl, "Core", "Src", "main.c"),
-    ...SHARED_TEMPLATE_FILES.map((rel) => path.join(halTpl, rel)),
   ];
   for (const source of sourcesToCheck) {
-    if (!fs.existsSync(source)) return fail("插件模板缺文件：" + source + "（重新安装插件）");
+    if (!fs.existsSync(source)) {
+      return fail(
+        "插件模板缺文件：" + source +
+          "。这是插件包损坏（安装中断或目录被杀毒软件动过），不是工程或配置的问题；" +
+          "带插件版本号（见 package.json）反馈最有效。",
+      );
+    }
   }
+  for (const rel of SHARED_TEMPLATE_FILES) {
+    if (rel === ".gitignore") continue; // 见上：npm 包里必然缺，跳过硬检查
+    if (!fs.existsSync(path.join(halTpl, rel))) {
+      return fail(
+        "插件模板缺文件：" + path.join(halTpl, rel) +
+          "。这是插件包损坏（安装中断或目录被杀毒软件动过），不是工程或配置的问题；" +
+          "带插件版本号（见 package.json）反馈最有效。",
+      );
+    }
+  }
+  if (!fs.existsSync(path.join(halTpl, ".gitignore"))) missingOptional.push(".gitignore");
   const driversSrc = path.join(template.entryDir, "Drivers");
   if (!fs.existsSync(driversSrc)) return fail("缓存的模板目录不完整（缺 Drivers）：" + template.entryDir + "。删掉它再试一次会重新下载。");
 
@@ -400,8 +419,9 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     // 2) 寄存器版 main.c（PC13 蓝丸示例，无占位符）
     fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8"), "utf8");
 
-    // 3) 与 HAL 无关的公共文件：工具链 / presets / 链接脚本 / .gitignore
+    // 3) 与 HAL 无关的公共文件：工具链 / presets / 链接脚本（.gitignore 缺失时跳过，见上面 missingOptional）
     for (const rel of SHARED_TEMPLATE_FILES) {
+      if (rel === ".gitignore" && missingOptional.includes(rel)) continue;
       const dest = path.join(targetDir, rel);
       mkdirTracked(path.dirname(dest), createdDirs);
       fs.copyFileSync(path.join(halTpl, rel), dest);
@@ -428,6 +448,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   const driverFiles = countFiles(path.join(targetDir, "Drivers"));
 
   const warnings: string[] = [];
+  if (missingOptional.includes(".gitignore")) {
+    warnings.push(
+      "插件包里没有 .gitignore（npm 打包会排除它）：工程功能不受影响，只是 git 状态会多出 build/ 目录。" +
+        "想干净就在工程根目录建一个 .gitignore，内容一行：build/",
+    );
+  }
   // 备份清单放第一条：用户看到"覆盖成功"时，第一眼得知道旧文件去哪了。
   if (backupNote !== null) warnings.push(backupNote);
   warnings.push(

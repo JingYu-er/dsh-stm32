@@ -292,6 +292,33 @@ function removeDirQuietly(dir: string): void {
   }
 }
 
+/**
+ * 是不是 Windows 盘根（C:/、C:、D:\ 这类）。
+ * Node 的 mkdirSync 对盘根会抛 EPERM（Windows 不允许 mkdir 在盘根上"创建"它），
+ * 而 targetDir=C:/msys64 时 parent 恰好就是盘根——那是本插件自己建议的默认装法，
+ * 不能让推荐路径变成必炸路径。
+ */
+export function isDriveRoot(dir: string): boolean {
+  const posix = toPosix(dir).replace(/\/+$/u, "");
+  return /^[A-Za-z]:$/u.test(posix);
+}
+
+/**
+ * 确保父目录存在：盘根直接 existsSync 校验（永远存在），其余才走 mkdirSync。
+ * 返回空串表示成功，非空是中文错误原因。
+ */
+function ensureParentDir(parent: string): string {
+  if (isDriveRoot(parent)) {
+    return existsSync(parent) ? "" : "盘根不存在：" + parent;
+  }
+  try {
+    mkdirSync(parent, { recursive: true });
+    return "";
+  } catch (error) {
+    return describeError(error);
+  }
+}
+
 function isMsys2Root(dir: string): boolean {
   return dir !== "" && existsSync(dir + "/usr/bin/bash.exe");
 }
@@ -1580,7 +1607,8 @@ export async function planOrInstallMsys2(
     );
   } else {
     try {
-      mkdirSync(parent, { recursive: true });
+      const mkdirError = ensureParentDir(parent);
+      if (mkdirError !== "") throw new Error(mkdirError + "（父目录 " + parent + "）");
       if (existsSync(msys64)) {
         const entries = safeList(msys64);
         if (entries.length > 0) {

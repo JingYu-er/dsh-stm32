@@ -35,6 +35,82 @@ export interface DoctorProcess {
   pid: number;
 }
 
+/** USB/探针形态诊断的结论（④：区分"没插"与"这台机器根本没有 USB"）。 */
+export type UsbDiagnosis = {
+  kind: "no-usb" | "no-dap" | "driver-error" | "ok" | "unknown";
+  detail: string;
+};
+
+/**
+ * 解析 `pnputil /enum-devices /connected` 的输出，回答"这台机器上 USB 是什么形态"。
+ *
+ * 为什么要分级：云服务器（阿里云 ECS）物理上没有 USB 口，无论用户怎么插线都进不来探针；
+ * 这和"没插板 / 线只供电 / 驱动没装 / 被占"是四种完全不同的回答，混成一句"找不到探针"
+ * 会让用户白折腾。诊断只读、失败不阻塞（unknown 也会给一句手查指引）。
+ */
+export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
+  // 不依赖本地化字段名（中文系统的 pnputil 字段名是 GBK，读出来是乱码）：
+  // 只要任意一行里出现 USB\VID_、USB\ROOT_HUB、或 VID_xxxx&PID 形态的 USB 实例，
+  // 就认定这台机器有 USB 控制器/设备；纯 ASCII 部分（USB、VID、PID、ROOT_HUB）不受编码影响。
+  const hasUsbController =
+    /USB\\(?:VID_|ROOT_HUB|VID\w{4}&PID)/iu.test(pnputilText) ||
+    /\\USB\\/u.test(pnputilText);
+  const hasDap = /CMSIS-DAP|VID_0483&PID_374B|VID_C251&PID_F001|VID_C251&PID_F002/iu.test(pnputilText);
+  const hasDriverProblem = /(?:Problem Code|问题代码)\s*[:：]?\s*(?:1[0-9]|2[0-8]|3[0-9]|4[0-3]|5[0-2])/iu.test(pnputilText);
+  if (!hasUsbController) {
+    return {
+      kind: "no-usb",
+      detail:
+        "系统里枚举不到任何 USB 控制器：这台机器多半是云服务器/虚拟机，物理上没有 USB 口，" +
+        "插线、换线、装驱动都解决不了。要么换一台有 USB 的物理机，要么用 USB over IP（usbipd/USBIP）把探针从别的机器转发过来" +
+        "（注意 SWD 对延迟敏感，转发方案只建议实验用）。",
+    };
+  }
+  if (hasDap && hasDriverProblem) {
+    return {
+      kind: "driver-error",
+      detail:
+        "能看到 CMSIS-DAP 设备但驱动状态异常（Problem Code 非 0）：在设备管理器里找到该设备，" +
+        "重装或回退驱动（CMSIS-DAP 用 WinUSB/HID 通用驱动即可；装过 DAPLink 官方驱动的先卸载它）。",
+    };
+  }
+  if (hasDap) {
+    return { kind: "ok", detail: "能看到 CMSIS-DAP 设备且驱动正常：探针在线，烧录/调试应当能直接找到它。" };
+  }
+  return {
+    kind: "no-dap",
+    detail:
+      "有 USB 控制器但没看到 CMSIS-DAP 设备：检查探针有没有插好（有的线只能供电不能传数据）、" +
+        "板上调试器的跳线/开关位置、以及 BOOT0 是否接错（BOOT0=1 会进系统 bootloader，SWD 不响应）。",
+  };
+}
+
+async function usbDiagnosis(subprocess: SubprocessService, signal?: AbortSignal): Promise<UsbDiagnosis> {
+  // 只读枚举；pnputil 不存在（老系统）或被组策略拦时返回 unknown，绝不让诊断把 doctor 搞挂。
+  try {
+    const outcome = await runCapture(subprocess, {
+      argv: ["pnputil", "/enum-devices", "/connected"],
+      timeoutMs: 10_000,
+      maxBytes: 2 * 1024 * 1024,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (outcome.spawnError !== null || outcome.exitCode !== 0) {
+      return {
+        kind: "unknown",
+        detail: "跑不了 pnputil /enum-devices（" +
+          (outcome.spawnError !== null ? outcome.spawnError : "退出码 " + String(outcome.exitCode)) +
+          "），无法判断 USB/探针形态；可在设备管理器里人工核对。",
+      };
+    }
+    return diagnoseUsb(outcome.stdout + "\n" + outcome.stderr);
+  } catch (error) {
+    return {
+      kind: "unknown",
+      detail: "USB/探针诊断异常终止（" + (error instanceof Error ? error.message : String(error)) + "），可忽略；设备管理器里人工核对。",
+    };
+  }
+}
+
 export interface DoctorReport {
   ok: boolean;
   projectDir: string;
@@ -50,6 +126,8 @@ export interface DoctorReport {
   elfSize: number;
   iocPath: string;
   iocWarnings: string[];
+  /** USB/探针形态诊断（④）：no-usb / no-dap / driver-error / ok / unknown。 */
+  usb: UsbDiagnosis;
   blockers: string[];
   notes: string[];
 }
@@ -121,7 +199,11 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
   const missingRequired = tools.filter((tool) => tool.required && !tool.found).map((tool) => tool.label);
 
   progress("检查残留的调试进程与端口…");
-  const [processes, portBusy] = await Promise.all([listProcesses(subprocess, request.signal), checkPortBusy(port)]);
+  const [processes, portBusy, usb] = await Promise.all([
+    listProcesses(subprocess, request.signal),
+    checkPortBusy(port),
+    usbDiagnosis(subprocess, request.signal),
+  ]);
 
   const buildDir = detectBuildDir(projectDir) ?? "";
   const elfInfo = buildDir === "" ? null : findElf(buildDir);
@@ -166,6 +248,13 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
     blockers.push("gdb 端口 " + String(port) + " 已被监听（可能是上一次调试会话没退干净），debug_run/flash 会顺延或失败");
   }
   if (elfInfo === null) notes.push(buildDir === "" ? "找不到构建目录：先跑 stm32_build" : "构建目录里还没有 .elf：先跑 stm32_build");
+  if (usb.kind === "no-usb") {
+    blockers.push("USB：" + usb.detail);
+  } else if (usb.kind !== "ok" && usb.kind !== "unknown") {
+    notes.push("USB：" + usb.detail);
+  } else if (usb.kind === "ok") {
+    notes.push("USB：探针在线（CMSIS-DAP 已枚举）。");
+  }
   if (iocPath === "") notes.push("工程根目录里没有 .ioc：generate/ioc_inspect 用不了");
   for (const warning of iocWarnings) blockers.push(".ioc：" + warning);
   if (blockers.length === 0) notes.push("环境就绪：工具链齐全、探针没被占、.ioc 没有致命告警");
@@ -189,6 +278,7 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
     elfSize: elfInfo === null ? 0 : elfInfo.size,
     iocPath,
     iocWarnings,
+    usb,
     blockers,
     notes,
   };

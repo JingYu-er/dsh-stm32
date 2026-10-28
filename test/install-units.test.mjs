@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { formatBytes, planOrInstallMsys2, parsePacmanQuery } from "../lib/engine/msys2-install.js";
+import { formatBytes, isDriveRoot, planOrInstallMsys2, parsePacmanQuery } from "../lib/engine/msys2-install.js";
 import {
   readToolchainConfig,
   resetToolchainConfigCache,
@@ -355,6 +355,20 @@ test("计划：只缺 1 个包 → 只说这 1 个，且不下载安装包", asy
   assert.doesNotMatch(report.message, /需要下载/u);
   assert.match(report.nextStep, /只补缺的 1 个包/u);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("isDriveRoot：盘根判定（C:/msys64 的 parent 是盘根，mkdirSync 对它抛 EPERM）", () => {
+  assert.equal(isDriveRoot("C:/"), true);
+  assert.equal(isDriveRoot("C:"), true);
+  assert.equal(isDriveRoot("c:\\"), true);
+  assert.equal(isDriveRoot("D://"), true);
+  assert.equal(isDriveRoot("D:/app"), false);
+  assert.equal(isDriveRoot("C:/msys64"), false);
+  assert.equal(isDriveRoot(""), false);
+  assert.equal(isDriveRoot("/"), false, "Unix 根不是 Windows 盘根");
+  // 反向断言：推荐默认 C:/msys64 的父目录必须被判为盘根——这条曾是必炸路径
+  const parentOf = (dir) => dir.split("/").slice(0, -1).join("/") || "/";
+  assert.equal(isDriveRoot(parentOf("C:/msys64")), true);
 });
 
 test("计划：pacman 问不出来（超时 / 报错）→ 不猜缺哪个，只说真装时会先问", async () => {

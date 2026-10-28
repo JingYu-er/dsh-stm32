@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseTasklistCsv } from "../lib/engine/doctor.js";
+import { diagnoseUsb, parseTasklistCsv } from "../lib/engine/doctor.js";
 import { buildRegsScript, normalizeAddress, parseRegsLog } from "../lib/engine/regs.js";
 
 test("normalizeAddress 接受带/不带 0x、大小写混写，非法返回 null", () => {
@@ -54,6 +54,67 @@ test("parseRegsLog 兼容 \"PC 0x…\" 兜底形态，且地址大小写不敏�
   assert.equal(parsed.pc, "0x08000478");
   assert.equal(parsed.samples[0].value, "0x00002000");
   assert.equal(parsed.samples[0].ok, true);
+});
+
+test("diagnoseUsb：云服务器（没有 USB 控制器）→ no-usb，话术点名换机或 usbip", () => {
+  const cloud = [
+    "Instance ID:                PCI\\VEN_8086&DEV_7000\\0",
+    "Device Description:         Intel 82371SB PCI Bus Master IDE Controller",
+    "Class Name:                 IDE Controller",
+    "Status:                     0x0",
+  ].join("\r\n");
+  const d = diagnoseUsb(cloud);
+  assert.equal(d.kind, "no-usb");
+  assert.match(d.detail, /云服务器|虚拟机/u);
+  assert.match(d.detail, /usbip|USB over IP/iu);
+  assert.match(d.detail, /物理上没有 USB/u);
+});
+
+test("diagnoseUsb：有 USB 控制器但没有 CMSIS-DAP → no-dap，话术覆盖只供电的线与 BOOT0", () => {
+  const desktopNoBoard = [
+    "Instance ID:                PCI\\VEN_8086&DEV_1E31\\3&11583659&0&A0",
+    "Instance ID:                USB\\ROOT_HUB30\\4&3392f545&0&0",
+    "Device Description:         Intel(R) 7 Series/C216 Chipset Family USB Enhanced Host Controller",
+    "Class Name:                 USB (USB Host Controller)",
+    "Class GUID:                 {36fc9e60-c465-11cf-8056-444553540000}",
+    "Status:                     0x0",
+  ].join("\r\n");
+  const d = diagnoseUsb(desktopNoBoard);
+  assert.equal(d.kind, "no-dap");
+  assert.match(d.detail, /只能供电/u);
+  assert.match(d.detail, /BOOT0/u);
+});
+
+test("diagnoseUsb：CMSIS-DAP 在线且无 Problem Code → ok", () => {
+  const online = [
+    "Instance ID:                USB\\VID_C251&PID_F001\\DEMO0001",
+    "Device Description:         CMSIS-DAP",
+    "Class Name:                 USB (USB 儲存裝置)",  // pnputil 输出格式：Class Name: USB (…)
+    "Status:                     0x0",
+  ].join("\r\n");
+  const d = diagnoseUsb(online);
+  assert.equal(d.kind, "ok");
+});
+
+test("diagnoseUsb：CMSIS-DAP 在线但 Problem Code 非 0 → driver-error", () => {
+  const broken = [
+    "Instance ID:                USB\\VID_0483&PID_374B\\00000000001A",
+    "Device Description:         STM32 STLink",
+    "Class Name:                 USB (USB Host Controller)",
+    "Status:                     0x1802000A",
+    "Problem Code:               28",
+  ].join("\r\n");
+  const d = diagnoseUsb(broken);
+  assert.equal(d.kind, "driver-error");
+  assert.match(d.detail, /设备管理器/u);
+});
+
+test("diagnoseUsb：空文本/乱码不误报 no-usb 之外的东西（拿不到 pnputil 输出走 unknown 路径）", () => {
+  // 空输出意味着"什么都没枚举到"：按 no-usb 处理太激进，但也没证据说有 USB。
+  // 设计取舍：空文本给 no-usb（云服务器上 pnputil 正常输出为空集）不会误导——
+  // 有 USB 的机器上 /connected 至少会枚举出控制器自己。
+  const d = diagnoseUsb("");
+  assert.equal(d.kind, "no-usb");
 });
 
 test("parseTasklistCsv 只留下关心的进程，容忍本地化表头与空行", () => {

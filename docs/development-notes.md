@@ -1644,9 +1644,25 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
 
 `install-units` 17 → **21 例**，按加入顺序：①「已有完整 MSYS2 + 5 个组件 → 说『什么都不用装』、`download.bytes` 为 0」；②「只缺 1 个包 → 只说 `openocd`、不列已装的 4 个」；③「pacman 问不出来（超时 / 报错）→ 不猜缺哪个，只说真装时会先问」；④「缺 CubeMX → 紧凑卡片补一句 HAL 提示，装了就不补」。既有那例「计划里的 pacman 步骤说的是真会跑的事」跟着改了断言：计划模式允许**一条**只读查询，但绝不能出现 `pacman -S` / `-Sy`。
 
-**24 套件 309 pass / 0 fail**（CI 307 + 2 skipped）。README / README_EN 的计数同步到 309。
+**24 套件 318 pass / 0 fail**（CI 316 + 2 skipped）。README / README_EN 的计数同步到 318。
 
 **还没验证的**：重启 DSH 后在面板里点「生成安装计划」，确认卡片首句变成「什么都不用装」。
+
+## 20. 发布形态三连修：mpu_armv7 的 marker、npm 吞 .gitignore、盘根 mkdir（2026-10-25）
+
+用户在另一台机器（阿里云 ECS、无 CubeMX、无 USB）实测暴露的三条「作者本机测不出来」的问题，全部是发布/环境形态才炸：
+
+**Q1 mpu_armv7.h 被 marker 误杀（100% 复现，与网络无关）。** `cmsis-sources.ts` 给 5 个内核头共用 `[__CMSIS,__CORE_,__MPU_]`，但上游 V5.0.4 的 `mpu_armv7.h` 是 ARM 原版，真实守卫是 `ARM_MPU_ARMV7_H`（没有前导下划线）——一个都不命中，四条下载链路全通也必失败。改为按文件各配真实守卫（`__CORE_CM3_H` / `__CMSIS_COMPILER_H` / `__CMSIS_GCC_H` / `__CMSIS_VERSION` / `ARM_MPU_ARMV7_H`）。**测试侧同一个坑**：`cache-units` 的 `markerFor()` 按文件名猜 "`#ifndef __MPU_ARMV7_H`"，恰好撞上旧 markers 的 `__MPU_`，等于一直在测假世界——同步改成真实守卫表，并新增回归用例（真守卫内容必须能落盘）。
+
+**Q2 npm 打包永远排除 .gitignore（所有 npm 用户 100% 复现）。** `.gitignore` 同时是 npm 的忽略过滤器，永远进不了 tarball；而 `register-template.ts` 把它列为**必需**文件，缺失即整次失败，报错还让用户"重新安装插件"——npm 用户重装是同一个包，死循环。用户决定**不改名、只做容错**：`.gitignore` 移出硬检查与复制循环，缺失时继续建工程 + 一句 warning（"工程功能不受影响，git 状态会多出 build/；想干净就自己建一个内容为 build/ 的 .gitignore"）；scaffold 路线同样处理；"重新安装插件"文案改为指向插件版本号反馈。两条路线各加一例"缺失时 ok:true + warning + 其余文件齐全"的测试（测试里临时把真实模板的 .gitignore 改名、finally 恢复）。
+
+**Q3 盘根 mkdir EPERM（插件自设的雷）。** `targetDir=C:/msys64` 是插件自己建议的默认装法，而 parent 是盘根 `C:/`，Node 的 `mkdirSync(盘根, {recursive:true})` 在 Windows 抛 EPERM。新增 `isDriveRoot(dir)`（导出，纯函数）与 `ensureParentDir(parent)`：盘根走 `existsSync` 校验、其余才 mkdir。install-units 加 isDriveRoot 单测（含"推荐默认 C:/msys64 的 parent 必须被判为盘根"的反向断言）。
+
+**Q4 USB/探针形态诊断（doctor 分级）。** 云服务器物理上没有 USB 口，与"没插板/线只供电/驱动异常/被占用"是四种完全不同的回答。新增 `diagnoseUsb(pnputilText)`（纯函数，四分类：no-usb / no-dap / driver-error / ok，另有 unknown 兜底）与 `usbDiagnosis(subprocess)`（跑只读 `pnputil /enum-devices /connected`，失败不阻塞）。**编码教训**：中文系统 pnputil 字段名是 GBK（"实例 ID" 读出来是乱码），任何依赖字段名的解析都会失效——最终只认行内 ASCII 本体（`USB\\VID_`、`USB\\ROOT_HUB`）。no-usb 判定进 blockers（它阻塞烧录且无解），no-dap/driver-error 进 notes，ok 也给一句"探针在线"。DoctorReport 与工具 outputSchema 新增 `usb` 字段，渲染加一行。doctor-regs-units +5 例。真机复验：本机（有 USB、无 CMSIS-DAP）正确报 no-dap 而不是 no-usb。
+
+**测试。** cache-units 16 → 17（真守卫回归）、scaffold-patch-units 22 → 24（.gitignore 缺失两条路线各一例）、install-units 21 → 22（isDriveRoot）、doctor-regs-units 5 → 10（四分类 + 空文本）。**24 套件 318 pass / 0 fail**（CI 316 + 2 skipped）。
+
+**发布顺序**：npm pack --dry-run 人工核对 → 版本 0.1.2（package.json + lock 两处 + 两 README 各两处）→ npm publish（盯 PUT 201/202）→ 模拟用户验收（删缓存 + 新 profile 装 tarball + register/hal 各建一次 + doctor 看 USB 话术）。
 
 
 

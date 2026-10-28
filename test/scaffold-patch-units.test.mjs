@@ -361,6 +361,55 @@ test("A1 覆盖备份：register 路线 overwrite=true 时，被覆盖的旧文�
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("npm 包形态：模板里没有 .gitignore 时，register 路线照建工程并给一句 warning", async () => {
+  const root = tempDir("gitignore-reg");
+  const { env } = seedCmsisCache(root);
+  const targetDir = path.join(root, "blink");
+  // 模拟 npm 安装：npm 打包永远排除 .gitignore。改的是真实模板文件，测完恢复。
+  const halTpl = path.resolve(process.cwd(), "templates", "scaffold");
+  const gi = path.join(halTpl, ".gitignore");
+  const giBackup = path.join(root, "gitignore.saved");
+  fs.copyFileSync(gi, giBackup);
+  fs.rmSync(gi);
+
+  try {
+    const report = await createRegisterProject({ targetDir, projectName: "blink", mcu: "STM32F103C8T6", env, download: false });
+    assert.equal(report.ok, true, report.message);
+    assert.ok(report.warnings.some((line) => line.includes(".gitignore")), "缺 .gitignore 要在 warnings 里说明：" + report.warnings.join(" | "));
+    // 其余公共文件一个不少：工程能用
+    assert.ok(fs.existsSync(path.join(targetDir, "CMakeLists.txt")));
+    assert.ok(fs.existsSync(path.join(targetDir, "CMakePresets.json")));
+    assert.ok(fs.existsSync(path.join(targetDir, "STM32F103XX_FLASH.ld")));
+    assert.ok(!fs.existsSync(path.join(targetDir, ".gitignore")), "缺失时不该凭空造一个");
+  } finally {
+    fs.copyFileSync(giBackup, gi);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("npm 包形态：模板里没有 .gitignore 时，hal 路线照建骨架并给一句 warning", () => {
+  const root = tempDir("gitignore-hal");
+  const targetDir = path.join(root, "blink");
+  const halTpl = path.resolve(process.cwd(), "templates", "scaffold");
+  const gi = path.join(halTpl, ".gitignore");
+  const giBackup = path.join(root, "gitignore.saved");
+  fs.copyFileSync(gi, giBackup);
+  fs.rmSync(gi);
+  try {
+    const report = createProjectScaffold({ targetDir, projectName: "blink", cubeMxRoots: [CUBE_ROOT], firmwarePackage: DEFAULT_FIRMWARE_PACKAGE });
+    if (report.ok) {
+      assert.ok(report.warnings.some((line) => line.includes(".gitignore")), "缺 .gitignore 要在 warnings 里说明：" + report.warnings.join(" | "));
+      assert.ok(!fs.existsSync(path.join(targetDir, ".gitignore")));
+    } else {
+      // 本机没有固件包时 preflight 会先拒绝——那就只验证拒绝原因不是 .gitignore
+      assert.ok(!report.message.includes(".gitignore"), "拒绝原因不该扯到 .gitignore：" + report.message);
+    }
+  } finally {
+    fs.copyFileSync(giBackup, gi);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("A1 .ioc 保护：hal 路线遇到已有同名 .ioc 时直接拒绝，一个字节都不动", () => {
   const root = tempDir("a1-hal");
   const targetDir = path.join(root, "blink");

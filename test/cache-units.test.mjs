@@ -48,10 +48,22 @@ function payloadFor(name) {
   return text + "\n" + markerFor(name);
 }
 
-/** 与 cmsis-sources.ts 里各 target 的 markers 对齐。 */
+/**
+ * 与 cmsis-sources.ts 里各 target 的 markers 对齐——用的是上游文件里的**真实守卫**。
+ * 之前的版本按文件名猜（"#ifndef __MPU_ARMV7_H"），恰好撞上旧 markers 的 __MPU_，
+ * 于是 mpu_armv7.h 的真实守卫 ARM_MPU_ARMV7_H 反而测不到。
+ */
 function markerFor(name) {
   if (name === "system_stm32f1xx.c") return "void SystemInit(void);";
   if (name.endsWith(".s")) return ".syntax unified\n_estack:";
+  if (name === "core_cm3.h") return "#ifndef __CORE_CM3_H";
+  if (name === "cmsis_compiler.h") return "#ifndef __CMSIS_COMPILER_H";
+  if (name === "cmsis_gcc.h") return "#ifndef __CMSIS_GCC_H";
+  if (name === "cmsis_version.h") return "#define __CMSIS_VERSION";
+  if (name === "mpu_armv7.h") return "#ifndef ARM_MPU_ARMV7_H"; // ARM 原版守卫，没有前导下划线
+  if (name === "stm32f1xx.h") return "#ifndef __STM32F1XX_H";
+  if (name === "stm32f103xb.h") return "#ifndef __STM32F103xB_H";
+  if (name === "system_stm32f1xx.h") return "#ifndef __SYSTEM_STM32F1XX_H";
   return "#ifndef __" + name.replace(/[^a-z0-9]/gi, "_").toUpperCase() + "_H";
 }
 
@@ -435,6 +447,28 @@ test("checkCacheEntry：同样大小、内容被换掉也要判出来（A38 sha2
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("mpu_armv7.h 用 ARM 原版守卫 ARM_MPU_ARMV7_H，不再是 __MPU_（寄存器路线必下载失败的根因）", async () => {
+  const root = tempDir("mpu");
+  const env = { DSH_STM32_CACHE: join(root, "cache") };
+  // 上游 V5.0.4 的真实开头（守卫没有前导下划线；旧 markers [__CMSIS,__CORE_,__MPU_] 一个都不命中）
+  const impl = fakeFetch({
+    handler: (url) => {
+      const name = url.split("/").pop();
+      if (name === "mpu_armv7.h") {
+        // 上游 V5.0.4 的真实开头（守卫没有前导下划线；旧 markers [__CMSIS,__CORE_,__MPU_] 一个都不命中）
+        const upstream = "#ifndef ARM_MPU_ARMV7_H\n#define ARM_MPU_ARMV7_H\n" + "/* MPU */\n".repeat(80);
+        return new Response(upstream, { status: 200 });
+      }
+      return new Response(payloadFor(name), { status: 200 });
+    },
+  });
+  const template = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: impl });
+  assert.equal(template.ok, true, template.message);
+  const mpu = join(template.entryDir, "Drivers", "CMSIS", "Include", "mpu_armv7.h");
+  assert.equal(existsSync(mpu), true, "mpu_armv7.h 应当能通过校验并落盘");
+  assert.match(readFileSync(mpu, "utf8"), /ARM_MPU_ARMV7_H/u);
 });
 
 test("fetchOne：字节数够但内容特征不对，换源而不是落盘（A32 markers）", async () => {

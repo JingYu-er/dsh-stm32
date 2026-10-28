@@ -70,6 +70,14 @@ export const outputSchema: JsonSchema = {
         missingRequired: { type: "array", items: { type: "string" } },
         tools: { type: "array", items: toolSchema },
         processes: { type: "array", items: processSchema },
+        usb: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["no-usb", "no-dap", "driver-error", "ok", "unknown"] },
+            detail: { type: "string" },
+          },
+          required: ["kind", "detail"],
+        },
         port: { type: "number" },
         portBusy: { type: "boolean" },
         buildDir: { type: "string" },
@@ -82,7 +90,7 @@ export const outputSchema: JsonSchema = {
       },
       required: [
         "ok", "projectDir", "message", "durationMs", "missingRequired", "tools", "processes",
-        "port", "portBusy", "buildDir", "elfPath", "elfSize", "iocPath", "iocWarnings", "blockers", "notes",
+        "port", "portBusy", "buildDir", "elfPath", "elfSize", "iocPath", "iocWarnings", "usb", "blockers", "notes",
       ],
     },
   },
@@ -116,7 +124,8 @@ function formatReport(report: DoctorReport): string[] {
     lines.push("可疑进程：" + (report.processes as DoctorProcess[]).map((process) => process.name + "(" + String(process.pid) + ")").join(" "));
   }
   lines.push("gdb 端口：" + String(report.port) + (report.portBusy ? "（被占用）" : "（空闲）"));
-  if (report.buildDir !== "") lines.push("构建目录：" + report.buildDir);
+  lines.push("USB：" + report.usb.kind + " — " + report.usb.detail);
+if (report.buildDir !== "") lines.push("构建目录：" + report.buildDir);
   if (report.elfPath !== "") lines.push("固件：" + report.elfPath + "（" + String(report.elfSize) + " B）");
   if (report.iocPath !== "") lines.push(".ioc：" + report.iocPath);
   if (report.blockers.length > 0) {
@@ -162,7 +171,7 @@ export function registerDoctor(ctx: DshContext): void {
           message: "宿主缺少 subprocess 服务，无法体检",
           report: {
             ok: false, projectDir: args.projectDir ?? "", message: "宿主缺少 subprocess 服务", durationMs: 0,
-            missingRequired: ["subprocess"], tools: [], processes: [], port: args.port ?? 3333, portBusy: false,
+            missingRequired: ["subprocess"], tools: [], processes: [], usb: { kind: "unknown", detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,
             buildDir: "", elfPath: "", elfSize: 0, iocPath: "", iocWarnings: [], blockers: ["宿主缺少 subprocess 服务"], notes: [],
           },
         };
