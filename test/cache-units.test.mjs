@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import {
@@ -71,6 +72,32 @@ function markerFor(name) {
  * 假 fetch：按 URL 末尾的文件名返回内容；never = 永远 404；html = 返回一个网页。
  * 记录每次调用的 URL，用来断言"按候选顺序回退"。
  */
+/** sha256（测试构造哈希用）。 */
+function hashOf(text) {
+  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+}
+
+/** 与 cmsisTemplatePlan 的 target.path 一一对应的示例内容（供哈希注入）。 */
+const SAMPLE_PAYLOADS = {
+  "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h": payloadFor("stm32f1xx.h"),
+  "Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h": payloadFor("system_stm32f1xx.h"),
+  "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h": payloadFor("stm32f103xb.h"),
+  "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/system_stm32f1xx.c": payloadFor("system_stm32f1xx.c"),
+  "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s": payloadFor("startup_stm32f103xb.s"),
+  "Drivers/CMSIS/Include/core_cm3.h": payloadFor("core_cm3.h"),
+  "Drivers/CMSIS/Include/cmsis_compiler.h": payloadFor("cmsis_compiler.h"),
+  "Drivers/CMSIS/Include/cmsis_gcc.h": payloadFor("cmsis_gcc.h"),
+  "Drivers/CMSIS/Include/cmsis_version.h": payloadFor("cmsis_version.h"),
+  "Drivers/CMSIS/Include/mpu_armv7.h": payloadFor("mpu_armv7.h"),
+};
+
+/** path → sha256（注入 ensureCmsisTemplate 的测试点，验证哈希校验链路本身）。 */
+function contentHashes(override = {}) {
+  const out = {};
+  for (const [key, text] of Object.entries(SAMPLE_PAYLOADS)) out[key] = hashOf(text);
+  return { ...out, ...override };
+}
+
 function fakeFetch(options = {}) {
   const calls = [];
   const impl = async (url) => {
@@ -337,7 +364,7 @@ test("ensureCmsisTemplate：下载成功写索引，第二次直接命中缓存�
   const root = tempDir("ensure-online");
   const env = { DSH_STM32_CACHE: root };
   try {
-    const first = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch() });
+    const first = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(first.ok, true, first.message);
     assert.equal(first.cacheHit, false);
     assert.equal(first.files, 11, "10 个下载文件 + THIRD_PARTY_NOTICES.md（notices 也要进 files[]，A24）");
@@ -361,7 +388,7 @@ test("ensureCmsisTemplate：下载成功写索引，第二次直接命中缓存�
 
     // 文件被删掉 → 自动重下
     rmSync(join(first.entryDir, "Drivers/CMSIS/Include/core_cm3.h"));
-    const third = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch() });
+    const third = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(third.ok, true);
     assert.equal(third.cacheHit, false);
   } finally {
@@ -374,12 +401,12 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
   const targetDir = join(root, "reg");
   const env = { DSH_STM32_CACHE: join(root, "cache") };
   try {
-    const report = await createRegisterProject({ targetDir, projectName: "reg", mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch() });
+    const report = await createRegisterProject({ targetDir, projectName: "reg", mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(report.ok, true);
     assert.equal(report.route, "register");
     assert.equal(report.startup, "startup_stm32f103xb.s");
     assert.equal(report.deviceDefine, "STM32F103xB");
-    assert.equal(report.templateFiles, 6);
+    assert.equal(report.templateFiles, 7);
     assert.equal(report.driverFiles, 10);
 
     const cmake = readFileSync(join(targetDir, "CMakeLists.txt"), "utf8");
@@ -394,13 +421,13 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.equal(existsSync(join(targetDir, "cmake", "gcc-arm-none-eabi.cmake")), true);
     assert.equal(existsSync(join(targetDir, "Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s")), true);
 
-    const second = await createRegisterProject({ targetDir, projectName: "reg", mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), overwrite: true });
+    const second = await createRegisterProject({ targetDir, projectName: "reg", mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), hashes: contentHashes(), overwrite: true });
     assert.equal(second.ok, true);
     assert.equal(second.cacheHit, true);
     assert.equal(readFileSync(join(env.DSH_STM32_CACHE, "F1", "startup_stm32f103xb", "THIRD_PARTY_NOTICES.md"), "utf8").length > 0, true);
 
     // 认不出的芯片：拒绝，而不是编一个启动文件
-    const unsupported = await createRegisterProject({ targetDir: join(root, "g4"), projectName: "g4", mcu: "STM32G431CBT6", env, fetchImpl: fakeFetch() });
+    const unsupported = await createRegisterProject({ targetDir: join(root, "g4"), projectName: "g4", mcu: "STM32G431CBT6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(unsupported.ok, false);
     assert.match(unsupported.message, /认不出/u);
   } finally {
@@ -452,19 +479,22 @@ test("checkCacheEntry：同样大小、内容被换掉也要判出来（A38 sha2
 test("mpu_armv7.h 用 ARM 原版守卫 ARM_MPU_ARMV7_H，不再是 __MPU_（寄存器路线必下载失败的根因）", async () => {
   const root = tempDir("mpu");
   const env = { DSH_STM32_CACHE: join(root, "cache") };
-  // 上游 V5.0.4 的真实开头（守卫没有前导下划线；旧 markers [__CMSIS,__CORE_,__MPU_] 一个都不命中）
+  // 上游 V5.0.4 的真实开头：守卫没有前导下划线，旧 markers [__CMSIS,__CORE_,__MPU_] 一个都不命中。
+  // hashes 注入的是这批假内容的真实哈希（mpu 用 upstream 的、其余用 payloadFor 的）。
+  const upstream = "#ifndef ARM_MPU_ARMV7_H\n#define ARM_MPU_ARMV7_H\n" + "/* MPU */\n".repeat(80);
   const impl = fakeFetch({
     handler: (url) => {
       const name = url.split("/").pop();
-      if (name === "mpu_armv7.h") {
-        // 上游 V5.0.4 的真实开头（守卫没有前导下划线；旧 markers [__CMSIS,__CORE_,__MPU_] 一个都不命中）
-        const upstream = "#ifndef ARM_MPU_ARMV7_H\n#define ARM_MPU_ARMV7_H\n" + "/* MPU */\n".repeat(80);
-        return new Response(upstream, { status: 200 });
-      }
+      if (name === "mpu_armv7.h") return new Response(upstream, { status: 200 });
       return new Response(payloadFor(name), { status: 200 });
     },
   });
-  const template = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: impl });
+  const template = await ensureCmsisTemplate({
+    mcu: "STM32F103C8T6",
+    env,
+    fetchImpl: impl,
+    hashes: contentHashes({ "Drivers/CMSIS/Include/mpu_armv7.h": hashOf(upstream) }),
+  });
   assert.equal(template.ok, true, template.message);
   const mpu = join(template.entryDir, "Drivers", "CMSIS", "Include", "mpu_armv7.h");
   assert.equal(existsSync(mpu), true, "mpu_armv7.h 应当能通过校验并落盘");
@@ -494,6 +524,31 @@ test("fetchOne：字节数够但内容特征不对，换源而不是落盘（A32
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("sha256 校验（0a）：哈希对不上时拒绝落盘，错误信息带期望与实际", async () => {
+  const root = tempDir("sha");
+  const env = { DSH_STM32_CACHE: join(root, "cache") };
+  const result = await ensureCmsisTemplate({
+    mcu: "STM32F103C8T6",
+    env,
+    fetchImpl: fakeFetch(),
+    // 故意给一个错的期望哈希：内容是 SAMPLE_PAYLOADS 的真哈希，期望值错开一位
+    hashes: Object.fromEntries(
+      Object.entries(contentHashes()).map(([key, value]) => [key, value === "0".repeat(64) ? "1".repeat(64) : "0".repeat(64)]),
+    ),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /sha256/u);
+  // 10 个文件全部被拒：错误信息里既有期望前缀也有实际前缀
+  assert.match(result.message, /期望/u);
+});
+
+test("sha256 校验（0a）：期望哈希正确时全部落盘（与上面的 contentHashes 注入等价）", async () => {
+  const root = tempDir("sha-ok");
+  const env = { DSH_STM32_CACHE: join(root, "cache") };
+  const result = await ensureCmsisTemplate({ mcu: "STM32F103C8T6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
+  assert.equal(result.ok, true, result.message);
 });
 
 test("ensureCmsisTemplate：下载失败不把并发方在读的目录直接抽走，并说清半截目录去哪了（A24）", async () => {

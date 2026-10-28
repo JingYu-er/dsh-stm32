@@ -143,6 +143,31 @@ test("stm32_flash 失败报告含 args 且符合 output schema", () => {
   });
 });
 
+test("stm32_flash 失败报告带 errorCode 时仍符合 output schema（2d 回归）", async () => {
+  // 本机 smoke 里踩到的真缺陷：reportSchema 漏声明 errorCode（additionalProperties:false），
+  // 成功路径 errorCode 缺省所以测不出来；一旦失败带码，宿主直接判「工具返回了非法输出」。
+  const failLog = [
+    "Open On-Chip Debugger 0.12.0",
+    "Error: unable to find a matching CMSIS-DAP device",
+    "Error: Error connecting DP: cannot read IDR",
+  ].join("\n");
+  const failingSubprocess = {
+    resolveExecutable: (command) => command,
+    spawn: () => ({
+      done: Promise.resolve({ exitCode: 1, signal: null }),
+      collected: {
+        stdout: { readFrom: () => ({ text: "", nextOffset: 0 }) },
+        stderr: { readFrom: () => ({ text: failLog, nextOffset: failLog.length }) },
+      },
+      waitForExit: () => Promise.resolve({ exitCode: 1, signal: null }),
+    }),
+  };
+  const report = await runFlash(failingSubprocess, { projectDir: FIXTURE_PROJECT, timeoutMs: 5000 });
+  reportProblems("stm32_flash", flashSchema, { message: report.message, report });
+  assert.equal(report.ok, false);
+  assert.equal(report.errorCode, "no-probe", "拿不到探针时要归到 no-probe：" + JSON.stringify(report.errors));
+});
+
 test("stm32_debug_run 失败报告符合 output schema", () => {
   return runDebugRun(forbiddenSubprocess, { projectDir: MISSING_DIR, timeoutMs: 5000 }).then((report) => {
     reportProblems("stm32_debug_run", debugSchema, { message: report.message, report });

@@ -10,7 +10,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
-import { runStreaming } from "./subprocess-runner.js";
+import { runCapture, runStreaming } from "./subprocess-runner.js";
+import { resolveToolIn } from "./probe.js";
 import { envWithBinDirs } from "./tool-env.js";
 import type { SubprocessService } from "../types.js";
 
@@ -23,6 +24,12 @@ export interface BuildRequest {
   signal?: AbortSignal;
   onProgress?: (line: string) => void;
   binDirs?: string[];
+  /**
+   * 构建成功后额外转换的产物格式（2b）。默认不转换——现有用户行为一个字节都不变。
+   * elf 恒有（编译链接本来就产它）；hex / bin 用同一工具链的 arm-none-eabi-objcopy 转出，
+   * 产线烧录器、CubeProgrammer、J-Flash、串口 ISP 基本只认这两个格式。
+   */
+  artifacts?: ("elf" | "hex" | "bin")[];
 }
 
 export interface MemoryUsage {
@@ -52,6 +59,8 @@ export interface BuildReport {
   memoryUsage: MemoryUsage[];
   /** 没有产物时省略（宿主输出校验不允许 null）。 */
   elf?: ElfInfo;
+  /** hex/bin 转换结果（2b）：请求了 artifacts 且转换成功时才有；失败进 notes 降级。 */
+  converted?: { kind: "hex" | "bin"; path: string; size: number }[];
   message: string;
   logTail: string;
   notes: string[];
@@ -364,9 +373,39 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
       { ...base, errors, notes },
     );
   }
+  // 2b：按请求转换 hex / bin。objcopy 失败不判 build 失败——编译本身成功了，
+  // 转不出来只降级为 warning（给 CubeProgrammer 用户一句怎么自己转）。
+  const wanted = new Set(request.artifacts ?? []);
+  const converted: { kind: "hex" | "bin"; path: string; size: number }[] = [];
+  if (elf !== null && (wanted.has("hex") || wanted.has("bin"))) {
+    const objcopy = await resolveToolIn(subprocess, ["arm-none-eabi-objcopy"], config.binDirs, request.signal);
+    for (const kind of ["hex", "bin"] as const) {
+      if (!wanted.has(kind)) continue;
+      if (objcopy === null) {
+        notes.push("要 " + kind + " 但找不到 arm-none-eabi-objcopy（工具链不完整）；跳过转换，elf 仍可用");
+        continue;
+      }
+      const out = elf.path.replace(/\.elf$/u, "") + (kind === "hex" ? ".hex" : ".bin");
+      const conv = await runCapture(subprocess, {
+        argv: [objcopy, "-O", kind === "hex" ? "ihex" : "binary", elf.path, out],
+        cwd: buildDir,
+        timeoutMs: 60_000,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      if (conv.spawnError === null && conv.exitCode === 0 && existsSync(out)) {
+        const size = statSync(out).size;
+        converted.push({ kind, path: out, size });
+        notes.push(kind + "：" + out + "（" + String(size) + " B）");
+      } else {
+        notes.push(kind + " 转换失败（" + (conv.spawnError ?? "退出码 " + String(conv.exitCode)) + "）；elf 仍可用");
+      }
+    }
+  }
+
   return {
     ok: true,
     ...base,
+    ...(converted.length === 0 ? {} : { converted }),
     notes,
     message: "编译成功（" + (durationMs / 1000).toFixed(1) + " s，" + String(errors.length) + " 个错误、" + String(base.warningCount) + " 个警告）",
   };

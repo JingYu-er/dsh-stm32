@@ -58,11 +58,11 @@ function makeContext(workdir) {
 
 const invocation = (rawInput) => ({ commandId: "c1", agent: { id: "a1" }, rawInput, signal: new AbortController().signal });
 
-await check("注册 6 条命令，名字与描述齐全", () => {
+await check("注册 7 条命令，名字与描述齐全", () => {
   const { ctx, commands } = makeContext("D:/proj");
   registerCommands(ctx);
   const names = [...commands.keys()].sort();
-  assert(JSON.stringify(names) === JSON.stringify(["stm32-build", "stm32-debug", "stm32-doctor", "stm32-env", "stm32-flash", "stm32-stop"]), "命令名不对：" + names.join(","));
+  assert(JSON.stringify(names) === JSON.stringify(["stm32-build", "stm32-debug", "stm32-doctor", "stm32-env", "stm32-flash", "stm32-setup", "stm32-stop"]), "命令名不对：" + names.join(","));
   for (const [, definition] of commands) {
     assert(typeof definition.description === "string" && definition.description.length > 8, definition.name + " 缺描述");
     assert(typeof definition.handler === "function", definition.name + " 缺 handler");

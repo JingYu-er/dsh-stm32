@@ -85,6 +85,17 @@ test("diagnoseUsb：有 USB 控制器但没有 CMSIS-DAP → no-dap，话术覆�
   assert.match(d.detail, /BOOT0/u);
 });
 
+test("diagnoseUsb：CH340 桥接探针（VID_1A86）也算在线（2a VID 扩表）", () => {
+  const ch340 = [
+    "Instance ID:                USB\\ROOT_HUB30\\4&1a2b3c4d&0&0",
+    "Instance ID:                USB\\VID_1A86&PID_7523\\5&2ff57725&0&0",
+    "Device Description:         USB-SERIAL CH340",
+    "Status:                     0x0",
+  ].join("\r\n");
+  const d = diagnoseUsb(ch340);
+  assert.equal(d.kind, "ok");
+});
+
 test("diagnoseUsb：CMSIS-DAP 在线且无 Problem Code → ok", () => {
   const online = [
     "Instance ID:                USB\\VID_C251&PID_F001\\DEMO0001",

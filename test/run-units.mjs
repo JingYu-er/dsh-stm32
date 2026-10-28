@@ -15,6 +15,7 @@ const suites = [
   "commands-units.test.mjs",
   "doctor-regs-units.mjs",
   "engine-units.test.mjs",
+  "export-units.test.mjs",
   "firmware-units.test.mjs",
   "flash-units.test.mjs",
   "generate-cache-units.test.mjs",

@@ -29,6 +29,7 @@ import { registerIocApply } from "./tools/ioc-apply.js";
 import { registerIocInspect } from "./tools/ioc-inspect.js";
 import { registerIocPlan } from "./tools/ioc-plan.js";
 import { registerProjectCreate } from "./tools/project-create.js";
+import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
@@ -66,6 +67,7 @@ export function apply(ctx: DshContext): void {
   registerEnvInstall(ctx);
   registerFirmwareInstall(ctx);
   registerProjectCreate(ctx);
+  registerProjectExport(ctx);
   registerCodePatch(ctx);
   registerGenerate(ctx);
   registerIocInspect(ctx);

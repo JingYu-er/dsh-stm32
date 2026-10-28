@@ -27,3 +27,6 @@ jobs:
             throw "lib/ is stale: run 'npm run build' and commit lib/ together with src/."
           }
       - run: npm test
+      # 发布形态烟测：npm pack 解包后真建一个寄存器工程。挡住"源码安装测不出、
+      # npm 安装必炸"的一整类问题（.gitignore 被 npm 排除、模板清单与打包内容不一致）。
+      - run: npm run test:pack

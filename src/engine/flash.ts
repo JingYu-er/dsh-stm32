@@ -12,6 +12,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
+import { usbDiagnosis } from "./doctor.js";
 import { detectBuildDir, findElf } from "./build.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
@@ -57,6 +58,8 @@ export interface FlashReport {
   exitCode?: number;
   programmed: boolean;
   verified: boolean;
+  /** 结构化错误码（2d）：模型按码决定重试还是问人。成功时省略（空串）。 */
+  errorCode?: FlashErrorCode;
   errors: string[];
   message: string;
   logTail: string;
@@ -98,6 +101,36 @@ export function checkNoDebugGuard(projectDir: string, allowNoDebug = false, expl
       : names.length === 0
         ? "工程里没有 .ioc"
         : "工程里有 " + String(names.length) + " 个 .ioc（" + names.join("、") + "），分不清用哪个";
+    // 2c：没有 .ioc（寄存器工程就是这样）时退回看 openocd.cfg 的 transport——
+    // 插件生成的 cfg 固定是 hla_swd；用户换成 jtag 的 cfg 就给警告，守卫从此也覆盖寄存器工程。
+    const cfg = findProjectConfig(projectDir);
+    if (cfg !== null) {
+      try {
+        const cfgText = readFileSync(cfg, "utf8");
+        const isSwd = /transport\s+select\s+(?:hla_)?swd/iu.test(cfgText);
+        const isJtag = /transport\s+select\s+jtag/iu.test(cfgText);
+        if (isSwd) {
+          return {
+            blocked: false,
+            errors: [],
+            notes: ["SWD 守卫（openocd.cfg 版）：transport 是 swd，探针侧不会关调试口；固件侧仍可能自己关 SWD，烧录前自行确认固件没动 AFIO_MAPR。"],
+          };
+        }
+        if (isJtag) {
+          return {
+            blocked: false,
+            errors: [],
+            notes: [
+              "SWD 守卫（openocd.cfg 版）：openocd.cfg 选了 jtag 而不是 swd。F103 的 JTAG 引脚与 SWD 引脚复用，" +
+                "用 JTAG 烧录前确认固件没有把 PA13/PA14 改作他用。",
+            ],
+          };
+        }
+        return { blocked: false, errors: [], notes: ["SWD 守卫没生效：" + why + "；openocd.cfg 里也没有 transport select，无法判断。"] };
+      } catch {
+        return { blocked: false, errors: [], notes: ["读不了 openocd.cfg（" + cfg + "），跳过 SWD 守卫"] };
+      }
+    }
     return {
       blocked: false,
       errors: [],
@@ -184,8 +217,40 @@ export interface FlashLogVerdict {
   verified: boolean;
   /** 真正导致失败的行；成功序列齐全时一律为空（A25）。 */
   errors: string[];
-  /** 成功路径上照样会出现的 Error: 行（DAP / ACK 噪声），只当信息。 */
+  /** 成功路径上照样会出现的 Error: 行（DAP / ACK 噪音），只当信息。 */
   noise: string[];
+  /**
+   * 结构化错误码（2d）：模型按码决定重试还是问人，不用解析日志原文。
+   * ""＝成功或无明确归类；unknown＝有失败但特征都不命中。
+   */
+  errorCode: FlashErrorCode;
+}
+
+export type FlashErrorCode =
+  | ""
+  | "no-probe"        // 找不到探针（没插 / 被 openocd 占用 / 机器没有 USB）
+  | "probe-busy"      // 探针被别的进程攥着
+  | "swd-locked"      // 芯片侧 SWD 连不上（固件关了调试口 / AP 锁）
+  | "flash-protected" // 写保护 / 读保护挡住烧写
+  | "no-power"        // 目标没供电
+  | "target-mismatch" // 连上的不是这颗芯片（id 不符）
+  | "unknown";
+
+/** 按日志行特征归码（2d）：一行命中即返回，多类并存时按先见者优先。 */
+export function errorCodeOfLines(lines: readonly string[]): FlashErrorCode {
+  for (const raw of lines) {
+    const line = raw.toLowerCase();
+    if (/unable to find a matching cmsis-dap device|no device found/.test(line)) return "no-probe";
+    if (/adapter speed could not be limited|target is openocd and must be halted/.test(line)) return "probe-busy";
+    // 真板子取证（2026-10-28）：两个 openocd 同时抓同一个 CMSIS-DAP 时，openocd 不会报"忙"，
+    // 而是两边交替收发导致 DAP 事务错位——满屏 transfer count mismatch / command mismatch。
+    if (/cmsis-dap (transfer count mismatch|command mismatch)|cmsis-dap command cmd_\w+ failed|libusb_error_busy/.test(line)) return "probe-busy";
+    if (/error connecting dp|cannot read idr|ap lock|sticky error/.test(line)) return "swd-locked";
+    if (/flash programming|write protected|read protected|memory protected/.test(line)) return "flash-protected";
+    if (/target voltage may be too low|no power/.test(line)) return "no-power";
+    if (/device id|cannot identify|unexpected idcode/.test(line)) return "target-mismatch";
+  }
+  return "unknown";
 }
 
 /** 认 openocd 的 ** Programming Finished ** / ** Verified OK ** 与 Error: 行。 */
@@ -213,11 +278,25 @@ export function parseFlashLog(text: string): FlashLogVerdict {
     if (succeeded) noise.push(line);
     else errors.push(line);
   }
-  return { programmed, verified, errors, noise };
+  const flat = [...errors, ...noise];
+  const errorCode: FlashErrorCode = succeeded ? "" : errorCodeOfLines(flat.length === 0 ? [text] : flat);
+  return { programmed, verified, errors, noise, errorCode };
 }
 
 const HINT_DP = "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
 const HINT_PROBE = "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试）。";
+const HINT_BUSY = "探针被别的进程同时访问（两个 openocd 抢同一个 CMSIS-DAP 时不会报错，而是满屏 transfer count mismatch）：先关掉调试会话或另一个 openocd，再烧一次。";
+
+/** openocd 报"找不到设备"的那几行错误行（2a 的判定基准，纯函数便于单测）。 */
+export function probeMissingLines(errors: readonly string[]): string[] {
+  return errors.filter((line) => /CMSIS-DAP device|no device found/iu.test(line));
+}
+
+/** USB 形态诊断的结论该以什么 note 呈现（unknown 静默：诊断失败不能把失败报告搞得更吵）。 */
+export function usbNoteFor(kind: string, detail: string): string | null {
+  if (kind === "unknown") return null;
+  return "USB 形态：" + detail;
+}
 
 export async function runFlash(subprocess: SubprocessService, request: FlashRequest): Promise<FlashReport> {
   const projectDir = resolve(request.projectDir);
@@ -307,7 +386,15 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     );
   }
   if (errors.some((line) => /Error connecting DP/u.test(line))) notes.push(HINT_DP);
-  if (errors.some((line) => /CMSIS-DAP device|no device found/iu.test(line))) notes.push(HINT_PROBE);
+  const probeMissing = probeMissingLines(errors);
+  if (probeMissing.length > 0) {
+    notes.push(HINT_PROBE);
+    // 2a：找不到设备时顺手做一次 USB 形态诊断——"没插"与"这台机器根本没 USB"是两种答案。
+    // 诊断失败静默（unknown 不进 notes），绝不能让诊断把失败报告搞得更吵。
+    const usb = await usbDiagnosis(subprocess, request.signal);
+    const extra = usbNoteFor(usb.kind, usb.detail);
+    if (extra !== null) notes.push(extra);
+  }
 
   const ok = outcome.exitCode === 0 && outcome.spawnError === null && !outcome.timedOut && verdict.programmed && errors.length === 0;
   if (!ok && verdict.programmed && !verdict.verified) notes.push("写入成功但校验没过，建议重试或降低 adapter speed");
@@ -317,11 +404,18 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     ? "烧录成功（" + ((Date.now() - startedAt) / 1000).toFixed(1) + " s" + (verdict.verified ? "，已校验" : "") + "）"
     : "烧录失败：" + (errors[0] ?? "openocd 退出码 " + String(outcome.exitCode));
 
+  // 2d：errorCode 供模型分流（重试 / 换线 / 停会话 / 直接问人）。
+  let errorCode: FlashErrorCode = verdict.errorCode;
+  if (!ok && (outcome.spawnError !== null || outcome.timedOut)) errorCode = "unknown";
+  if (!ok && errorCode === "swd-locked" && errors.some((line) => /Error connecting DP/u.test(line))) errorCode = "swd-locked";
+  if (!ok && errorCode === "probe-busy") notes.push(HINT_BUSY);
+
   return {
     ok, projectDir, elfPath, elfSize, command, args, configs,
     durationMs: Date.now() - startedAt,
     ...(outcome.exitCode === null ? {} : { exitCode: outcome.exitCode }),
     programmed: verdict.programmed, verified: verdict.verified,
+    ...(errorCode === "" ? {} : { errorCode }),
     errors, message, logTail: log.split(/\r?\n/u).slice(-25).join("\n"), notes,
   };
 }

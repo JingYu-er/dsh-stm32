@@ -8,9 +8,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.1-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 19 tools, 6 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 20 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.1`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.2`); after a restart `/stm32-doctor` should respond.
 
 
 **Uninstall**: `dsh plugin --profile desktop remove dsh-stm32`, then restart dsh.
@@ -67,7 +67,8 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 318 offline cases, no board needed
+npm test                            # optional: 338 offline cases, no board needed
+npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 ```
 
 Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
@@ -104,6 +105,7 @@ On the model side it is one sentence: "create a blinking-LED project for STM32F1
 /stm32-flash          # flash only, no debug session
 /stm32-debug          # flash + halt at main
 /stm32-stop           # close the debug session, hand the probe back to VS Code
+/stm32-setup          # health check + install plan (the word "install" in the command actually installs)
 ```
 
 ### This is a minimal check, not the ceiling
@@ -130,12 +132,13 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
 | Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
 | Choose the technical route | `stm32_route_plan`: for **this project's** requirements, lays out the HAL and register cost per peripheral (effort / readability / debugging), then says whether what is missing is installable-by-the-plugin or human-only (CubeMX is a GUI wizard needing an ST account; firmware packages are only maintained by the CubeMX package manager) |
-| Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use |
+| Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use (every file is pinned by upstream sha256 and refused if it changed); both routes also ship an `openocd.cfg` (CMSIS-DAP + `hla_swd` + 2 MHz) |
+| Export a project | `stm32_project_export`: packs the sources into one zip (without `build/`, `.dsh-stm32/`, `node_modules/`, `.git/`), optionally including the `.elf`, plus a hand-off README |
 | `.ioc` as a transaction | `stm32_ioc_inspect` (read-only parse) → `stm32_ioc_plan` (diff, no writes) → `stm32_ioc_apply` (SHA check + backup + rollback) |
 | USER CODE only | `stm32_code_patch`: writes only between `/* USER CODE BEGIN X */` and `END X`; everything else untouched |
 | Code generation | `stm32_generate`: headless CubeMX + ST project layout + USER CODE carried over by label |
-| Build | `stm32_build`: build directory and `.elf` inferred, deduplicated errors, RAM/FLASH usage parsed after linking |
-| Flash | `stm32_flash`: openocd `program verify reset exit`, probe released afterwards; checks that the `.ioc` has Serial Wire enabled |
+| Build | `stm32_build`: build directory and `.elf` inferred, deduplicated errors, RAM/FLASH usage parsed after linking; ask for `artifacts: ["hex","bin"]` and the same toolchain's `arm-none-eabi-objcopy` produces them |
+| Flash | `stm32_flash`: openocd `program verify reset exit`, probe released afterwards; checks that the `.ioc` has Serial Wire enabled; failures carry an `errorCode` (`no-probe` / `probe-busy` / `swd-locked` …) |
 | Debug | `stm32_debug_run` / `stm32_debug_session` / `stm32_debug_eval` / `stm32_debug_stop` |
 | Prove it is running | `stm32_regs_read`: reads any peripheral register back by physical address, halts, reads, then `resume` — no chip reset |
 | Working discipline for the model | SKILL `stm32-workflow` shipped with the plugin (USER CODE only, never touch generated regions, flash and debug are separate, claims need register evidence) |
@@ -152,6 +155,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
 | `stm32_project_create` | Empty directory → full CMake project. `route: "hal"` (default) is the CubeMX route (including both "flash only" and "flash and debug" launch configs in `.vscode`); `route: "register"` builds a **no-CubeMX, no-HAL** register-level project (`mcu` picks the part, CMSIS headers and startup file come from the cache). Refuses a non-empty target unless `overwrite: true` |
 | `stm32_cache` | Inspect / verify / fetch / purge the download cache: `action: "list"` (default), `"verify"` (per-file check), `"fetch"` (pull the template for an `mcu`, reusing the cache without touching the network), `"purge"` (drop entries; clears everything without an `id`). The cache holds what the register route needs but the plugin does not ship — CMSIS device headers, startup file, core headers — downloaded once, reused forever |
+| `stm32_project_export` | Hands the project to someone else as one zip: sources, CMake, `.vscode` and the `.ioc` by default, skipping `build/`, `.dsh-stm32/`, `node_modules/`, `.git/`; `includePrebuilt: true` also packs the `.elf`, `readme: false` skips the in-archive README, `outDir` moves the output (default `<name>-export.zip` next to the project) |
 | `stm32_firmware_install` | One-stop firmware-package install: `dryRun` (default) returns only the plan — where it would land, which two source repos it would download, which checks must pass; `dryRun: false` + `confirm: true` actually downloads (HAL driver + CMSIS device support + core headers, ~2 MB total from GitHub), assembles an official-shaped `STM32Cube_FW_<family>_V<version>` package (writing `package.xml` itself) and runs five checks. Does nothing when the official package is already installed; installs into `<CubeMX root>/dsh-firmware` by default (not `Repository` — a self-made version there is silently ignored), and `stm32_generate` points CubeMX at it with `setCustomFWPath` |
 
 ### .ioc: read-only and transactions
@@ -168,13 +172,13 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | --- | --- |
 | `stm32_code_patch` | replace/append inside `USER CODE` blocks only; bytes outside (including CRLF) are preserved; backs up first, then writes a temp file and renames it. A wrong label lists every available label in the file |
 | `stm32_generate` | Runs `java -jar STM32CubeMX.exe -q` headless, then places output under `Core/Src` and `Core/Inc`, carrying USER CODE from the old files by label. Background job by default. **When the `.ioc`, the CubeMX build and every output hash are unchanged it reuses the previous result** (`skipped: true`, ~1 s; pass `skipIfUnchanged: false` or delete `.dsh-stm32/generate-cache.json` to force a rerun). Projects that use no X-CUBE pack (`Mcu.ThirdPartyNb=0`) have `~/.stm32cubemx/thirdparties/pdsc` parked for the run and restored afterwards, saving ~25 s; pass `thirdpartyPacks: "keep"` to keep the index. **The need for the index is not guessed from keywords**: `Mcu.ThirdParty0=STMicroelectronics.X-CUBE-ALGOBUILD.1.4.0` in the `.ioc` is matched by name against a built-in pack catalog (67 packs, generated by `scripts/gen-xcube-catalog.mjs`), and a pack this machine lacks is reported in the notes up front |
-| `stm32_build` | `cmake --build`, with the build directory inferred from `CMakePresets.json` and `build/*/CMakeCache.txt`; configures on first build; rejects the "CMakeCache directory mismatch but ninja exits 0" false success |
+| `stm32_build` | `cmake --build`, with the build directory inferred from `CMakePresets.json` and `build/*/CMakeCache.txt`; configures on first build; rejects the "CMakeCache directory mismatch but ninja exits 0" false success. With `artifacts: ["hex","bin"]` it converts the `.elf` afterwards via `arm-none-eabi-objcopy`; a failed conversion is only a note, not a build failure |
 
 ### Flash and debug
 
 | Tool | What it does |
 | --- | --- |
-| `stm32_flash` | **Flash**: openocd `program verify reset exit`, no debug session, no halt at `main`. Reads the `.ioc` first and refuses when the debug port is disabled (see [Design notes](#design-notes)) |
+| `stm32_flash` | **Flash**: openocd `program verify reset exit`, no debug session, no halt at `main`. Reads the `.ioc` first and refuses when the debug port is disabled (see [Design notes](#design-notes)). Failures carry an `errorCode` (`no-probe` / `probe-busy` / `swd-locked` / `flash-protected` / `no-power` / `target-mismatch` / `unknown`), and when no device is found the USB shape (no USB on this machine / probe unplugged / driver problem) is added to the notes |
 | `stm32_debug_run` | Starts openocd + gdb, `break main` → `continue` → captures pc/sp/lr/bt/locals → `reset run` + `detach`; no Flash write, nothing left running |
 | `stm32_debug_session` | Long-lived openocd session (`.elf` resolved automatically), closed after 90 s idle, hard limit 10 min |
 | `stm32_debug_eval` | Runs gdb commands or reads expressions (e.g. `g_led_blink_count`) inside the session, then `resume` + `detach` immediately |
@@ -188,6 +192,7 @@ Tools are for the model; when you want to act yourself, use a command — one co
 | Command | What it does | Touches the board |
 | --- | --- | --- |
 | `/stm32-doctor` | Health check: toolchain, busy debug processes, ports, `.elf`, `.ioc` warnings | No |
+| `/stm32-setup` | Health check plus an install plan in one go; only actually installs when the command says so (e.g. `/stm32-setup install the missing ones`) | No |
 | `/stm32-env` | Shows what each of the four capabilities (build / flash / debug / generate) is missing, what to install and how to self-check; a missing toolchain still renders the card | No |
 | `/stm32-build [dir] [--clean]` | Build, printing memory usage / `.elf` / errors | No |
 | `/stm32-flash [dir]` | **Flash**: program + verify + reset, no debug session, no breakpoints | Yes |
@@ -334,12 +339,13 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 24 offline suites, 318 cases; no board, CubeMX, or toolchain needed
+npm test                 # 25 offline suites, 338 cases; no board, CubeMX, or toolchain needed
+npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **316 passed + 2 skipped**, while a developer machine runs all 318. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **336 passed + 2 skipped**, while a developer machine runs all 338. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
@@ -355,9 +361,9 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 19 tools, L3 (parameter schema + output contract + rendering)
+  tools/                   the 20 tools, L3 (parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
-  commands/register.ts     the 6 slash commands
+  commands/register.ts     the 7 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
   data/                    paths and chip data (paths are data, not logic)
 templates/scaffold/        project template snapshot (CMake / .ld / .vscode / .ioc)

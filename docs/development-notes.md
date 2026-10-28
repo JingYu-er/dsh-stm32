@@ -1664,6 +1664,129 @@ blocked 时的 `message` 是一句人话，不是字段堆砌：
 
 **发布顺序**：npm pack --dry-run 人工核对 → 版本 0.1.2（package.json + lock 两处 + 两 README 各两处）→ npm publish（盯 PUT 201/202）→ 模拟用户验收（删缓存 + 新 profile 装 tarball + register/hal 各建一次 + doctor 看 USB 话术）。
 
+## 21. 阿里云实测后的五档清单：让"别人的机器"也能从零跑到烧录（2026-10-25）
+
+**背景。** 用户在一台阿里云 Windows ECS（有 MSYS2、无 CubeMX、无 USB 口）上照 README 从零走了一遍，除了 §20 那三条 100% 复现的 P0，还提了五条：①发布形态没人验过——`npm pack` 出来的包里少了文件、`lib/client.js` 与 `client/client.js` 不同步，都要等用户装上才发现；②云服务器上 `stm32_doctor` 说不清"没有 USB 口"和"没插探针"的区别；③只有 `.elf`，想要 `hex` / `bin`，还希望工程自带 `openocd.cfg`；④烧录失败只有一句话，模型没法按类分支；⑤上游文件只靠 marker 判"像不像"，`master` 改一行照样落盘。
+
+定案时明确了两条边界：**不做**自动装 CubeMX（GUI 向导 + ST 账号，装不了）；**不加**运行时依赖（zip 都自己写）。
+
+### 21.1 钉死上游内容：模板每个文件带 sha256（0a）
+
+marker 只能证明"拿回来的像这个文件"，证明不了"还是那一份"。上游 `master` 上把 `system_stm32f1xx.c` 改一行，marker 照样命中，落盘后要到编译期才炸，而缓存还会把坏文件长期留着。
+
+- `src/engine/fetch.ts` 的 `FetchTarget` 加可选 `sha256`，`fetchOne` 的校验顺序是：HTTP 状态 → 体积下限 → HTML 嗅探（代理拦截页）→ marker → **sha256**；不匹配就换下一个候选源，全失败时报「sha256 对不上（期望 `abcd…`，实际 `ef01…`）多半是上游 master 挪动了内容」，并把实际值写进 attempts 方便核对。
+- `src/data/cmsis-sources.ts` 新增四张表 `DEVICE_HEADER_SHA256` / `SYSTEM_C_SHA256` / `STARTUP_SHA256` / `CORE_HEADER_SHA256`，10 个下载目标全部接上。值是 2026-10-25 从本机缓存里的真实文件算出来的，关键五条：`stm32f1xx.h` `05e93fa3ddefb2e83d762b9ca4de36e3bba9cd8e9690400fe9f2c11fc0a3cef5`、`system_stm32f1xx.h` `a54dfbb3480c672f532d472a6e84bcf34df6551771d2e9966c5a3503c676b6ab`、`stm32f103xb.h` `d9c7c613d9fea74220892b4fbc3e80617493acad82a04bafadab2b4a7198399c`、`system_stm32f1xx.c` `8465bf3fe9057adecd8b4561403836d1fa2152d3cb088831623da3f91d86ec0a`、`startup_stm32f103xb.s` `a9a5fc7ed5ff617527dd98b3092830f4d17ed4bf57c99eac2c53bdb514ce138c`。
+- **取舍**：上游一动，新机器就装不上（旧的还能从缓存复用）。仍然选"失败"而不是"照落"——落错文件的代价是半天编译报错的排查，而对不上的提示里直接给了两个哈希，用户（或我）能在 30 秒内判断是上游改了还是网络中间人。
+- 测试注入点：`TemplateRequest.hashes` 与 `RegisterProjectRequest.hashes`（`src/engine/register-template.ts` 把它们映射到 targets 的 `sha256`），测试侧用 `contentHashes(override)` 按 `SAMPLE_PAYLOADS` 现算；`cache-units` 新增"哈希对不上必须拒绝并报两个哈希"。
+
+### 21.2 pack-smoke：发布形态得由 CI 自己验（第 1 批）
+
+`npm test` 跑的是仓库里的 `lib/`，永远发现不了"tarball 里少了 `templates/scaffold/openocd.cfg`"或"`lib/client.js` 没跟着 `client/client.js` 重新生成"。新增 `scripts/pack-smoke.mjs`：
+
+1. `npm pack` 到临时目录；
+2. `tar -xzf` 解开（Windows 上 `execFileSync` 必须带 `shell: true`，否则找不到 `tar`）；
+3. 断言 16 个发布必须文件都在（含 `lib/client.js`、`templates/scaffold/openocd.cfg`——`openocd.cfg` 是 2c 新加的，漏打包会让新工程烧不了而单测全绿）；
+4. 断言 `lib/client.js` 与 `client/client.js` 逐字节一致（否则说明忘了 `npm run build`）；
+5. **用解包出来的 `lib/` 与 `templates/` 真建一次寄存器工程**，断言产物与模板计数。
+
+`package.json` 加 `test:pack`，`.github/workflows/ci.yml` 在 `npm test` 之后单独一步跑它。不并进 `npm test` 的原因：它要跑 `npm pack`（慢），而且它验的是"发布形态"而不是"逻辑"，分开跑能一眼看出是哪种失败。
+
+### 21.3 探针诊断下沉到烧录（2a）
+
+云服务器上 `stm32_flash` 失败只会说「找不到 CMSIS-DAP 设备」，和"线只供电"、"驱动没装"、"口被占"混在一起。做法是把 §20 的 `usbDiagnosis` 复用出两层：
+
+- `src/engine/doctor.ts` 的 `hasDap` 名单扩到 CMSIS-DAP / `VID_0D28` / `VID_0483`（ST-Link）/ `VID_C251` / `VID_1A86`（CH340 桥接板），另配 `usb vid_` 小写形态；
+- `src/engine/flash.ts` 新增导出 `probeMissingLines(errors)`（从 openocd 日志里认出"找不到设备"那几行）与 `usbNoteFor(kind, detail)`（`unknown` 返回 `null`，不乱说话），`runFlash` 只在"确实没找到设备"时把 USB 形态追加进 `notes`。
+
+### 21.4 hex/bin 与 openocd.cfg（2b / 2c）
+
+- `stm32_build` 的 `BuildRequest.artifacts`（`elf` / `hex` / `bin` 的子集）与 `BuildReport.converted`（`{kind, path, size}[]`）。链接成功后用 `resolveToolIn(subprocess, ["arm-none-eabi-objcopy"], config.binDirs, signal)` 跑 `-O ihex` / `-O binary` 到 `.elf` 同目录；**转换失败只写 note，不判编译失败**——编译本身已经成功，`.elf` 仍然可用。不让用户自己 `objcopy` 的理由：门禁已经知道工具链在哪，而且失败时文案能说清"缺 objcopy"还是"路径写不进"。
+- 新增 `templates/scaffold/openocd.cfg`（`source interface/cmsis-dap.cfg`、`transport select hla_swd`、`source target/stm32f1x.cfg`、`adapter speed 2000`），进 `SHARED_TEMPLATE_FILES`，两条路线都自带。2 MHz 是 F103 + CMSIS-DAP 上实测最稳的档位。
+- 顺带把 `checkNoDebugGuard` 的降级路径做完整：工程里找不到唯一 `.ioc` 时，改看 `openocd.cfg` 的 `transport` —— `swd` 放行并说明"依据是 openocd.cfg"；`jtag` 提示 PA13/PA14 可能被复用；连 `transport` 都没有才继续报"守卫没生效"。计数断言随之 14 → 15（scaffold-patch）、6 → 7（cache-units）。
+
+### 21.5 errorCode：让模型能按类分支（2d）
+
+`stm32_flash` 新增 `FlashErrorCode`（`""` / `no-probe` / `probe-busy` / `swd-locked` / `flash-protected` / `no-power` / `target-mismatch` / `unknown`）与 `errorCodeOfLines(lines)`；成功时为空串，`FlashLogVerdict` 与 `FlashReport` 都带上它，工具 schema 用 enum 收口并在卡片里单独一行渲染。分类按 openocd 日志的**首个**命中判定（顺序敏感：先 `no-probe` 再 `probe-busy`，避免把"被占用"读成"没插"）。不把 `message` 直接给模型当分支依据——中文话术会改，错误码是契约。
+
+### 21.6 `/stm32-setup`（第 3 批轻量版）
+
+人已经决定要干活时，先体检再出计划比"先问他装不装"更顺手：命令一次跑完 `stm32_env_probe` + 安装计划；**命令里带「装」字**（例如 `/stm32-setup 装上缺的`）才真装，否则只回计划与下一句。真装仍然是 43 MB 下载 + 写注册表，不能靠一句 `/stm32-setup` 触发。命令数 6 → 7。
+
+### 21.7 `stm32_project_export`：把工程交给别人（P1-4）
+
+用户的原话是"云上建好的工程怎么拿回本地"。与其让他自己挑文件打包，不如给一个工具：
+
+- `src/engine/project-export.ts`：`collectSources` 递归收集，`SKIP_DIRS` 固定跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt` 时把 `.elf` 一起带上；`readme` 默认在包里写一份开箱说明（内容用 `__inline__` 前缀表示"这是内联生成，不是文件"）；`outDir` 缺省落在工程同级的 `<name>-export.zip`。
+- `src/engine/zip.ts`：**store-only 的最小 zip 写盘器**（CRC32 + DOS 时间 + 本地头 + 中央目录），外加 `listZipEntries(buffer)` 给测试验内容。为什么不加 `archiver` / `jszip`：这个仓库的承诺是零运行时依赖、`lib/` 入库、`npm i` 不用编译任何东西，为此引一棵依赖树不划算；我们的场景也不需要压缩比（源码 + 一个 `.elf`）。
+- 报告字段：`ok` / `projectDir` / `zipPath` / `zipBytes` / `fileCount` / `prebuilt` / `durationMs` / `message` / `notes`；`message` 直接给"多少个文件、多大、要不要带 elf"。
+- 测试（`test/export-units.test.mjs` 9 例）：空工程仍出合法 zip 且能被 `listZipEntries` 读回；`build/` 与 `.dsh-stm32/` 不进包；`includePrebuilt: true` 时 `.elf` 在包里、`false` 时不在；`readme: false` 不写 README；默认落点与 `outDir`；`zipBytes` 与磁盘文件大小一致；`fileCount` 与实际条目一致；CRC 能被独立实现验过。
+
+### 21.8 计数与文档
+
+本批新增 8 例（cache 17 → 19 的两条哈希、flash 8 → 13 的五条、doctor 10 → 11 的一条 CH340；`commands-units` 只改命令名单断言、不增例），加 export 9 例：**25 套件 335 pass / 0 fail**（CI 333 + 2 skipped）。README / README_EN 的用例数、套件数、工具数（19 → 20）、命令数（6 → 7）与新增小节一并同步；`package.json` / `package-lock.json` / 两个 README 的 badge 与"装完确认"行升到 0.1.2。
+
+### 21.9 宿主级验证（2026-10-28，重启加载 0.1.2 后）
+
+八项实测，全部通过（不碰板子的部分都跑了；碰板子的两条见 21.10）：
+
+1. **计划只报缺件（§19 的回归）**：`stm32_env_install` 默认计划 → `steps: []`、`download.bytes: 0`、`verify.ok: true`、`notes: []`、`nextStep: ""`，全文只有「工具链完整，不需要装任何东西：5 个组件都能跑，PATH 与配置都已就位（D:/app/msys64/ucrt64/bin）。」
+2. **`stm32_env_probe`**：四项能力全 `true`；gcc 13.3.0、gdb 16.2、openocd 0.12.0、cmake 3.31.5、ninja 1.12.1、`cubemx-java` OpenJDK 21.0.3；`cubemx` 的版本串是空的（路径在、版本没解析出来，记进 21.10）。
+3. **`stm32_doctor`**：`ok: true`、`usb.kind: "no-dap"`（文案把「没插探针 / 线只供电 / BOOT0=1」分开说了）、`portBusy: false`、`processes: []`、`blockers: []`。
+4. **2b hex/bin**：寄存器版工程（template 7 / drivers 10，缓存命中）→ 首次 `cmake --preset Debug` 21.9 s、编译 2.2 s、`elf` 431,012 B、RAM 7.7% / FLASH 1.16%；`converted` = `hex` 2,221 B + `bin` 760 B，落在 `build/Debug/` 里。
+5. **0a sha256 真下载**：把 `%LOCALAPPDATA%\dsh-stm32\cache` 整个挪开 → `stm32_cache fetch` → 11 个文件 / 1,071,297 B 全部过校验并落盘；新缓存与挪开的旧缓存逐文件比对 `diffCount=0`。
+6. **sha256 反向验证**：同一个 URL 故意喂 64 个 `0` 的哈希 → `ok: false`，attempts 原文「sha256 对不上（期望 0000000000000000…，实际 05e93fa3ddefb2e8…）。多半是上游 master 挪动了内容」；喂真值 → `ok: true`、10,110 B。说明这道门禁不是空转。
+7. **export**：同一个寄存器工程 `includePrebuilt: true` → zip 1,522,918 B / 21 条，包内有 `prebuilt/{p1verify.elf,hex,bin}`、`README.md`、`openocd.cfg`、`.gitignore`，**没有** `build/`、没有 `.dsh-stm32/`；notes 写明 build 不进包的原因（CMakeCache 记着本机绝对路径）。
+8. **2c + hal 路线**：hal 工程 template 15（比旧版多 `openocd.cfg`）、drivers 238、`firmwareRoot` = `D:\app\STM32CubeMX\dsh-firmware\STM32Cube_FW_F1_V1.8.8`；`.vscode/launch.json` 与 `settings.json` 剥注释后都 `JSON.parse` 成功、**占位符 0 个、`D:/JingYu` 0 次**，`armToolchainPath` / `gdbPath` 填的是本机探测到的 `D:/app/msys64/ucrt64/bin`；寄存器版工程没有 `.ioc` 时 `checkNoDebugGuard` 按 `openocd.cfg` 的 `transport=swd` 放行（`blocked=false`）并说明依据，不再静默通过。
+
+**顺手记下的两个 API 事实**（下次写验证脚本别再踩）：`src/engine/zip.ts` 的 `listZipEntries(buffer)` 返回的是**文件名数组**（`string[]`），不是对象数组；在 `demo/` 下写脚本 import 插件的 `lib/` 必须用 `file:///` 绝对 URL，相对路径会 `ERR_MODULE_NOT_FOUND`。
+
+**验证用的临时工程**（`.verify-p1/` 下的 reg、hal、zip 与三个脚本）与挪开的旧缓存都已进回收站，`demo/` 下 `.verify-*` / `.tmp-*` 为 0。
+
+### 21.10 还没验证的
+
+- `npm run test:pack` 只在开发机跑过，CI 上首跑要看 windows-latest 的 `tar` 行为（已按经验带 `shell: true`）；
+- 2d 的 `errorCode` 已在真板上验过 `probe-busy`（见 §21.11）；`swd-locked` / `flash-protected` / `no-power` / `target-mismatch` 四种要制造锁片、写保护或拔电源，不能为了测试去毁板子，仍只有单测覆盖；
+- `/stm32-setup`、`/stm32-build` 等斜杠命令的人工卡片：命令只能用户自己输入，工具层结论已由上面的 1–8 覆盖；
+- `stm32_env_probe` 里 `cubemx` 的版本串为空是**设计如此**（`probe.ts` 的 cubemx 目标 `versionArgs: []`——启动器 exe 没有可用的 `--version`，版本靠 `cubemx-java` 那项）；卡片上 `OK  cubemx  <路径>` 正常显示，只有直接读 JSON 的 `version` 字段才是空串。验证时一度把它当缺陷，记在这里免得下次又查一遍；
+- P2（多芯片 F0/F3/F4/G0/L4、HAL 外设源文件落位）与 P3（gdb MI 常驻）未开工。
+### 21.11 上板验证（2026-10-28，蓝丸 F103C8T6 + CMSIS-DAP）
+
+用户插上板子后补的第五~九项。**这一步抓出了两个只有真硬件才会暴露的缺陷**，单测当时全是绿的。
+
+**跑通的部分**
+
+- `stm32_doctor`：`usb.kind` 从 `no-dap` 变成 `ok`（「能看到 CMSIS-DAP 设备且驱动正常」），`processes: []`、`portBusy: false`。
+- `stm32_flash` 烧 demo：`ok`、`programmed + verified`、2.5 s、`errorCode` 缺省；openocd 日志 `device id = 0x20036410`、`flash size = 64 KiB`、`clock speed 1000 kHz`（工程自带 `demo/openocd.cfg`）。
+- 新建寄存器工程（`route=register`，`template 7 / drivers 10`，缓存命中）→ 构建 9.0 s configure + 2.5 s 编译、`regcheck.elf` 431,052 B、RAM 7.70% / FLASH 1.16% → `stm32_flash` 走模板 `openocd.cfg`（`transport swd` + `adapter speed 2000`，日志 `clock speed 2000 kHz`）成功，notes 第一条是「SWD 守卫（openocd.cfg 版）：transport 是 swd…」——2c 的两条路径（.ioc 与 openocd.cfg）都在真机上成立。
+- `stm32_regs_read`：`pc=0x08000210`；`0x4001100C`(GPIOC_ODR)=`0x00000000`、`0x40011004`(GPIOC_CRH)=`0x44244444`、`0x40021018`(RCC_APB2ENR)=`0x00000035`、`0xE000ED04`=`0x00000000`，全 `ok`、`errors: []`。
+- `stm32_debug_run`（`breakAt: main`）：`ok`、`hitBreakpoint`、`main () at Core/Src/main.c:67`、`pc=0x8000f58 sp=0x20004ff8 lr=0x80011ab`、backtrace 一条。
+
+**缺陷 1：模板 `openocd.cfg` 写了 `hla_swd`（2c 的模板错了）**
+
+寄存器工程第一次烧录，宿主直接拒收：`tool "stm32_flash" returned invalid output: "value.report.errorCode" is not a declared property`（这才是缺陷 2 暴露的入口）。手动跑 openocd 才看到真因：`Error: Debug adapter doesn't support 'hla_swd' transport`，位置正是模板的 `transport select hla_swd`。`hla_swd` 只有 st-link 系适配器支持，CMSIS-DAP 必须 `transport select swd`。
+
+修法与回归：模板改 `transport select swd`（注释里写清为什么不能用 `hla_swd`），`test/flash-units.test.mjs` 加一条读模板文件的用例——断言 `/transport\s+select\s+swd\b/u` 命中、**生效行**不含 `hla_swd`（注释允许解释）、把这份配置写进临时目录后 `checkNoDebugGuard` 报 `blocked=false` 且 notes 含「transport 是 swd」。教训：模板类文件也要有「按真实消费者跑一遍」的断言，光断言文件存在不够。
+
+**缺陷 2：`stm32_flash` 的 report schema 漏声明 `errorCode`（2d 在失败路径上不可用）**
+
+`src/tools/flash.ts` 的 `reportSchema` 是 `additionalProperties: false`，但没写 `errorCode`。成功路径 `errorCode` 是空串、引擎按 `...(errorCode === "" ? {} : { errorCode })` 省略，所以永远不触发；**只要失败带码，宿主就判「工具返回了非法输出」，报告拿不到**。2d 加字段时只改了 `FlashReport` 类型与卡片渲染，没同步 schema，单测也只测了空目录早退（不带码）。
+
+修法与回归：schema 补 `errorCode`（enum 收到 8 个码，不进 `required`）；`test/schema-guard.mjs` 加「失败报告带 errorCode 时仍符合 output schema」，用假 subprocess 返回 `exitCode 1` + `no-probe` 文本，断言 `report.errorCode === "no-probe"` 且过 schema 检查。教训：**新增可选字段必须同时进 schema**，而且要有一条「字段有值」的用例——只测缺省值等于没测。
+
+**顺手补的分类：两个 openocd 抢同一个探针**
+
+为了验 `probe-busy`，用 `Start-Process` 起一个常驻 openocd（`-f interface/cmsis-dap.cfg -c "transport select swd" -f target/stm32f1x.cfg -c init`，日志 `Listening on port 3333`）攥住探针，再调 `stm32_flash`。真实失败**不是**「设备忙」，而是两个进程交替收发：`CMSIS-DAP command mismatch. Sent 0x12 received 0x5`、`CMSIS-DAP command CMD_DISCONNECT failed`、满屏 `CMSIS-DAP transfer count mismatch: expected 5, got 1`、`Failed to write memory`、`clearing lockup after double fault`。原来的 `errorCodeOfLines` 一条都不认 → `unknown`。
+
+修法：`errorCodeOfLines` 增加 `/cmsis-dap (transfer count mismatch|command mismatch)|cmsis-dap command cmd_\w+ failed|libusb_error_busy/` → `probe-busy`；新增 `HINT_BUSY` 并只在 `errorCode === "probe-busy"` 时进 notes（「先关掉调试会话或另一个 openocd，再烧一次」）。宿主级实测：`ok=false`、`exitCode=1`、`errorCode=probe-busy`、notes 就是 `HINT_BUSY`，工具正常返回；杀掉持锁进程后再烧 demo → `ok`、`programmed + verified`、3.1 s、`errorCode` 缺省。
+
+另外记一个 PowerShell 坑：`Start-Process -ArgumentList` 不会替你加引号，`-c 'transport select swd'` 会被拆成两个参数，openocd 报 `Unexpected command line argument: select`；要写成 `-c '"transport select swd"'`。
+
+**计数**：本批新增 3 例（flash 13 → 15 两条、schema-guard 23 → 24 一条）→ **25 套件 338 pass / 0 fail**（CI 336 + 2 skipped）；README / README_EN 的用例数与 CI 计数已同步。
+
+**清理**：`demo/.verify-board/`（一次性寄存器工程）与 `%TEMP%` 下的持锁脚本、openocd 日志、重启脚本都进了回收站，计划任务 `dsh-restart-board` 已注销；`demo/` 下 `.verify-*` / `.tmp-*` 为 0。
+
+
+
 
 
 

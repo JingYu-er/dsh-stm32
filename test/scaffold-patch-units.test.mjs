@@ -243,9 +243,9 @@ test("scaffold：空目录 → 骨架（工程名替换 / .ioc 改名 / Drivers 
   const targetDir = path.join(root, "blink");
   const report = createProjectScaffold({ targetDir, projectName: "blink", cubeMxRoots: [CUBE_ROOT] });
   assert.equal(report.ok, true, report.message);
-  // 12 个工程文件（CMake/.ld/.vscode/.ioc/.gitignore）+ Core/Src 下的 sysmem.c、syscalls.c
+  // 15 个工程文件（CMake/.ld/.vscode/.ioc/openocd.cfg/.gitignore）+ Core/Src 下的 sysmem.c、syscalls.c
   // （CubeMX GUI 会生成这两个，CLI 不生成；缺了 cmake/stm32cubemx/CMakeLists.txt 直接配置失败）
-  assert.equal(report.templateFiles, 14);
+  assert.equal(report.templateFiles, 15);
   assert.ok(fs.existsSync(path.join(targetDir, "Core/Src/sysmem.c")));
   assert.ok(fs.existsSync(path.join(targetDir, "Core/Src/syscalls.c")));
   // 固件包 Drivers 有 5392 个文件，其中 4000+ 是 CMSIS 文档站/DSP 示例/BSP 组件（与编译无关）；

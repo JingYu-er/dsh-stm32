@@ -1634,10 +1634,19 @@ export async function planOrInstallMsys2(
       const reason = describeError(error);
       setStep(prepareStep, "failed", reason);
       skipAfter(steps, "prepare", "父目录建不了，未执行");
+      // 0c：失败时给一条不依赖本工具的手动兜底——下载好的 sfx 安装包自己就能解压，
+      // 手动装好后重跑本工具会直接走 alreadyInstalled（检测的是 usr/bin/bash.exe，不是本工具写的标记）。
+      const manualSteps = [
+        "手动兜底（不依赖本工具）：",
+        "  1. 下载安装包：" + installer.url,
+        "  2. 手动解压到目标盘：进入下载目录后执行  <安装包文件> -y -o" + (parent === "" ? "C:\\\\" : toWindowsDir(parent)),
+        "     （sfx 会在所选目录下解压出 msys64/；把它改名或移动到 " + msys64 + " 即可）",
+        "  3. 重跑本工具：它会检测到 usr/bin/bash.exe 并直接复用，不再下载、不再解压。",
+      ].join("\n");
       return finish(
         false,
         "没能准备安装目录：" + reason,
-        "检查路径是否合法、有没有写权限，或换一个 targetDir。",
+        "检查路径是否合法、有没有写权限，或换一个 targetDir。\n" + manualSteps,
       );
     }
   }

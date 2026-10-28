@@ -9,6 +9,7 @@
  * 只用全局 fetch（Node 18+ 自带），不引运行时依赖；测试可注入 fetchImpl。
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -25,6 +26,13 @@ export interface FetchTarget {
    * 字节数照样对得上。这里钉的是「这份内容里必须有这个东西」。
    */
   markers?: string[];
+  /**
+   * 期望的 sha256（64 位十六进制，小写）。给了的文件在 markers 之后再校验哈希：
+   * 上游 master 漂移、CDN 缓存了旧版、同名不同代的内容都会被它拦下。
+   * 哈希对不上时错误信息带期望值与实际值——维护者一看就知道上游动了、该重新实测。
+   * 不给（老数据/还没实测的族）就只走 minBytes + HTML + markers，行为不变。
+   */
+  sha256?: string;
 }
 
 export interface FetchOutcome {
@@ -103,6 +111,16 @@ export async function fetchOne(target: FetchTarget, destRoot: string, options: F
       if (missed.length > 0) {
         attempts.push(url + " → 内容对不上（找不到 " + missed.join(" / ") + "），不是要的那个文件");
         continue;
+      }
+      if (target.sha256 !== undefined && target.sha256 !== "") {
+        const actual = createHash("sha256").update(buffer).digest("hex");
+        if (actual !== target.sha256.toLowerCase()) {
+          attempts.push(
+            url + " → sha256 对不上（期望 " + target.sha256.toLowerCase().slice(0, 16) + "…，实际 " + actual.slice(0, 16) +
+              "…）。多半是上游 master 挪动了内容：用真实 URL 重新实测哈希并更新 cmsis-sources。",
+          );
+          continue;
+        }
       }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       partSeq += 1;

@@ -36,6 +36,7 @@ const reportSchema: JsonSchema = {
     logTail: { type: "string" },
     notes: { type: "array", items: { type: "string" } },
     guard: { type: "string" },
+    errorCode: { type: "string", enum: ["", "no-probe", "probe-busy", "swd-locked", "flash-protected", "no-power", "target-mismatch", "unknown"] },
   },
   required: ["ok", "projectDir", "elfPath", "elfSize", "command", "args", "durationMs", "programmed", "verified", "errors", "message", "logTail", "notes"],
 };
@@ -82,6 +83,7 @@ export function formatFlashReport(report: FlashReport): string[] {
   if (report.configs.length > 0) lines.push("配置：" + report.configs.join(" + "));
   if (report.command !== "") lines.push("命令：" + report.command);
   lines.push("写入=" + (report.programmed ? "是" : "否") + "，校验=" + (report.verified ? "是" : "否"));
+  if (report.errorCode !== undefined && report.errorCode !== "") lines.push("错误码：[" + report.errorCode + "]");
   for (const note of report.notes) lines.push("· " + note);
   for (const error of report.errors.slice(0, 10)) lines.push("! " + error);
   if (!report.ok && report.logTail !== "") {

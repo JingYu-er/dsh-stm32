@@ -140,6 +140,33 @@ export interface CmsisTemplatePlan {
  * 寄存器版工程直接 -I Drivers/CMSIS/Include -I Drivers/CMSIS/Device/ST/STM32F1xx/Include 就能编译，
  * 与 HAL 工程共用同一套 include 约定。
  */
+/**
+ * 上游文件的 sha256（0a：2026-10-25 实测，jsDelivr master）。
+ *
+ * 为什么值得锁：markers 钉的是「内容里必须有这个特征」，CDN 缓存旧版、上游同名不同代
+ * 都拦不住；哈希一锁，上游任何一点改动都会显式失败并给出两个哈希——维护者就知道
+ * 该去重新实测而不是静默接受漂移。F1 只列 C8T6 走的 xB 档（其它容量档用到时再实测）。
+ */
+const DEVICE_HEADER_SHA256: Readonly<Record<string, string>> = {
+  "stm32f1xx.h": "05e93fa3ddefb2e83d762b9ca4de36e3bba9cd8e9690400fe9f2c11fc0a3cef5",
+  "system_stm32f1xx.h": "a54dfbb3480c672f532d472a6e84bcf34df6551771d2e9966c5a3503c676b6ab",
+  "stm32f103xb.h": "d9c7c613d9fea74220892b4fbc3e80617493acad82a04bafadab2b4a7198399c",
+};
+
+const SYSTEM_C_SHA256 = "8465bf3fe9057adecd8b4561403836d1fa2152d3cb088831623da3f91d86ec0a";
+
+const STARTUP_SHA256: Readonly<Record<string, string>> = {
+  "startup_stm32f103xb.s": "a9a5fc7ed5ff617527dd98b3092830f4d17ed4bf57c99eac2c53bdb514ce138c",
+};
+
+const CORE_HEADER_SHA256: Readonly<Record<string, string>> = {
+  "core_cm3.h": "655bb08e9474438dec8b1874ea6c63749dc2787b85f06a0987c4870bcb580f21",
+  "cmsis_compiler.h": "03ab80c426a8360eaaad833ac816462a9f38cb2e4dbdc490914880ad071181fe",
+  "cmsis_gcc.h": "341982e6d6c91119214c47d7a04b31f1f8ce0970c45e2c9fe0870c80d0876e28",
+  "cmsis_version.h": "c2570d56ee85d4f2ec0fb62f31d080d3cddf3a015500a4ed5a006a571637b43c",
+  "mpu_armv7.h": "e4968e627df085e4ebf46be5140be657e035d978ae1938c1c2e3ee49fbde5030",
+};
+
 export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | null {
   const spec = CMSIS_FAMILIES[choice.family];
   if (spec === undefined) return null;
@@ -156,6 +183,7 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
       urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceIncludeDir + "/" + header),
       minBytes: 200,
       markers: ["#ifndef __STM32", "#ifndef __SYSTEM_STM32"],
+      sha256: DEVICE_HEADER_SHA256[header],
     });
   }
   targets.push({
@@ -163,6 +191,7 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceIncludeDir + "/" + choice.deviceHeader),
     minBytes: 10_000,
     markers: ["#ifndef __STM32", "#ifndef __SYSTEM_STM32"],
+    sha256: DEVICE_HEADER_SHA256[choice.deviceHeader],
   });
 
   // 2) system_stm32f1xx.c 与启动文件
@@ -171,12 +200,14 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceTemplatesDir + "/system_stm32f1xx.c"),
     minBytes: 1_000,
     markers: ["SystemInit"],
+    sha256: SYSTEM_C_SHA256,
   });
   targets.push({
     path: deviceBase + "/Source/Templates/gcc/" + choice.startup,
     urls: sourceUrls(spec.deviceRepo, spec.deviceRef, spec.deviceTemplatesDir + "/gcc/" + choice.startup),
     minBytes: 1_000,
     markers: ["_estack", ".syntax unified"],
+    sha256: STARTUP_SHA256[choice.startup],
   });
 
   // 3) CMSIS 内核头（ST 主仓库里就有，不是子模块）。
@@ -197,6 +228,7 @@ export function cmsisTemplatePlan(choice: StartupChoice): CmsisTemplatePlan | nu
       urls: sourceUrls(spec.cmsisRepo, spec.cmsisRef, spec.coreIncludeDir + "/" + header),
       minBytes: 500,
       markers: coreHeaderMarkers[header] ?? ["__CMSIS", "__CORE_"],
+      sha256: CORE_HEADER_SHA256[header],
     });
   }
 

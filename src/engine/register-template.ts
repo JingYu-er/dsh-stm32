@@ -34,6 +34,13 @@ export interface TemplateRequest {
   onProgress?: (text: string) => void;
   /** false = 只查缓存，不联网（给"离线机器"与测试用）。 */
   download?: boolean;
+  /**
+   * 覆盖下载清单里的 sha256（path → 期望值）。**只给测试用**：
+   * 单测的假 fetch 返回的是拼出来的假内容，生产哈希必然对不上；
+   * 注入"假内容的真实哈希"来验证哈希校验这条链路本身。
+   * 生产调用一律不传，targets 用 cmsis-sources 里的实测值。
+   */
+  hashes?: Record<string, string>;
 }
 
 /** 型号/族 → 启动文件与设备宏；认不出返回 null（不猜文件名）。 */
@@ -144,7 +151,10 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
   if (request.fetchImpl !== undefined) options.fetchImpl = request.fetchImpl;
   if (request.signal !== undefined) options.signal = request.signal;
 
-  const fetched = await fetchAll(plan.targets, entryDir, options);
+  const targets = request.hashes === undefined
+    ? plan.targets
+    : plan.targets.map((target) => ({ ...target, sha256: request.hashes?.[target.path] }));
+  const fetched = await fetchAll(targets, entryDir, options);
   if (fetched.failed > 0) {
     const failures = fetched.results.filter((item) => !item.ok).slice(0, 3).map((item) => item.path + "：" + item.error);
     const failedResults = fetched.results.filter((item) => !item.ok);
@@ -254,6 +264,8 @@ export interface RegisterProjectRequest {
   overwrite?: boolean;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  /** 测试注入：path → 期望 sha256（见 TemplateRequest.hashes）。 */
+  hashes?: Record<string, string>;
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
   download?: boolean;
@@ -278,7 +290,7 @@ export interface RegisterProjectReport {
 }
 
 /** 从 HAL 骨架模板里借来的**与 HAL 无关**的文件（工具链、presets、链接脚本、.gitignore）。 */
-const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "STM32F103XX_FLASH.ld", "cmake/gcc-arm-none-eabi.cmake"];
+const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "STM32F103XX_FLASH.ld", "cmake/gcc-arm-none-eabi.cmake", "openocd.cfg"];
 
 function countFiles(root: string): number {
   let count = 0;
@@ -335,6 +347,7 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     ...(request.family === undefined ? {} : { family: request.family }),
     ...(request.env === undefined ? {} : { env: request.env }),
     ...(request.fetchImpl === undefined ? {} : { fetchImpl: request.fetchImpl }),
+    ...(request.hashes === undefined ? {} : { hashes: request.hashes }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
     ...(request.download === undefined ? {} : { download: request.download }),
@@ -356,28 +369,20 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   // 例外：.gitignore 不在检查列表里——npm 打包永远排除点文件（.gitignore 同时是它的
   // 忽略过滤器），npm 安装的用户模板里必然没有它；缺它只影响 git 状态观感，工程照建。
   const missingOptional: string[] = [];
-  const sourcesToCheck = [
+  // 全量预检（0b）：把所有缺失的必需文件一次列完，别让用户修一个跑一次再撞下一个。
+  const required = [
     path.join(regTpl, "CMakeLists.txt"),
     path.join(regTpl, "Core", "Src", "main.c"),
+    ...SHARED_TEMPLATE_FILES.filter((rel) => rel !== ".gitignore").map((rel) => path.join(halTpl, rel)),
   ];
-  for (const source of sourcesToCheck) {
-    if (!fs.existsSync(source)) {
-      return fail(
-        "插件模板缺文件：" + source +
-          "。这是插件包损坏（安装中断或目录被杀毒软件动过），不是工程或配置的问题；" +
-          "带插件版本号（见 package.json）反馈最有效。",
-      );
-    }
-  }
-  for (const rel of SHARED_TEMPLATE_FILES) {
-    if (rel === ".gitignore") continue; // 见上：npm 包里必然缺，跳过硬检查
-    if (!fs.existsSync(path.join(halTpl, rel))) {
-      return fail(
-        "插件模板缺文件：" + path.join(halTpl, rel) +
-          "。这是插件包损坏（安装中断或目录被杀毒软件动过），不是工程或配置的问题；" +
-          "带插件版本号（见 package.json）反馈最有效。",
-      );
-    }
+  const missingRequired = required.filter((source) => !fs.existsSync(source));
+  if (missingRequired.length > 0) {
+    const list = missingRequired.map((source) => "  · " + source).join("\n");
+    return fail(
+      "插件模板缺 " + String(missingRequired.length) + " 个文件（一次列完）：\n" + list +
+        "\n这是插件包损坏（安装中断或目录被杀毒软件动过），不是工程或配置的问题；" +
+        "带插件版本号（见 package.json）反馈最有效。",
+    );
   }
   if (!fs.existsSync(path.join(halTpl, ".gitignore"))) missingOptional.push(".gitignore");
   const driversSrc = path.join(template.entryDir, "Drivers");
