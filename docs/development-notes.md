@@ -1895,6 +1895,38 @@ candidate JSON 放在工作区 `.archify/<type>-<slug>-<时间戳>/`，不进仓
 
 ### 24.5 计数与行数
 
-`npm run build` exit 0；`npm test` → **24 套件 347 pass / 0 fail**（CI 345 + 2 skipped）。行数按"文件内 `\n` 个数"重算：src 65 个 `.ts` **20,758 行**、tools 19 文件 4,832、engine 36 文件 **13,328**（`fetch.ts` 197→**341**、`msys2-install.ts` 2038→**2313**）、data 6 文件 1,803、client 682；`reading-guide.md` 的合计与两处单文件数字、第 9 章用例数已同步。
+`npm run build` exit 0；`npm test` → **24 套件 348 pass / 0 fail**（CI 346 + 2 skipped）。行数按"文件内 `\n` 个数"重算：src 65 个 `.ts` **20,758 行**、tools 19 文件 4,832、engine 36 文件 **13,328**（`fetch.ts` 197→**341**、`msys2-install.ts` 2038→**2313**）、data 6 文件 1,803、client 682；`reading-guide.md` 的合计与两处单文件数字、第 9 章用例数已同步。
 
 **顺手记一个度量坑**：PowerShell 的 `(Get-Content x.ts).Count` 和 `Measure-Object -Line` 都**不等于**行数（前者受文件尾换行影响，后者忽略空行），`wc -l` 在 Git Bash 里对 CRLF 文件也会差一。本文档与 `reading-guide.md` 统一用 Node 读文件数 `\n`：`(text.match(/\n/g) ?? []).length`——示例：`index.ts` 是 119，`Get-Content` 给 108。
+
+## 25. T1 / T2 验收：sha256 负向与 .ioc 事务链（2026-10-30）
+
+发布前该验的三件（T1 sha256 负向、T2 .ioc 四步链、T3 真机）里，T1/T2 完全离线，先做掉；T3 卡在探针没识别（见 25.3）。
+
+### 25.1 T1：sha256 门禁负向（6 例全过，抓到一个真缺陷）
+
+用注入的 `fetchImpl` 走真 `fetchOne`（一次网络都不发）：正控（哈希对→落盘、字节一致、失败记录为空）；负控（哈希错→拒绝、消息里有「期望」与「实际」两个前缀和「重新实测」的提示、**不落盘**）；旧文件已存在时失败（旧文件原样不动，A15 语义）；多源（第一个源回代理登录页 html、第二个源哈希不符→`attempts` 两条各说各的）；`minBytes`（1 字节→「只有 1 字节（< 16）」）；模拟上游漂移（内容变了但声明哈希还是旧的→拦下并提示去更新 `cmsis-sources`）。
+
+**抓到的缺陷**：四道校验（体量 / 网页 / markers / sha256）失败后只 `continue`，**没删 `.part` 半成品**。该路径在 `streamOnce` 内部有自己的清理，但校验发生在整个文件读完之后，`.part` 已经躺在缓存目录里——43 MB 的安装包、几十 MB 的模板，几次失败能攒出几百 MB 垃圾，而且它既不参与续传（换源一律从零）也不会被任何清理逻辑回收。
+
+修法：`src/engine/fetch.ts` 的校验段加局部 `reject(reason)`（`attempts.push` + `removeQuietly(part)`），四道校验改用它再 `continue`；回归沉到 `test/cache-units.test.mjs` 的「fetchOne：校验失败（sha256 / markers / 体量 / 网页）时必须连 .part 半成品一起删掉（T1）」——四道校验各跑一遍，断言目标文件不存在、目录里没有 `.part-*`（22 → 23 例）。
+
+### 25.2 T2：`.ioc` 事务链（7 例全过，用仓库自带 `templates/scaffold/demo.ioc`）
+
+工具层走真注册（假 `ctx`：`tools.register` 收定义、`workingDirectory.ensure` 给临时目录、`subprocess` 一律抛错证明没起进程），工程是 `templates/scaffold/demo.ioc`（4 084 B，sha `a487d32b1d3b8818…`）复制到临时目录：
+
+- `stm32_ioc_inspect`：`STM32F103C8T6` / `STM32Cube FW_F1 V1.8.7` / `SWD=Serial_Wire` / 8 个引脚 / 3 个外设，**不写盘**（sha 不变）。
+- `stm32_ioc_plan`（加 `PA0` 输出、label `t2led`）：`planId` 10 位、`sourceSha256` 等于当前文件、`candidateSha256` 变了，diff **8 条**（`Mcu.Pin8`、`Mcu.PinsNb` 与 `PA0.GPIO_*` 五项），**不写盘**。
+- `stm32_ioc_apply`：`shaBefore` = 原文件、`shaAfter` = 候选、备份落在 `.dsh-stm32/backups/<时间戳>-ioc/demo.ioc` 且与原文件逐字节一致；写完后反读 inspect 能看到 `PA1` / `t2btn`。
+- `stm32_ioc_apply({rollbackFrom})`：`rolledBack=true`，文件**逐字节**回到原 sha。
+- 两条守卫：plan 之后外部改过 `.ioc` → apply 拒写（消息里带两个 sha 与「请重新 plan」）、文件不动；缺 `planId` / 不存在的 `planId` → 给人话且不写盘。
+
+脚本留在工作区 `.t1-t2/`（不进仓库、不进包）：它们的长期价值已经分别沉到 `test/cache-units.test.mjs`（T1）与既有的 `test/e2e-a8-ioc-rollback.mjs` + `test/ioc-plan-units.test.mjs`（T2），重复收进仓库只会养一批没人跑的脚本。
+
+### 25.3 T3：真机项先挂起
+
+`stm32_doctor` 报 `usb.kind = "no-dap"`（「有 USB 控制器但没看到常见探针（CMSIS-DAP / ST-Link / DAPLink / CH340）」），`processes: []`、`portBusy: false`。也就是说板子/探针当前没被识别：现在跑 `stm32_flash` / `stm32_regs_read` / `stm32_debug_run` 只会得到 `no-probe` 分支——那验证的是错误路径（2026-10-28 已验过），不是 T3 要的烧录 / 读寄存器 / 断点。插上后再跑。
+
+### 25.4 计数
+
+`npm run build` exit 0；`npm test` → **24 套件 348 pass / 0 fail**（CI 346 + 2 skipped）；`npm run test:pack` exit 0（16 个必须文件齐全）。README / README_EN / `reading-guide.md` 第 9 章的用例数已同步到 348 / 346。

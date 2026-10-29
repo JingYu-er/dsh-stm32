@@ -706,3 +706,28 @@ test("stm32_cache：不认识的 action 不再等于清空缓存；清空要 con
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("fetchOne：校验失败（sha256 / markers / 体量 / 网页）时必须连 .part 半成品一起删掉（T1）", async () => {
+  const root = tempDir("part-cleanup");
+  const content = "STM32F103XB_H\n/* header */\n";
+  const wrong = "0".repeat(64);
+  const cases = [
+    { name: "sha256", target: { path: "a/x.h", urls: ["https://a/x.h"], minBytes: 5, sha256: wrong }, body: content },
+    { name: "markers", target: { path: "b/x.h", urls: ["https://a/x.h"], minBytes: 5, markers: ["NOT_THERE"] }, body: content },
+    { name: "体量", target: { path: "c/x.h", urls: ["https://a/x.h"], minBytes: 999 }, body: content },
+    { name: "网页", target: { path: "d/x.h", urls: ["https://a/x.h"], minBytes: 5 }, body: "<html><body>login</body></html>" },
+  ];
+  try {
+    for (const item of cases) {
+      const fetchImpl = async () => new Response(item.body, { status: 200 });
+      const outcome = await fetchOne(item.target, root, { fetchImpl });
+      assert.equal(outcome.ok, false, item.name + "：应当失败");
+      const dir = join(root, item.target.path.split("/")[0]);
+      const parts = existsSync(dir) ? readdirSync(dir).filter((name) => name.includes(".part-")) : [];
+      assert.deepEqual(parts, [], item.name + "：校验失败后不许留下 .part 半成品，实际 " + parts.join(","));
+      assert.equal(existsSync(join(root, item.target.path)), false, item.name + "：不许留下目标文件");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
