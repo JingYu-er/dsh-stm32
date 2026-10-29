@@ -1791,3 +1791,53 @@ marker 只能证明"拿回来的像这个文件"，证明不了"还是那一份"
 
 
 
+
+## 22. 源码精读指南：把 2 万行拆成七站（2026-10-26）
+
+新增 `docs/reading-guide.md`（约 695 行 / 4 万字符）。它不是 API 文档，而是「怎么读这份源码」的路线图：11 章、14 张 Mermaid 流程图，从宿主装配一路读到测试假件。
+
+结构：0 心法（四层：L4 装配 / L3 tools 契约 / L2 engine 逻辑 / L1 data 事实表，加四条设计约定）→ 1 整体框架图 + 目录行数全景 → 2 七站阅读顺序（每站有行数、能回答的问题、建议时长）→ 3 入口层 → 4 tools 骨架与 20 工具表 → 5 engine 十个域逐文件表 → 6 data 六张事实表 → 7 十四条流程各配一张图 → 8 二十条不变量 → 9 测试三层 → 10 改东西动哪里 → 11 已知的坑。
+
+**写文档时踩到的两件事**
+
+1. **数字必须从磁盘重算，不能抄早先的清点。** 第一版的行数是从几轮前的一次 `grep` 清点里拿的，已经过时：engine 合计写成 11 994（实为 12 753）、`commands/register.ts` 386（实为 445）、`client/client.js` 674（实为 682）、`msys2-install.ts` 1808（实为 2038）、`types.ts` 164（实为 196）。最后用脚本按「读文件 → 按 `\n` 切 → 去掉末尾空行」重新统计，再把文档里所有 `文件名（数字）`、章节小计、目录合计、阅读站小计逐个对齐，并做了一次反向扫描（把每个「文件名 + 数字」对拿新表校验，剩 0 处不一致）。教训：文档里的数字要么别写，要么每次由产物重算——写死手抄值必然在下一批改动后变成假话。
+2. **Mermaid 的标签一律用双引号包住。** 节点标签里出现括号、斜杠、方括号（`probeCache.set(key, {at})`、`missing[]`）时，不引号化会直接把图解析坏；状态图的行内标签里也尽量别用括号（本轮把 `turn/end（本轮输出结束）` 改成顿号版本）。
+
+**顺手发现的一处杂物**
+
+`templates/scaffold/build/` 里有 4 个文件、29 459 B 的构建残留（`.cmake/api/v1/query/client-vscode/query.json`、`CMakeFiles/CMakeConfigureLog.yaml`、`CMakeFiles/3.31.5/CMakeSystem.cmake`、`CMakeFiles/3.31.5/CompilerIdC/CMakeCCompilerId.c`）。全仓库 grep 不到任何 `scaffold/build` 引用，但 `package.json` 的 `files` 含 `templates`，会把它一起打进发行包。已写进指南 §11 待清，尚未删除（等用户确认）。
+
+README 与 README_EN 的 docs 索引各加一行指向新文档。
+
+## 23. 可视化：用 Archify 出两张可交互图（2026-10-28）
+
+精读指南里原来只有 Mermaid。Mermaid 适合贴在 Markdown 里速览，但排版、配色、缩放和导出都不受控；这一节记的是用 Archify（`@tt-a1i/archify-dsh` 技能）把它升级成两张单文件 HTML 的过程与踩坑。
+
+**产物**（已复制进仓库，随 `docs` 一起发布）
+
+- `docs/diagrams/dsh-stm32-architecture.html`（约 787 KB）：17 个节点、1 个宿主进程边界、19 条连线、5 张卡片。主轴是「调用入口 → tools 层 → 门禁 → engine 五簇 → 子进程桥 → 外部程序（CubeMX / 工具链 / openocd+gdb / pacman）/ 上游仓库」，磁盘状态放卡片。
+- `docs/diagrams/dsh-stm32-journey.html`（约 771 KB）：6 列 × 4 lane 的 workflow。列是时间（定路线 → 体检 → 建工程 → 生成 → 改码 → 编译 → 上板），lane 是「你与模型 / 契约层 / 门禁与失败分支（exception 配色）/ 外部程序与板子」。
+- 两张都带「来源 N」角标：点开是 `path` + 行号，对着 `reading-guide.md` 第 5 章能直接跳到文件。
+
+**生成命令**（本机没有 Chrome，用 Edge 冒充 Chromium 通过 browser-check）
+
+```powershell
+$env:ARCHIFY_CHROME="C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+node "<skill>/bin/archify.mjs" finalize architecture `
+  ".archify/architecture-dsh-stm32-overview-20261028-152823/candidate.json" `
+  ".archify/architecture-dsh-stm32-overview-20261028-152823/dsh-stm32-architecture.html" `
+  --quality showcase --repo-root "D:/JingYu/Desktop/c8t6_vscode_test/demo/dsh-stm32" --json
+```
+
+candidate JSON 放在工作区 `.archify/<type>-<slug>-<时间戳>/`，不进仓库；改完重新 finalize，再把 HTML 覆盖到 `docs/diagrams/`。
+
+**踩到的六个坑**
+
+1. **没有 Chrome 时 browser-check 直接 skipped**（`viewer/chrome-unavailable`，整体 exit 1）。本机只有 Edge，`ARCHIFY_CHROME` 指过去就能跑——Edge 是 Chromium 内核，CDP 检查全过。
+2. **证据按 HEAD 的已提交字节校验，不认工作区**。`/nodes/N/sources/path` 必须在该 revision 存在：我第一次把 `install-guides.ts` 写成 `src/engine/…`（实际在 `src/data/…`），报 `repository-evidence/file-missing`。行号同理——0.1.2 尚未提交，凡是这一批新加的行都别写行号，只写 `path` 更稳。
+3. **showcase 要求零警告**：`composition/viewport-height` 在普通检查里只是 warning，在 showcase deliver 里算失败。判据很具体——1440×900 视口下，画布要么高度 ≤ 785（宽 1218），要么横向铺到 ≥ 1414；我最初 6 条 lane 的 workflow 是 1218×912，被判超高，删掉一条 lane（6→5→4）才合格。
+4. **`composition/desktop-readability` 卡字号**：画布越宽缩放越小，8px 源文字投到 930px 预算上必须 ≥ 6px。把节点宽度一口气加到 196 后 viewBox 变成 1511，投影只有 4.9px；退回 132–160 的混合宽度（viewBox 1218）才过。宽度和字号是一对矛盾，别只盯布局。
+5. **workflow 的 lane/col 是硬网格**：`mainPath` 必须按列单调，`entry(col1) → route(col0)` 这种回退会报 `mainPath moves backward`；同一 lane 同一 col 只能放一个节点；`route: "straight"` 在跨 lane 的边上根本不可能满足（`workflow/route-preset-conflict`），同 lane 相邻列的边又容易撞 `ambiguous-corridor`（两条边共用一段通道 ≥ 8px）。最后是靠「把失败分支从图里挪进卡片、把 patch/build 放进同一 lane」收掉的。
+6. **回执文件有归属校验**：artifact 变了以后旧的 `*.browser-check.json` 会被判 `viewer/evidence-path-conflict`（`ownership-artifact-mismatch`），不许覆盖。每轮改完 finalize 前，把旧回执改名（如 `stale-browser-check-*.json`）而不是删掉。
+
+**经验**：Archify 的价值在「强制你把话说清楚」——节点要一句话、边要有方向、失败分支要么成节点要么进卡片。两次 finalize 卡住的都不是审美，而是「这条边到底谁指向谁」「这个失败到底属于哪个阶段」。写图的过程等于把 `reading-guide.md` 第 7 章又校对了一遍。
