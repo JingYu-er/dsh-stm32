@@ -1930,3 +1930,39 @@ candidate JSON 放在工作区 `.archify/<type>-<slug>-<时间戳>/`，不进仓
 ### 25.4 计数
 
 `npm run build` exit 0；`npm test` → **24 套件 348 pass / 0 fail**（CI 346 + 2 skipped）；`npm run test:pack` exit 0（16 个必须文件齐全）。README / README_EN / `reading-guide.md` 第 9 章的用例数已同步到 348 / 346。
+
+## 26. 修掉老洞：`cmake/stm32cubemx/CMakeLists.txt` 从不跟着 .ioc 更新（2026-10-30）
+
+### 26.1 洞是什么，怎么证实的
+
+CubeMX 无头生成（`generate all_code_in_main` + `generate code`）只重写 `Core/` 下的代码，`cmake/stm32cubemx/CMakeLists.txt` 这份源清单它一个字都不碰——那是脚手架拷进来的快照。后果：`.ioc` 里新开了 USART1，CubeMX 会老老实实把 `HAL_UART_MODULE_ENABLED` 写进 `stm32f1xx_hal_conf.h`、把 `MX_USART1_UART_Init()` 写进 `main.c`，但源清单里没有 `stm32f1xx_hal_uart.c`，到链接阶段才炸 `undefined reference to HAL_UART_Init`，而错误信息完全指不到真正的原因。
+
+证据（2026-10-30 实测）：`demo/cmake/stm32cubemx/CMakeLists.txt`（3 466 B，mtime 2026/10/21 17:55:36）与 `templates/scaffold/cmake/stm32cubemx/CMakeLists.txt` 逐字节相同，而 `demo/Core/Src/main.c` 的 mtime 是 2026/10/24 15:17:33——中间跑过生成，源清单没变过。模板里三个写死的点：`set(MX_Defines_Syms ... STM32F103xB)`、`set(MX_Application_Src ...)`、`set(STM32_Drivers_Src ...)`（只有 11 个 HAL 模块）。
+### 26.2 修法：新增 `src/engine/cmake-sources.ts`（450 行）
+
+- `deviceDefineFromStartup` / `familyTokensFromStartup`：从 `startup_stm32f103xb.s` 反推设备宏 `STM32F103xB` 与家族目录名 `STM32F1xx`（规则：upper 后把倒数第二个 X 换小写 x），不查表。
+- `halModulesInUse`：模块清单以 `Core/Inc/stm32f1xx_hal_conf.h` 里 CubeMX 自己写的 `HAL_xxx_MODULE_ENABLED` 为准，再并上 `Core/Src/*.c`、`Core/Inc/*.h` 里显式 `#include "stm32f1xx_hal_xxx.h"` 的（兜住手写代码）。不能扫 hal_conf 里那一圈 `#include`：那里 33 个模块全列了一遍，只是被 `#ifdef` 包住。
+- `collectCmakeSources`：算出启动文件、设备宏、模块清单、驱动源文件（顺序 = `system_stm32f1xx.c` → `stm32f1xx_hal.c` → 其余按模块名字母序，`_ex.c` 存在才带上）、应用源文件（`Core/Src/*.c` + 启动文件），缺 `.c` 的模块进 notes 而不是硬写。
+- `refreshCubemxCmakeLists(projectDir, { dryRun })`：只改上面三个 managed 块，其余行原样；清单保留原顺序、摘掉磁盘上已不存在的条目、缺的追加到末尾（对用户工程 diff 最小）；内容一致时一个字节都不写。
+- `describeRefresh`：一句话给 notes（「已是最新 / 已更新（新增 N 条）/ 未处理 —— 原因」）。
+- 接线：`src/engine/generate.ts` 在两条返回路径上都调它——CubeMX 真跑完落位之后（dryRun 时只算不写），以及缓存命中直接复用产物时。只要经过 `stm32_generate`，源清单就会被对齐。
+### 26.3 差分构建验证（真工具链，不是单测）
+
+把 `demo` 复制一份（2 935 文件 / 261 914 598 B，排除 `build`、`.dsh-stm32` 等），在副本上做最小改动：
+
+1. `Core/Inc/stm32f1xx_hal_conf.h` 打开 `HAL_UART_MODULE_ENABLED`，`main.c` 的 `USER CODE BEGIN 2` 里塞 `UART_HandleTypeDef huart1; huart1.Instance = USART1; (void)HAL_UART_Init(&huart1);`。
+2. `cmake --preset Debug` + `cmake --build --preset Debug`（不刷新源清单）→ 复现老洞：`Core/Src/main.c:84:(.text.main+0x20): undefined reference to HAL_UART_Init`，`ninja: build stopped`。
+3. 跑 `refreshCubemxCmakeLists` → `added = ["Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_uart.c"]`，`modules` 从 7 个变 8 个。
+4. 重新 configure + build → `[21/21] Linking C executable demo.elf`，`demo.elf` 存在。
+
+先失败、后成功，两遍都是真跑了 arm-none-eabi-gcc + ninja；这是「修复确实治好了那个症状」的唯一硬证据。副本与临时脚本用完丢回收站。
+
+### 26.4 验证过程里又抓到两个真缺陷
+
+- 注释里的 `#define` 被当成启用：真实 `stm32f1xx_hal_conf.h` 里没用到的模块写的是 `/*#define HAL_ADC_MODULE_ENABLED   */`，正则照样命中，于是第一次刷新把整个 HAL 的 30 多个 `.c` 全加进了清单（差分验证第 3 步一开始看到的是 30 条 added）。修法：匹配前先 `stripComments`（块注释 + 行注释），并补一条回归用例（三个注释形态 + 源码里被注释掉的 `#include` 都不算）。
+- 行尾混排导致整文件重写：`demo` 这份文件的 86 行里 6 行 CRLF、80 行 LF，而 `readTextFile` 的 `eol` 是「含 CRLF 就算 CRLF」→ 内容一个字没改，写出来却是全文件翻成 CRLF；再加上「按行切完末尾多一个空串」没摘，每跑一次多一个空行，幂等直接断掉。修法：`dominantEol` 按多数行尾决定写回值、比较时只比内容不比行尾、切完 `pop()` 掉末尾空串。现在对真实 `demo` 跑 dryRun 报「已是最新」，字节不动。
+### 26.5 测试与计数
+
+新套件 `test/cmake-sources-units.test.mjs`（15 例）：设备宏/家族反推、启动文件排序、原样工程零写入、换芯片（startup + 设备宏一起换、旧 startup 从清单摘掉）、开 UART 只加真存在的 `hal_uart.c` 且第二次幂等、hal_conf 开着但驱动包缺 `.c` 时只进 notes、hal_conf 里那一圈 `#include` 不算用到、源码手写 `#include` 也算、ADC 连 `_ex` 一起加、删掉的驱动文件从清单摘除、dryRun 不写盘、非 CMake 布局/无启动文件 `ok=false`、注释掉的 `#define` 不算启用、CRLF/LF 混排零写入，以及一条接线回归（伪造 `cubemx/jre/bin/java.exe` + 缓存命中，`runGenerate` 在 `skipped=true` 时也必须把 `hal_uart.c` 写进清单）；`test/run-units.mjs` 已登记。
+
+`npm run build` exit 0；`npm test` → **25 套件 363 pass / 0 fail**（CI 361 + 2 skipped）；`npm run test:pack` exit 0（16 个必须文件齐全、解包产物能建寄存器工程）。README / README_EN / `reading-guide.md` 第 9 章已同步到 363 / 361。

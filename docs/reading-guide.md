@@ -68,11 +68,11 @@ flowchart TD
 | --- | --- | --- | --- |
 | src/ | 4 | 795 | index.ts 119、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
 | src/tools/ | 19 | 4832 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施） |
-| src/engine/ | 36 | 13328 | 见第 5 章；最大的是 msys2-install.ts 2313 行 |
+| src/engine/ | 37 | 13824 | 见第 5 章；最大的是 msys2-install.ts 2313 行 |
 | src/data/ | 6 | 1803 | 见第 6 章 |
 | templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
-| test/ | 24 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
+| test/ | 25 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
 | scripts/ | 3 | — | copy-client.mjs、pack-smoke.mjs、gen-xcube-catalog.mjs |
 
 ## 2. 阅读顺序
@@ -214,7 +214,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**route-plan.ts 573 行**是 tools 层里最大的，因为它的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
 
-## 5. engine 层：36 个模块，十个域
+## 5. engine 层：37 个模块，十个域
 
 下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。
 
@@ -252,11 +252,11 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。与 debug-session 的区别是「一次性、不复位」，起完就关。 |
 | doctor.ts（289） | 体检。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录。 |
 
-### 5.5 生成、编码与 .ioc 事务（8 个，2335 行）
+### 5.5 生成、编码与 .ioc 事务（9 个，2825 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| generate.ts（739） | 全仓库最复杂的一个。`STATE_DIR = ".dsh-stm32"`、`findIocFile`（只认「唯一」.ioc）、`detectLayout`（coupled / per-ip）、`runGenerate`：工程锁（`acquireLock`：pid + startedAt + `isProcessAlive` 探活，30 分钟兜底）→ 固件包定位 → 生成 CubeMX 脚本（`-Dfile.encoding=UTF-8`，审计 B18）→ 跑 CubeMX → 解析日志（generate-script.parseGenerateLog，以产物判据为准）→ 把 Src/Inc 搬进 Core/（preserve USER CODE）→ `assessGenerateProducts`（产物判据：applied 数为 0 或关键文件缺失时 ok 不能为真）→ 写 generate-cache。 |
+| generate.ts（750） | 全仓库最复杂的一个。`STATE_DIR = ".dsh-stm32"`、`findIocFile`（只认「唯一」.ioc）、`detectLayout`（coupled / per-ip）、`runGenerate`：工程锁（`acquireLock`：pid + startedAt + `isProcessAlive` 探活，30 分钟兜底）→ 固件包定位 → 生成 CubeMX 脚本（`-Dfile.encoding=UTF-8`，审计 B18）→ 跑 CubeMX → 解析日志（generate-script.parseGenerateLog，以产物判据为准）→ 把 Src/Inc 搬进 Core/（preserve USER CODE）→ `assessGenerateProducts`（产物判据：applied 数为 0 或关键文件缺失时 ok 不能为真）→ 写 generate-cache → 落位后（以及缓存命中直接返回前）再跑一次 `refreshCubemxCmakeLists`，把 `cmake/stm32cubemx/CMakeLists.txt` 对齐磁盘上的 startup 与 hal_conf。 |
 | generate-script.ts（115） | `buildGenerateScript` 拼脚本（setCustomFWPath / SetCopyLibrary / ProjectManager 项）、`layoutCommand`、`parseGenerateLog`：UNKNOWN_COMMAND 先判；成功行不再「一票否决」错误（审计 A10）——CubeMX 缺包时也会打 Code successfully generated，所以 ok 由产物判据决定。 |
 | generate-cache.ts（168） | 生成缓存。`CACHE_FILE = "generate-cache.json"`、`sha256Text` / `sha256File`、`cubeMxStamp`、`computeCacheKey(iocSha, stamp, layout)`、`readCache` / `writeCache`、`cacheHit(entry, key, projectDir)`（key 命中还不够，文件 hash 也得对得上）。 |
 | usercode-merge.ts（142） | `parseUserCodeRegions` / `mergeUserCode` / `canMergeUserCode`：把旧文件 USER CODE 块里的内容搬进新生成的文件，保留 CRLF 风格，标出 droppedLabels。 |
@@ -264,6 +264,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | text-file.ts（172） | 编码层。`detectEncoding`（BOM → utf8-bom；空 → utf8；严格 UTF-8 成 → utf8；再试 gb18030；否则 unknown）、`decodeText`、`encodeText`（gb18030 只允许纯 ASCII——Node 只有解码器没有编码器）、`readTextFile`、`lineStarts`、`replaceLineRange`（未改的行原字节照抄，只把新增行按原编码插入）。**这是「中文注释不被写坏」的唯一保障**。 |
 | ioc.ts（202） | .ioc 只读解析：`parseIocEntries`、`decodeIocValue`、`summarizeIoc`（MCU、时钟树、引脚、外设、调试口、工程设置、警告）。 |
 | ioc-plan.ts（582） | .ioc 事务。`planIocChanges` 算出逐键 diff + 源 SHA-256 → planId；`applyIocPlan` 校验 SHA 后原子替换（备份到 backups/<stamp>-ioc）；`rollbackIoc(backupFrom)` 回滚；辅助 `renderIocText`、`compareEntries`、`sha256Hex`、`encodeIocValue`、`loadPlan`。引脚写入保序（审计 A3）：只追加新增，不因缺 .Signal 删已有项。 |
+| cmake-sources.ts（479） | **老洞的补丁**：CubeMX 无头生成从不重写 `cmake/stm32cubemx/CMakeLists.txt`，那份源清单永远停在脚手架快照上。`collectCmakeSources` 从磁盘反推真相（`pickStartupFile` 选启动文件 → `deviceDefineFromStartup` 得 `STM32F103xB` → `familyTokensFromStartup` 得家族目录 `STM32F1xx` → `halModulesInUse` 由 `stm32f1xx_hal_conf.h` 的 `HAL_xxx_MODULE_ENABLED`（先 `stripComments`，注释掉的不算）∪ `Core/Src` 源码里的 `#include "stm32f1xx_hal_x.h"` 求并集），`refreshCubemxCmakeLists` 只重写三个 managed 块（设备宏 / 应用清单 / 驱动清单），保留原顺序、摘掉磁盘上已不存在的条目、缺的追加到末尾；`dominantEol` 按多数行尾写回、内容一致时一个字节都不写；`describeRefresh` 生成一句人话进 generate 的 notes。 |
 
 ### 5.6 造工程与导出（5 个，1336 行）
 
@@ -513,10 +514,14 @@ flowchart TD
   L --> M["搬产物：.dsh-stm32/gen/Src|Inc → Core/Src|Inc<br/>旧文件先读编码 → 认不出就 skipped-encoding<br/>能读就 mergeUserCode 保 USER CODE"]
   M --> N["assessGenerateProducts：产物判据决定 ok<br/>（CubeMX 缺包时也会打 successfully generated）"]
   N --> O["写 generate-cache（key + 每个文件 sha256）"]
-  O --> R["releaseLock（rm lock.json）"]
+  O --> P["refreshCubemxCmakeLists：源清单跟着 startup / hal_conf 走<br/>设备宏、startup、HAL 模块清单三块；内容没变不写盘"]
+  Z --> P2["缓存命中分支同样调一次 refresh"]
+  P --> R["releaseLock（rm lock.json）"]
+  P2 --> R
 ```
 
-三个坑：
+四个坑：
+- **源清单不会自己长**：CubeMX 只重写 `Core/` 下的代码，`cmake/stm32cubemx/CMakeLists.txt` 它一个字都不碰。`.ioc` 里新开 USART1 后 `hal_conf.h` 会有 `HAL_UART_MODULE_ENABLED`，但清单里没有 `stm32f1xx_hal_uart.c` → 编译通过、链接报 `undefined reference to HAL_UART_Init`。所以 generate 落位之后（以及缓存命中直接返回之前）都必须跑一次 `refreshCubemxCmakeLists`（docs/development-notes.md §26，带真工具链差分验证）。
 - **锁的探活**：早期只看 pid+时间，进程崩了要等 30 分钟；现在先 isProcessAlive(pid)，死了立刻接管（审计 A14）。
 - **成功日志不等于成功**：CubeMX 缺固件包/包版本不认时也打 Code successfully generated，所以 ok 必须有产物判据（审计 A10）。
 - **中文路径**：脚本按 UTF-8 写且启动 java 时指定 -Dfile.encoding=UTF-8（审计 B18）；否则中文工程路径在脚本里变乱码。
@@ -648,6 +653,7 @@ flowchart LR
 | 18 | 生成成功以产物为准，不以日志为准 | 缺包时误报成功 | generate.assessGenerateProducts |
 | 19 | 生成期间 pdsc 停放必须在 finally 还原 | 用户的第三方包索引「消失」 | thirdparty.ts + generate.ts |
 | 20 | 零运行时依赖、lib/ 入库 | 装上就坏 / 用户机器没有编译器 | package.json、tsconfig |
+| 21 | cmake 源清单必须跟着 startup 与 hal_conf 走 | 开了外设也链接失败（undefined reference to HAL_xxx_Init） | cmake-sources.refreshCubemxCmakeLists、generate.ts 两处调用 |
 
 ## 9. 测试体系
 
@@ -655,13 +661,13 @@ flowchart LR
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 24 个套件 348 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
+| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 25 个套件 363 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
 | e2e 脚本 | test/e2e-*.mjs（12 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
 | 发布形态 | scripts/pack-smoke.mjs（npm run test:pack） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程。CI 上跑 |
 
-### 9.2 24 个套件一览（test/run-units.mjs 的 suites 数组顺序）
+### 9.2 25 个套件一览（test/run-units.mjs 的 suites 数组顺序）
 
-build-units、cache-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
+build-units、cache-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
 
 约定：
 - 测试 import ../lib/，所以**改 src 必须先 npm run build**（否则测的是旧代码，最容易自欺的地方）。
@@ -696,6 +702,7 @@ const fake = {
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |
 | 改 .elf 选择规则 | engine/build.ts 的 `pickElf` / `elfCandidates` / `elfSelectionNote`（flash、debug_run、doctor、export 全都间接用它） | build-units 里要同时断言「工程名优先」和「退化到最新」两条路 |
 | 给工具加错误码 | engine/flash.ts 的 `errorCodeOfLines` 与 `FlashErrorCode`（debug_run 复用同一枚举） | 三个地方同改：engine 归类、reportSchema 声明、schema-guard 用例 |
+| 改 cmake 源清单的认法（设备宏、startup、HAL 模块） | engine/cmake-sources.ts 的 `collectCmakeSources` / `halModulesInUse` | 注释掉的 `#define` 与 `#include` 不能算启用；内容没变必须零写入（cmake-sources-units 15 例兜这两条） |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
 
 ## 11. 已知的坑与未做的事
