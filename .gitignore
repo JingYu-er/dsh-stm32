@@ -2,6 +2,7 @@
 # 只有仓库里带着编译产物，别人才能一条命令装上。改完 src 记得 npm run build 再提交。
 *.tsbuildinfo
 .vscode
+docs/reading-guide.html
 # 依赖
 node_modules/
 
