@@ -14,6 +14,11 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, existsSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// 用插件自己的解包器（lib/engine/tar.js）：Windows 自带的是 libarchive 的 bsdtar，
+// 读不懂 npm 用 pax 扩展头标记的非 ASCII 文件名（docs/dsh-stm32-plugin-规格.md），
+// 会直接报 "Archive entry has empty or unreadable filename"。tar.ts 明确支持 x/g/L/K。
+import { extractTarGz } from "../lib/engine/tar.js";
+
 const root = process.cwd();
 const work = mkdtempSync(join(tmpdir(), "dsh-pack-smoke-"));
 const failures = [];
@@ -28,7 +33,8 @@ try {
   execFileSync("npm pack --pack-destination " + JSON.stringify(work) + " --ignore-scripts", { cwd: root, stdio: "pipe", shell: true });
   const packed = readdirSync(work).find((name) => name.endsWith(".tgz"));
   if (packed === undefined) throw new Error("npm pack 没产出 tgz");
-  execFileSync("tar -xzf " + JSON.stringify(packed) + " -C " + JSON.stringify(work), { cwd: work, stdio: "pipe", shell: true });
+  const extracted = extractTarGz(readFileSync(join(work, packed)), work, { maxBytes: 256 * 1024 * 1024 });
+  if (!extracted.ok) throw new Error("解包失败：" + String(extracted.error ?? "未知原因"));
   const pkgRoot = join(work, "package");
   if (!existsSync(pkgRoot)) throw new Error("解包后没有 package/ 目录");
 
