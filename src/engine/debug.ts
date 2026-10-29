@@ -8,13 +8,26 @@
 
 import { existsSync, statSync } from "node:fs";
 import { createConnection } from "node:net";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
-import { detectBuildDir, findElf } from "./build.js";
-import { defaultConfigs, findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
+import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
+import { usbDiagnosis } from "./doctor.js";
+import {
+  HINT_BUSY,
+  HINT_DP,
+  HINT_PROBE,
+  defaultConfigs,
+  errorCodeOfLines,
+  findProjectConfig,
+  probeMissingLines,
+  quoteForDisplay,
+  toOpenOcdPath,
+  usbNoteFor,
+} from "./flash.js";
+import type { FlashErrorCode } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 
@@ -48,6 +61,8 @@ export interface RegisterValue {
 
 export interface DebugRunReport {
   ok: boolean;
+  /** 结构化错误码（F2）：与 stm32_flash 同一枚举，成功或无关时省略。 */
+  errorCode?: FlashErrorCode;
   projectDir: string;
   elfPath: string;
   port: number;
@@ -174,6 +189,34 @@ export async function waitForListening(handle: ProcessHandle, timeoutMs: number,
   return { ok: false, text };
 }
 
+/** 失败时 log tail 的优先级：Error/adapter 那几行比"最后 15 行"有用得多。 */
+function keyLogTail(lines: readonly string[], maxLines: number): string {
+  const important = /error|unable to find|no device found|adapter|cmsis-dap|listening|couldn't bind|jtag|cannot/i;
+  const kept = new Set<number>();
+  for (let index = lines.length - 1; index >= 0 && kept.size < maxLines; index -= 1) {
+    const line = lines[index];
+    if (line === undefined) continue;
+    if (important.test(line)) kept.add(index);
+  }
+  for (let index = lines.length - 1; index >= 0 && kept.size < maxLines; index -= 1) kept.add(index);
+  return [...kept].sort((left, right) => left - right).map((index) => lines[index] as string).join("\n");
+}
+
+/** errorCode → 一句给人看的下一步。 */
+function debugHintFor(code: FlashErrorCode): string | null {
+  if (code === "no-probe") return HINT_PROBE;
+  if (code === "probe-busy") return HINT_BUSY;
+  if (code === "swd-locked") return HINT_DP;
+  if (code === "no-power") return "目标板可能没供电：检查 3V3/GND 与 BOOT 跳线。";
+  return null;
+}
+
+/** 日志里第一条真正说明问题的行（给 message 用，避免只报"起不来"）。 */
+function firstProblemLine(lines: readonly string[]): string {
+  const hit = lines.find((line) => /^Error|unable to find|no device found|couldn't bind|cannot open|invalid/i.test(line));
+  return (hit ?? lines[lines.length - 1] ?? "").trim();
+}
+
 export async function runDebugRun(subprocess: SubprocessService, request: DebugRunRequest): Promise<DebugRunReport> {
   const projectDir = resolve(request.projectDir);
   const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
@@ -191,6 +234,8 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     errors.push("找不到 .elf（先跑 stm32_build）");
     return { ...empty, message: "没调试：找不到 .elf", durationMs: Date.now() - startedAt };
   }
+  const selectionNote = elfSelectionNote(dirname(elfPath));
+  if (selectionNote !== "") notes.push(selectionNote);
   const openOcd = request.openOcdPath !== undefined && request.openOcdPath !== ""
     ? request.openOcdPath
     : await resolveToolIn(subprocess, ["openocd"], config.binDirs);
@@ -230,13 +275,26 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
       request.onProgress?.(text);
     });
     if (!listening.ok) {
-      const tail = listening.text.split(/\r?\n/u).slice(-15).join("\n");
-      errors.push(/Error connecting DP|no device found|CMSIS-DAP/iu.test(listening.text)
-        ? "openocd 连不上探针/芯片（见日志）"
-        : "openocd 没有在 15 s 内开始监听 " + String(port));
+      // F2：旧版只回"openocd 起不来"+15 行尾巴，真正的 adapter init 失败常被挤掉。
+      // 现在先归类（与 flash 同一套规则），再把有信息量的行留下，并顺手做一次 USB 形态诊断。
+      const lines = listening.text.split(/\r?\n/u).filter((line) => line.trim() !== "");
+      const errorCode = errorCodeOfLines(lines);
+      const hint = debugHintFor(errorCode);
+      if (hint !== null) notes.push(hint);
+      if (probeMissingLines(lines).length > 0) {
+        const usb = await usbDiagnosis(subprocess, request.signal);
+        const extra = usbNoteFor(usb.kind, usb.detail);
+        if (extra !== null) notes.push(extra);
+      }
+      const problem = firstProblemLine(lines);
+      errors.push(
+        "openocd 起不来（errorCode=" + (errorCode === "" ? "unknown" : errorCode) + "）：" +
+          (problem === "" ? "15 s 内没开始监听 " + String(port) : problem),
+      );
       return {
-        ...empty, elfPath, port, openOcdLogTail: tail,
-        message: "没调试：openocd 起不来", durationMs: Date.now() - startedAt,
+        ...empty, elfPath, port, openOcdLogTail: keyLogTail(lines, 40), errorCode,
+        message: "没调试：openocd 起不来" + (errorCode === "" ? "" : "（" + errorCode + "）"),
+        durationMs: Date.now() - startedAt,
       };
     }
 
@@ -276,6 +334,7 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     if (gdbOutcome.spawnError !== null) errors.push("gdb 启动失败：" + gdbOutcome.spawnError);
     if (gdbOutcome.timedOut) errors.push("gdb 超时（" + String(request.timeoutMs ?? 45_000) + " ms）：断点没命中或目标没在跑");
     if (gdbOutcome.exitCode !== 0) errors.push("gdb 退出码 " + String(gdbOutcome.exitCode));
+    const allLines = [...openOcdText.split(/\r?\n/u), ...gdbText.split(/\r?\n/u)].filter((line) => line.trim() !== "");
 
     // A26：ok 必须和 errors 一致 —— 退出码非 0、gdb 报的错（Cannot access memory 之类）都不算成功。
     const ok =
@@ -288,6 +347,18 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     if (!ok && probe.hitBreakpoint) notes.push("命中了断点，但收尾阶段有问题");
     if (breakAt !== "none" && !probe.hitBreakpoint && errors.length === 0) {
       errors.push("没有停在 " + breakAt + "：可能是复位后没跑到这里，或符号对不上（.elf 与板上的固件不一致）");
+    }
+    // F2：失败时给结构化错误码 + 可执行提示（成功时留空，报告不带噪音）。
+    let errorCode: FlashErrorCode = "";
+    if (!ok) {
+      errorCode = errorCodeOfLines(allLines);
+      const hint = debugHintFor(errorCode);
+      if (hint !== null) notes.push(hint);
+      if (errorCode === "no-probe" && probeMissingLines(allLines).length > 0) {
+        const usb = await usbDiagnosis(subprocess, request.signal);
+        const extra = usbNoteFor(usb.kind, usb.detail);
+        if (extra !== null) notes.push(extra);
+      }
     }
 
     return {
@@ -303,7 +374,8 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
       locals: probe.locals,
       gdbCommand,
       gdbOutput: gdbText,
-      openOcdLogTail: openOcdText.split(/\r?\n/u).slice(-15).join("\n"),
+      openOcdLogTail: keyLogTail(allLines, 40),
+      ...(errorCode === "" ? {} : { errorCode }),
       durationMs: Date.now() - startedAt,
       errors,
       message: ok

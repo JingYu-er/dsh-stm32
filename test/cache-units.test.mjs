@@ -301,6 +301,108 @@ test("fetchOne：第一个源 404 就换第二个；拿回网页或太短都不�
   }
 });
 
+/** 造一个"给一半就停"的响应：abort 时让 stream 报错，模拟低速被 watchdog 掐断。 */
+function stallingResponse(chunk, signal) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(chunk));
+        signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+      },
+    }),
+    { status: 200 },
+  );
+}
+
+test("F3c 低速中断：同一个源带 Range 从断点续传，拼出来的文件是完整的", async () => {
+  const root = tempDir("fetch-resume");
+  try {
+    const payload = "#ifndef __CORE_CM3_H\n#define __CORE_CM3_H\n" + "y".repeat(4000);
+    const bytes = Buffer.from(payload, "utf8");
+    const head = bytes.subarray(0, 1500);
+    const tail = bytes.subarray(1500);
+    const calls = [];
+    const impl = async (url, init) => {
+      const range = init?.headers?.Range ?? "";
+      calls.push(range === "" ? "fresh" : range);
+      if (range === "") return stallingResponse(head, init?.signal);
+      return new Response(new Uint8Array(tail), {
+        status: 206,
+        headers: { "Content-Range": "bytes 1500-" + String(bytes.length - 1) + "/" + String(bytes.length) },
+      });
+    };
+    const outcome = await fetchOne(
+      { path: "core_cm3.h", urls: ["https://x/core_cm3.h"], minBytes: 100, markers: ["__CORE_CM3_H"] },
+      root,
+      { fetchImpl: impl, stallMs: 150, minBytesPerSec: 1024 },
+    );
+    assert.equal(outcome.ok, true, outcome.error);
+    assert.deepEqual(calls, ["fresh", "bytes=1500-"], "第二次必须带 Range 从断点接着要");
+    assert.equal(readFileSync(join(root, "core_cm3.h"), "utf8"), payload, "断点接起来的文件不能有重复或缺口");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F3c 服务器无视 Range 回 200：整份重写，不是接在旧字节后面", async () => {
+  const root = tempDir("fetch-range-ignored");
+  try {
+    const payload = "#ifndef __CORE_CM3_H\n#define __CORE_CM3_H\n" + "z".repeat(4000);
+    const bytes = Buffer.from(payload, "utf8");
+    const calls = [];
+    const impl = async (url, init) => {
+      const range = init?.headers?.Range ?? "";
+      calls.push(range === "" ? "fresh" : range);
+      if (range === "") return stallingResponse(bytes.subarray(0, 1500), init?.signal);
+      return new Response(new Uint8Array(bytes), { status: 200 });
+    };
+    const outcome = await fetchOne(
+      { path: "core_cm3.h", urls: ["https://x/core_cm3.h"], minBytes: 100, markers: ["__CORE_CM3_H"] },
+      root,
+      { fetchImpl: impl, stallMs: 150, minBytesPerSec: 1024 },
+    );
+    assert.equal(outcome.ok, true, outcome.error);
+    assert.equal(calls.length, 2, calls.join(" / "));
+    const text = readFileSync(join(root, "core_cm3.h"), "utf8");
+    assert.equal(text, payload, "200 是整份重发，必须截断写，绝不能变成 1500+4000 字节");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F3c 太慢之后换源：新源从零开始，旧源的半截 .part 不会被拼进来", async () => {
+  const root = tempDir("fetch-switch");
+  try {
+    const good = "#ifndef __CORE_CM3_H\n#define __CORE_CM3_H\n" + "w".repeat(4000);
+    const goodBytes = Buffer.from(good, "utf8");
+    const calls = [];
+    const impl = async (url, init) => {
+      calls.push(url + " " + (init?.headers?.Range ?? "fresh"));
+      if (url.includes("slow")) {
+        // 两次都只给 800 字节就停：续传一次也还是慢 → 换源。
+        const body = stallingResponse(Buffer.alloc(800, 0x41), init?.signal);
+        return body;
+      }
+      return new Response(new Uint8Array(goodBytes), { status: 200 });
+    };
+    const outcome = await fetchOne(
+      { path: "core_cm3.h", urls: ["https://slow/core_cm3.h", "https://fast/core_cm3.h"], minBytes: 100, markers: ["__CORE_CM3_H"] },
+      root,
+      { fetchImpl: impl, stallMs: 150, minBytesPerSec: 1024 },
+    );
+    assert.equal(outcome.ok, true, outcome.error);
+    assert.equal(outcome.url, "https://fast/core_cm3.h");
+    assert.equal(readFileSync(join(root, "core_cm3.h"), "utf8"), good, "换源必须重下整份，不能接前一个源的头");
+    // slow 源试了两次（首次 + 续传），fast 源一次不带 Range。
+    assert.equal(calls.filter((line) => line.startsWith("https://slow/")).length, 2, calls.join("\n"));
+    assert.equal(calls.filter((line) => line.startsWith("https://fast/")).length, 1, calls.join("\n"));
+    assert.ok(calls.at(-1).startsWith("https://fast/") && calls.at(-1).endsWith("fresh"), calls.at(-1));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
 test("fetchAll：并发下每个文件各算一次，失败数能统计出来", async () => {
   const root = tempDir("fetch-all");
   try {

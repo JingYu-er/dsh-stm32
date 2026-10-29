@@ -326,6 +326,7 @@ source [find target/stm32f1x.cfg]
 
 | 现象 | 原因与处理 |
 | --- | --- |
+| 装插件时 `ERR_PNPM_GIT_UNKNOWN_ERROR … connect ETIMEDOUT …:443` | 这是**取包这一跳**连不上 GitHub（`dsh plugin add github:…` 会走 git 去拉仓库），跟 pnpm 11 的 `allowBuilds` 白名单、包体签名、包本身都没关系——换个网络就能装上。三条路按省事程度排：① 用 npm 上的正式包：`dsh plugin --profile desktop add dsh-stm32`（走 npm registry，不碰 GitHub）；② 一定要从 GitHub 装，就只给这一条命令挂代理，用进程级 `GIT_CONFIG_*` 临时生效、**不动你的全局 git 配置**：`$env:GIT_CONFIG_COUNT="1"; $env:GIT_CONFIG_KEY_0="http.https://github.com.proxy"; $env:GIT_CONFIG_VALUE_0="http://127.0.0.1:7890"; dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main`（端口换成你自己的）；③ 绕开 git、直接吃 HTTPS 包：`dsh plugin --profile desktop add https://codeload.github.com/JingYu-er/dsh-stm32/tar.gz/refs/heads/main`。**装最新**永远用 `github:JingYu-er/dsh-stm32#main`，已经 publish 的版本用 `dsh-stm32@latest`——两者内容一致，后者不依赖 GitHub |
 | 烧完连不上、SWD 失联 | 固件里生成了 `__HAL_AFIO_REMAP_SWJ_DISABLE()`。按住 BOOT0 上电进系统 bootloader 重烧，然后把 SYS 设回 Serial Wire——`stm32_flash` 现在会先拦这种情况 |
 | `Error: No device found` / `transfer count mismatch` | 探针被别的进程占着。先 `/stm32-stop`，再用 `stm32_doctor` 看 openocd / gdb 进程与 3333 端口。调试会话开着时读寄存器不会再有这个问题：`stm32_regs_read` 复用会话的 openocd，不另起第二个 |
 | 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 用会话自己的 gdb 连接执行 `print/x $pc` 与 `print/x *(unsigned int *)0x…`，读完 `monitor resume` 再 detach，notes 第一条写「复用调试会话（端口 N）的 openocd，没有另起一个」；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
@@ -342,13 +343,13 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 25 个离线套件、338 个用例；不需要板子、CubeMX、工具链
+npm test                 # 24 个离线套件、347 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **336 pass + 2 skipped**，开发机上是 338 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **345 pass + 2 skipped**，开发机上是 347 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

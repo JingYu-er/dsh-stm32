@@ -1841,3 +1841,60 @@ candidate JSON 放在工作区 `.archify/<type>-<slug>-<时间戳>/`，不进仓
 6. **回执文件有归属校验**：artifact 变了以后旧的 `*.browser-check.json` 会被判 `viewer/evidence-path-conflict`（`ownership-artifact-mismatch`），不许覆盖。每轮改完 finalize 前，把旧回执改名（如 `stale-browser-check-*.json`）而不是删掉。
 
 **经验**：Archify 的价值在「强制你把话说清楚」——节点要一句话、边要有方向、失败分支要么成节点要么进卡片。两次 finalize 卡住的都不是审美，而是「这条边到底谁指向谁」「这个失败到底属于哪个阶段」。写图的过程等于把 `reading-guide.md` 第 7 章又校对了一遍。
+
+## 24. 第五批：选错 .elf、调试丢根因、安装包单源（F1–F4，2026-10-29）
+
+用户点名的四个问题，顺序 F1 → F4（m00536）。F1/F2 修的是「已经在做对的事，但结果说错/做错」，F3 修的是「只在网络不好或国内访问时才暴露」，F4 是文档。
+
+### 24.1 F1：`findElf` 会把旧固件当产物（P0）
+
+旧规则是「构建目录同名优先」：`buildDir` 叫 `build/Debug` 时 `buildName = "Debug"`，而产物叫 `demo.elf`，两者**永不相等**，于是退化成 `readdir` 顺序——改过工程名（或换个 `project()` 重新生成）之后，中间产物和上一次的固件都在同一个 `build/` 里，谁排在前面就烧谁。这条路径被 **5 个调用点**共用：`src/engine/build.ts:414`（编译后报产物）、`flash.ts:210`（烧之前找 elf）、`debug.ts:402`、`doctor.ts:213`（体检报 elf 大小）、`project-export.ts:104`（导出 prebuilt），所以坏一次是五处一起坏。
+
+新实现（`src/engine/build.ts:194-284`）：
+
+- `readCmakeProjectName(buildDir)`：从 `CMakeCache.txt` 里读 `CMAKE_PROJECT_NAME:<TYPE>=<名字>`，读不到返回空串（没有缓存不影响出结果）。
+- `elfCandidates(buildDir)`：列出全部 `.elf`，带 `size` / `mtimeMs`，按修改时间从新到旧排序；`readdir` 或 `stat` 抛错（刚被删、被独占）就跳过，不炸整条链路。
+- `pickElf(buildDir)`：**先按 CMakeCache 里的工程名精确匹配 `<name>.elf`**（`byProjectName: true`，最权威）；匹配不到才退回"修改时间最新"（`byProjectName: false`）。
+- `findElf(buildDir)`：对外的老签名不变，仍返回 `ElfInfo`，所以五个调用点一行都不用改。
+- `elfSelectionNote(buildDir)`：构建目录里有 ≥2 个 `.elf` 时回一句人话（"用了 demo.elf（18:42:03，按 CMakeCache 的工程名选）；没动的 2 个：…"），只放 `notes`，只有一个 elf 时返回空串——不给报告加噪音。
+
+**判据为什么不是「最新」而是 CMakeCache**：`mtime` 只能回答"谁最后被写"，回答不了"谁属于当前这套构建"。`stm32_generate` 重新生成、`cmake --preset` 换 preset、用户手动 `rename` 都能让旧固件比新固件更新；而 `CMakeCache.txt` 是 CMake 自己写的、和这套构建目录一一对应的事实。**先在事实层找答案，再退回启发式**，这条经验在 `buildDir` 检测、`findProjectConfig` 里都出现过。
+
+### 24.2 F2：`stm32_debug_run` 失败只说"起不来"（P0）
+
+旧代码在 `waitForListening` 超时后只做两件事：把日志 `tail(15)` 塞进 `openOcdLogTail`，message 写 "没调试：openocd 起不来"。真机上 adapter init 失败的那几行（`Error: unable to find CMSIS-DAP device`、`CMSIS-DAP command mismatch`）常被后 15 行的 `Info :` 挤出去，模型和用户都拿不到根因，而且**同一套分类逻辑在 `stm32_flash` 里已经有了**（`errorCodeOfLines` / `probeMissingLines` / `usbDiagnosis`），调试路径没接上。
+
+修法（两条失败路径都覆盖）：
+
+1. **openocd 起不来**（`src/engine/debug.ts:277-299`）：`errorCodeOfLines(lines)` 归类 → `debugHintFor(code)` 给一句下一步（`no-probe`→查线/驱动、`probe-busy`→关掉另一个 openocd、`swd-locked`→`monitor reset halt`/改 BOOT、`no-power`→查 3V3/GND）；只有 `no-probe` 且 `probeMissingLines` 命中时才多跑一次 `usbDiagnosis`（`usbNoteFor` 出人话，`ok` 时不打扰）；`firstProblemLine(lines)` 取第一条 `Error/unable to find/no device found/couldn't bind/cannot open/invalid` 进 `errors`，message 带 `（code）`。
+2. **gdb 起来了但没收好**（`src/engine/debug.ts:351-362`）：`ok === false` 时同样算一次 `errorCode`，只在失败时附上（成功时报告里根本不出现这个字段）。
+3. **日志尾巴换算法**（`keyLogTail(lines, 40)`，`debug.ts:192-203`）：先用 `/error|unable to find|no device found|adapter|cmsis-dap|listening|couldn't bind|jtag|cannot/i` 从尾部往前挑"有信息量"的行，挑不满 40 行再按尾部补齐，最后按原顺序拼回去。旧的 `tail(15)` 只保证"最后"，新的保证"最后 + 关键"。
+4. 契约同步：`src/tools/debug.ts` 的 `reportSchema` 补 `errorCode`（8 个码的 enum，不进 `required`），`formatDebugReport` 在"固件："后加一行"错误码：";`test/schema-guard.mjs` 加一条"失败报告带 `errorCode` 时仍过 output schema + 卡片打印错误码"的用例（手搓报告对象，不跑 15 s 超时）。
+
+**教训**：同一类失败在两个工具里各写一遍，就一定会有一边落队（`flash` 有 `errorCode` 时 `debug` 没有）。现在两者共用 `HINT_PROBE` / `HINT_BUSY` / `HINT_DP` / `errorCodeOfLines` / `probeMissingLines` / `usbDiagnosis`，改一处两边都变。
+
+### 24.3 F3：MSYS2 安装包只有 GitHub 一个来源（P1）
+
+**a) 候选链**（`resolveInstallerUrls(env)`，替换掉的旧名 `resolveInstallerUrl` 已不存在）：`MSYS2_INSTALLER_URL`（单源，给了就只试它）> `MSYS2_MIRROR`（给全 `.exe` 当完整地址，否则当目录拼两个文件名）> 四个国内镜像 × 两个文件名 > GitHub × 两个文件名，共 **10 个候选**，顺序就是"国内优先、GitHub 兜底"。**为什么每个源要试两个名字**：镜像只同步 `msys2-x86_64-latest.sfx.exe`，GitHub releases 只有 `msys2-base-x86_64-latest.sfx.exe`（实测 TUNA 上 `msys2-base-…` 是 404），钉死一个名字等于把一半源排除掉。
+
+**b) pacman 也走国内镜像**（`preferMirrorServers(text, servers)` + `preferChinaMirrors(msys64)`）：MSYS2 自带的 `etc/pacman.d/mirrorlist.{msys,mingw}` 第一顺位是官方源，国内装 173 个包会慢到像卡死。安装成功后把国内镜像插到这两个文件**最前面**（`Server = https://mirrors.tuna.tsinghua.edu.cn/msys2/msys/$arch/` 这类），官方条目不删、只在缺失时插入（幂等），文件不存在就跳过。**已经有 MSYS2 的机器一个字都不改**——那是用户自己的配置。
+
+**c) 断点续传 + 低速判死**（`src/engine/fetch.ts`，同步用于所有下载）：`streamOnce(url, part, startAt, …)` 带 `Range: bytes=N-` 流式写 `.part-<pid>-<seq>`；watchdog 每 `min(1000, max(100, stallMs/4))` ms 检查：超过 `stallMs`（默认 10 s）没有新字节，或窗口内平均速率 < `minBytesPerSec`（默认 1024），就 `slow = true` + `controller.abort()`，然后**从已落盘字节续一次**（`fetchOne` 里 `if (!streamed.ok && streamed.slow && streamed.bytes > 0 && !isCancelled())`）。`206` 才追加、`200` 一律截断重写（服务器无视 Range 时不能把两段拼起来）、`416` 直接判失败。**换源一定从零开始**（不同源的字节不保证是同一份，拼出来的 sha256 必然对不上）。安装包那边同一套逻辑用 curl 实现：`-C -` + `--speed-limit 1024 --speed-time 10`，退出码 28 单独写成"太慢（10 s 内不足 1 KB/s）"，退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次。
+
+**d) 缓存三道粗检**：① 命中缓存先 `cachedInstallerBytes`（MZ 魔数 + ≥ `MIN_INSTALLER_BYTES` = 40 MB 才算数）② 下载后查退出码/体量/MZ 头 ③ 解压后查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删，留证据）并让用户重跑。**为什么不能钉 sha256**：镜像与 GitHub 的文件名不同、字节数也不同（实测 TUNA/NJU/aliyun 43,117,824 B、GitHub 42,907,176 B，同步时点不同），跨源钉同一个哈希必然误杀。
+
+**e) 顺序不变的部分**：CMSIS 头与 ST 固件包仍走原来的候选（raw.githubusercontent → jsdelivr → ghfast → …）。实测 codeload 4.2 s、jsdelivr 675 ms、raw 859 ms，换顺序省不下时间；真正的大头是 43 MB 安装包和 pacman 包体。
+
+**测试**：`test/install-units.test.mjs` 27 例（新增候选链 / `preferMirrorServers` 幂等 / `preferChinaMirrors` 只动两个文件 / 1 KB 缓存不算数→10 个候选全试 / 已有 MSYS2 不改配置）、`test/cache-units.test.mjs` 22 例（新增"断在 1500 字节→`Range: bytes=1500-`→206 续传""服务器回 200 时截断重写""慢源试两次后换快源、不拼接"）。**A29 那条测试同时被改了**：它用 1 KB 假缓存来"跳过下载、在解压步取消"，`MIN_INSTALLER_BYTES` 一上就让缓存失效、取消点前移到下载步，解压步自然变 `skipped`——把假缓存改成 40 MB 的 `Buffer.alloc(40_000_002)` 才恢复原意。
+
+### 24.4 F4：README 排错段补"连不上 GitHub"
+
+现象：`dsh plugin add github:JingYu-er/dsh-stm32` 报 `ERR_PNPM_GIT_UNKNOWN_ERROR … connect ETIMEDOUT …:443`。这不是 pnpm 11 的 `allowBuilds` 拦截、不是签名问题、不是包坏了，而是**取包这一跳根本连不上 GitHub**——换个说法就没人再往 pnpm 身上查。
+
+给了三条不再碰全局配置的路（README 中/英同一条）：① 走 npm registry（`add dsh-stm32`，已发布时最省事）② 进程级代理：只给本次命令设 `GIT_CONFIG_COUNT=1` / `GIT_CONFIG_KEY_0=http.https://github.com.proxy` / `GIT_CONFIG_VALUE_0=…`，不写 `git config --global`（那样会影响用户所有仓库）③ 直接吃 codeload 的 tarball。装最新用 `github:JingYu-er/dsh-stm32#main`，要稳定版用 `dsh-stm32@latest`。
+
+### 24.5 计数与行数
+
+`npm run build` exit 0；`npm test` → **24 套件 347 pass / 0 fail**（CI 345 + 2 skipped）。行数按"文件内 `\n` 个数"重算：src 65 个 `.ts` **20,758 行**、tools 19 文件 4,832、engine 36 文件 **13,328**（`fetch.ts` 197→**341**、`msys2-install.ts` 2038→**2313**）、data 6 文件 1,803、client 682；`reading-guide.md` 的合计与两处单文件数字、第 9 章用例数已同步。
+
+**顺手记一个度量坑**：PowerShell 的 `(Get-Content x.ts).Count` 和 `Measure-Object -Line` 都**不等于**行数（前者受文件尾换行影响，后者忽略空行），`wc -l` 在 Git Bash 里对 CRLF 文件也会差一。本文档与 `reading-guide.md` 统一用 Node 读文件数 `\n`：`(text.match(/\n/g) ?? []).length`——示例：`index.ts` 是 119，`Get-Content` 给 108。

@@ -42,6 +42,11 @@ const reportSchema: JsonSchema = {
     gdbCommand: { type: "string" },
     gdbOutput: { type: "string" },
     openOcdLogTail: { type: "string" },
+    // F2：失败时带结构化错误码（与 stm32_flash 同一套枚举）。可选字段，成功路径不出现。
+    errorCode: {
+      type: "string",
+      enum: ["", "no-probe", "probe-busy", "swd-locked", "flash-protected", "no-power", "target-mismatch", "unknown"],
+    },
     durationMs: { type: "number" },
     errors: { type: "array", items: { type: "string" } },
     message: { type: "string" },
@@ -90,6 +95,7 @@ export function formatDebugReport(report: DebugRunReport): string[] {
   const lines: string[] = [];
   lines.push((report.ok ? "调试快照完成" : "调试失败") + "：" + report.message);
   if (report.elfPath !== "") lines.push("固件：" + report.elfPath);
+  if (report.errorCode !== undefined && report.errorCode !== "") lines.push("错误码：" + report.errorCode);
   if (report.port !== 0) lines.push("端口：" + String(report.port) + "，断点：" + report.breakAt);
   if (report.location !== "") lines.push("位置：" + report.location);
   if (report.registers.length > 0) lines.push("寄存器：" + report.registers.map((item) => item.name + "=" + item.value).join(" "));

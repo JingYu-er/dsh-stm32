@@ -1,7 +1,7 @@
 # dsh-stm32 源码精读指南
 
 > 面向：第一次读这个仓库、并且要改它的人。
-> 规模：65 个 TypeScript 文件约 20.2k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。
+> 规模：65 个 TypeScript 文件约 20.3k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。
 > 读完这份指南你应该能回答：一次工具调用从宿主进来到 openocd 退出中间经过了谁；哪几条不变量破了一定出事；要改某个功能得动哪几个文件；哪些行为有测试兜着、哪些只能上板子验。
 >
 > 配套文档：docs/development-notes.md（按时间记的决策与被坑记录）、docs/logic-audit.md（历史审计条目）、README.md（用户视角）。
@@ -67,8 +67,8 @@ flowchart TD
 | 目录 | 文件数 | 行数 | 说明 |
 | --- | --- | --- | --- |
 | src/ | 4 | 795 | index.ts 119、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
-| src/tools/ | 19 | 4826 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施） |
-| src/engine/ | 36 | 12753 | 见第 5 章；最大的是 msys2-install.ts 2038 行 |
+| src/tools/ | 19 | 4832 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施） |
+| src/engine/ | 36 | 13328 | 见第 5 章；最大的是 msys2-install.ts 2313 行 |
 | src/data/ | 6 | 1803 | 见第 6 章 |
 | templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
@@ -77,17 +77,17 @@ flowchart TD
 
 ## 2. 阅读顺序
 
-不要从 engine/msys2-install.ts（2038 行）开始读，会迷路。按下面的顺序走，每一站都有一条完整的「从宿主到硬件」的链路可以跟到底。
+不要从 engine/msys2-install.ts（2313 行）开始读，会迷路。按下面的顺序走，每一站都有一条完整的「从宿主到硬件」的链路可以跟到底。
 
 | 站 | 读什么 | 行数 | 读完能回答 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | src/index.ts、src/types.ts | 315 | 插件怎么被加载？宿主给了我什么？工具/命令/skill/路由各自怎么注册？ | 20 分钟 |
-| 2 | src/tools/flash.ts → src/engine/flash.ts → src/engine/subprocess-runner.ts → src/engine/tool-env.ts | 912 | 一次工具调用从头到尾长什么样？参数怎么校验？进程怎么起、环境变量怎么注入？ | 1 小时 |
+| 2 | src/tools/flash.ts → src/engine/flash.ts → src/engine/subprocess-runner.ts → src/engine/tool-env.ts | 915 | 一次工具调用从头到尾长什么样？参数怎么校验？进程怎么起、环境变量怎么注入？ | 1 小时 |
 | 3 | src/engine/toolchain-gate.ts → probe.ts → src/data/search-roots.ts → src/data/toolchain-config.ts | 1649 | 门禁怎么判「缺件」？为什么快路径也要跑一次版本命令？配置文件的 CAS 写是什么？ | 1.5 小时 |
 | 4 | src/engine/generate.ts → generate-script.ts → generate-cache.ts → layout.ts → ioc.ts → ioc-plan.ts → code-patch.ts → text-file.ts → usercode-merge.ts | 2385 | CubeMX 怎么被驱动？产物怎么搬进 Core/？为什么改代码要按字节拼接？.ioc 事务的 SHA 校验挡的是什么？ | 2.5 小时 |
-| 5 | src/engine/scaffold.ts → register-template.ts → vscode-config.ts → build.ts → project-export.ts → zip.ts → fs-longpath.ts | 1855 | 新工程怎么造出来？寄存器路线为什么不碰 CubeMX？编译产物 hex/bin 怎么来？导出的 zip 里为什么没有 build/？ | 2 小时 |
-| 6 | src/engine/fetch.ts → cache.ts → tar.ts → firmware-install.ts → thirdparty.ts → xcube.ts → msys2-install.ts | 4204 | sha256 门禁在哪一环？缓存怎么保证可恢复？固件包为什么装到 dsh-firmware？安装计划怎么做到只报缺件？ | 3 小时 |
-| 7 | src/engine/debug.ts → debug-session.ts → regs.ts → doctor.ts → route-plan.ts → web-api.ts → client/client.js → src/commands/register.ts | 3634 | 调试会话的租约与归属怎么算？扫描链/寄存器怎么读？路线评估的判定规则？设置面板走什么通道？ | 2.5 小时 |
+| 5 | src/engine/scaffold.ts → register-template.ts → vscode-config.ts → build.ts → project-export.ts → zip.ts → fs-longpath.ts | 1936 | 新工程怎么造出来？寄存器路线为什么不碰 CubeMX？编译产物 hex/bin 怎么来？导出的 zip 里为什么没有 build/？ | 2 小时 |
+| 6 | src/engine/fetch.ts → cache.ts → tar.ts → firmware-install.ts → thirdparty.ts → xcube.ts → msys2-install.ts | 4623 | sha256 门禁在哪一环？缓存怎么保证可恢复？固件包为什么装到 dsh-firmware？安装计划怎么做到只报缺件？ | 3 小时 |
+| 7 | src/engine/debug.ts → debug-session.ts → regs.ts → doctor.ts → route-plan.ts → web-api.ts → client/client.js → src/commands/register.ts | 3706 | 调试会话的租约与归属怎么算？扫描链/寄存器怎么读？路线评估的判定规则？设置面板走什么通道？ | 2.5 小时 |
 
 每一站的「流程」在第 7 章都有对应的图，读到不懂的地方先跳到图上找位置。
 
@@ -235,19 +235,19 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | data/search-roots.ts（421） | 搜索范围的事实表。DEFAULT_BIN_DIRS / DEFAULT_CUBEMX_ROOTS、discoverBinDirs / discoverCubeMxRoots（含 msys64 的 ucrt64/mingw64/clang64 变体）、`decodeRegistryText`（严格 UTF-8 不成就按 GB18030 解，审计 B9）、`readRegistryInstallDirs`、`resolveSearchConfig`（配置 > 显式 > 自动发现）、`searchConfigWarnings`、`describeSearchScope`。 |
 | data/toolchain-config.ts（370） | ~/.dsh-stm32/config.json 的读写。`TOOLCHAIN_CONFIG_VERSION = 1`、`ToolchainConfig{msys64,binDirs,cubeMxRoot,packages}`、`readToolchainConfig`、`writeToolchainConfig(expect)` 与 `updateToolchainConfig`（CAS：写入前比对快照，别人改过就冲突而不是覆盖，审计 A28）、`binDirsFromConfig` / `cubeMxRootsFromConfig`、`describeToolchainConfig`。 |
 
-### 5.3 构建与产物（2 个，462 行）
+### 5.3 构建与产物（2 个，543 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| build.ts（412） | `runBuild(subprocess, request)`：选 preset（`pickConfigurePreset` 优先 Debug）→ `cmake --preset` → `cmake --build` → `findElf` → 解析内存占用（`parseMemoryUsage`，GNU ld 的 `RAM: 1584 B 20 KB 7.73%` 格式）→ 错误行（`parseBuildErrors`）与警告数（`countWarnings`）→ 按需跑 objcopy 出 hex/bin（`converted`，失败只写 note 不判失败）。辅助导出：`presetDirs`、`detectBuildDir`。 |
+| build.ts（493） | `runBuild(subprocess, request)`：选 preset（`pickConfigurePreset` 优先 Debug）→ `cmake --preset` → `cmake --build` → `findElf`（= `pickElf`：CMakeCache 的 CMAKE_PROJECT_NAME 优先，否则取 mtime 最新的 .elf；`elfCandidates` 列出全部候选，`elfSelectionNote` 在候选多于 1 个时把「选了哪个、其他候选的 mtime」写进 notes）→ 解析内存占用（`parseMemoryUsage`，GNU ld 的 `RAM: 1584 B 20 KB 7.73%` 格式）→ 错误行（`parseBuildErrors`）与警告数（`countWarnings`）→ 按需跑 objcopy 出 hex/bin（`converted`，失败只写 note 不判失败）。辅助导出：`presetDirs`、`detectBuildDir`。 |
 | layout.ts（50） | 生成物的落位约定：`GEN_SRC_DIR = "Src"`、`GEN_INC_DIR = "Inc"`、`PROJECT_SRC_DIR = "Core/Src"`、`PROJECT_INC_DIR = "Core/Inc"`、`mapGeneratedPath(rel)`、`listGeneratedFiles`。CubeMX 无头模式吐在 `.dsh-stm32/gen/Src|Inc`，由这里映射回工程的 Core/。 |
 
-### 5.4 烧录、调试与诊断（5 个，1806 行）
+### 5.4 烧录、调试与诊断（5 个，1881 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| flash.ts（421） | `runFlash`：SWD 守卫（`checkNoDebugGuard`：唯一 .ioc 看 PA13/PA14，没有 .ioc 就看 openocd.cfg 的 transport，找不到依据时给 notes 而不是静默放行）→ `resolveElf` → 找 openocd 配置（`findProjectConfig` 认 openocd.cfg/openocd/…；否则 `defaultConfigs` 用 interface/cmsis-dap.cfg + target/stm32f1x.cfg）→ 拼 `program <elf> verify reset exit`（`buildProgramCommand`）→ 解析日志（`parseFlashLog` 认 ** Programming Finished ** / ** Verified OK **，成功序列里的偶发 Error 行进 noise）→ 失败时分类（`errorCodeOfLines` → no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / unknown）→ 追加 USB 形态提示（`usbNoteFor` / `probeMissingLines`）。`toOpenOcdPath` 只把反斜杠换成正斜杠。 |
-| debug.ts（334） | 一次性调试快照 `runDebugRun`：挑端口（`pickPort`，默认 3333，占用则顺延）→ 起 openocd（`waitForListening` 等 "Listening on port"）→ 起 gdb 跑一串 -ex（file / break / info registers / bt / info locals / monitor reset run / detach）→ `parseGdbOutput` 提取断点命中、寄存器、调用栈、locals → ok 判据看 exitCode + probe.errors + hitBreakpoint（审计 A26）。 |
+| flash.ts（424） | `runFlash`：SWD 守卫（`checkNoDebugGuard`：唯一 .ioc 看 PA13/PA14，没有 .ioc 就看 openocd.cfg 的 transport，找不到依据时给 notes 而不是静默放行）→ `resolveElf` → 找 openocd 配置（`findProjectConfig` 认 openocd.cfg/openocd/…；否则 `defaultConfigs` 用 interface/cmsis-dap.cfg + target/stm32f1x.cfg）→ 拼 `program <elf> verify reset exit`（`buildProgramCommand`）→ 解析日志（`parseFlashLog` 认 ** Programming Finished ** / ** Verified OK **，成功序列里的偶发 Error 行进 noise）→ 失败时分类（`errorCodeOfLines` → no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / unknown）→ 追加 USB 形态提示（`usbNoteFor` / `probeMissingLines`）。`toOpenOcdPath` 只把反斜杠换成正斜杠。`HINT_PROBE` / `HINT_DP` / `HINT_BUSY` 三个提示常量是 export 的，debug.ts 复用同一套文案。 |
+| debug.ts（406） | 一次性调试快照 `runDebugRun`：挑端口（`pickPort`，默认 3333，占用则顺延）→ 起 openocd（`waitForListening` 等 "Listening on port"）→ 起 gdb 跑一串 -ex（file / break / info registers / bt / info locals / monitor reset run / detach）→ `parseGdbOutput` 提取断点命中、寄存器、调用栈、locals → ok 判据看 exitCode + probe.errors + hitBreakpoint（审计 A26）。失败时：`errorCodeOfLines` 归类（与 flash 同一枚举）、`debugHintFor` 给下一步、`probeMissingLines` 命中就跑 `usbDiagnosis`、日志用 `keyLogTail(lines, 40)`（优先留 adapter/Error 行，而不是「最后 15 行」）、`firstProblemLine` 把首条根因塞进 errors。 |
 | debug-session.ts（516） | 长会话租约。`DebugSessionManager` 管「一个常驻 openocd + 多次短命 gdb -batch eval」，空闲 90 s、总时长 10 min、turn/end 立刻释放；`releaseProbeFor(reason)` 是别的工具（flash/regs/debug_run）动探针前必须调的一步（审计 B16：先释放再门禁）。三个纯函数是好单测点：`normalizeHexAddress`、`parseGdbPrintedHex`、`parseMarkedWords`（按 `echo ===DSH:<tag>===` 分段对齐，修「中间某个地址读失败导致后面值整体前移」）。 |
 | regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。与 debug-session 的区别是「一次性、不复位」，起完就关。 |
 | doctor.ts（289） | 体检。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录。 |
@@ -279,7 +279,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| fetch.ts（197） | `fetchOne(target, destRoot, options)`：按 URL 列表依次尝试 → 校验内容特征（markers）→ 校验 sha256（有声明时）→ 落到目标路径；`fetchAll` 汇总。失败信息带「期望 / 实际」两个哈希，方便判断是上游挪了内容。 |
+| fetch.ts（341） | `fetchOne(target, destRoot, options)`：按 URL 列表依次尝试 → 校验内容特征（markers）→ 校验 sha256（有声明时）→ 落到目标路径；`fetchAll` 汇总。失败信息带「期望 / 实际」两个哈希，方便判断是上游挪了内容。**同一源内断点续传**（F3c）：`streamOnce(url, part, startAt, …)` 用 `Range: bytes=N-` 流式写 `.part-<pid>-<seq>`，watchdog 在 `stallMs`（默认 10 s）内判停滞或平均速率 < `minBytesPerSec`（默认 1024）就 abort，返回 `slow: true` 让 `fetchOne` 从已落盘字节续一次；服务器回 200（无视 Range）时截断重写，只有 206 才追加——**换源一律从零开始**（不同源的字节不保证同一份）。 |
 | cache.ts（347） | 缓存索引（默认 %LOCALAPPDATA%\dsh-stm32\cache，可用 DSH_STM32_CACHE 覆盖）。`CACHE_INDEX_VERSION`、`readCacheIndex` / `writeCacheIndex`（坏索引先改名 index.json.broken-<ts>；tmp 唯一名 + rename 失败先备份旧索引再重试；`CacheIndexWriteError` 让上层知道是索引写坏了，审计 A2/A12）、`upsertCacheEntry` / `removeCacheEntry` / `findCacheEntry`、`checkCacheEntry`（按 sha256 验证，审计 A38）、`sha256OfFile`、`describeCacheBytes`。 |
 | tar.ts（288） | `extractTarGz(archive, destRoot, options)`：解 gzip + tar，路径白名单（`isSafeRelative` 拒反斜杠、冒号、.. 与空段）、类型白名单（`entryKind`：0/空/5 正常，x/g/L/K 元数据，其余跳过并记名，审计 A4）、声明长度超出实际数据判截断整次失败。 |
 | firmware-install.ts（760） | 固件包下载与组装。`firmwareInstallPlan` / `installFirmware` / `planOrInstallFirmware`：选址（`isProtectedSystemDir` 拒绝 Program Files 之类、`orderCubeMxRoots` 把本机存在的排前面、`hasCubeMxExe` 只对真 CubeMX 目录建 dsh-firmware）→ 下载 2 个归档 + 5 个内核头 → `extractTarGz` → `verifyFirmwarePackage` → 写 `installed.json` 记录（`FIRMWARE_RECORD_FILE`）→ `firmwareExtraDirs` 让 generate/scaffold 也能找到非标准落点。 |
@@ -287,11 +287,11 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | xcube.ts（293） | X-CUBE 包识别：`identifyPackId`、`parsePdscNames`、`listInstalledPacks`、`scanIocPacks`、`summarizePacks`。 |
 | xcube-catalog.ts（117） | 由 scripts/gen-xcube-catalog.mjs 生成的包目录（159 条）。`XCUBE_CATALOG_ENTRY_COUNT = XCUBE_PACK_CATALOG.length`（审计 A23：不要把条目数写成数字常量，重跑脚本会回写旧值）。 |
 
-### 5.8 工具链安装（1 个，2038 行）
+### 5.8 工具链安装（1 个，2313 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| msys2-install.ts（2038） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrl`、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。 |
+| msys2-install.ts（2313） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrls(env)`（**F3a 候选链**：`MSYS2_INSTALLER_URL` 单源 > `MSYS2_MIRROR` > 清华 TUNA / 中科大 USTC / 南大 NJU / 阿里云 × 两个文件名 > GitHub，共 10 个候选；`installerSourceLabel` 把 URL 变成「清华 TUNA」这样的人话）、`installerSourceLabel`、`preferMirrorServers(text, servers)` / `preferChinaMirrors(msys64)`（**F3b**：只把国内镜像插到 `etc/pacman.d/mirrorlist.msys` 与 `mirrorlist.mingw` 最前，官方条目不删，幂等，已有 MSYS2 一个字都不改）、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。**F3d 三道粗检**：缓存要 MZ 头 + ≥ `MIN_INSTALLER_BYTES`（40 MB）才算数（`cachedInstallerBytes`）；下载后查退出码/体量/MZ；解压后再查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删）。**F3c**：`curl -C -` 同源续传、`--speed-limit 1024 --speed-time 10` 低速自退（退出码 28 单独说明），退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次，换源前删 `.part`。 |
 
 ### 5.9 设置面板的宿主侧（2 个，577 行）
 
@@ -408,13 +408,15 @@ flowchart LR
   A["runBuild"] --> B["pickConfigurePreset<br/>优先 Debug"]
   B --> C["cmake --preset=<name><br/>env 注入 binDirs + 原 PATH"]
   C --> D["cmake --build --preset=<name>"]
-  D --> E["findElf：build/<preset>/*.elf"]
+  D --> E["findElf → pickElf：CMakeCache 工程名优先<br/>否则取 mtime 最新的 .elf；elfSelectionNote 进 notes"]
   E --> F["parseMemoryUsage / parseBuildErrors / countWarnings"]
   F --> G{"artifacts 里要 hex/bin?"}
   G -->|是| H["arm-none-eabi-objcopy -O ihex / binary<br/>失败只写 note，不判 build 失败"]
   G -->|否| I["报告"]
   H --> I
 ```
+
+选哪个 .elf 是 0.1.2 修的坑：老的 findElf 取 readdir 的第一个，Debug 目录里积了多个 elf（改过工程名、重建过、复制过 build/）时会挑到旧的——烧进去的固件和源码不一致，却什么都不报。现在 `pickElf` 先读 CMakeCache 的 `CMAKE_PROJECT_NAME`（buildDir 目录名是 Debug，与 Debug.elf 永不相等，这条老逻辑不再被依赖），取不到再退化为 mtime 最新；候选多于 1 个时 `elfSelectionNote` 把「选了哪个 + 其余候选的 mtime」写进报告 notes，flash / debug_run / build 都会带这条说明。
 
 坑：**复制过的工程**（CMakeCache 里记着别的路径）会报奇怪的错，build.ts 里有显式拦截：检测到 CMakeCache 的源目录与当前工程不一致就直接给「把 build/ 删掉重配」。
 
@@ -428,7 +430,7 @@ flowchart TD
   C1 -->|有| C2["PA13=SYS_JTMS-SWDIO / PA14=SYS_JTCK-SWCLK / Mode=Serial_Wire?"]
   C1 -->|没有或多个| C3["看 openocd.cfg 的 transport：swd 放行并说明依据<br/>jtag 提示引脚复用<br/>都没有 → notes 两条「守卫没生效」"]
   C2 -->|是 No_Debug| BLOCK["blocked：拒绝，除非 allowNoDebug"]
-  C2 -->|是 Serial Wire| D["resolveElf"]
+  C2 -->|是 Serial Wire| D["resolveElf（内部 findElf → pickElf，notes 说明选中的是哪个）"]
   C3 --> D
   D --> E["findProjectConfig：openocd.cfg 优先<br/>否则 interface/cmsis-dap.cfg + target/stm32f1x.cfg"]
   E --> F["openocd -f ... -c program <elf> verify reset exit"]
@@ -461,6 +463,8 @@ stateDiagram-v2
 1. **只有 openocd 常驻**，gdb 每次短命——gdb 崩了不会把会话带死，也避免 gdb 自己攒一堆状态。
 2. **归属（A9）**：turn/end 事件里尽量掏 agent id，只关这条会话自己开的；掏不到就全关（宁可按最短释放，也不攥着探针）。
 3. **别人要用探针先 releaseProbeFor**：flash / regs_read / debug_run 都在自己起 openocd 之前调它，否则就是「两个 openocd 抢一个 CMSIS-DAP」。
+
+**debug_run 失败时说什么**（0.1.2 修复）：以前只回一句「openocd 起不来」外加日志最后 15 行，真正的原因（adapter init 失败、探针被占）常被后面的噪声挤掉。现在先按 flash 同一套 `errorCodeOfLines` 归类，再用 `debugHintFor` 给一条可执行提示，`probeMissingLines` 命中时顺手跑 `usbDiagnosis` 分清「没插 / 没认到 / 驱动异常」，日志改用 `keyLogTail` 挑有信息量的行，`firstProblemLine` 把首条根因写进 errors。报告里的 `errorCode` 是**可选字段**（成功时不出现），且必须在 tools/debug.ts 的 reportSchema 里声明——漏声明就会重演 flash 那次「失败路径被判非法输出」。
 
 ### 7.7 .ioc 事务：plan → 用户确认 → apply / rollback
 
@@ -651,7 +655,7 @@ flowchart LR
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 24 个套件，全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
+| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 24 个套件 347 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
 | e2e 脚本 | test/e2e-*.mjs（12 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
 | 发布形态 | scripts/pack-smoke.mjs（npm run test:pack） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程。CI 上跑 |
 
@@ -690,6 +694,8 @@ const fake = {
 | 改工程模板 | templates/scaffold/*，若新增文件同步 scaffold.ts 的 SHARED_TEMPLATE_FILES | scaffold-patch-units 的文件数断言会红 |
 | 改设置面板 | client/client.js（前端）+ engine/web-api.ts（逻辑）+ web-api-units | 前端不经打包器，语法要保守 |
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |
+| 改 .elf 选择规则 | engine/build.ts 的 `pickElf` / `elfCandidates` / `elfSelectionNote`（flash、debug_run、doctor、export 全都间接用它） | build-units 里要同时断言「工程名优先」和「退化到最新」两条路 |
+| 给工具加错误码 | engine/flash.ts 的 `errorCodeOfLines` 与 `FlashErrorCode`（debug_run 复用同一枚举） | 三个地方同改：engine 归类、reportSchema 声明、schema-guard 用例 |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
 
 ## 11. 已知的坑与未做的事
@@ -702,6 +708,7 @@ const fake = {
 6. **templates/scaffold/build/** 里有一份 4 个文件、29 KB 的构建残留（CMakeConfigureLog 等），代码没有引用它，但 package.json 的 files 里有 templates，会把它一起打进发行包——属于该清掉的杂物。
 7. **CI 上的 test:pack** 只在本机跑过；第一次在 GitHub Actions 上跑还没有记录。
 8. 斜杠命令的卡片渲染只有用户手输能验，工具层测不到。
+9. **.elf 的选择依赖 CMakeCache**：工程名优先来自 `CMAKE_PROJECT_NAME`，手工删了 CMakeCache 或换了构建目录后只能退化为「mtime 最新」，此时以报告 notes 里的候选列表为准。
 
 ---
 

@@ -29,7 +29,7 @@ import { registerIocApply } from "../lib/tools/ioc-apply.js";
 import { outputSchema as iocApplySchema } from "../lib/tools/ioc-apply.js";
 import { registerIocPlan } from "../lib/tools/ioc-plan.js";
 import { outputSchema as iocPlanSchema } from "../lib/tools/ioc-plan.js";
-import { outputSchema as debugSchema } from "../lib/tools/debug.js";
+import { formatDebugReport, outputSchema as debugSchema } from "../lib/tools/debug.js";
 import { registerCodePatch } from "../lib/tools/code-patch.js";
 import { outputSchema as codePatchSchema } from "../lib/tools/code-patch.js";
 import { outputSchema as doctorSchema } from "../lib/tools/doctor.js";
@@ -173,6 +173,22 @@ test("stm32_debug_run 失败报告符合 output schema", () => {
     reportProblems("stm32_debug_run", debugSchema, { message: report.message, report });
     assert.equal(report.ok, false);
   });
+});
+
+test("stm32_debug_run 失败报告带 errorCode 时符合 output schema（F2 回归）", () => {
+  // debug_run 失败会带 errorCode（与 flash 同一枚举）。schema 若没声明它，
+  // 宿主按 additionalProperties:false 会把整条输出判成非法——副作用已发生，调用却报错。
+  const report = {
+    ok: false, projectDir: FIXTURE_PROJECT, elfPath: "", port: 3333, breakAt: "main",
+    hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
+    gdbCommand: "", gdbOutput: "",
+    openOcdLogTail: "Error: unable to find a matching CMSIS-DAP device",
+    durationMs: 12, errorCode: "no-probe",
+    errors: ["openocd 起不来（errorCode=no-probe）：Error: unable to find a matching CMSIS-DAP device"],
+    message: "没调试：openocd 起不来（no-probe）", notes: [],
+  };
+  reportProblems("stm32_debug_run", debugSchema, { message: report.message, report });
+  assert.match(formatDebugReport(report).join("\n"), /错误码：no-probe/u);
 });
 
 test("stm32_regs_read 参数错误报告符合 output schema（不 spawn）", () => {

@@ -7,13 +7,13 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { usbDiagnosis } from "./doctor.js";
-import { detectBuildDir, findElf } from "./build.js";
+import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
 import { resolveToolIn } from "./probe.js";
@@ -283,9 +283,9 @@ export function parseFlashLog(text: string): FlashLogVerdict {
   return { programmed, verified, errors, noise, errorCode };
 }
 
-const HINT_DP = "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
-const HINT_PROBE = "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试）。";
-const HINT_BUSY = "探针被别的进程同时访问（两个 openocd 抢同一个 CMSIS-DAP 时不会报错，而是满屏 transfer count mismatch）：先关掉调试会话或另一个 openocd，再烧一次。";
+export const HINT_DP = "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
+export const HINT_PROBE = "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试）。";
+export const HINT_BUSY = "探针被别的进程同时访问（两个 openocd 抢同一个 CMSIS-DAP 时不会报错，而是满屏 transfer count mismatch）：先关掉调试会话或另一个 openocd，再烧一次。";
 
 /** openocd 报"找不到设备"的那几行错误行（2a 的判定基准，纯函数便于单测）。 */
 export function probeMissingLines(errors: readonly string[]): string[] {
@@ -314,6 +314,9 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   }
   const elfPath = elfResolved.elf;
   const elfSize = statSync(elfPath).size;
+  // F1：多个 .elf 并存时说清"烧的是哪一个、为什么是它"。
+  const selectionNote = elfSelectionNote(dirname(elfPath));
+  if (selectionNote !== "") notes.push(selectionNote);
 
   // A5：先看 .ioc，别把 SWD 烧死。
   const guard = checkNoDebugGuard(projectDir, request.allowNoDebug === true, request.iocPath ?? "");

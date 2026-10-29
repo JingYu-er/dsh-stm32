@@ -67,7 +67,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 338 offline cases, no board needed
+npm test                            # optional: 347 offline cases, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 ```
 
@@ -323,6 +323,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 | Symptom | Cause and fix |
 | --- | --- |
+| `ERR_PNPM_GIT_UNKNOWN_ERROR … connect ETIMEDOUT …:443` while installing | The **package fetch hop** cannot reach GitHub (`dsh plugin add github:…` clones over git). It is unrelated to the pnpm 11 `allowBuilds` allow-list, package signatures, or a broken tarball — the same command works from another network. Three options, easiest first: (1) install the published package: `dsh plugin --profile desktop add dsh-stm32` (npm registry, no GitHub); (2) if you must install from GitHub, proxy **only that one command** with process-scoped `GIT_CONFIG_*` (your global git config stays untouched): `$env:GIT_CONFIG_COUNT="1"; $env:GIT_CONFIG_KEY_0="http.https://github.com.proxy"; $env:GIT_CONFIG_VALUE_0="http://127.0.0.1:7890"; dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main` (use your own port); (3) skip git entirely and take the HTTPS tarball: `dsh plugin --profile desktop add https://codeload.github.com/JingYu-er/dsh-stm32/tar.gz/refs/heads/main`. For the newest code use `github:JingYu-er/dsh-stm32#main`; for a published release use `dsh-stm32@latest` — same content, no GitHub dependency |
 | SWD lost after flashing | The firmware generated `__HAL_AFIO_REMAP_SWJ_DISABLE()`. Hold BOOT0 while powering up to enter the system bootloader and reflash, then set SYS back to Serial Wire — `stm32_flash` now blocks this case first |
 | `Error: No device found` / `transfer count mismatch` | Another process holds the probe. Run `/stm32-stop`, then use `stm32_doctor` to inspect openocd / gdb processes and port 3333. Reading registers while a debug session is open no longer hits this: `stm32_regs_read` reuses the session's openocd instead of starting a second one |
 | Reading registers with a live session shows a `gdb-multiarch … target extended-remote 127.0.0.1:3333` `report.command` | That is the normal "reuse" shape: while `stm32_debug_session` is alive, `stm32_regs_read` drives the session's own gdb connection with `print/x $pc` and `print/x *(unsigned int *)0x…`, then `monitor resume` and detach; the first note reads "reusing the openocd of the debug session (port N), not starting another". Only without a session does it start its own openocd. Older builds failed here with `CMSIS-DAP transfer count mismatch: expected N, got M` |
@@ -339,13 +340,13 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 25 offline suites, 338 cases; no board, CubeMX, or toolchain needed
+npm test                 # 24 offline suites, 347 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **336 passed + 2 skipped**, while a developer machine runs all 338. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **345 passed + 2 skipped**, while a developer machine runs all 347. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 Hardware e2e writes to the board and needs a project you point it at:
 

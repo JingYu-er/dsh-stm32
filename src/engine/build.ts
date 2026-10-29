@@ -190,20 +190,97 @@ export function pickConfigurePreset(projectDir: string): { name: string; dir: st
   return sorted[0] ?? null;
 }
 
-/** 构建目录里的 .elf：优先与目录同名的（demo/build/Debug/demo.elf）。 */
+/** 构建目录里的一个 .elf 候选。 */
+export interface ElfCandidate {
+  name: string;
+  path: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/** CMakeCache 里记的工程名（CMAKE_PROJECT_NAME:<TYPE>=<名字>）；读不到返回空串。 */
+function readCmakeProjectName(buildDir: string): string {
+  try {
+    const text = readFileSync(join(buildDir, "CMakeCache.txt"), "utf8");
+    for (const raw of text.split(/\r?\n/u)) {
+      const match = /^CMAKE_PROJECT_NAME:[A-Z]+=(.+)$/u.exec(raw.trim());
+      if (match !== null && match[1] !== undefined && match[1].trim() !== "") return match[1].trim();
+    }
+  } catch {
+    // 没有缓存文件或读不了：退回"最新的那个"，不影响出结果。
+  }
+  return "";
+}
+
+/** 构建目录里全部 .elf，按修改时间从新到旧。 */
+export function elfCandidates(buildDir: string): ElfCandidate[] {
+  let names: string[];
+  try {
+    names = readdirSync(buildDir).filter((name) => name.toLowerCase().endsWith(".elf"));
+  } catch {
+    return [];
+  }
+  const out: ElfCandidate[] = [];
+  for (const name of names) {
+    const file = join(buildDir, name);
+    try {
+      const stat = statSync(file);
+      out.push({ name, path: file, size: stat.size, mtimeMs: stat.mtimeMs });
+    } catch {
+      // 刚被删掉或被独占：跳过，下一次再找。
+    }
+  }
+  out.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return out;
+}
+
+interface ElfPick {
+  chosen: ElfCandidate;
+  candidates: ElfCandidate[];
+  /** true = 按 CMakeCache 的工程名选中（最权威）；false = 退回最新的那个。 */
+  byProjectName: boolean;
+}
+
+function pickElf(buildDir: string): ElfPick | null {
+  const candidates = elfCandidates(buildDir);
+  if (candidates.length === 0) return null;
+  const projectName = readCmakeProjectName(buildDir).toLowerCase();
+  if (projectName !== "") {
+    const exact = candidates.find((item) => item.name.toLowerCase() === projectName + ".elf");
+    if (exact !== undefined) return { chosen: exact, candidates, byProjectName: true };
+  }
+  const newest = candidates[0];
+  if (newest === undefined) return null;
+  return { chosen: newest, candidates, byProjectName: false };
+}
+
+/**
+ * 构建目录里的 .elf（F1）。
+ *
+ * 旧规则是"与构建目录同名的优先"，但构建目录叫 Debug、产物叫 demo.elf，两者永不相等，
+ * 于是退化成 readdir 顺序——改过工程名重新生成之后，会把旧固件当产物烧进板子。
+ * 现在的顺序：CMakeCache 里记的工程名（最权威）→ 修改时间最新（多产物时唯一有意义的判据）。
+ */
 export function findElf(buildDir: string): ElfInfo | null {
-  if (!existsSync(buildDir)) return null;
-  const names = readdirSync(buildDir).filter((name) => name.toLowerCase().endsWith(".elf"));
-  if (names.length === 0) return null;
-  const buildName = buildDir.replace(/\\/gu, "/").split("/").pop() ?? "";
-  names.sort((left, right) => {
-    const leftMatch = left.toLowerCase() === buildName.toLowerCase() + ".elf" ? 0 : 1;
-    const rightMatch = right.toLowerCase() === buildName.toLowerCase() + ".elf" ? 0 : 1;
-    return leftMatch - rightMatch;
-  });
-  const path = join(buildDir, names[0] as string);
-  const stat = statSync(path);
-  return { path, size: stat.size, mtimeMs: stat.mtimeMs };
+  const picked = pickElf(buildDir);
+  if (picked === null) return null;
+  const { chosen } = picked;
+  return { path: chosen.path, size: chosen.size, mtimeMs: chosen.mtimeMs };
+}
+
+/** 多个 .elf 并存时给一句说明（只有一个时返回空串，报告不加噪音）。 */
+export function elfSelectionNote(buildDir: string): string {
+  const picked = pickElf(buildDir);
+  if (picked === null || picked.candidates.length < 2) return "";
+  const stamp = (ms: number): string => new Date(ms).toISOString().slice(11, 19);
+  const others = picked.candidates.filter((item) => item.name !== picked.chosen.name);
+  const list = others.slice(0, 4).map((item) => item.name + "（" + stamp(item.mtimeMs) + "）").join("、");
+  return (
+    "构建目录里有 " + String(picked.candidates.length) + " 个 .elf，用了 " + picked.chosen.name +
+    "（" + stamp(picked.chosen.mtimeMs) + "，" +
+    (picked.byProjectName ? "按 CMakeCache 的工程名选" : "按修改时间最新选") +
+    "）；没动的 " + String(others.length) + " 个：" + list
+  );
 }
 
 /** 解析 cmake 可执行文件：优先显式 binDirs（msys64），否则交给 PATH。 */
@@ -348,7 +425,11 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     logTail: tail(log, 30),
   };
   const notes: string[] = [...preNotes];
-  if (elf !== null) notes.push("产物：" + elf.path + "（" + String(elf.size) + " B）");
+  if (elf !== null) {
+    notes.push("产物：" + elf.path + "（" + String(elf.size) + " B）");
+    const selectionNote = elfSelectionNote(buildDir);
+    if (selectionNote !== "") notes.push(selectionNote);
+  }
   if (memoryUsage.length > 0) notes.push("占用：" + memoryUsage.map((item) => item.region + " " + String(item.percent) + "%").join("，"));
   else if (elf !== null) notes.push("本次是增量构建，没有重新链接，因此没有内存占用数据（需要时用 clean 构建）");
 

@@ -9,7 +9,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { formatBytes, isDriveRoot, planOrInstallMsys2, parsePacmanQuery } from "../lib/engine/msys2-install.js";
+import {
+  formatBytes,
+  isDriveRoot,
+  planOrInstallMsys2,
+  parsePacmanQuery,
+  preferChinaMirrors,
+  preferMirrorServers,
+  resolveInstallerUrls,
+} from "../lib/engine/msys2-install.js";
 import {
   readToolchainConfig,
   resetToolchainConfigCache,
@@ -679,9 +687,12 @@ test("A30 pacman 失败：db.lck 在就给删锁命令，文件冲突就给 --ov
 
 test("A29 解压中途被取消：不当失败、不删暂存目录、消息说「已取消」", async () => {
   const dir = tempDir("cancel");
-  // 缓存里放一个以 MZ 开头的假安装包 → 下载步跳过，直接进解压。
+  // 缓存里放一个以 MZ 开头、够体量的假安装包 → 下载步跳过，直接进解压。
+  // 体量必须 ≥ MIN_INSTALLER_BYTES（40 MB），否则 F3d 的缓存检查会判它不可用、真去下载。
   mkdirSync(join(dir, "cfg"), { recursive: true });
-  writeFileSync(join(dir, "cfg", "msys2-latest.sfx.exe"), "MZ" + "0".repeat(1024));
+  const fakeExe = Buffer.alloc(40_000_002);
+  fakeExe.write("MZ", 0, "latin1");
+  writeFileSync(join(dir, "cfg", "msys2-latest.sfx.exe"), fakeExe);
   const root = join(dir, "msys64");
   const controller = new AbortController();
   const subprocess = scriptedSubprocess((line) => {
@@ -795,5 +806,128 @@ test("A28 配置 CAS：读完之后别人改过 → 重读并重新合并，atte
   );
   assert.equal(again.ok, true, again.error);
   assert.equal(again.attempts, 1);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("F3a 安装包候选链：国内镜像在前、GitHub 兜底，每个源两个文件名", () => {
+  const plan = resolveInstallerUrls({});
+  assert.equal(plan.urls.length, 10, plan.urls.join("\n"));
+  assert.ok(plan.urls[0].startsWith("https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib/"), plan.urls[0]);
+  assert.ok(plan.urls[0].endsWith("/msys2-x86_64-latest.sfx.exe"), plan.urls[0]);
+  assert.ok(plan.urls[1].endsWith("/msys2-base-x86_64-latest.sfx.exe"), plan.urls[1]);
+  assert.equal(
+    plan.urls.at(-1),
+    "https://github.com/msys2/msys2-installer/releases/latest/download/msys2-base-x86_64-latest.sfx.exe",
+  );
+  assert.match(plan.note, /GitHub/u);
+  // 国内四家都在 GitHub 前面：镜像是首选，GitHub 只是兜底。
+  assert.ok(plan.urls.findIndex((url) => url.includes("github.com")) > plan.urls.findIndex((url) => url.includes("mirrors.aliyun.com")));
+
+  // MSYS2_INSTALLER_URL：只用一个源，一个都不多试。
+  const direct = resolveInstallerUrls({ MSYS2_INSTALLER_URL: "https://example.test/pkg.exe" });
+  assert.deepEqual(direct.urls, ["https://example.test/pkg.exe"]);
+  assert.match(direct.note, /MSYS2_INSTALLER_URL/u);
+
+  // MSYS2_MIRROR：给目录就拼两个文件名（末尾斜杠要去掉），给全地址就原样用。
+  const mirror = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/msys2/" });
+  assert.deepEqual(mirror.urls, [
+    "https://mirror.example/msys2/msys2-x86_64-latest.sfx.exe",
+    "https://mirror.example/msys2/msys2-base-x86_64-latest.sfx.exe",
+  ]);
+  const full = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/one.7z" });
+  assert.deepEqual(full.urls, ["https://mirror.example/one.7z"]);
+});
+
+test("F3b preferMirrorServers：已有的不重复加，缺的排最前（幂等）", () => {
+  const official = "Server = https://repo.msys2.org/msys/$arch/\n";
+  const once = preferMirrorServers(official, ["https://a/$arch/", "https://b/$arch/"]);
+  assert.ok(once.startsWith("# dsh-stm32"), once);
+  assert.ok(once.indexOf("https://a/$arch/") < once.indexOf("https://repo.msys2.org"), "国内镜像要在官方源前面");
+  assert.ok(once.endsWith(official), "官方源原样保留在后面");
+  // 第二次调：一个不少、一个不多（否则每装一次文件就长一截）。
+  assert.equal(preferMirrorServers(once, ["https://a/$arch/", "https://b/$arch/"]), once);
+  // 只补缺的那一个，已有的不重复。
+  const partial = preferMirrorServers(once, ["https://a/$arch/", "https://c/$arch/"]);
+  assert.match(partial, /https:\/\/c\/\$arch\//u);
+  assert.equal(partial.split("https://a/$arch/").length - 1, 1, "已有的不该出现两次");
+});
+
+test("F3b preferChinaMirrors：只动两个 mirrorlist、幂等、缺文件就跳过", () => {
+  const dir = tempDir("mirror");
+  const msys = join(dir, "msys64");
+  const etc = join(msys, "etc", "pacman.d");
+  mkdirSync(etc, { recursive: true });
+  const msysFile = join(etc, "mirrorlist.msys");
+  const mingwFile = join(etc, "mirrorlist.mingw");
+  writeFileSync(msysFile, "Server = https://repo.msys2.org/msys/$arch/\n");
+  writeFileSync(mingwFile, "Server = https://repo.msys2.org/mingw/$repo/\n");
+
+  const first = preferChinaMirrors(msys);
+  assert.deepEqual([...first.files].sort(), ["mirrorlist.mingw", "mirrorlist.msys"]);
+  assert.match(first.note, /清华 TUNA/u);
+  const msysText = readFileSync(msysFile, "utf8");
+  assert.ok(msysText.includes("https://mirrors.tuna.tsinghua.edu.cn/msys2/msys/$arch/"), msysText);
+  const mingwText = readFileSync(mingwFile, "utf8");
+  assert.ok(mingwText.includes("https://mirrors.tuna.tsinghua.edu.cn/msys2/mingw/$repo/"), mingwText);
+  assert.ok(mingwText.includes("https://repo.msys2.org/mingw/$repo/"), "官方源不能丢");
+
+  // 幂等：第二次进去文件一模一样，也不给 note。
+  const second = preferChinaMirrors(msys);
+  assert.deepEqual(second.files, []);
+  assert.equal(second.note, "");
+  assert.equal(readFileSync(msysFile, "utf8"), msysText);
+
+  // 文件不在（不是 MSYS2 目录）：跳过，不报错、不造文件。
+  const empty = join(dir, "empty");
+  mkdirSync(empty, { recursive: true });
+  const none = preferChinaMirrors(empty);
+  assert.deepEqual(none.files, []);
+  assert.equal(none.note, "");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("F3d 缓存只有 1 KB：不认这份缓存，真去按候选链下载，失败原因逐源列出", async () => {
+  const dir = tempDir("smallcache");
+  mkdirSync(join(dir, "cfg"), { recursive: true });
+  writeFileSync(join(dir, "cfg", "msys2-latest.sfx.exe"), "MZ" + "0".repeat(1024));
+  const subprocess = scriptedSubprocess((line) => {
+    if (line.includes("curl")) return { exitCode: 22, stdout: "", stderr: "curl: (22) The requested URL returned error: 404" };
+    return {};
+  });
+  const report = await planOrInstallMsys2(
+    subprocess,
+    { mode: "install", targetDir: join(dir, "msys64"), writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  const downloadStep = stepOf(report, "download");
+  assert.equal(downloadStep.status, "failed", downloadStep.detail);
+  // 10 个候选一个不落地都试过了。
+  assert.equal(subprocess.calls.filter((line) => line.includes(".sfx.exe")).length, 10, subprocess.calls.join("\n"));
+  assert.match(report.message, /10 个候选源/u, report.message);
+  assert.match(report.nextStep, /MSYS2_MIRROR 或 MSYS2_INSTALLER_URL/u, report.nextStep);
+  assert.equal(stepOf(report, "extract").status, "skipped", "没下下来就不该解压");
+  // 小缓存没被删：用户手里那份文件不该被我们清掉。
+  assert.ok(existsSync(join(dir, "cfg", "msys2-latest.sfx.exe")));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("F3b 已有 MSYS2：不动用户的 pacman 镜像配置", async () => {
+  const dir = tempDir("keepmirror");
+  const root = makeMsys64(join(dir, "msys64"));
+  const etc = join(root, "etc", "pacman.d");
+  mkdirSync(etc, { recursive: true });
+  const file = join(etc, "mirrorlist.msys");
+  const original = "Server = https://my.own.mirror/msys/$arch/\n";
+  writeFileSync(file, original);
+  const subprocess = scriptedSubprocess((line) =>
+    isPacmanQuery(line) ? { exitCode: 0, stdout: PACKAGES.map((name) => name + " 1.0.0-1").join("\n") + "\n" } : {},
+  );
+  const report = await planOrInstallMsys2(
+    subprocess,
+    { mode: "install", targetDir: root, writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  assert.equal(readFileSync(file, "utf8"), original, "已有的 MSYS2 是用户的东西，镜像配置一个字都不改");
+  assert.equal(report.notes.some((note) => note.includes("pacman 镜像列表最前")), false, report.notes.join("\n"));
   rmSync(dir, { recursive: true, force: true });
 });
