@@ -111,7 +111,12 @@ try {
   };
   const projectDir = join(work, "proj");
   const cacheDir = join(work, "cache");
-  const env = { DSH_STM32_CACHE: cacheDir };
+  // 设备事实只从资源包缓存读（插件不再内置芯片表），所以这里把 DSH_STM32_ASSETS 指到仓库里的
+  // 测试夹具：烟测验的是「解包出来的 lib 能不能建工程」，不该依赖网络或本机缓存。
+  const assetsRoot = join(root, "test", "fixtures", "assets");
+  const previousAssets = process.env.DSH_STM32_ASSETS;
+  process.env.DSH_STM32_ASSETS = assetsRoot;
+  const env = { DSH_STM32_CACHE: cacheDir, DSH_STM32_ASSETS: assetsRoot };
   const report = await mod.createRegisterProject({
     targetDir: projectDir,
     projectName: "smoke",
