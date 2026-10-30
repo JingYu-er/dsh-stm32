@@ -8,6 +8,9 @@
  * 输出是"每个外设的代价/风险 + 一条建议"，外加工具链分流：
  *   · pacman 能补的（gcc/gdb/openocd/cmake/ninja）→ 可代装，给 stm32_env_install 的路
  *   · CubeMX / 固件包 → 只能人装，给 guides[]（含离线整目录拷贝的做法）
+ *
+ * 不需要设备事实：评分只看 .ioc 与需求里的外设清单（芯片型号取自 .ioc 的 Mcu.CPN），
+ * 不查资源包，所以不在这里 ensureAssets。
  */
 
 import { readFileSync } from "node:fs";

@@ -14,7 +14,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
+import { FIXTURE_ASSETS, FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
 
 import { runBuild } from "../lib/engine/build.js";
 import { runDebugRun } from "../lib/engine/debug.js";
@@ -51,6 +51,9 @@ import { outputSchema as cacheSchema } from "../lib/tools/cache.js";
 import { registerFirmwareInstall } from "../lib/tools/firmware-install.js";
 import { outputSchema as firmwareInstallSchema } from "../lib/tools/firmware-install.js";
 import { outputSchema as regsSchema } from "../lib/tools/regs.js";
+
+// 设备事实只从资源包缓存读（内置表已删）：指到夹具，绝不读开发机真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
 
 const MISSING_DIR = "D:/__dsh_stm32_missing_project__";
 

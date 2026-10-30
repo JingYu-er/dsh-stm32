@@ -6,6 +6,9 @@
  *
  * 时钟（clock 入参）走同一个 plan：时钟就是 .ioc 里的一段键，单开工具会让"改引脚"和"改时钟"
  * 变成两次 plan/apply，中间还可能留下 PLL 与 APB 分频不自洽的中间态。详见 engine/clock-plan.ts。
+ *
+ * 不需要设备事实：引脚只查"名字是否合法"（src/data/chips.ts 的 isKnownPin，不再有内置引脚表），
+ * 时钟/句柄/标签全是 .ioc 自己的键，所以不在这里 ensureAssets（改 .ioc 不该依赖网络）。
  */
 
 import { planIocChanges } from "../engine/ioc-plan.js";

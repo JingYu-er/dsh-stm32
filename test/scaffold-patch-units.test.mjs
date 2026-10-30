@@ -19,6 +19,11 @@ import { registerIocApply } from "../lib/tools/ioc-apply.js";
 import { registerIocPlan } from "../lib/tools/ioc-plan.js";
 import { registerDebugSession } from "../lib/tools/debug-session.js";
 
+import { FIXTURE_ASSETS } from "./fixtures.mjs";
+
+// 建工程（stm32_project_create）要先 ensureAssets：单测统一指到夹具，绝不读真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
+
 /** 取工具定义：注册器会把 definition 交给 ctx.tools.register，其余服务一律返回 undefined。 */
 function captureTools(register) {
   const out = new Map();

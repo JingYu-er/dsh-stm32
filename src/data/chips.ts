@@ -1,60 +1,45 @@
 /**
- * L1：芯片型号 → 可用引脚表。
+ * L1：引脚名合法性 + 由本机 CubeMX db 派生的引脚表。
  *
- * 两条来源，优先本机 CubeMX 的数据库：
- *   1. `<CubeMX 安装根>/db/mcu/<Mcu.Name>.xml` 里的 `<Pin Name="PA1" Position="3"/>`——
- *      Position>0 才是真实封装引脚（Position=0 是虚拟引脚，例如 VP_SYS_VS_Systick 的占位）。
- *      名字常带功能后缀（`PA0-WKUP`、`PC13-TAMPER-RTC`、`PD0-OSC_IN`），这里归一化成 PA0/PC13/PD0。
- *   2. 内置表（CHIPS）：机器上没装 CubeMX 时兜底，能跑但**没有跟本机 db 校验过**，
- *      deriveChipPinTable 会在 notes 里把这件事说清楚。
+ * 用户 2026-10-31「内置表删了吧」之后，这里**不再有任何内置芯片/引脚表**（原来的 CHIPS / KNOWN_CHIPS /
+ * findChip 已删）。原因：芯片事实的唯一来源是资源包缓存 device/f1/chips.json，而那份文件只有 pinCount
+ * （封装上有多少根脚），没有「这个封装有哪几根 GPIO」的清单——拿 pinCount 去猜 PA0-PB15… 等于又造一张表。
  *
- * 放行语义（从第一天就在，不能变）：isKnownPin 只认内置表；未知型号、虚拟引脚（VP_*）一律 true。
- * 校验是为了拦住手误，不是为了当数据源；没校验过的东西绝不当"不存在"。
+ * 于是分工变成：
+ *   1. isKnownPin(pin)：只校验**引脚名**是不是 STM32 的合法名（P + A..K + 0..15，虚拟引脚 VP_* 恒放行）。
+ *      它拦的是手误（PA99、PZ9、PA-1），不再假装知道某个封装有没有这根脚。
+ *   2. deriveChipPinTable()：引脚**存在性**只认本机 CubeMX 的 db/mcu XML
+ *      （<Pin Name="PA1" Position="3"/>，Position>0 才是真实封装引脚）。本机没装 CubeMX / 没有这个 XML 时
+ *      kind="unknown"，notes 里明说「没校验」，绝不拿猜测冒充实测。
+ *
+ * 放行语义（从第一天就在，不能变）：没把握的一律当「不是不存在」，只拦一定写错的东西。
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export interface ChipInfo {
-  /** 型号（= .ioc 里的 Mcu.CPN）。 */
-  cpn: string;
-  /** LQFP 封装引脚名（不含虚拟引脚 VP_*）。 */
-  pins: readonly string[];
-  /** 数据手册上的 Flash 大小（字节），用于提示链接脚本是否匹配。 */
-  flashBytes: number;
-  ramBytes: number;
+/** STM32 的 GPIO 引脚名：PA0..PK15。F1 只用到 A..E，这里按族上界放到 K。 */
+const PIN_NAME = /^P([A-K])(\d{1,2})$/u;
+
+/** 每个端口最多 16 根（0..15）；再大的一定是写错了。 */
+const MAX_PIN_NUMBER = 15;
+
+/**
+ * 引脚名是否合法（未知/虚拟引脚一律放行）。
+ *
+ * 为什么不再按型号判「有没有这根脚」：那需要「封装 → 引脚清单」的事实，而资源包只给了 pinCount。
+ * 真正的引脚存在性请用 deriveChipPinTable（本机 CubeMX db）——它给的是实测清单，不是符号表。
+ */
+export function isKnownPin(pin: string): boolean {
+  const raw = pin.trim().toUpperCase();
+  if (raw === "") return true;
+  if (raw.startsWith("VP_")) return true;
+  // .ioc 里同一根脚会带功能后缀（PA0-WKUP / PC13-TAMPER-RTC），比较时只看引脚名本身。
+  const name = (raw.split(/[-/]/u)[0] ?? "").trim();
+  const matched = PIN_NAME.exec(name);
+  if (matched === null) return false;
+  return Number.parseInt(matched[2] ?? "", 10) <= MAX_PIN_NUMBER;
 }
-
-function port(prefix: string, from: number, to: number): string[] {
-  const out: string[] = [];
-  for (let index = from; index <= to; index += 1) out.push(prefix + String(index));
-  return out;
-}
-
-const CHIPS: readonly ChipInfo[] = [
-  {
-    cpn: "STM32F103C8T6",
-    // LQFP48：PA0-15、PB0-15、PC13-15、PD0-1（PD0/PD1 默认是 OSC_IN/OSC_OUT）。
-    pins: [...port("PA", 0, 15), ...port("PB", 0, 15), "PC13", "PC14", "PC15", "PD0", "PD1"],
-    flashBytes: 64 * 1024,
-    ramBytes: 20 * 1024,
-  },
-];
-
-export function findChip(cpn: string): ChipInfo | null {
-  const wanted = cpn.trim().toUpperCase();
-  return CHIPS.find((chip) => chip.cpn.toUpperCase() === wanted) ?? null;
-}
-
-/** 引脚名是否属于该型号；未知型号或虚拟引脚（VP_*）一律放行。 */
-export function isKnownPin(cpn: string, pin: string): boolean {
-  if (pin.startsWith("VP_")) return true;
-  const chip = findChip(cpn);
-  if (chip === null) return true;
-  return chip.pins.includes(pin.toUpperCase());
-}
-
-export const KNOWN_CHIPS = CHIPS;
 
 // ── 本机 CubeMX db/mcu 派生 ─────────────────────────────────────────────────
 
@@ -128,31 +113,31 @@ export function readMcuDbPins(dbMcuDir: string | null | undefined, names: readon
       const pins = parseMcuDbXmlPins(readFileSync(xmlPath, "utf8"));
       if (pins.length > 0) return { xmlPath, pins };
     } catch {
-      // 读不了/不是合法 db：退回内置表，notes 里会说明没校验。
+      // 读不了/不是合法 db：当作没有 db，notes 里会说明没校验。
     }
   }
   return null;
 }
 
-/** 引脚表的来源。 */
-export type ChipPinSourceKind = "db" | "builtin" | "unknown";
+/** 引脚表的来源：只有本机 CubeMX db 或「没有」两种。 */
+export type ChipPinSourceKind = "db" | "unknown";
 
 export interface ChipPinSource {
   kind: ChipPinSourceKind;
   cpn: string;
   /** 用来找 db XML 的 Mcu.Name（没有则为空串）。 */
   mcuName: string;
-  /** 归一化后的引脚名（PA0…），已排序。 */
+  /** 归一化后的引脚名（PA0…），已排序；没有 db 时为空。 */
   pins: readonly string[];
   /** 这份引脚表跟本机 db 校验过没有、为什么。 */
   notes: string[];
 }
 
 /**
- * 型号 → 引脚表（db 优先，退回内置表）。
+ * 型号 → 引脚表（只认本机 CubeMX db）。
  *
- * "没校验"这件事必须写进 notes：内置表只收了 C8T6 一款，别的型号拿它当"真实引脚"会误判，
- * 所以内置表路径只说"这里是内置表，未与本机 db 校验"，不假装校验过。
+ * "没校验"这件事必须写进 notes：没有 db 就没有任何引脚存在性事实，此时 pins 是空的、kind=unknown，
+ * 报告里要说清「没校验」，而不是让上层以为「这个型号没有引脚」。
  */
 export function deriveChipPinTable(input: {
   cpn: string;
@@ -176,27 +161,17 @@ export function deriveChipPinTable(input: {
       ],
     };
   }
-  const builtin = findChip(cpn);
   const why = input.dbMcuDir === null || input.dbMcuDir === undefined
     ? "本机没找到 CubeMX 的 db/mcu"
     : "db/mcu 下没有 " + (names.length === 0 ? "该型号" : names.join(" / ")) + ".xml";
-  if (builtin !== null) {
-    return {
-      kind: "builtin",
-      cpn,
-      mcuName,
-      pins: builtin.pins,
-      notes: ["引脚表：内置表（" + String(builtin.pins.length) + " 个引脚，未与本机 db 校验：" + why + "）"],
-    };
-  }
   return {
     kind: "unknown",
     cpn,
     mcuName,
     pins: [],
     notes: [
-      "引脚表：型号 " + (cpn === "" ? "(空)" : cpn) + " 不在内置表，也没有本机 CubeMX db（未与本机 db 校验：" + why +
-        "）；未知引脚一律放行（isKnownPin 语义不变）",
+      "引脚表：没有本机 CubeMX db（" + why + "），引脚存在性不校验（isKnownPin 只查引脚名是否合法）；" +
+        "插件不内置引脚表，需要逐脚校验请装 CubeMX 或用 stm32_assets 的 chipdb",
     ],
   };
 }

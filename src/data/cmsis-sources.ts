@@ -14,6 +14,7 @@
  */
 
 import type { FetchTarget } from "../engine/fetch.js";
+import { loadDeviceFacts } from "./device-facts.js";
 import { resolveF1Chip, type F1Chip } from "./stm32f1.js";
 
 const JS_DELIVR_FASTLY = (repo: string, ref: string, file: string): string =>
@@ -121,6 +122,29 @@ function choiceFromChip(chip: F1Chip): StartupChoice {
 }
 
 /**
+ * 只给容量字母（F1:B / F1:8）时，从设备事实里挑一颗同档芯片当代表：
+ * 优先 F103（档位最全，0.1 的 "F1:B" 正是按 F103 解释的），再按 line / CPN 升序。
+ *
+ * 以前这里靠手写的「容量字母 → 档位」常量表（随 chip-table.json 2026-10-31 一起删了）。
+ * 现在这条事实也只从资源包缓存读：没有缓存就返回 null，上层会明说先 refresh，
+ * 不会编一个可能不存在的启动文件名。
+ */
+function chipForDensityLetter(letter: string): F1Chip | null {
+  const wanted = letter.trim().toUpperCase();
+  const facts = loadDeviceFacts();
+  if (!facts.ok) return null;
+  const candidates = facts.chips.filter((chip) => /^STM32F\d{3}[A-Z]([0-9A-G])/u.exec(chip.cpn)?.[1] === wanted);
+  if (candidates.length === 0) return null;
+  const ordered = [...candidates].sort((a, b) => {
+    const byLine = Number(a.line) - Number(b.line);
+    if (byLine !== 0) return byLine;
+    return a.cpn < b.cpn ? -1 : a.cpn > b.cpn ? 1 : 0;
+  });
+  const preferred = ordered.find((chip) => chip.line === "103") ?? ordered[0];
+  return preferred === undefined ? null : resolveF1Chip(preferred.cpn).chip;
+}
+
+/**
  * 只给容量档（F1:B / F1:8 / F1:xb）时，用 F103 当代表：F103 的档位最全
  * （x6/xb/xe/xg），0.1 的 "F1:B" 也正是按 F103 解释的，行为不变。
  */
@@ -128,7 +152,7 @@ function chipForKey(key: string): F1Chip | null {
   const text = key.trim().toLowerCase();
   if (text.length === 0) return null;
   if (/^x[0-9a-z]{1,2}$/u.test(text)) return resolveF1Chip("F103:" + text.toUpperCase()).chip;
-  if (/^[0-9a-z]$/u.test(text)) return resolveF1Chip("STM32F103C" + text.toUpperCase() + "T6").chip;
+  if (/^[0-9a-z]$/u.test(text)) return chipForDensityLetter(text);
   return null;
 }
 

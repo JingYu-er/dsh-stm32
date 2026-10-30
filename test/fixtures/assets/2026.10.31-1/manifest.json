@@ -1,0 +1,27 @@
+{
+  "name": "dsh-stm32-assets",
+  "version": "2026.10.31-1",
+  "schema": 2,
+  "generatedBy": "test/fixtures",
+  "profiles": {
+    "core": [
+      "device/**"
+    ],
+    "full": [
+      "device/**"
+    ]
+  },
+  "files": [
+    {
+      "path": "device/f1/chips.json",
+      "bytes": 8887,
+      "sha256": "724f3d4041fbff2135aa4f4160dff9f10ffd4fa60e5e62366b5f2bbc880dd8d7",
+      "source": "fixtures",
+      "profile": "core"
+    }
+  ],
+  "skipped": [],
+  "counts": {
+    "device": 1
+  }
+}

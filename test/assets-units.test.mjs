@@ -244,7 +244,8 @@ test("sha256 不符：整次拒绝、删半成品，已装版本一个字节不�
     assert.match(value.message, /校验失败/u);
     assert.match(value.message, /device\/f1\/chips\.json/u, "要点名是哪个文件");
     assert.match(value.message, /sha256 对不上/u);
-    assert.ok(value.offlineFallback.includes("chip-table.json"), "失败时要给离线兜底");
+    assert.match(value.offlineFallback, /不再内置芯片表/u, "失败时要说清没有内置表可退");
+    assert.match(value.offlineFallback, /stm32_assets refresh/u, "并给出 refresh 这条路");
     assert.equal(readFileSync(chipsPath, "utf8"), original, "半成品不能覆盖已装好的文件");
     assert.equal(listInstalledVersions(env).length, 1, "仍然只有一版可用的安装");
     assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "临时目录必须删干净");
@@ -288,7 +289,7 @@ test("多源回退：GitHub 404 后自动换 jsDelivr，报告写明实际源", 
   }
 });
 
-test("全源失败：ok=false、三个源都记下来，并明确说内置表仍可建工程", async () => {
+test("全源失败：ok=false、三个源都记下来，并明确说没有内置表可退、要 refresh", async () => {
   const root = tempRoot();
   try {
     const fake = makeFakeFetch({
@@ -298,9 +299,9 @@ test("全源失败：ok=false、三个源都记下来，并明确说内置表仍
     const value = await runTool({ env: envFor(root), fetchImpl: fake.fetchImpl }, { action: "refresh" });
     assert.equal(value.ok, false);
     assert.equal(value.attempts.length, 3, "三个源都要有尝试记录：" + value.attempts.join(" | "));
-    assert.ok(value.offlineFallback.includes("chip-table.json"));
-    assert.ok(value.offlineFallback.includes("stm32f1.ts"));
-    assert.ok(value.offlineFallback.includes("stm32_project_create"), "要指出还能用哪个工具建工程");
+    assert.match(value.offlineFallback, /不再内置芯片表/u);
+    assert.match(value.offlineFallback, /action=refresh/u);
+    assert.match(value.offlineFallback, /stm32_assets refresh/u, "要给出具体该跑什么");
     assert.match(value.message, /刷新失败/u);
     assert.deepEqual(readdirSync(root), []);
   } finally {
@@ -388,7 +389,7 @@ test("action=list 形状：没装时可用、装好后报版本/文件/占用", 
     assert.equal(empty.action, "list");
     assert.equal(empty.ok, true);
     assert.deepEqual(empty.versions, []);
-    assert.ok(empty.offlineFallback.includes("chip-table.json"), "没装时要提内置表");
+    assert.match(empty.offlineFallback, /不再内置芯片表/u, "没装时要说清没有内置表可退");
 
     await installVersion(env, "2026.10.30-1");
     const listed = await runTool({ env }, { action: "list" });

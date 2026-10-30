@@ -23,6 +23,11 @@ import { fetchAll, fetchOne } from "../lib/engine/fetch.js";
 import { cmsisTemplatePlan, sourceUrls, startupChoiceFor } from "../lib/data/cmsis-sources.js";
 import { createRegisterProject, ensureCmsisTemplate, resolveStartupChoice } from "../lib/engine/register-template.js";
 
+import { FIXTURE_ASSETS } from "./fixtures.mjs";
+
+// 设备事实只从资源包缓存读（内置 chip-table.json 已删）：单测统一指到夹具，绝不读真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
+
 function tempDir(tag) {
   return mkdtempSync(join(tmpdir(), "dsh-stm32-" + tag + "-"));
 }

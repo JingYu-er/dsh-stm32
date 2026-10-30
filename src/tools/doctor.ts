@@ -5,6 +5,7 @@
  * 特别是"探针被谁占着"这个在 VS Code 调试与命令行工具之间最容易互相踩的问题。
  */
 
+import { ensureAssets } from "../engine/assets.js";
 import { runDoctor } from "../engine/doctor.js";
 import type { DoctorProcess, DoctorReport } from "../engine/doctor.js";
 import type { ProbeResult } from "../engine/probe.js";
@@ -177,6 +178,10 @@ export function registerDoctor(ctx: DshContext): void {
         };
       }
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      // 芯片型号 / 启动文件 / 引脚一致性都要设备事实：插件不再内置芯片表，事实来自资源包缓存。
+      // 这里**不硬失败**——体检本来就是用来回答"为什么现在烧不了"，网络不通不该让整张报告消失；
+      // 拿不到事实就把原因写进 notes，其余检查（工具链/探针/端口/构建产物）照跑。
+      const assets = await ensureAssets({ signal: exec.signal });
       const report = await runDoctor(subprocess, {
         projectDir: resolution.projectDir,
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
@@ -186,6 +191,11 @@ export function registerDoctor(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (resolution.note !== null) report.notes.push(resolution.note);
+      if (!assets.ok) {
+        report.notes.push("设备事实不可用：" + assets.message + " —— 型号↔启动文件/设备宏/链接脚本的一致性检查会跳过（其余检查不受影响）");
+      } else if (assets.status === "refreshed") {
+        report.notes.push(assets.message);
+      }
       return { message: report.message, report };
     },
   });

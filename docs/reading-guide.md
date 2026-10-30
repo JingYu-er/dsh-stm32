@@ -1,7 +1,7 @@
 # dsh-stm32 源码精读指南
 
 > 面向：第一次读这个仓库、并且要改它的人。
-> 规模：72 个 TypeScript 文件约 24.3k 行（另有脚本生成的 src/data/chip-table.json 2044 行），外加一个手写的浏览器 bundle（client/client.js，682 行）。
+> 规模：75 个 TypeScript 文件约 23.2k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。**芯片事实不在仓库里**：`src/data/device-facts.ts` 只读本地资源包缓存（`~/.dsh-stm32/assets/<版本>/device/f1/chips.json`），插件不内置任何芯片表（2026-10-31 删掉了 chip-table.json / f1-ram.generated.ts / 手写容量档表 / 内置引脚表）。
 > 读完这份指南你应该能回答：一次工具调用从宿主进来到 openocd 退出中间经过了谁；哪几条不变量破了一定出事；要改某个功能得动哪几个文件；哪些行为有测试兜着、哪些只能上板子验。
 >
 > 配套文档：docs/development-notes.md（按时间记的决策与被坑记录）、docs/logic-audit.md（历史审计条目）、README.md（用户视角）。
@@ -28,7 +28,7 @@
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
 | L3 契约层 | src/tools（19 个文件：20 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
 | L2 逻辑层 | src/engine（41 个模块） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
-| L1 事实表 | src/data（8 张事实表 + 1 份生成的芯片薄表） | 芯片表（含由 CubeMX db 派生的引脚表与 chip-table.json）、镜像 URL、固件族、F1 容量档、F1 时钟树、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
+| L1 事实表 | src/data（9 个数据模块） | 设备事实（`device-facts.ts` 从资源包缓存读 chips.json；插件不内置芯片表）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
 
 跨层的只有两样东西：**SubprocessService**（进程能力，从 ctx 一路当参数传到 engine）和 **DshContext**（宿主服务袋）。
 
@@ -53,7 +53,7 @@ flowchart TD
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
-  ENGINE --> DATA["src/data/*<br/>8 张事实表"]
+  ENGINE --> DATA["src/data/*<br/>9 个数据模块（芯片事实读资源包缓存）"]
   ENGINE --> RUN["src/engine/subprocess-runner.ts"]
   RUN --> OS["宿主 subprocess 服务"]
   OS --> BIN["gcc / cmake / ninja / openocd / gdb<br/>java(CubeMX) / reg.exe / pacman / objcopy"]
@@ -69,11 +69,11 @@ flowchart TD
 | src/ | 4 | 795 | index.ts 119、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
 | src/tools/ | 19 | 5078 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 route-plan.ts 573 行 |
 | src/engine/ | 41 | 15919 | 见第 5 章；最大的是 msys2-install.ts 2313 行，其次是 clock-plan.ts 801 行 |
-| src/data/ | 9 | 4592 | 8 张 .ts 事实表共 2548 行 + 脚本生成的 chip-table.json（2044 行 / 2016 颗芯片），见第 6 章 |
+| src/data/ | 9 | 2336 | 9 个 .ts 数据模块（其中 device-facts.ts 从资源包缓存读设备事实，仓库里没有任何芯片表），见第 6 章 |
 | templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
-| test/ | 29 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
-| scripts/ | 5 | 776 | copy-client.mjs(24)、gen-chip-table.mjs(371)、gen-xcube-catalog.mjs(151)、pack-size.mjs(80)、pack-smoke.mjs(150) |
+| test/ | 31 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
+| scripts/ | 4 | 349 | copy-client.mjs(18)、gen-xcube-catalog.mjs(136)、pack-size.mjs(63)、pack-smoke.mjs(132)。芯片表的生成脚本 2026-10-31 已挪到资源仓库（`scripts/build-assets.mjs`） |
 
 ## 2. 阅读顺序
 
@@ -311,19 +311,19 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | --- | --- |
 | route-plan.ts（645） | 「这笔功能该走 HAL 还是寄存器」。`PERIPHERAL_RULES`（外设规则表：关键词 → HAL/寄存器各自的代价与风险）、`assessRoute(input)` → `RouteAssessment`（verdict：hal-only / both-viable / register-ok / unclear）、`familyOf`、`findFirmwarePackage`、`VERDICT_LABEL`。工具层再把它和门禁、安装指引拼成一份输出。 |
 
-## 6. data 层：8 张事实表（2548 行）+ 1 份生成的芯片薄表
+## 6. data 层：9 个数据模块（2336 行；芯片事实来自资源包缓存，仓库里没有芯片表）
 
 | 模块 | 行数 | 内容 |
 | --- | --- | --- |
-| chips.ts | 202 | 内置 `CHIPS` 芯片表（F103C8T6 等）、`findChip`、`isKnownPin`（未知型号一律放行，不猜），外加**由本机 CubeMX db 派生引脚表**的一整套：`parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，`PC13-TAMPER-RTC → PC13`，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / builtin / unknown`（db 命中就注明来源 XML 与引脚数，否则明说「未与本机 db 校验」）。引脚合法性由它兜底。 |
-| cmsis-sources.ts | 392 | 寄存器路线的下载源与型号映射：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（委托 resolveF1Chip，兼容 `F1:B` / `F1:8` / `F103:xb` / `STM32F103C8T6` 四种写法）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / **STARTUP 14 条** / CORE_HEADER）、缓存条目 id 与解析（`chipOf`、`cmsisGroupKey`、`cmsisEntryId` → `cmsis:F1:103xb`、`chipEntryId`、`parseCmsisEntryRef`、`cmsisEntryAliases`）。**改这里等于改「离线可复现」的边界**：F1 的 14 个容量档 sha256 全部是 2026-10-30 真实下载实测的。 |
-| stm32f1.ts | 234 | F1 的容量档事实表（两条路线共用的唯一型号来源）。`F1_LINES`（6 条 line：100 xb/xe、101 x6/xb/xe/xg、102 x6/xb、103 x6/xb/xe/xg、105 xc、107 xc）、`GROUP_BY_LETTER`、`FLASH_BY_LETTER`、`RAM_BY_LINE_LETTER`（同字母在不同 line 差很多：字母 C 在 F103 是 256 KiB Flash / 48 KiB RAM，在 F105/F107 是 64 KiB RAM）、`PINS_BY_PACKAGE`（T36 / C48 / R64 / V100 / Z144）、`resolveF1Chip(input)` → `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`。 |
+| chips.ts | 142 | **不再有内置引脚表**（`CHIPS` / `KNOWN_CHIPS` / `findChip` 2026-10-31 删除）。`isKnownPin(pin)` 只查**引脚名是否合法**（`PA0..PG15`、`VP_*` 虚拟脚放行；顺序不影响——`PA0-WKUP` / `PC13-TAMPER-RTC` 先归一化）；这不是「这个封装有没有这根脚」，那条事实只能来自本机 CubeMX db：`parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / unknown`（db 命中注明来源 XML 与引脚数；没有 db 就明说「引脚存在性不校验」，绝不拿内置表冒充）。 |
+| cmsis-sources.ts | 341 | 寄存器路线的下载源与型号映射：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（委托 resolveF1Chip，兼容 `F1:B` / `F1:8` / `F103:xb` / `STM32F103C8T6` 四种写法；只给容量字母的老写法现在从设备事实里挑一颗同档芯片当代表，优先 F103——原来的「字母 → 档位」常量表已删，没缓存就返回 null 让上层提示 refresh）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / **STARTUP 14 条** / CORE_HEADER）、缓存条目 id 与解析（`chipOf`、`cmsisGroupKey`、`cmsisEntryId` → `cmsis:F1:103xb`、`chipEntryId`、`parseCmsisEntryRef`、`cmsisEntryAliases`）。**改这里等于改「离线可复现」的边界**：F1 的 14 个容量档 sha256 全部是 2026-10-30 真实下载实测的。 |
+| stm32f1.ts | 143 | 两条路线共用的**型号解析器**，本身不再存任何事实：`resolveF1Chip(input)` 先做格式/封装/温度档校验，再查 `device-facts.ts`（完整型号按 CPN 精确匹配、无温度后缀按前缀归一化、`F103:xb` 按 line+档取代表芯片），返回 `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`（签名与结构 0.2 不变）；`f1GroupsFor(code)` 从事实聚合该 line 的容量档。错误分四类且都带「先跑 `stm32_assets refresh`」提示：没缓存 / 型号不在资源包 / line 不存在 / 该 line 没有这一容量档。 |
 | clock-f1.ts | 215 | F1 时钟树的事实表：PLL 源（HSE 8 MHz / HSI÷2 4 MHz / HSI 8 MHz，后者 `selectable=false`）、倍频 ×2..×16、上限（SYSCLK 72 / APB1 36 / APB2 72 / ADC 14 / USB 48 且必须 PLLCLK=72÷1.5）、APB1/APB2/ADC 分频表、14 条外设→总线、UART 波特率档、20 个 RCC IPParameters 名单。 |
 | firmware-packages.ts | 463 | 固件包事实表：`FIRMWARE_FAMILIES`（目前只有 F1）、`firmwareFamilyOf`、`firmwareVersionTags`、`packageXmlText`、`firmwarePlanFor`、`verifyFirmwarePackage`、`DSH_FIRMWARE_DIR_NAME = "dsh-firmware"`、`dshFirmwareDir`、`firmwareNeedFromIoc`（从 .ioc 的包名推族与版本）、`looksLikeFirmwarePackage`、`locateFirmwarePackage(root, packageName, extraDirs)` → `FirmwareLocation`（source：repository / dsh-firmware / cache / custom）、`firmwareSourceLabel`、`FirmwareExtraDir`。 |
 | install-guides.ts | 251 | 安装指引文本：`COMPONENT_INSTALLABILITY`（哪些 pacman 能代装、哪些必须人装）、`cubeMxGuide`、`firmwareGuide`、`guideFor`（用 Map 查而不是 in，避免原型链误判）、`guidesFor`、`guideLines`、`firmwareSizeHint`、`familyPrefix`。 |
 | search-roots.ts | 421 | 见 5.2。 |
 | toolchain-config.ts | 370 | 见 5.2。 |
-| chip-table.json | 2044 | **脚本生成的薄表**（`node scripts/gen-chip-table.mjs` 产出，不要手改）：2016 颗芯片的 CPN / 内核 / 主频 / RAM / Flash / 电压 / 引脚数，来源是本机 CubeMX 的 `db/mcu/*.xml`。插件当前只消费 F1 那一段，其余为将来扩族备查；`--check` 模式给 CI 用（生成物与 db 不一致就红）。 |
+| device-facts.ts | 229 | 设备事实读取层（新增）：从 `~/.dsh-stm32/assets/<版本>/device/f1/chips.json` 读（`DSH_STM32_ASSETS` 可换根目录，版本取本地已装的最新一版），按 path+size+mtime 缓存一次。`loadDeviceFacts(env?)` → `{ok,path,version,chips,byCpn,byLineGroup,lines,groupsByLine,error}`、`findChipFact(cpn,env?)`（缺失返回 null）、`requireChipFact(cpn,env?)`（抛 `DeviceFactError`，`code: facts-missing / chip-unknown`）、`deviceFactsSource(env?)`（缓存路径或 `"none"`）。**不抛异常、不退回内置表**：没有缓存就把「先跑 stm32_assets refresh，或检查网络」原样交给上层。 |
 
 ## 7. 关键流程
 
@@ -706,10 +706,10 @@ const fake = {
 | --- | --- | --- |
 | 加一个工具 | src/engine/<域>.ts（逻辑）→ src/tools/<x>.ts（schema + 渲染）→ src/index.ts 注册 | output schema、formatXReport、test/tool-contract-units、schema-guard |
 | 改报告字段 | src/tools/<x>.ts 的 reportSchema + 渲染 | schema-guard 必须有对应断言 |
-| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts（引脚表可交给 deriveChipPinTable 从 db 派生）、再补一份 clock-f1 那样的时钟上限表（否则寄存器版只能不出 clock_init） | 仓库名不能猜；sha256 逐文件实测并把来源 URL 记进表里（F1 的 14 条就是这么来的） |
-| 加芯片型号（同族容量档） | src/data/stm32f1.ts（容量档与引脚数）→ src/engine/hal-chip.ts（渲染启动文件/宏/.ld/.ioc）→ register-template.ts / register-linker.ts / register-clock.ts | 三条路都要试：HAL 建工程、寄存器建工程、doctor 一致性；stm32f1-units / hal-route-units / doctor-chip-units 会红 |
+| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts（引脚存在性交给 deriveChipPinTable 从本机 db 派生）、设备事实（资源仓库的 device/<族>/chips.json，由它的 scripts/build-assets.mjs 生成）、再补一份 clock-f1 那样的时钟上限表（否则寄存器版只能不出 clock_init） | 仓库名不能猜；sha256 逐文件实测并把来源 URL 记进表里（F1 的 14 条就是这么来的） |
+| 加芯片型号（同族容量档） | **资源仓库的 device/f1/chips.json**（`node scripts/build-assets.mjs` 从本机 CubeMX `db/mcu` 展开 CPN 并逐字段对账，manifest 里会列 skipped）→ 插件的 src/data/device-facts.ts 自动读到；再对照 src/engine/hal-chip.ts（渲染启动文件/宏/.ld/.ioc）→ register-template.ts / register-linker.ts / register-clock.ts | 资源仓库改完要升 manifest 版本（插件按最新已装版本读）；本地 `~/.dsh-stm32/assets/` 是旧版就先 `stm32_assets refresh`。三条路都要试：HAL 建工程、寄存器建工程、doctor 一致性 |
 | 改时钟树 | src/data/clock-f1.ts（PLL 源/分频/外设→总线）→ src/engine/clock-plan.ts（枚举/就近/diff）→ src/tools/ioc-plan.ts（参数与渲染）→ src/engine/register-clock.ts（寄存器版） | clock-units 14 例兜「60→64」「超限一个键都不写」；派生键必须全量重算 |
-| 更新芯片薄表 | `node scripts/gen-chip-table.mjs` 重跑 → src/data/chip-table.json 更新 | 生成物不要手改；`--check` 给 CI；读不到 CubeMX db 时必须报错退出而不是写半截文件 |
+| 更新设备事实（芯片表） | **资源仓库** `node scripts/build-assets.mjs` 重跑 → device/f1/chips.json + memory.json + manifest.json 一起更新；插件侧 `stm32_assets refresh` 拉新版本 | 生成物不要手改；插件已经不再内置芯片表（`scripts/gen-chip-table.mjs` 与 chip-table.json 2026-10-31 删除），没缓存时工具会明说先 refresh。测试夹具在 `test/fixtures/assets/`，与真实资源包同构 |
 | 改工程模板 | templates/scaffold/*，若新增文件同步 scaffold.ts 的 SHARED_TEMPLATE_FILES | scaffold-patch-units 的文件数断言会红 |
 | 改设置面板 | client/client.js（前端）+ engine/web-api.ts（逻辑）+ web-api-units | 前端不经打包器，语法要保守 |
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |

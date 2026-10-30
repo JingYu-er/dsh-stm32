@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { applyIocPlan, planIocChanges, rollbackIoc, sha256Hex } from "../lib/engine/ioc-plan.js";
 import { summarizeIoc } from "../lib/engine/ioc.js";
 
-import { FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
+import { FIXTURE_ASSETS, FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
+
+// 引脚只查"名字是否合法"，但 doctor/型号相关代码会读资源包：统一指到夹具，绝不读真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
 
 const DEMO_IOC = join(FIXTURE_PROJECT, "demo.ioc");
 const TMP = e2eWorkDir("ioc-test");
@@ -83,7 +86,8 @@ test("引脚校验：未知引脚 / 重复引脚 / 非法标签 / 标签重名",
   const { projectDir } = freshProject();
   const badPin = planIocChanges({ projectDir, pins: [{ pin: "PA99" }] });
   assert.equal(badPin.ok, false);
-  assert.match(badPin.errors.join(" "), /不在 STM32F103C8T6 的引脚表里/u);
+  assert.match(badPin.errors.join(" "), /不是合法的 STM32 GPIO 引脚/u);
+  assert.match(badPin.errors.join(" "), /不再内置引脚表/u);
 
   const dupPin = planIocChanges({ projectDir, pins: [{ pin: "PC13-TAMPER-RTC" }] });
   assert.equal(dupPin.ok, false);

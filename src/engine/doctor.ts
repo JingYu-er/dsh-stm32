@@ -351,7 +351,7 @@ export interface ChipConsistencyResult {
   chip: F1Chip | null;
   /** 链接脚本 MEMORY；没有链接脚本为 null。 */
   memory: LinkerMemory | null;
-  /** 引脚表来源（db / builtin / unknown）。 */
+  /** 引脚表来源（db / unknown：插件不内置引脚表，没 db 就只查引脚名）。 */
   pins: ChipPinSource;
 }
 
@@ -361,7 +361,7 @@ export interface ChipConsistencyResult {
  *   ② 启动文件/芯片 ↔ cmake 源清单里的设备宏；
  *   ③ 链接脚本 MEMORY 的 FLASH/RAM ↔ 芯片真实容量（大了致命，小了只浪费）；
  *   ④ .elf 实际大小 ↔ Flash 容量。
- * 另外把引脚表来源（本机 db 还是内置表、有没有校验过）写进 notes。
+ * 另外把引脚表来源（本机 db 还是 unknown、有没有校验过）写进 notes。
  */
 export function checkChipConsistency(input: ChipConsistencyInput): ChipConsistencyResult {
   const blockers: string[] = [];
@@ -476,7 +476,7 @@ export function checkChipConsistency(input: ChipConsistencyInput): ChipConsisten
     }
   }
 
-  // 引脚表 ↔ .ioc 用到的引脚（只有真拿到本机 db 时才比；内置表不拿来判"引脚不存在"）
+  // 引脚表 ↔ .ioc 用到的引脚（只有真拿到本机 db 时才比：没有内置表可退，没 db 就不判引脚存在性）
   const iocPins = [...new Set((input.iocPins ?? []).map((pin) => normalizeIocPin(pin)).filter((pin) => pin !== ""))];
   if (pins.kind === "db" && iocPins.length > 0) {
     const unknown = iocPins.filter((pin) => !pins.pins.includes(pin));

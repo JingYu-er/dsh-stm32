@@ -1,5 +1,5 @@
 // 单元测试：doctor 的芯片一致性（型号 ↔ 启动文件 ↔ 设备宏 ↔ .ld MEMORY ↔ .elf）
-// 与引脚表派生（本机 CubeMX db/mcu 优先，退回内置表）。
+// 与引脚表派生（有本机 CubeMX db/mcu 就用它；没有就 kind=unknown，插件不内置引脚表）。
 //
 // 这里守的是“换芯片只换了 .ioc”这一类最麻烦的错：编译器全绿、烧进去跑飞。
 // 跑法：node --test test/doctor-chip-units.test.mjs（需先 npm run build）
@@ -19,6 +19,11 @@ import {
   parseLinkerMemory,
   runDoctor,
 } from "../lib/engine/doctor.js";
+
+import { FIXTURE_ASSETS } from "./fixtures.mjs";
+
+// 设备事实只从资源包缓存读（内置引脚表已删）：单测统一指到夹具，绝不读真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
 
 const TEMPLATES = fileURLToPath(new URL("../templates/scaffold/", import.meta.url));
 
@@ -123,17 +128,21 @@ function elfWith(flashBytes, padBytes = 0) {
   return buf;
 }
 
-test("没有本机 db 时退回内置表，并写明「未与本机 db 校验」（isKnownPin 放行语义不变）", () => {
+test("没有本机 db 时 kind=unknown + 空引脚 + 明说没校验（内置引脚表已删，不再有 builtin 兜底）", () => {
   const table = deriveChipPinTable({ cpn: "STM32F103C8T6", mcuName: "STM32F103C(8-B)Tx", dbMcuDir: null });
-  assert.equal(table.kind, "builtin");
-  assert.ok(table.pins.includes("PA0"));
-  assert.ok(table.pins.includes("PD1"));
-  assert.equal(table.notes.some((line) => line.includes("未与本机 db 校验")), true, table.notes.join("\n"));
-  // 放行语义：已知型号拦不存在的引脚；未知型号/虚拟引脚一律放行。
-  assert.equal(isKnownPin("STM32F103C8T6", "PA0"), true);
-  assert.equal(isKnownPin("STM32F103C8T6", "PC12"), false);
-  assert.equal(isKnownPin("STM32F103RCT6", "PZ9"), true);
-  assert.equal(isKnownPin("STM32F103C8T6", "VP_SYS_VS_Systick"), true);
+  assert.equal(table.kind, "unknown");
+  assert.deepEqual(table.pins, []);
+  assert.equal(table.notes.some((line) => line.includes("引脚存在性不校验")), true, table.notes.join(" / "));
+  assert.equal(table.notes.some((line) => line.includes("不内置引脚表")), true, table.notes.join(" / "));
+  // isKnownPin 只查引脚名合法性：PZ9 / PA99 这类写错的一定拦；PC12 名字合法
+  //（这个封装到底有没有它，只有本机 CubeMX db 说了算）。
+  assert.equal(isKnownPin("PA0"), true);
+  assert.equal(isKnownPin("PA0-WKUP"), true);
+  assert.equal(isKnownPin("PC12"), true);
+  assert.equal(isKnownPin("PZ9"), false);
+  assert.equal(isKnownPin("PA99"), false);
+  assert.equal(isKnownPin("PA-1"), false);
+  assert.equal(isKnownPin("VP_SYS_VS_Systick"), true);
 });
 
 test("db XML 解析：只收 Position>0 的封装引脚，功能后缀归一化（VP 引脚位置 0 不算）", () => {
@@ -152,10 +161,11 @@ test("有本机 db 时引脚表来自 db（Mcu.Name 优先，其次按完整型�
   // 只给完整型号（没有 Mcu.Name）也能命中
   const full = dbDirWith(DB_XML, "STM32F103RCT6.xml");
   assert.equal(deriveChipPinTable({ cpn: "STM32F103RCT6", dbMcuDir: full }).kind, "db");
-  // db 里没有这个型号 → 退回内置表，仍然说明没校验
+  // db 里没有这个型号 → kind=unknown（没有内置表可退），仍然说明没校验
   const other = deriveChipPinTable({ cpn: "STM32F103C8T6", dbMcuDir: full });
-  assert.equal(other.kind, "builtin");
-  assert.equal(other.notes.some((line) => line.includes("未与本机 db 校验")), true);
+  assert.equal(other.kind, "unknown");
+  assert.deepEqual(other.pins, []);
+  assert.equal(other.notes.some((line) => line.includes("引脚存在性不校验")), true);
 });
 
 test("findMcuDbDir：只认 <CubeMX 根>/db/mcu，找不到返回 null", () => {

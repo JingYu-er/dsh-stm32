@@ -10,6 +10,17 @@ export const FIXTURE_PROJECT = join(FIXTURES, "project");
 export const FIXTURE_IOC = join(FIXTURE_PROJECT, "demo.ioc");
 export const FIXTURE_SCRATCH_IOC = join(FIXTURES, "scratch.ioc");
 
+/**
+ * 夹具资源包根（DSH_STM32_ASSETS 用的那个根）：里面只有一个版本目录 2026.10.31-1，
+ * 带 manifest.json / install.json / device/f1/chips.json（20 颗真实 CPN）。
+ * 插件已经不再内置芯片表，设备事实全从这个缓存读，所以**所有**需要型号事实的单测都要
+ * 在最前面写 process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS —— 否则会去读开发机真实 home 缓存，
+ * 测试就不再是离线的了。
+ */
+export const FIXTURE_ASSETS = join(FIXTURES, "assets");
+/** 夹具资源包的版本目录名（也是 install.json 里的 version）。 */
+export const FIXTURE_ASSETS_VERSION = "2026.10.31-1";
+
 /** e2e 放临时副本的根目录（默认系统临时目录）。 */
 export const E2E_ROOT = process.env.DSH_STM32_E2E_ROOT ?? tmpdir();
 

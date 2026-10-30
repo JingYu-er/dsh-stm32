@@ -13,6 +13,7 @@
  * 寄存器路线只要编译工具链（capability=build）——这正是"缺 CubeMX 也能干活"的落点。
  */
 
+import { ensureAssets } from "../engine/assets.js";
 import { createProjectScaffold, preflightTarget } from "../engine/scaffold.js";
 import { createRegisterProject } from "../engine/register-template.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
@@ -271,6 +272,27 @@ export function registerProjectCreate(ctx: DshContext): void {
         };
       }
 
+      // 设备事实（型号 → 启动文件/设备宏/Flash/RAM）只从资源包缓存读：插件不再内置芯片表，
+      // 第一次用在这里自动装一次（缓存命中时最坏只是几次 stat，不发网络请求）。
+      const assets = await ensureAssets({ signal: exec.signal });
+      if (!assets.ok) {
+        const message =
+          "设备事实还没就绪，型号 → 启动文件/设备宏/容量都算不出来：插件不再内置芯片表，这些事实只从资源包缓存读。" +
+          assets.message;
+        const blocked: ProjectReport = {
+          ok: false,
+          route,
+          targetDir: args.targetDir,
+          projectName: args.projectName ?? "",
+          message,
+          templateFiles: 0,
+          driverFiles: 0,
+          durationMs: 0,
+          warnings: [message],
+        };
+        return { message, report: blocked };
+      }
+
       // 门禁：两条路线要的东西不一样。
       //   register（寄存器版）建完就能编译 → 按 build 能力查 gcc/cmake/ninja。
       //   hal（默认）这一步**只拷文件**（CMake 工程文件 / 链接脚本 / Drivers），既不需要
@@ -324,6 +346,7 @@ export function registerProjectCreate(ctx: DshContext): void {
           cacheHit: report.cacheHit,
         };
         if (gate !== null && !gate.ok) normalized.warnings.unshift(gate.message);
+        if (assets.status === "refreshed") normalized.warnings.unshift(assets.message);
         return { message: normalized.message, report: normalized };
       }
 
@@ -339,6 +362,7 @@ export function registerProjectCreate(ctx: DshContext): void {
       });
       // ScaffoldReport 没有 notes 字段，warn 档的警告并进 warnings（卡片照样打出来）。
       if (gate !== null && !gate.ok) scaffold.warnings.unshift(gate.message);
+      if (assets.status === "refreshed") scaffold.warnings.unshift(assets.message);
       const halReport: ProjectReport = {
         ok: scaffold.ok,
         route: "hal",

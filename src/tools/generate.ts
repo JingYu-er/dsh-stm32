@@ -3,6 +3,9 @@
  *
  * 默认走后台 job（3–4 分钟，超过工具超时阈值），进度可读；foreground=true 时
  * 同步等待并直接返回完整报告（调试用）。
+ *
+ * 不需要设备事实（型号 → 启动文件/容量只在 build_project/doctor 那些地方用；这里只跑 CubeMX
+ * 并搬运产物），所以**不**在这里调 ensureAssets —— 生成代码不该因为没网而先卡一次超时。
  */
 
 import { runGenerate } from "../engine/generate.js";

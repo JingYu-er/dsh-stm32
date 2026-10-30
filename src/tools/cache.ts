@@ -17,6 +17,7 @@ import {
   type CacheEntry,
   type CacheIndex,
 } from "../engine/cache.js";
+import { ensureAssets } from "../engine/assets.js";
 import { ensureCmsisTemplate } from "../engine/register-template.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 
@@ -193,6 +194,13 @@ export function registerCache(ctx: DshContext): void {
       if (action === "fetch") {
         if ((args.mcu ?? "") === "" && (args.family ?? "") === "") {
           return empty("fetch 至少给一个 mcu（例如 STM32F103C8T6）或 family（例如 F1）。");
+        }
+        // cmsis 条目 id 里带着启动文件与设备宏（cmsis:F1:103xb），那要靠设备事实算：
+        // 插件不再内置芯片表，所以先把资源包缓存准备好；拿不到就明说，别让它报"认不出这颗芯片"
+        // （那个文案会让人以为型号写错了）。
+        const assets = await ensureAssets({ signal: exec.signal });
+        if (!assets.ok) {
+          return empty("认芯片型号需要设备事实，但资源包还没就绪：" + assets.message + " 装好后重试 action=fetch。");
         }
         const result = await ensureCmsisTemplate({
           ...(args.mcu === undefined ? {} : { mcu: args.mcu }),

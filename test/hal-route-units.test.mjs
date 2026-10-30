@@ -24,6 +24,12 @@ import {
 } from "../lib/engine/hal-chip.js";
 import { createProjectScaffold, DEFAULT_FIRMWARE_PACKAGE } from "../lib/engine/scaffold.js";
 
+import { FIXTURE_ASSETS } from "./fixtures.mjs";
+
+// 设备事实只从资源包缓存读（内置 chip-table.json / 手写容量表已删）：
+// 单测统一指到 test/fixtures/assets，绝不读开发机真实 home 缓存。
+process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
+
 const TEMPLATES = fileURLToPath(new URL("../templates/scaffold/", import.meta.url));
 const CUBE_ROOT = "D:/app/STM32CubeMX";
 const FIRMWARE_PACKAGE_EXISTS = fs.existsSync(path.join(CUBE_ROOT, "Repository", DEFAULT_FIRMWARE_PACKAGE));

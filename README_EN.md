@@ -67,7 +67,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 418 offline cases in 29 suites, no board needed
+npm test                            # optional: 442 offline cases in 31 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 npm run test:size                   # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
 ```
@@ -133,6 +133,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
 | Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
 | Choose the technical route | `stm32_route_plan`: for **this project's** requirements, lays out the HAL and register cost per peripheral (effort / readability / debugging), then says whether what is missing is installable-by-the-plugin or human-only (CubeMX is a GUI wizard needing an ST account; firmware packages are only maintained by the CubeMX package manager) |
+| Chip facts (part → startup file / device define / sizes) | The plugin **ships no chip table**: part, startup file, device define and Flash/RAM come only from the local assets cache (`~/.dsh-stm32/assets/<version>/device/f1/chips.json`, root overridable with `DSH_STM32_ASSETS`), installed once on first use (`stm32_assets` with `action: "refresh"`) and offline afterwards. With no network and no cache, `stm32_project_create` / `stm32_doctor` say "run stm32_assets refresh, or check the network" instead of inventing a startup file from a built-in table |
 | Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use (every file is pinned by upstream sha256 and refused if it changed); `mcu` names the part (both routes accept it; the HAL route renders its startup file / device define / `<DeviceId>_FLASH.ld` from it); both routes also ship an `openocd.cfg` (CMSIS-DAP + `hla_swd` + 2 MHz) |
 | Export a project | `stm32_project_export`: packs the sources into one zip (without `build/`, `.dsh-stm32/`, `node_modules/`, `.git/`), optionally including the `.elf`, plus a hand-off README |
 | `.ioc` as a transaction | `stm32_ioc_inspect` (read-only parse) → `stm32_ioc_plan` (diff, no writes) → `stm32_ioc_apply` (SHA check + backup + rollback) |
@@ -155,6 +156,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | `stm32_route_plan` | Settle the route before writing code: `requirement` is required (e.g. "a button drives the LED, UART prints its state once a second"), and it returns `verdict` (`register-ok` / `both-viable` / `hal-only` / `unclear`), per-peripheral `halEffort`/`regEffort` with `advice`, how the two routes differ, the next concrete step, and toolchain gaps tagged `installability` (`auto` = the plugin can install it / `manual` = human only) plus the full manual install guide. No generic comparison table — the verdict only holds for the requirement you gave |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
 | `stm32_project_create` | Empty directory → full CMake project. `route: "hal"` (default) is the CubeMX route (including both "flash only" and "flash and debug" launch configs in `.vscode`); `route: "register"` builds a **no-CubeMX, no-HAL** register-level project (`mcu` picks the part, CMSIS headers and startup file come from the cache). Refuses a non-empty target unless `overwrite: true` |
+| `stm32_assets` | Manages the **device-facts asset pack** (chip table / memory layout / .ioc templates / linker scripts / SVD — not the CMSIS download cache): `action: "refresh"` (default `profile: "core"`, ~100 KB; an already installed version is reused) fetches `manifest.json` from GitHub → jsDelivr → gitcode and installs it file-by-file, every file pinned by sha256, into `~/.dsh-stm32/assets/<version>/`; `list` / `verify` / `prune` manage versions. **The plugin no longer embeds any chip table**, so device facts come only from here — the first use needs one online install, offline afterwards |
 | `stm32_cache` | Inspect / verify / fetch / purge the download cache: `action: "list"` (default), `"verify"` (per-file check), `"fetch"` (pull the template for an `mcu`, reusing the cache without touching the network), `"purge"` (drop entries; clears everything without an `id`). The cache holds what the register route needs but the plugin does not ship — CMSIS device headers, startup file, core headers — downloaded once, reused forever |
 | `stm32_project_export` | Hands the project to someone else as one zip: sources, CMake, `.vscode` and the `.ioc` by default, skipping `build/`, `.dsh-stm32/`, `node_modules/`, `.git/`; `includePrebuilt: true` also packs the `.elf`, `readme: false` skips the in-archive README, `outDir` moves the output (default `<name>-export.zip` next to the project) |
 | `stm32_firmware_install` | One-stop firmware-package install: `dryRun` (default) returns only the plan — where it would land, which two source repos it would download, which checks must pass; `dryRun: false` + `confirm: true` actually downloads (HAL driver + CMSIS device support + core headers, ~2 MB total from GitHub), assembles an official-shaped `STM32Cube_FW_<family>_V<version>` package (writing `package.xml` itself) and runs five checks. Does nothing when the official package is already installed; installs into `<CubeMX root>/dsh-firmware` by default (not `Repository` — a self-made version there is silently ignored), and `stm32_generate` points CubeMX at it with `setCustomFWPath` |
@@ -336,6 +338,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | Reading registers with a live session shows a `gdb-multiarch … target extended-remote 127.0.0.1:3333` `report.command` | That is the normal "reuse" shape: while `stm32_debug_session` is alive, `stm32_regs_read` drives the session's own gdb connection with `print/x $pc` and `print/x *(unsigned int *)0x…`, then `monitor resume` and detach; the first note reads "reusing the openocd of the debug session (port N), not starting another". Only without a session does it start its own openocd. Older builds failed here with `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | Build "succeeds" but the old firmware runs | The project was copied or renamed with `build/` included: the CMakeCache directory no longer matches, yet ninja still exits 0. `stm32_build` treats that as a failure; clean or delete `build/Debug` as prompted |
 | A tool answers "missing arm-none-eabi-gcc …, X was not started" | That is the pre-flight gate (`envCheck` defaults to `block`) doing its job, not a bug: it is cheaper than discovering the problem halfway through. Answer "install", and the model runs `stm32_env_install` for a plan; after you confirm, the toolchain is installed and the config written — **the next call works without a restart**. Run `/stm32-env` for the whole picture, or pass `envCheck: "warn"` (continue with a warning) / `"off"` (skip the check) |
+| The first project build answers "device facts are not ready … run stm32_assets refresh, or check the network" | The plugin ships no chip table: part → startup file / device define / Flash / RAM come only from the local assets cache (`~/.dsh-stm32/assets/<version>/`). Once online, run `stm32_assets` (`action: "refresh"`, default `profile: "core"`, ~100 KB); offline afterwards. `DSH_STM32_ASSETS` overrides the root |
 | `stm32_doctor` cannot find gcc / openocd | First read the "searched ..." list and the auto-discovery line in the doctor notes / error; if it is installed elsewhere, set `STM32_BIN_DIRS` or pass `binDirs`. **If you do not know what to install, run `stm32_env_probe` first**: every missing component carries `impact` (what stops working), `install` (recommended way, easiest first) and `verify` (self-check after installing), while the top-level `recommendations` gives the install order and offers to install for you |
 | `stm32_generate` feels stuck | The first run (cold start, no cache) legitimately takes 3.5–4 minutes; later runs are skipped (<1 s) while the `.ioc` and outputs are unchanged. It runs as a background job by default — watch it with `job_output`, or pass `foreground: true`. Check `skipped` in the result and the reason in the notes to see whether the cache hit |
 | It regenerates for 3 minutes even though nothing changed | The cache key covers the CubeMX `size:mtime` and every output hash, so swapping CubeMX, editing generated files or changing the layout invalidates it. Read the reason in the notes, or delete `.dsh-stm32/generate-cache.json` |
@@ -347,14 +350,14 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 29 offline suites, 418 cases; no board, CubeMX, or toolchain needed
+npm test                 # 31 offline suites, 442 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 npm run test:size        # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **416 passed + 2 skipped**, while a developer machine runs all 418. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **440 passed + 2 skipped**, while a developer machine runs all 442. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 
@@ -362,7 +365,7 @@ A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that nee
 | --- | --- | --- |
 | npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 99 files / 525.7 KB packed, 1538.3 KB unpacked; `templates/**` alone is 38.5 KB |
 | Git only, not packed | `src/**`, `test/**`, `scripts/**`, `docs/diagrams/**` (two interactive HTML pages) | diagrams are 2 MB raw / 891 KB gz; `files` in `package.json` narrows `docs` to `docs/*.md` |
-| Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages | manage the cache with `stm32_cache list/verify/purge` |
+| Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages; the **device-facts asset pack** (chips.json / memory.json / .ioc templates / .ld / SVD, ~100 KB — the plugin ships no chip table, `stm32_assets refresh` installs it once and it is offline afterwards) | manage the caches with `stm32_cache list/verify/purge` and `stm32_assets list/verify/prune` |
 | Rendered on the spot | `.ioc` content (`renderIoc`), `.ld` MEMORY (`renderLinkerScript`), the cmake source list | rendered per part, never stored as a template |
 
 The guard is `scripts/pack-size.mjs` (`npm run test:size`): tarball ≤ 1.2 MB (1 200 000 B), `templates/**` ≤ 60 KB, no `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll` inside, and `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md` all present.
@@ -387,8 +390,8 @@ src/
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
   data/                    paths and chip data (paths are data, not logic)
 templates/scaffold/        project template snapshot (CMake / .ld / .vscode / .ioc)
-test/                      offline suites (29) + fixtures + hardware e2e
-scripts/                   guards and generators (pack-size / pack-smoke / gen-chip-table / gen-xcube-catalog / copy-client)
+test/                      offline suites (31) + fixtures + hardware e2e
+scripts/                   guards and generators (pack-size / pack-smoke / gen-xcube-catalog / copy-client)
 docs/                      specification + development notes + reading guide + diagrams/ (not packed)
 ```
 

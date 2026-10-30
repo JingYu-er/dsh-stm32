@@ -2071,7 +2071,7 @@ npm run build exit 0；npm test 26 套件 374 pass / 0 fail（CI 372 + 2 skipped
 
 第四项踩了个真坑：**别用 .elf 文件大小判超 Flash**。工作区里那个正经 C8T6 工程，`.elf` 有 641.5 KiB——全是 `-g3` 的调试信息，按文件大小判会把 64 KiB 的芯片判成超容量。改成读 ELF program header，只累加 `p_paddr` 落在 `0x08000000` 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`，同一工程立刻变成 0 blocker。解析不出 program header 时才退回文件大小，并在 notes 里注明「按文件大小粗算」。
 
-`src/data/chips.ts`（202 行，+162）：保留原 `CHIPS` / `findChip` / `isKnownPin` 的语义（未知型号一律放行，不猜、不误拦），新增 `parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，`PC13-TAMPER-RTC → PC13`，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / builtin / unknown`：db 命中就注明来源 XML 与引脚数，否则明说「未与本机 db 校验」，都没有就说明未知引脚一律放行。
+`src/data/chips.ts`（202 行，+162；内置表 2026-10-31 已删，见 §28.9）：保留原 `CHIPS` / `findChip` / `isKnownPin` 的语义（未知型号一律放行，不猜、不误拦），新增 `parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，`PC13-TAMPER-RTC → PC13`，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / builtin / unknown`：db 命中就注明来源 XML 与引脚数，否则明说「未与本机 db 校验」，都没有就说明未知引脚一律放行。
 
 ### 28.5 包体三分法与护栏
 
@@ -2086,7 +2086,7 @@ npm run build exit 0；npm test 26 套件 374 pass / 0 fail（CI 372 + 2 skipped
 
 护栏是 `scripts/pack-size.mjs`（80 行，`npm run test:size`，CI 在 `test:pack` 之后跑）：tarball ≤1.2 MB、`templates/**` ≤60 KB、包内禁止 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。它用 `npm pack --dry-run --json` 拿文件清单，不写盘。
 
-### 28.6 芯片薄表：scripts/gen-chip-table.mjs（371 行）
+### 28.6 芯片薄表：scripts/gen-chip-table.mjs（371 行）——**2026-10-31 已整体删除，见 §28.9**
 
 目标是一份「不联网、不依赖 CubeMX 运行时」的芯片事实表，供将来扩族时查容量与封装，也方便人肉核对。
 
@@ -2114,3 +2114,17 @@ skill 的 R2 现在点名「本型号的启动文件 + 本型号的 `.ld`」，R
 - `npm run test:size` → exit 0（tarball 525.7 KB / 上限 1171.9 KB，templates 38.5 KB / 上限 60 KB）。
 
 注：§27.5 里的「26 套件 374 例」是当时的数，现在是 29 套件 418 例（captain 口径里的 28 个套件少算了 `schema-guard`）；§27.3 的坑、§27.4 的接口都还成立，只是 `startupChoiceFor` 现在委托给 `resolveF1Chip` 了。
+
+### 28.9 2026-10-31：删掉全部内置芯片表，设备事实只从资源包缓存读
+
+用户原话：「**内置表删了吧**」。这一批把插件里三张手写/生成的事实表全部清掉，改成「资源仓库出事实、插件只读本地缓存」：
+
+- **删文件**：`src/data/chip-table.json`（2016 颗薄表，157 KB）、`src/data/f1-ram.generated.ts`（RAM 反查表）、`scripts/gen-chip-table.mjs`（371 行）。脚本**直接删**而不是保留：生成 CPN 的逻辑已经搬到资源仓库的 `scripts/build-assets.mjs`，插件侧再留一份生成器就等于留两条事实来源。
+- **新增读取层** `src/data/device-facts.ts`：唯一事实来源是 `~/.dsh-stm32/assets/<版本>/device/f1/chips.json`（版本取本地已装最新一版；`DSH_STM32_ASSETS` 可换根目录），按 path+size+mtime 内存缓存一次。`loadDeviceFacts()` / `findChipFact(cpn)`（缺失返回 null）/ `requireChipFact(cpn)`（抛 `DeviceFactError`，code = `facts-missing` / `chip-unknown`）/ `deviceFactsSource()`（缓存路径或 `"none"`）。没有缓存时不抛、不猜，把「先跑 stm32_assets refresh，或检查网络」原样交上去。
+- **`src/data/stm32f1.ts`**：删 `F1_LINES` / `GROUP_BY_LETTER` / `FLASH_BY_LETTER` / `RAM_BY_LINE_LETTER` / `PINS_BY_PACKAGE` 与 `f1-ram.generated` 的 import；`resolveF1Chip` 的签名与 `F1Chip` 结构不变，改为「解析写法 → 查 device facts」；`f1GroupsFor(code)` 从事实聚合。错误分四类，都带 refresh 提示。
+- **`src/data/cmsis-sources.ts`**：`F1:B` / `F1:8` 这类只给容量字母的老写法，原来的「字母 → 档位」常量表已删，改成从事实里挑一颗同档芯片当代表（优先 F103），没缓存就返回 null。
+- **`src/data/chips.ts`**：删 `CHIPS` / `KNOWN_CHIPS` / `findChip` / `ChipInfo`。`isKnownPin(pin)` 改成单参、只查**引脚名合法性**（`PA0..PG15`、`VP_*`；`PA0-WKUP` / `PC13-TAMPER-RTC` 先归一化）。没有拿 `pinCount` 去猜封装引脚——那等于又造一张表；引脚存在性只认本机 CubeMX db（`deriveChipPinTable` 的 `kind` 从 `db / builtin / unknown` 收窄成 `db / unknown`，没有 db 就明说「引脚存在性不校验」）。
+- **首次使用自动 refresh**：`src/engine/assets.ts` 新增 `ensureAssets({profile:'core'})` —— 缓存命中（已装版本里有 `device/f1/chips.json`）直接返回 `status: "cache"`，否则走 `fetchManifest` + `verifyAndInstall` 自动装一次（`status: "refreshed"`），失败 `status: "missing"` 并带 refresh 文案。接进 `stm32_project_create`（**硬失败**，结构化错误）、`stm32_doctor` / `stm32_ioc_plan` / `stm32_cache` 的 fetch（**软提示**，其余检查照跑）；`stm32_generate` / `stm32_ioc_inspect` / `stm32_ioc_apply` / `stm32_route_plan` 本来不读芯片事实，**故意不接**（接了只会让不相关的工具因为没网而失败）。
+- **测试**：新增夹具 `test/fixtures/assets/2026.10.31-1/`（20 颗真实 CPN + `manifest.json` + `install.json`，值从资源包原样抽，测试不联网）；`stm32f1-units` 重写成「事实从哪来 / 缺缓存怎么报」，`doctor-chip-units` 的 builtin 用例改成 `kind: unknown` + 空引脚，`assets-units` 的「内置表兜底」断言全部改口径。`test/run-units.mjs` 未动（captain 统一登记）。
+- **验证**：`npm run build` exit 0；`npm test` → **31 套件 442 pass / 0 fail**；资源包版本 `2026.10.31-1`（`chips.json` 83 颗 = F1 全部 CPN；任务书里的「58 颗」是 CubeMX `db/mcu` 的 XML 分组数，不是 CPN 数）。
+- **偏差备案**：任务书要求 `stm32_generate` / `stm32_ioc_*` 也 `await ensureAssets`，实际只接了 `stm32_ioc_plan`（软提示）；其余不读芯片事实的工具按上面的理由不接，避免把「没网」变成无关工具的硬失败。

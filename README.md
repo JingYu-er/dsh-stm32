@@ -68,7 +68,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：418 个离线用例、29 个套件，不需要板子
+npm test                            # 可选：442 个离线用例、31 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
 npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
 ```
@@ -134,6 +134,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
 | 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
 | 选技术路线 | `stm32_route_plan`：先按**这个工程**的需求，把每个外设的 HAL 版与寄存器版代价摆出来（效率 / 可读性 / 排错），再告诉你缺的是「能代装的」还是「只能人装的」（CubeMX 是 GUI 向导 + 要 ST 账号、固件包只由 CubeMX 包管理器维护） |
+| 设备事实（型号 → 启动文件 / 设备宏 / 容量） | 插件**不内置芯片表**：型号、启动文件、设备宏、Flash/RAM 这些事实只从本地资源包缓存读（`~/.dsh-stm32/assets/<版本>/device/f1/chips.json`，`DSH_STM32_ASSETS` 可换根目录），第一次用到时自动装一次（`stm32_assets` 的 `refresh`），装好之后离线可用。没网又没缓存时 `stm32_project_create` / `stm32_doctor` 会明说「先跑 stm32_assets refresh，或检查网络」，不会拿内置表凑一个可能错的启动文件名 |
 | 从零建工程 | `stm32_project_create`：`route: "hal"` 用模板快照 + 固件包 Drivers（与 CubeMX GUI 新建的工程逐字节一致）；`route: "register"` 建不用 CubeMX 的寄存器版工程，CMSIS 模板首次从网上下到缓存、之后复用（每个文件都钉了上游 sha256，改过就拒绝落盘）；`mcu` 指定型号（两条路线都吃；HAL 路线按型号渲染启动文件 / 设备宏 / `<DeviceId>_FLASH.ld`）；两条路线都会带一份 `openocd.cfg`（CMSIS-DAP + `hla_swd` + 2 MHz） |
 | 导出工程 | `stm32_project_export`：源码打成一个 zip（默认不带 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`），可选把 `.elf` 一起带上，并写一份开箱 README |
 | `.ioc` 事务 | `stm32_ioc_inspect`（只读解析）→ `stm32_ioc_plan`（算 diff，不写盘）→ `stm32_ioc_apply`（SHA 校验 + 备份 + 回滚） |
@@ -156,6 +157,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
 | `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——F1 全系都吃；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
+| `stm32_assets` | 管**设备事实资源包**（芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "refresh"`（默认 `profile: "core"`，约 100 KB；已装同版本直接复用）从 GitHub → jsDelivr → gitcode 多源拉 `manifest.json`，逐文件钉 sha256 装到 `~/.dsh-stm32/assets/<版本>/`；`list` / `verify` / `prune` 管各版本。**插件不再内置任何芯片表**，设备事实只从这里读，第一次用要联网装一次，装好后离线可用 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
 | `stm32_firmware_install` | 缺固件包时的一条龙：`dryRun`（默认）只出计划——装到哪、下哪两个源码仓、几条自检判据；`dryRun: false` + `confirm: true` 才真下（GitHub 上 HAL 驱动与 CMSIS 设备支持两个源码包 + 内核头，合计约 2 MB），组装成与官方同构的 `STM32Cube_FW_<族>_V<版本>` 包（自写 `package.xml`）并过五条自检。已有官方包时什么都不做；默认装到 `<CubeMX 根>/dsh-firmware`（不是 `Repository`——塞自造版本号会被 CubeMX 静默忽略），生成时由 `stm32_generate` 用 `setCustomFWPath` 指过去 |
@@ -339,6 +341,7 @@ source [find target/stm32f1x.cfg]
 | 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 用会话自己的 gdb 连接执行 `print/x $pc` 与 `print/x *(unsigned int *)0x…`，读完 `monitor resume` 再 detach，notes 第一条写「复用调试会话（端口 N）的 openocd，没有另起一个」；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | 工具直接回「缺 arm-none-eabi-gcc…，这次没有开始编译」 | 这是开工前门禁（`envCheck` 默认 `block`）拦下来的，不是 bug：它比跑到一半才发现省时间。回一句「装」，模型调 `stm32_env_install` 出计划；确认后装好并写配置文件，**下一条命令就能用，不必重启**。想先看全貌就 `/stm32-env`；只想先跑起来就传 `envCheck: "warn"`（照做但写警告）或 `"off"`（不查） |
+| 第一次建工程回「设备事实还没就绪……先跑 stm32_assets refresh，或检查网络」 | 插件不内置芯片表：型号 → 启动文件 / 设备宏 / Flash / RAM 的事实只从本地资源包缓存（`~/.dsh-stm32/assets/<版本>/`）读。联网跑一次 `stm32_assets`（`action: "refresh"`，默认 `profile: "core"`，约 100 KB），装好后离线可用；`DSH_STM32_ASSETS` 可换根目录 |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
@@ -350,14 +353,14 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 29 个离线套件、418 个用例；不需要板子、CubeMX、工具链
+npm test                 # 31 个离线套件、442 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **416 pass + 2 skipped**，开发机上是 418 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **440 pass + 2 skipped**，开发机上是 442 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 
@@ -365,7 +368,7 @@ GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的�
 | --- | --- | --- |
 | 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 99 个文件 / 525.7 KB，解包 1538.3 KB；其中 `templates/**` 38.5 KB |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
-| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包 | 缓存可用 `stm32_cache list/verify/purge` 管 |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（chips.json / memory.json / .ioc 模板 / .ld / SVD，约 100 KB；插件不再内置芯片表，第一次用时 `stm32_assets refresh` 装一次，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
 
 护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` ≤ 60 KB、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
@@ -390,8 +393,8 @@ src/
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）
-test/                      离线套件（29 个）+ fixtures + 真机 e2e
-scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-chip-table / gen-xcube-catalog / copy-client）
+test/                      离线套件（31 个）+ fixtures + 真机 e2e
+scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-xcube-catalog / copy-client）
 docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/（不进 npm 包）
 ```
 

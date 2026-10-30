@@ -264,11 +264,7 @@ function writePinOrder(entries: Map<string, string>, order: string[]): void {
   entries.set("Mcu.PinsNb", String(order.length));
 }
 
-function addPin(
-  table: PinTable,
-  request: PinAddRequest,
-  chip: { cpn: string },
-): void {
+function addPin(table: PinTable, request: PinAddRequest): void {
   const pin = request.pin.trim();
   if (pin === "") {
     table.errors.push("pins 里有空引脚名");
@@ -278,8 +274,11 @@ function addPin(
     table.errors.push("引脚 " + pin + " 已经在 .ioc 里配置过了（要改请用 entries 直接设置对应键）");
     return;
   }
-  if (!isKnownPin(chip.cpn, pin)) {
-    table.errors.push("引脚 " + pin + " 不在 " + (chip.cpn === "" ? "当前 MCU" : chip.cpn) + " 的引脚表里（见 src/data/chips.ts）");
+  if (!isKnownPin(pin)) {
+    table.errors.push(
+      "引脚名 " + pin + " 不是合法的 STM32 GPIO 引脚（形如 PA0..PG15，或 VP_ 开头的虚拟引脚）；" +
+        "插件不再内置引脚表，这个封装到底有没有这根脚请用 stm32_doctor 对着本机 CubeMX db 校验",
+    );
     return;
   }
   const label = (request.label ?? "").trim();
@@ -378,12 +377,11 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const before = parseIocEntries(source);
   // 深拷贝成可写 Map（parseIocEntries 返回的就是新 Map，直接改即可）。
   const after = new Map(before);
-  const chipCpn = before.get("Mcu.CPN") ?? "";
 
   const pinTable = readPinTable(after, errors, warnings);
   // 先记下原始引脚表：只有真的变了才重写 Mcu.PinN，顺序没变就一个字节都不碰。
   const originalOrder = [...pinTable.order];
-  for (const pin of request.pins ?? []) addPin(pinTable, pin, { cpn: chipCpn });
+  for (const pin of request.pins ?? []) addPin(pinTable, pin);
   if (request.serialWire === true) ensureSerialWire(pinTable);
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，
