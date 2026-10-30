@@ -30,3 +30,6 @@ jobs:
       # 发布形态烟测：npm pack 解包后真建一个寄存器工程。挡住"源码安装测不出、
       # npm 安装必炸"的一整类问题（.gitignore 被 npm 排除、模板清单与打包内容不一致）。
       - run: npm run test:pack
+      # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许有 png/html 之类资产。
+      # 目的不是抠体积，而是拦住「把图片/固件包/板级 .ioc 顺手塞进仓库」这类长期臃肿。
+      - run: npm run test:size

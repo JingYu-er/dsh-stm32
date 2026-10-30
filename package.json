@@ -13,7 +13,7 @@
     "lib",
     "client",
     "templates",
-    "docs",
+    "docs/*.md",
     "cordis.patch.yml",
     "README.md",
     "README_EN.md",
@@ -27,7 +27,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/run-units.mjs",
     "prepublishOnly": "npm run build",
-    "test:pack": "node scripts/pack-smoke.mjs"
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "test:size": "node scripts/pack-size.mjs"
   },
   "keywords": [
     "dsh-plugin",

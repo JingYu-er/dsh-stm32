@@ -38,11 +38,14 @@ export interface ProjectReport {
   iocPath?: string;
   firmwareRoot?: string;
   templateDir?: string;
-  /** 寄存器路线 */
+  /** 两条路线都有的芯片事实 */
   mcu?: string;
   family?: string;
   startup?: string;
   deviceDefine?: string;
+  /** HAL 路线：按芯片命名并渲染的链接脚本，例如 STM32F103RCTx_FLASH.ld。 */
+  linkerScript?: string;
+  /** 寄存器路线 */
   cacheDir?: string;
   cacheHit?: boolean;
 }
@@ -67,6 +70,7 @@ const reportSchema: JsonSchema = {
     family: { type: "string" },
     startup: { type: "string" },
     deviceDefine: { type: "string" },
+    linkerScript: { type: "string" },
     cacheDir: { type: "string" },
     cacheHit: { type: "boolean" },
   },
@@ -114,6 +118,12 @@ export function formatProjectReport(report: ProjectReport): string[] {
   if (report.ok) {
     lines.push("工程：" + report.projectName + " → " + report.targetDir);
     lines.push("文件：" + String(report.templateFiles) + " 个工程文件 + " + String(report.driverFiles) + " 个驱动源文件");
+    if (report.route === "hal" && report.mcu !== undefined) {
+      lines.push(
+        "芯片：" + report.mcu + "，启动文件 " + (report.startup ?? "") + "，设备宏 " + (report.deviceDefine ?? "") +
+          "，链接脚本 " + (report.linkerScript ?? ""),
+      );
+    }
     if (report.route === "hal" && report.iocPath !== undefined) lines.push(".ioc：" + report.iocPath);
     if (report.route === "hal" && report.firmwareRoot !== undefined) lines.push("固件包：" + report.firmwareRoot);
     if (report.route === "register") {
@@ -159,7 +169,11 @@ export function registerProjectCreate(ctx: DshContext): void {
         targetDir: { type: "string", description: "新工程目录（可以是还不存在的路径）。" },
         route: { type: "string", enum: ["hal", "register"], description: "hal（默认，要 CubeMX 固件包）或 register（寄存器版，不要 CubeMX）" },
         projectName: { type: "string", description: "工程名（C 标识符）；缺省取目录名。" },
-        mcu: { type: "string", description: "芯片型号，例如 STM32F103C8T6（route=register 时用；缺省按 F103C8T6 处理）。" },
+        mcu: {
+          type: "string",
+          description:
+            "芯片型号，例如 STM32F103C8T6 / STM32F103RCT6 / STM32F107VCT6（两条路线都吃）。route=hal：决定启动文件、设备宏与链接脚本（按 <DeviceId>_FLASH.ld 命名），缺省 STM32F103C8T6；route=register：决定启动文件与设备宏，缺省按 F103C8T6 处理。",
+        },
         family: { type: "string", description: "只给族时写这里，例如 F1（route=register；按中容量档处理）。" },
         firmwarePackage: { type: "string", description: "CubeMX 固件包目录名，默认 STM32Cube_FW_F1_V1.8.7（只 route=hal 用）。" },
         cubeMxRoots: { type: "array", items: { type: "string" }, description: "STM32CubeMX 安装根目录候选（固件包在 <root>/Repository 下）；缺省用默认值/环境变量（只 route=hal 用）。" },
@@ -298,6 +312,7 @@ export function registerProjectCreate(ctx: DshContext): void {
       const scaffold = createProjectScaffold({
         targetDir: args.targetDir,
         ...(args.projectName === undefined ? {} : { projectName: args.projectName }),
+        ...(args.mcu === undefined ? {} : { mcu: args.mcu }),
         ...(args.firmwarePackage === undefined ? {} : { firmwarePackage: args.firmwarePackage }),
         ...(args.overwrite === undefined ? {} : { overwrite: args.overwrite }),
         cubeMxRoots: config.cubeMxRoots,
@@ -318,6 +333,10 @@ export function registerProjectCreate(ctx: DshContext): void {
         iocPath: scaffold.iocPath,
         ...(scaffold.firmwareRoot === undefined ? {} : { firmwareRoot: scaffold.firmwareRoot }),
         templateDir: scaffold.templateDir,
+        ...(scaffold.mcu === undefined ? {} : { mcu: scaffold.mcu }),
+        ...(scaffold.startup === undefined ? {} : { startup: scaffold.startup }),
+        ...(scaffold.deviceDefine === undefined ? {} : { deviceDefine: scaffold.deviceDefine }),
+        ...(scaffold.linkerScript === undefined ? {} : { linkerScript: scaffold.linkerScript }),
       };
       return { message: halReport.message, report: halReport };
     },

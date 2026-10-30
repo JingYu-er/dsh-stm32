@@ -7,12 +7,17 @@
  */
 
 import { createConnection } from "node:net";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
+import { deriveChipPinTable, findMcuDbDir } from "../data/chips.js";
+import type { ChipPinSource } from "../data/chips.js";
 import { describeSearchScope, discoverInstalls, discoveryDisabled, resolveSearchConfig } from "../data/search-roots.js";
+import { resolveF1Chip } from "../data/stm32f1.js";
+import type { F1Chip } from "../data/stm32f1.js";
 import type { SubprocessService } from "../types.js";
 import { detectBuildDir, findElf } from "./build.js";
+import { CUBEMX_CMAKE_REL, deviceDefineFromStartup, isDeviceDefine, listStartupFiles } from "./cmake-sources.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
 import { buildTargets, probeAll } from "./probe.js";
@@ -174,6 +179,358 @@ export function checkPortBusy(port: number, timeoutMs = 600): Promise<boolean> {
   });
 }
 
+// ── 芯片 ↔ 启动文件 ↔ 设备宏 ↔ 链接脚本 ↔ .elf 的一致性 ─────────────────────
+//
+// 换芯片最容易漏的四处：工程根还是旧启动文件、cmake 源清单里还是旧设备宏、
+// 链接脚本 MEMORY 还是旧容量、产物早就超出 Flash。这四处任何一处不自洽，
+// 现象都是"编译过了、烧进去跑飞"，所以 doctor 要替人把它们两两对一遍。
+// 分级：会让固件直接跑不起来的进 blockers，只是浪费/可疑的进 notes。
+
+/** 链接脚本 MEMORY 里的容量（字节）；没写或写成算式时对应字段为 null。 */
+export interface LinkerMemory {
+  ramBytes: number | null;
+  flashBytes: number | null;
+}
+
+/** Gnu ld 的容量写法：20K / 0x5000 / 65536 / 64M；带 +/- 的算式不猜，返回 null。 */
+function parseByteLength(raw: string): number | null {
+  const matched = /^(0x[0-9a-f]+|\d+)\s*(k|m)?$/iu.exec(raw.trim());
+  if (matched === null) return null;
+  const literal = matched[1] ?? "";
+  const base = literal.toLowerCase().startsWith("0x") ? Number.parseInt(literal, 16) : Number.parseInt(literal, 10);
+  if (!Number.isFinite(base)) return null;
+  const unit = (matched[2] ?? "").toLowerCase();
+  if (unit === "k") return base * 1024;
+  if (unit === "m") return base * 1024 * 1024;
+  return base;
+}
+
+/**
+ * 从链接脚本读 MEMORY 的 RAM/FLASH 容量。
+ *
+ * 只认 MEMORY 行（`RAM (xrw) : ORIGIN = 0x20000000, LENGTH = 20K`）。
+ * `LENGTH = 20K - 1` 这类算式返回 null：算错了不如说不知道。
+ */
+export function parseLinkerMemory(text: string): LinkerMemory {
+  const out: LinkerMemory = { ramBytes: null, flashBytes: null };
+  const withoutComments = text.replace(/\/\*[\s\S]*?\*\//gu, " ").replace(/\/\/[^\n]*/gu, " ");
+  const regionRe = /^[ \t]*([A-Za-z_][\w.]*)\s*(?:\([^)]*\))?\s*:\s*ORIGIN\s*=\s*[^,\n]+,\s*LENGTH\s*=\s*([^,\n;]+)/gmu;
+  for (const matched of withoutComments.matchAll(regionRe)) {
+    const region = (matched[1] ?? "").toUpperCase();
+    const bytes = parseByteLength(matched[2] ?? "");
+    if (bytes === null) continue;
+    if (region.includes("RAM")) {
+      if (out.ramBytes === null) out.ramBytes = bytes;
+    } else if (region.includes("FLASH")) {
+      if (out.flashBytes === null) out.flashBytes = bytes;
+    }
+  }
+  return out;
+}
+
+/** cmake 源清单里的 STM32 设备宏（`set(MX_Defines_Syms ... STM32F103xB ...)` 那一行）。 */
+export function deviceDefinesIn(cmakeText: string): string[] {
+  // 去掉注释，并把 -DSTM32F103xB 这种带 -D 的写法还原成裸宏名（-D 紧贴 S 会顶住左边界）。
+  const withoutComments = cmakeText.replace(/#[^\n]*/gu, " ").replace(/-D(?=STM32[A-Z]\d{3}[A-Za-z])/gu, " ");
+  const out: string[] = [];
+  for (const token of withoutComments.match(/(?<![A-Za-z0-9_])STM32[A-Z]\d{3}[A-Za-z][A-Za-z0-9]?(?![A-Za-z0-9_])/gu) ?? []) {
+    if (!isDeviceDefine(token)) continue;
+    if (!out.includes(token)) out.push(token);
+  }
+  return out;
+}
+
+function kib(bytes: number): string {
+  return String(Math.round((bytes / 1024) * 10) / 10) + " KiB";
+}
+
+/**
+ * ELF 里真正要烧进 Flash 的字节数：只算 p_paddr 落在 F1 Flash 区间（0x08000000 起 1 MiB）的 PT_LOAD。
+ *
+ * 为什么不用文件大小：开了 -g3 的工程 .elf 里塞着几百 KiB 调试信息，文件大小和 Flash 占用能差一个数量级，
+ * 拿文件大小判"超 Flash"会在正经工程上误报。看不懂 program header 时返回 null，调用方退回文件大小并说明。
+ */
+export function elfFlashBytes(elfPath: string): number | null {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(elfPath);
+  } catch {
+    return null;
+  }
+  if (buf.length < 52) return null;
+  if (buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) return null;
+  const isElf32 = buf[4] === 1;
+  if (buf[4] !== 1 && buf[4] !== 2) return null;
+  if (buf[5] !== 1) return null; // ARM 目标一律小端
+  const u16 = (at: number): number => buf.readUInt16LE(at);
+  const u32 = (at: number): number => buf.readUInt32LE(at);
+  const u64 = (at: number): number => Number(buf.readBigUInt64LE(at));
+  const phoff = isElf32 ? u32(28) : u64(32);
+  const phentsize = isElf32 ? u16(42) : u16(54);
+  const phnum = isElf32 ? u16(44) : u16(56);
+  if (phoff <= 0 || phentsize === 0 || phnum === 0) return null;
+  const flashBase = 0x08000000;
+  const flashTop = flashBase + 1024 * 1024;
+  let total = 0;
+  let seen = false;
+  for (let index = 0; index < phnum; index += 1) {
+    const at = phoff + index * phentsize;
+    if (at + phentsize > buf.length) break;
+    if (u32(at) !== 1) continue; // PT_LOAD
+    const paddr = isElf32 ? u32(at + 12) : u64(at + 24);
+    const filesz = isElf32 ? u32(at + 16) : u64(at + 32);
+    if (paddr < flashBase || paddr >= flashTop) continue;
+    total += filesz;
+    seen = true;
+  }
+  return seen ? total : null;
+}
+
+/** .ioc 里的引脚名（可能带功能后缀：PC13-TAMPER-RTC、PD0-OSC_IN）归一化成 PA13/PC13/PD0。 */
+function normalizeIocPin(pin: string): string {
+  const head = (pin.split(/[-/]/u)[0] ?? "").trim().toUpperCase();
+  return /^P[A-K]\d{1,2}$/u.test(head) ? head : "";
+}
+
+/** 工程根下的 *_FLASH.ld 文件名（按名字排序）。 */
+export function linkerScriptNames(projectDir: string): string[] {
+  if (!existsSync(projectDir)) return [];
+  try {
+    return readdirSync(projectDir).filter((name) => /_FLASH\.ld$/iu.test(name)).sort();
+  } catch {
+    return [];
+  }
+}
+
+export interface LinkerScriptFacts {
+  path: string;
+  /** 文件名（报告里用它，不贴绝对路径）。 */
+  name: string;
+  text: string;
+}
+
+/** 工程根那个链接脚本：多个时优先按芯片命名的（旧通用名 STM32F103XX_FLASH.ld 排最后）。 */
+export function findLinkerScript(projectDir: string): LinkerScriptFacts | null {
+  const names = linkerScriptNames(projectDir);
+  if (names.length === 0) return null;
+  const preferred = names.find((name) => name.toUpperCase() !== "STM32F103XX_FLASH.LD") ?? (names[0] as string);
+  try {
+    return { path: join(projectDir, preferred), name: preferred, text: readFileSync(join(projectDir, preferred), "utf8") };
+  } catch {
+    return null;
+  }
+}
+
+export interface ChipConsistencyInput {
+  /** .ioc 里的 Mcu.CPN；没有 .ioc 传空串。 */
+  cpn: string;
+  /** .ioc 里的 Mcu.Name（CubeMX db 的分组名，例如 STM32F103C(8-B)Tx）。 */
+  mcuName?: string | undefined;
+  /** 工程根上的 startup_stm32*.s（listStartupFiles 的结果）。 */
+  startupFiles?: readonly string[] | undefined;
+  /** cmake 源清单的文本；读不到传 null。 */
+  cmakeText?: string | null | undefined;
+  /** 工程根链接脚本的文本；没有传 null。 */
+  linkerText?: string | null | undefined;
+  /** 链接脚本文件名（报告里用它）。 */
+  linkerName?: string | undefined;
+  /** 构建出来的 .elf 路径；没有传空串（有它会按 program header 算真实 Flash 占用）。 */
+  elfPath?: string | undefined;
+  /** .elf 的文件字节数；没有传 0（解析不出 program header 时用它粗算）。 */
+  elfSize?: number | undefined;
+  /** 本机 CubeMX 的 db/mcu 目录；没有传 null。 */
+  dbMcuDir?: string | null | undefined;
+  /** .ioc 里用到的引脚名（含 VP_*，内部会过滤）。 */
+  iocPins?: readonly string[] | undefined;
+}
+
+export interface ChipConsistencyResult {
+  blockers: string[];
+  notes: string[];
+  /** 型号反推结果；认不出为 null。 */
+  chip: F1Chip | null;
+  /** 链接脚本 MEMORY；没有链接脚本为 null。 */
+  memory: LinkerMemory | null;
+  /** 引脚表来源（db / builtin / unknown）。 */
+  pins: ChipPinSource;
+}
+
+/**
+ * 四项一致性检查（纯函数，runDoctor 与单测共用）：
+ *   ① 芯片型号 ↔ 工程根启动文件；
+ *   ② 启动文件/芯片 ↔ cmake 源清单里的设备宏；
+ *   ③ 链接脚本 MEMORY 的 FLASH/RAM ↔ 芯片真实容量（大了致命，小了只浪费）；
+ *   ④ .elf 实际大小 ↔ Flash 容量。
+ * 另外把引脚表来源（本机 db 还是内置表、有没有校验过）写进 notes。
+ */
+export function checkChipConsistency(input: ChipConsistencyInput): ChipConsistencyResult {
+  const blockers: string[] = [];
+  const notes: string[] = [];
+  const cpn = input.cpn.trim();
+  const mcuName = (input.mcuName ?? "").trim();
+  const pins = deriveChipPinTable({ cpn, mcuName, dbMcuDir: input.dbMcuDir ?? null });
+  if (cpn !== "") notes.push(...pins.notes);
+
+  let chip: F1Chip | null = null;
+  if (cpn !== "") {
+    const resolved = resolveF1Chip(cpn);
+    chip = resolved.chip;
+    if (chip === null) {
+      notes.push("芯片型号 " + cpn + " 没法按 F1 反推（" + resolved.reason + "）：跳过型号↔启动文件/链接脚本校验");
+    }
+  }
+
+  // ① 型号 ↔ 启动文件
+  const startupFiles = [...(input.startupFiles ?? [])];
+  const startup = startupFiles[0] ?? "";
+  const startupDefine = startup === "" ? "" : deviceDefineFromStartup(startup);
+  if (startup === "") {
+    notes.push("工程根没有 startup_stm32*.s：判断不了启动文件跟芯片是否配套（CubeMX 布局的 HAL 工程根上应该有一个）");
+  } else {
+    if (startupFiles.length > 1) {
+      notes.push(
+        "工程根有多个启动文件（" + startupFiles.join("、") + "）：按 " + startup +
+          " 判断；换过芯片请删掉旧的，否则链接期会撞重复的中断向量表",
+      );
+    }
+    if (chip !== null && startup.toLowerCase() !== chip.startup.toLowerCase()) {
+      blockers.push(
+        "芯片 " + chip.cpn + " 的启动文件应是 " + chip.startup + "，工程根却是 " + startup +
+          "（中断向量表还是别的容量档，烧进去会跑飞）",
+      );
+    }
+  }
+
+  // ② 启动文件/芯片 ↔ 设备宏（cmake 源清单）
+  const cmakeText = input.cmakeText ?? null;
+  const cmakeDefines = cmakeText === null ? [] : deviceDefinesIn(cmakeText);
+  if (cmakeText === null) {
+    notes.push("没有 " + CUBEMX_CMAKE_REL + "：跳过设备宏一致性检查（不是 ST 的 CMake 布局？）");
+  } else if (cmakeDefines.length === 0) {
+    notes.push(CUBEMX_CMAKE_REL + " 里没有 STM32 设备宏（set(MX_Defines_Syms ...)）：跳过设备宏一致性检查");
+  } else if (startupDefine !== "" && !cmakeDefines.includes(startupDefine)) {
+    blockers.push(
+      "启动文件 " + startup + " 对应设备宏 " + startupDefine + "，但 " + CUBEMX_CMAKE_REL + " 里是 " +
+        cmakeDefines.join(" / ") +
+        "（设备宏决定 CMSIS 头的容量档与中断表，错配编出来的是不相干的工程；换芯片后重跑 stm32_generate 让 CubeMX 重写这份清单）",
+    );
+  }
+  const startupMatchesChip = chip !== null && (startup === "" || startup.toLowerCase() === chip.startup.toLowerCase());
+  if (chip !== null && startupMatchesChip && cmakeDefines.length > 0 && !cmakeDefines.includes(chip.deviceDefine)) {
+    blockers.push("芯片 " + chip.cpn + " 的设备宏应是 " + chip.deviceDefine + "，" + CUBEMX_CMAKE_REL + " 里是 " + cmakeDefines.join(" / "));
+  }
+
+  // ③ 链接脚本 MEMORY ↔ 芯片容量
+  const linkerText = input.linkerText ?? null;
+  const memory = linkerText === null ? null : parseLinkerMemory(linkerText);
+  const linkerLabel = (input.linkerName ?? "").trim() === "" ? "链接脚本" : (input.linkerName as string).trim();
+  if (linkerText === null) {
+    notes.push("工程根没有 *_FLASH.ld：跳过 MEMORY 容量校验（链接脚本缺失或命名不同）");
+  } else if (memory !== null) {
+    if (memory.flashBytes === null) {
+      notes.push(linkerLabel + " 里读不到 FLASH 区的 LENGTH（不是 MEMORY 写法？）：没校验 Flash 容量");
+    } else if (chip !== null && chip.flashBytes !== null) {
+      if (memory.flashBytes > chip.flashBytes) {
+        blockers.push(
+          linkerLabel + " 的 FLASH 是 " + kib(memory.flashBytes) + "，超过芯片 " + chip.cpn + " 的 " + kib(chip.flashBytes) +
+            "（链接器会照它放代码，超出物理容量的部分写不进去）",
+        );
+      } else if (memory.flashBytes < chip.flashBytes) {
+        notes.push(
+          linkerLabel + " 只给了 " + kib(memory.flashBytes) + " Flash，芯片 " + chip.cpn + " 有 " + kib(chip.flashBytes) +
+            "：能用，但浪费了 " + kib(chip.flashBytes - memory.flashBytes) + "（按芯片重渲染 <DeviceId>_FLASH.ld 才能用满）",
+        );
+      }
+    }
+    if (chip !== null && chip.ramBytes === null) {
+      notes.push("芯片 " + chip.cpn + " 的 RAM 大小未收录：没校验链接脚本的 RAM 上限");
+    } else if (chip !== null && chip.ramBytes !== null && memory.ramBytes !== null) {
+      if (memory.ramBytes > chip.ramBytes) {
+        blockers.push(
+          linkerLabel + " 的 RAM 是 " + kib(memory.ramBytes) + "，超过芯片 " + chip.cpn + " 的 " + kib(chip.ramBytes) +
+            "（栈/堆一涨就踩到不存在的内存）",
+        );
+      } else if (memory.ramBytes < chip.ramBytes) {
+        notes.push(linkerLabel + " 只给了 " + kib(memory.ramBytes) + " RAM，芯片 " + chip.cpn + " 有 " + kib(chip.ramBytes) + "：浪费了 " + kib(chip.ramBytes - memory.ramBytes));
+      }
+    }
+  }
+
+  // ④ .elf ↔ Flash
+  const elfSize = input.elfSize ?? 0;
+  const headerBytes = input.elfPath === undefined || input.elfPath === "" ? null : elfFlashBytes(input.elfPath);
+  const elfUsed = headerBytes ?? elfSize;
+  const flashLimit = chip?.flashBytes ?? (memory === null ? null : memory.flashBytes);
+  if (elfUsed > 0 && flashLimit !== null) {
+    const usage = headerBytes === null ? ".elf 的 program header 读不出来，按文件大小 " + kib(elfUsed) + " 粗算" : ".elf 要占 " + kib(elfUsed) + " Flash";
+    if (elfUsed > flashLimit) {
+      blockers.push(
+        usage + "，超过 Flash 容量 " + kib(flashLimit) +
+          (chip === null ? "（按链接脚本算）" : "（芯片 " + chip.cpn + "）") +
+          (headerBytes === null
+            ? "：文件大小含调试信息时会偏大，跑一次 stm32_build 看 FLASH 占用再确认；真的超了就别烧"
+            : "：链接器本该拦下，多半是 .ld 跟芯片错配，别烧"),
+      );
+    } else if (elfUsed / flashLimit >= 0.9) {
+      notes.push(".elf 已用 " + String(Math.round((elfUsed / flashLimit) * 100)) + "% Flash（" + kib(elfUsed) + " / " + kib(flashLimit) + "），快满了");
+    }
+  }
+
+  // 引脚表 ↔ .ioc 用到的引脚（只有真拿到本机 db 时才比；内置表不拿来判"引脚不存在"）
+  const iocPins = [...new Set((input.iocPins ?? []).map((pin) => normalizeIocPin(pin)).filter((pin) => pin !== ""))];
+  if (pins.kind === "db" && iocPins.length > 0) {
+    const unknown = iocPins.filter((pin) => !pins.pins.includes(pin));
+    if (unknown.length > 0) {
+      notes.push(
+        ".ioc 里这些引脚不在本机 db 的 " + (mcuName === "" ? cpn : mcuName) + " 封装里：" + unknown.join("、") + "（型号或封装选错了？）",
+      );
+    }
+  }
+
+  return { blockers, notes, chip, memory, pins };
+}
+
+/** 从工程读事实再判：runDoctor 用它把四项一致性接进报告（不 spawn、不写盘）。 */
+export function collectChipConsistency(
+  projectDir: string,
+  options: {
+    cpn: string;
+    mcuName?: string | undefined;
+    elfPath?: string | undefined;
+    elfSize?: number | undefined;
+    dbMcuDir?: string | null | undefined;
+    iocPins?: readonly string[] | undefined;
+  },
+): ChipConsistencyResult {
+  const startupFiles = listStartupFiles(projectDir);
+  let cmakeText: string | null = null;
+  try {
+    cmakeText = readFileSync(join(projectDir, CUBEMX_CMAKE_REL), "utf8");
+  } catch {
+    cmakeText = null;
+  }
+  const linker = findLinkerScript(projectDir);
+  const result = checkChipConsistency({
+    cpn: options.cpn,
+    mcuName: options.mcuName,
+    startupFiles,
+    cmakeText,
+    linkerText: linker === null ? null : linker.text,
+    linkerName: linker === null ? "" : linker.name,
+    elfPath: options.elfPath ?? "",
+    elfSize: options.elfSize ?? 0,
+    dbMcuDir: options.dbMcuDir ?? null,
+    iocPins: options.iocPins,
+  });
+  const names = linkerScriptNames(projectDir);
+  if (names.length > 1) {
+    result.notes.push(
+      "工程根有多个链接脚本（" + names.join("、") + "）：按 " + (linker === null ? (names[0] ?? "") : linker.name) + " 校验；多余的删掉，免得 -T 指错",
+    );
+  }
+  return result;
+}
+
 async function listProcesses(subprocess: SubprocessService, signal?: AbortSignal): Promise<DoctorProcess[]> {
   const outcome = await runCapture(subprocess, {
     argv: ["tasklist", "/NH", "/FO", "CSV"],
@@ -213,9 +570,14 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
   const elfInfo = buildDir === "" ? null : findElf(buildDir);
   const iocPath = findIocFile(projectDir) ?? "";
   const iocWarnings: string[] = [];
+  let iocMcu: { cpn: string; name: string } | null = null;
+  let iocPins: string[] = [];
   if (iocPath !== "") {
     try {
-      iocWarnings.push(...summarizeIoc(readFileSync(iocPath, "utf8"), iocPath).warnings);
+      const summary = summarizeIoc(readFileSync(iocPath, "utf8"), iocPath);
+      iocWarnings.push(...summary.warnings);
+      iocMcu = { cpn: summary.mcu.cpn, name: summary.mcu.name };
+      iocPins = summary.pins.map((pin) => pin.pin);
     } catch (error) {
       iocWarnings.push("读不了 .ioc：" + (error instanceof Error ? error.message : String(error)));
     }
@@ -261,6 +623,20 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
   }
   if (iocPath === "") notes.push("工程根目录里没有 .ioc：generate/ioc_inspect 用不了");
   for (const warning of iocWarnings) blockers.push(".ioc：" + warning);
+  // 芯片一致性：型号 ↔ 启动文件 ↔ 设备宏 ↔ .ld MEMORY ↔ .elf（没有 .ioc 就没有芯片主张，跳过）。
+  if (iocMcu !== null && iocMcu.cpn !== "") {
+    progress("核对芯片/启动文件/设备宏/链接脚本是否配套…");
+    const chipCheck = collectChipConsistency(projectDir, {
+      cpn: iocMcu.cpn,
+      mcuName: iocMcu.name,
+      elfPath: elfInfo === null ? "" : elfInfo.path,
+      elfSize: elfInfo === null ? 0 : elfInfo.size,
+      dbMcuDir: findMcuDbDir(config.cubeMxRoots),
+      iocPins,
+    });
+    blockers.push(...chipCheck.blockers);
+    notes.push(...chipCheck.notes);
+  }
   if (blockers.length === 0) notes.push("环境就绪：工具链齐全、探针没被占、.ioc 没有致命告警");
 
   const message = blockers.length === 0

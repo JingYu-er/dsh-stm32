@@ -23,6 +23,16 @@ import { fileURLToPath } from "node:url";
 import { DSH_FIRMWARE_DIR_NAME, type FirmwareExtraDir } from "../data/firmware-packages.js";
 import { firmwareExtraDirs } from "./firmware-install.js";
 import { copyFileLong, copyTreeLong, mkdirTrackedLong } from "./fs-longpath.js";
+import {
+  describeHalChip,
+  LEGACY_LINKER_SCRIPT,
+  pointLinkerFlagAt,
+  renderIoc,
+  renderLinkerScript,
+  renderStartupAndDefine,
+  resolveHalChip,
+  type HalChipFacts,
+} from "./hal-chip.js";
 import { describeDroppedPlaceholder, detectVscodeFill, fillVscodeTemplate } from "./vscode-config.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
@@ -38,6 +48,11 @@ const STATE_DIR = ".dsh-stm32";
 export interface ScaffoldRequest {
   targetDir: string;
   projectName?: string;
+  /**
+   * 芯片型号（HAL 路线必给的"具体型号"，例如 STM32F103RCT6）。
+   * 缺省按 DEFAULT_HAL_MCU（STM32F103C8T6）建，与加参数之前的行为一致。
+   */
+  mcu?: string;
   firmwarePackage?: string;
   cubeMxRoots?: string[];
   /** 目标目录已有文件时是否继续（默认 false，宁可拒绝也不覆盖别人的工程）。 */
@@ -61,6 +76,14 @@ export interface ScaffoldReport {
   durationMs: number;
   warnings: string[];
   message: string;
+  /** 这次按哪款芯片建的（归一化后的完整型号）。 */
+  mcu?: string;
+  /** 从固件包拷进来的启动文件，例如 startup_stm32f103xe.s。 */
+  startup?: string;
+  /** 工程里用的设备宏，例如 STM32F103xE。 */
+  deviceDefine?: string;
+  /** 按芯片命名并渲染的链接脚本，例如 STM32F103RCTx_FLASH.ld。 */
+  linkerScript?: string;
 }
 
 /** 模板目录随插件走：lib/engine/scaffold.js → ../../templates/scaffold。 */
@@ -145,12 +168,18 @@ export function cleanupAfterFailure(targetDir: string, targetExistedBefore: bool
   return removed === 0 ? "" : "已清掉本次新建的 " + String(removed) + " 个空目录。";
 }
 
-/** 目录里是不是一个能拿来建工程的固件包（三条判据与 CubeMX 包管理器装的包一致）。 */
+/**
+ * 目录里是不是一个能拿来建工程的固件包（三条判据与 CubeMX 包管理器装的包一致）。
+ *
+ * 第三条只看 gcc 目录在不在，不再点名 startup_stm32f103xb.s：那是 C8T6 的启动文件，
+ * 用它当判据等于「不是 C8T6 的工程就别想建」。具体型号要哪个启动文件由
+ * createProjectScaffold 按芯片查（缺了会列出包里真实带的那些）。
+ */
 function isUsableFirmwareRoot(candidate: string): boolean {
   return (
     fs.existsSync(path.join(candidate, "Drivers", "STM32F1xx_HAL_Driver")) &&
     fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Include")) &&
-    fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates", "gcc", "startup_stm32f103xb.s"))
+    fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates", "gcc"))
   );
 }
 
@@ -286,8 +315,8 @@ function templateTargets(tpl: string, projectName: string): Map<string, string> 
 }
 
 /** 被模板/固件包直接覆盖的工程文件（Drivers/ 整棵树不在内：那是 ST 源码，不是用户文件）。 */
-function overwriteTargetsFor(tpl: string, projectName: string): string[] {
-  return [...templateTargets(tpl, projectName).values(), "startup_stm32f103xb.s", "Core/Src/system_stm32f1xx.c"];
+function overwriteTargetsFor(writtenRels: readonly string[], facts: HalChipFacts): string[] {
+  return [...writtenRels, facts.startup, "Core/Src/system_stm32f1xx.c", facts.linkerScript];
 }
 
 /** 备份说明（写进 warnings，卡片上第一眼就能看到原件在哪）。 */
@@ -304,6 +333,13 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   const targetDir = path.resolve(request.targetDir);
   const projectName = request.projectName ?? path.basename(targetDir);
   const firmwarePackage = request.firmwarePackage ?? DEFAULT_FIRMWARE_PACKAGE;
+  // 芯片事实先算出来：连失败报告都要说清"本来是按哪款芯片建"。
+  const chip = resolveHalChip(request.mcu);
+  const facts = chip.facts;
+  const chipFields = (): Partial<ScaffoldReport> =>
+    facts === null
+      ? {}
+      : { mcu: facts.mcu, startup: facts.startup, deviceDefine: facts.deviceDefine, linkerScript: facts.linkerScript };
   const fail = (message: string, warnings: string[] = []): ScaffoldReport => ({
     ok: false,
     targetDir,
@@ -315,10 +351,14 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     durationMs: Date.now() - startedAt,
     warnings,
     message,
+    ...chipFields(),
   });
 
   const refusal = preflightTarget({ targetDir, projectName, route: "hal", ...(request.overwrite === undefined ? {} : { overwrite: request.overwrite }) });
   if (refusal !== null) return fail(refusal);
+
+  // 1) 芯片：认不出 / 缺 RAM 就拒绝（reason 是人话，直接给用户看）
+  if (facts === null) return fail("认不出芯片型号：" + chip.reason);
 
   const tpl = templateDir();
   if (!fs.existsSync(tpl)) return fail("插件模板目录缺失：" + tpl + "（重新安装插件）");
@@ -331,10 +371,68 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     );
   }
 
+  // 2) 固件包里必须真有这款芯片的启动文件与设备头：认不出就停在这里，别建出个编译不过的工程
+  //    （startup 是 copy 进工程的，设备头随 Drivers/ 整树拷过来，所以只校验存在性）。
+  const deviceDir = path.join(firmware.root, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx");
+  const templatesDir = path.join(deviceDir, "Source", "Templates");
+  const gccDir = path.join(templatesDir, "gcc");
+  const startupSource = path.join(gccDir, facts.startup);
+  const headerSource = path.join(deviceDir, "Include", facts.deviceHeader);
+  if (!fs.existsSync(startupSource)) {
+    const available = fs.existsSync(gccDir)
+      ? fs.readdirSync(gccDir).filter((name) => /^startup_.*\.s$/u.test(name)).sort()
+      : [];
+    return fail(
+      "固件包里没有 " + facts.mcu + " 需要的启动文件 " + facts.startup + "：" + startupSource +
+        "。这份固件包真实带的启动文件：" + (available.length === 0 ? "（一个都没有）" : available.join("、")),
+    );
+  }
+  if (!fs.existsSync(headerSource)) {
+    return fail(
+      "固件包里没有 " + facts.deviceDefine + " 的设备头 " + facts.deviceHeader + "：" + headerSource +
+        "。设备头随 Drivers/ 一起复制，缺它说明这份固件包不完整（换一个版本的 " + firmwarePackage + "）。",
+    );
+  }
+
+  // 3) 模板全部读进内存并按芯片渲染好——这一步一个字节都不写：
+  //    渲染失败只可能是模板被改过，宁可在动手前拒绝，也不留下一半 C8T6 一半新芯片的工程。
+  const vscodeFill = detectVscodeFill(request.binDirs ?? []);
+  const droppedVscode = new Set<string>();
+  const written: Array<{ rel: string; text: string }> = [];
+  let linkerScriptText = "";
+  try {
+    // 链接脚本按芯片渲染；模板里那份（C8T6 的 64K/20K）只作渲染源 + 蓝丸的兼容副本。
+    linkerScriptText = renderLinkerScript(fs.readFileSync(path.join(tpl, LEGACY_LINKER_SCRIPT), "utf8"), facts);
+    for (const [source, destRel] of templateTargets(tpl, projectName)) {
+      // 旧名的链接脚本只在蓝丸上留一份：别的芯片写旧名 = 一份骗人的内存布局。
+      if (destRel === LEGACY_LINKER_SCRIPT && !facts.keepLegacyLinkerScript) continue;
+      let text = fs.readFileSync(source, "utf8");
+      if (destRel !== ".gitignore" && destRel !== LEGACY_LINKER_SCRIPT) {
+        text = text.split("__PROJECT_NAME__").join(projectName);
+      }
+      if (destRel === projectName + ".ioc") text = renderIoc(text, facts);
+      if (destRel === "cmake/gcc-arm-none-eabi.cmake" || destRel === "cmake/starm-clang.cmake") {
+        text = pointLinkerFlagAt(text, facts);
+      }
+      if (destRel === "cmake/stm32cubemx/CMakeLists.txt") text = renderStartupAndDefine(text, facts);
+      if (destRel.startsWith(".vscode/")) {
+        const filled = fillVscodeTemplate(text, vscodeFill);
+        text = filled.text;
+        for (const token of filled.dropped) droppedVscode.add(token);
+      }
+      written.push({ rel: destRel, text });
+    }
+  } catch (error) {
+    return fail(
+      "没写任何文件：模板按芯片渲染失败（" + String((error as Error).message) + "）。目标目录 " + targetDir + " 未被改动。",
+    );
+  }
+  const templateFiles = written.length;
+
   // —— 写盘从这里开始：先把将被覆盖的同名文件备份；备份失败就一个字节都不写 ——
   let backup: OverwriteBackup;
   try {
-    backup = backupBeforeOverwrite(targetDir, overwriteTargetsFor(tpl, projectName), "scaffold");
+    backup = backupBeforeOverwrite(targetDir, overwriteTargetsFor(written.map((item) => item.rel), facts), "scaffold");
   } catch (error) {
     return fail(
       "没写任何文件：覆盖前的备份失败（" + String((error as Error).message) + "）。目标目录 " + targetDir + " 未被改动。",
@@ -348,42 +446,30 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   // 缺它工程照建，只是 git 状态会多出 build/；warning 里说明白，别让人以为是装坏了。
   const gitignoreMissing = !fs.existsSync(path.join(tpl, ".gitignore"));
   const createdDirs: string[] = [];
-  const vscodeFill = detectVscodeFill(request.binDirs ?? []);
-  const droppedVscode = new Set<string>();
-  let templateFiles = 0;
   let driverFiles = 0;
   try {
     mkdirTracked(targetDir, createdDirs);
     mkdirTracked(path.join(targetDir, "Core", "Src"), createdDirs);
     mkdirTracked(path.join(targetDir, "Core", "Inc"), createdDirs);
 
-    // 1) 模板快照：CMake 工程文件 / 链接脚本 / .vscode / .ioc（只替换工程名）
+    // 1) 模板快照（已按芯片渲染）：CMake 工程文件 / 链接脚本 / .vscode / .ioc
     //    .vscode 里的调试/构建路径按本机探测填（模板只留占位符，绝不写死开发机的 D:/… 路径）。
-    for (const [source, destRel] of templateTargets(tpl, projectName)) {
-      let text = fs.readFileSync(source, "utf8");
-      if (destRel !== ".gitignore" && destRel !== "STM32F103XX_FLASH.ld") {
-        text = text.split("__PROJECT_NAME__").join(projectName);
-      }
-      if (destRel.startsWith(".vscode/")) {
-        const filled = fillVscodeTemplate(text, vscodeFill);
-        text = filled.text;
-        for (const token of filled.dropped) droppedVscode.add(token);
-      }
-      const dest = path.join(targetDir, destRel);
+    for (const item of written) {
+      const dest = path.join(targetDir, item.rel);
       mkdirTracked(path.dirname(dest), createdDirs);
-      fs.writeFileSync(dest, text);
-      templateFiles += 1;
+      fs.writeFileSync(dest, item.text);
     }
+    // 链接脚本：按芯片命名的那份（蓝丸另有一份旧名兼容副本，已经作为模板项写过了）
+    fs.writeFileSync(path.join(targetDir, facts.linkerScript), linkerScriptText);
 
-    // 2) 固件包：Drivers 全量 + startup + system（与 GUI 新工程逐字节一致）
+    // 2) 固件包：Drivers 全量 + 本芯片的 startup + system（与 GUI 新工程逐字节一致）
     driverFiles = copyTreeLong(path.join(firmware.root, "Drivers"), path.join(targetDir, "Drivers"), DRIVER_SKIP_PREFIXES, createdDirs);
-    const templatesDir = path.join(firmware.root, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates");
-    copyFileLong(path.join(templatesDir, "gcc", "startup_stm32f103xb.s"), path.join(targetDir, "startup_stm32f103xb.s"));
+    copyFileLong(startupSource, path.join(targetDir, facts.startup));
     copyFileLong(path.join(templatesDir, "system_stm32f1xx.c"), path.join(targetDir, "Core", "Src", "system_stm32f1xx.c"));
   } catch (error) {
     const cleanup = cleanupAfterFailure(targetDir, targetExistedBefore, createdDirs);
     return fail(
-      "写盘失败（已写 " + String(templateFiles) + " 个模板文件、" + String(driverFiles) + " 个固件文件）：" +
+      "写盘失败（已写 " + String(written.length) + " 个模板文件、" + String(driverFiles) + " 个固件文件）：" +
         String((error as Error).message) + "；路径：" + targetDir + "。" + cleanup,
       backupWarnings,
     );
@@ -392,6 +478,13 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   const iocPath = path.join(targetDir, projectName + ".ioc");
   const warnings: string[] = [];
   if (backupNote !== null) warnings.push(backupNote);
+  for (const note of facts.notes) warnings.push(note);
+  if (!facts.keepLegacyLinkerScript) {
+    warnings.push(
+      "链接脚本按芯片命名为 " + facts.linkerScript + "（cmake 的 -T 已指到它）；旧名 " + LEGACY_LINKER_SCRIPT +
+        " 只在 C8T6 上留兼容副本，别的芯片写它是错的内存布局。",
+    );
+  }
   if (gitignoreMissing) {
     warnings.push(
       "插件包里没有 .gitignore（npm 打包会排除它）：工程功能不受影响，只是 git 状态会多出 build/ 目录。" +
@@ -414,8 +507,12 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     driverFiles,
     durationMs: Date.now() - startedAt,
     warnings,
+    mcu: facts.mcu,
+    startup: facts.startup,
+    deviceDefine: facts.deviceDefine,
+    linkerScript: facts.linkerScript,
     message:
       "工程骨架已建好（" + String(templateFiles) + " 个工程文件 + " + String(driverFiles) + " 个固件文件）：" + targetDir +
-      (backupNote === null ? "" : "；" + backupNote),
+      "；芯片 " + describeHalChip(facts) + (backupNote === null ? "" : "；" + backupNote),
   };
 }

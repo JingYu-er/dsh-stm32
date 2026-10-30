@@ -14,8 +14,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CMSIS_FAMILIES, cmsisTemplatePlan, startupChoiceFor, type StartupChoice } from "../data/cmsis-sources.js";
-import { cacheRootInfo, checkCacheEntry, findCacheEntry, readCacheIndex, sha256OfFile, upsertCacheEntry, type CacheEntry, type CacheFile } from "./cache.js";
+import { cacheRootInfo, checkCacheEntry, readCacheIndex, resolveCacheEntry, sha256OfFile, upsertCacheEntry, type CacheEntry, type CacheFile } from "./cache.js";
 import { fetchAll, type FetchOptions, type FetchOutcome } from "./fetch.js";
+import { planRegisterClock, renderClockInit } from "./register-clock.js";
+import { planRegisterLinker, renderLinkerScript } from "./register-linker.js";
 import { backupBeforeOverwrite, backupWarning, cleanupAfterFailure, mkdirTracked, preflightTarget, templateDir, type OverwriteBackup } from "./scaffold.js";
 
 /** 寄存器版模板目录：lib/engine/register-template.js → ../../templates/register。 */
@@ -55,7 +57,7 @@ export function resolveStartupChoice(request: { mcu?: string; family?: string })
 export interface TemplateResult {
   ok: boolean;
   family: string;
-  /** 缓存条目 id，例如 cmsis:F1:startup_stm32f103xb。 */
+  /** 缓存条目 id，例如 cmsis:F1:103xb（0.1 是 cmsis:F1:startup_stm32f103xb）。 */
   id: string;
   cacheRoot: string;
   /** 模板根目录（里面是 Drivers/CMSIS 布局）；失败时是空串。 */
@@ -104,7 +106,9 @@ export async function ensureCmsisTemplate(request: TemplateRequest = {}): Promis
   const { index, error: indexError } = readCacheIndex(env);
   if (indexError !== null) request.onProgress?.(indexError);
 
-  const existing = findCacheEntry(index, "cmsis", plan.id);
+  // 用别名解析而不是精确匹配：0.1 建过的 cmsis:F1:startup_stm32f103xb 条目内容完全一样，
+  // 认不出就会白下一遍 14 个文件（还可能在慢网里失败）。
+  const existing = resolveCacheEntry(index, plan.id);
   if (existing !== null) {
     const health = checkCacheEntry(existing);
     if (health.ok) {
@@ -280,6 +284,16 @@ export interface RegisterProjectReport {
   family: string;
   startup: string;
   deviceDefine: string;
+  /** ST 器件代号，例如 STM32F103C8Tx（链接脚本名用）。 */
+  deviceId: string;
+  /** 按型号渲染的链接脚本文件名，例如 STM32F103C8Tx_FLASH.ld。 */
+  linkerScript: string;
+  flashBytes: number;
+  ramBytes: number;
+  /** clock_init() 拿到的 SYSCLK（Hz）。 */
+  sysclkHz: number;
+  /** 时钟摘要，例如 72 MHz（HSE 8 MHz × 9；…）。 */
+  clockSummary: string;
   cacheRoot: string;
   cacheHit: boolean;
   templateFiles: number;
@@ -289,8 +303,17 @@ export interface RegisterProjectReport {
   message: string;
 }
 
-/** 从 HAL 骨架模板里借来的**与 HAL 无关**的文件（工具链、presets、链接脚本、.gitignore）。 */
-const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "STM32F103XX_FLASH.ld", "cmake/gcc-arm-none-eabi.cmake", "openocd.cfg"];
+/**
+ * 从 HAL 骨架模板里借来的**与 HAL 无关**的文件（工具链、presets、.gitignore）。
+ *
+ * 链接脚本不在这张表里：它是寄存器路线里唯一必须按型号改的模板（ST 那份写死
+ * 64K FLASH / 20K RAM），所以从 HAL 骨架读原文本、改 MEMORY 两行、另存为
+ * <DeviceId>_FLASH.ld（见 register-linker.ts）。拷贝数不变，工程文件总数还是 7 个。
+ */
+const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "cmake/gcc-arm-none-eabi.cmake", "openocd.cfg"];
+
+/** 链接脚本的"源模板"（HAL 骨架里那份，按型号渲染后另存）。 */
+const LINKER_TEMPLATE_FILE = "STM32F103XX_FLASH.ld";
 
 function countFiles(root: string): number {
   let count = 0;
@@ -322,6 +345,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     family: "",
     startup: "",
     deviceDefine: "",
+    deviceId: "",
+    linkerScript: "",
+    flashBytes: 0,
+    ramBytes: 0,
+    sysclkHz: 0,
+    clockSummary: "",
     cacheRoot: cacheRootInfo(request.env ?? process.env).root,
     cacheHit: false,
     templateFiles: 0,
@@ -356,6 +385,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
 
   const choice = resolveStartupChoice({ ...(request.mcu === undefined ? {} : { mcu: request.mcu }), ...(request.family === undefined ? {} : { family: request.family }) });
   if (choice === null || cmsisTemplatePlan(choice) === null) return fail("内部错误：缓存条目对应的下载清单没了（" + template.family + "）。");
+  const chip = choice.chip;
+  if (chip === undefined) return fail("内部错误：缓存条目没带回芯片信息（" + template.family + "）。");
+  // 链接脚本与时钟初始化都按型号现算：寄存器路线没有 CubeMX 替我们算这两样，
+  // 写死 C8T6 的 64K/20K 与 8 MHz HSI 会让 F103ZE / F100C6 这类芯片要么链不下、要么跑得莫名其妙。
+  const linker = planRegisterLinker(chip);
+  const clock = planRegisterClock(chip);
   const spec = CMSIS_FAMILIES[template.family];
   if (spec === undefined) return fail("内部错误：这一代没有设备头规格（" + template.family + "）。");
   const familyDir = spec.deviceDefinePrefix + "xx";
@@ -373,6 +408,8 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   const required = [
     path.join(regTpl, "CMakeLists.txt"),
     path.join(regTpl, "Core", "Src", "main.c"),
+    // 链接脚本模板：按型号渲染的那份是从它改出来的，缺了就只能建 C8T6 尺寸的工程
+    path.join(halTpl, LINKER_TEMPLATE_FILE),
     ...SHARED_TEMPLATE_FILES.filter((rel) => rel !== ".gitignore").map((rel) => path.join(halTpl, rel)),
   ];
   const missingRequired = required.filter((source) => !fs.existsSync(source));
@@ -391,24 +428,39 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   // 覆盖前先备份将被覆盖的同名文件；备份失败就一个字节都不写（否则用户的 main.c 就没了）。
   let backup: OverwriteBackup;
   try {
-    backup = backupBeforeOverwrite(targetDir, ["CMakeLists.txt", "Core/Src/main.c", ...SHARED_TEMPLATE_FILES], "register");
+    backup = backupBeforeOverwrite(targetDir, ["CMakeLists.txt", "Core/Src/main.c", linker.fileName, ...SHARED_TEMPLATE_FILES], "register");
   } catch (error) {
     return fail("没写任何文件：覆盖前的备份失败（" + String((error as Error).message) + "）。目标目录 " + targetDir + " 未被改动。");
   }
   const backupNote = backupWarning(backup);
 
-  // 1) 寄存器版 CMakeLists：替换四个占位符
+  // 1) 寄存器版 CMakeLists / main.c：替换七个占位符
+  const chipBanner = (chip.cpn.toUpperCase().startsWith("STM32") ? chip.cpn : "STM32F" + clock.line + "（" + chip.group + " 档）")
+    + " · " + linker.summary + " · SYSCLK " + String(Math.round(clock.sysclkHz / 1e6)) + " MHz";
   const replacements: Record<string, string> = {
     __PROJECT_NAME__: projectName,
     __FAMILY_DIR__: familyDir,
     __STARTUP_FILE__: template.startup,
     __DEVICE_DEFINE__: template.deviceDefine,
+    __LINKER_SCRIPT__: linker.fileName,
+    __MCU_BANNER__: chipBanner,
+    __CLOCK_INIT__: renderClockInit(clock),
   };
   const fill = (text: string): string => {
     let out = text;
     for (const [key, value] of Object.entries(replacements)) out = out.split(key).join(value);
     return out;
   };
+
+  // 链接脚本先渲染（纯字符串替换）：模板被人改过导致四处标记缺一处时，要在写盘之前就拒绝，
+  // 而不是生成一个 RAM/Flash 尺寸错的工程——那种工程能编译、烧进去才崩。
+  const linkerText = renderLinkerScript(linker, fs.readFileSync(path.join(halTpl, LINKER_TEMPLATE_FILE), "utf8"));
+  if (linkerText === null) {
+    return fail(
+      "链接脚本模板里没找到该改的四处（MEMORY 的 RAM/FLASH 两行 + 注释两行）：" + path.join(halTpl, LINKER_TEMPLATE_FILE) +
+        "。这是插件模板被改坏，不是工程问题；带插件版本号反馈最有效。一个字节都没写。",
+    );
+  }
 
   const targetExistedBefore = fs.existsSync(targetDir);
   const driversExistedBefore = fs.existsSync(path.join(targetDir, "Drivers"));
@@ -421,10 +473,10 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     // 1) CMakeLists.txt
     fs.writeFileSync(path.join(targetDir, "CMakeLists.txt"), fill(fs.readFileSync(path.join(regTpl, "CMakeLists.txt"), "utf8")), "utf8");
 
-    // 2) 寄存器版 main.c（PC13 蓝丸示例，无占位符）
-    fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8"), "utf8");
+    // 2) 寄存器版 main.c：芯片注释 + 按型号生成的 clock_init()
+    fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fill(fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8")), "utf8");
 
-    // 3) 与 HAL 无关的公共文件：工具链 / presets / 链接脚本（.gitignore 缺失时跳过，见上面 missingOptional）
+    // 3) 与 HAL 无关的公共文件：工具链 / presets（.gitignore 缺失时跳过，见上面 missingOptional）
     for (const rel of SHARED_TEMPLATE_FILES) {
       if (rel === ".gitignore" && missingOptional.includes(rel)) continue;
       const dest = path.join(targetDir, rel);
@@ -433,7 +485,11 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
       templateFiles += 1;
     }
 
-    // 4) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
+    // 4) 按型号渲染的链接脚本：MEMORY 两行 + 注释两行换成本芯片的真实 Flash/RAM
+    fs.writeFileSync(path.join(targetDir, linker.fileName), linkerText, "utf8");
+    templateFiles += 1;
+
+    // 5) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
     fs.cpSync(driversSrc, path.join(targetDir, "Drivers"), { recursive: true });
   } catch (error) {
     // Drivers 整棵是本次拷的（原来没有）→ 可以整棵删；原来就有（覆盖场景）则一个都不动。
@@ -464,7 +520,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   warnings.push(
     "模板里的 LED 是蓝丸的 PC13；换板子改 Core/Src/main.c 顶部的 LED_PORT / LED_PIN。",
     "寄存器版没有 .ioc：不需要 CubeMX，也不需要固件包；要换成 HAL 版就用 stm32_project_create route=hal。",
+    "链接脚本已按型号渲染：" + linker.fileName + "（" + linker.summary + "），拷自 templates/scaffold/" + LINKER_TEMPLATE_FILE + "。",
+    "时钟在 main.c 的 clock_init() 里现配：" + clock.summary + "（HSE 不起振就自动退回 HSI/2 ×" + String(clock.hsiMul) + "）。",
   );
+  // 链接脚本/时钟的告警来自按型号推导本身（RAM 用了保守下限、F100 没有延迟位、HSI 到不了上限…），
+  // 用户需要知道"为什么是 64 MHz 而不是 72"。
+  warnings.push(...linker.warnings, ...clock.warnings);
   if (template.cacheHit) warnings.push("这次用的是缓存模板（" + template.entryDir + "），没有联网。");
   else warnings.push("模板已下载到缓存（" + template.entryDir + "），以后再建工程不联网。");
 
@@ -477,6 +538,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     family: template.family,
     startup: template.startup,
     deviceDefine: template.deviceDefine,
+    deviceId: linker.deviceId,
+    linkerScript: linker.fileName,
+    flashBytes: linker.flashBytes,
+    ramBytes: linker.ramBytes,
+    sysclkHz: clock.sysclkHz,
+    clockSummary: clock.summary,
     cacheRoot: template.cacheRoot,
     cacheHit: template.cacheHit,
     templateFiles,
@@ -485,6 +552,7 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     warnings,
     message:
       "寄存器版工程已建好（" + String(templateFiles) + " 个工程文件 + " + String(driverFiles) + " 个 CMSIS 文件）：" + targetDir +
+      "；芯片 " + chipBanner +
       (backupNote === null ? "" : "；" + backupNote),
   };
 }

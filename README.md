@@ -1,15 +1,15 @@
 # dsh-stm32
 
-> 让 DSH 接管 STM32F103C8T6 的整条开发链：探测工具链 → 建工程 → 改 .ioc → 生成代码 → 编译 → 调试 → 烧录。
+> 让 DSH 接管 **STM32F1 全系**（F100/101/102/103/105/107）的整条开发链：探测工具链 → 建工程 → 改 .ioc（含时钟） → 生成代码 → 编译 → 调试 → 烧录。
 
-**English:** STM32F103C8T6 toolchain for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it.
+**English:** STM32F1 toolchain (F100/101/102/103/105/107) for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it.
 
 [English](./README_EN.md) · [快速开始](#快速开始最小验证空目录到灯在闪) · [功能一览](#功能一览) · [工具参考](#工具参考) · [斜杠命令](#斜杠命令) · [设计要点](#设计要点) · [已知限制](#已知限制) · [排错](#排错) · [规格书](docs/dsh-stm32-plugin-规格.md)
 
 [![GitHub stars](https://img.shields.io/github/stars/JingYu-er/dsh-stm32?color=4a6cf7)](https://github.com/JingYu-er/dsh-stm32)
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
-[![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#已知限制)
+[![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 20 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
@@ -68,8 +68,9 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：374 个离线用例，不需要板子
+npm test                            # 可选：418 个离线用例、29 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
+npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -123,7 +124,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器（`TIM2_CNT`、`USART1_SR`、`ADC1_DR`…），或 `stm32_debug_eval` 读变量 | 按物理地址读寄存器已实测（`GPIOC_ODR` / `AFIO_MAPR`） |
 | 出问题要看现场 | `stm32_debug_run` 停在 `main` 抓一次；要连续调就开 `stm32_debug_session` + `stm32_debug_eval` | 已实测（停在 `main () at main.c:67`） |
 
-所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——芯片只支持 F103C8T6、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
+所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——芯片支持 F1 全系（F100/101/102/103/105/107，本机验证板是 C8T6）但只到 F1、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
 
 ## 功能一览
 
@@ -133,7 +134,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
 | 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
 | 选技术路线 | `stm32_route_plan`：先按**这个工程**的需求，把每个外设的 HAL 版与寄存器版代价摆出来（效率 / 可读性 / 排错），再告诉你缺的是「能代装的」还是「只能人装的」（CubeMX 是 GUI 向导 + 要 ST 账号、固件包只由 CubeMX 包管理器维护） |
-| 从零建工程 | `stm32_project_create`：`route: "hal"` 用模板快照 + 固件包 Drivers（与 CubeMX GUI 新建的工程逐字节一致）；`route: "register"` 建不用 CubeMX 的寄存器版工程，CMSIS 模板首次从网上下到缓存、之后复用（每个文件都钉了上游 sha256，改过就拒绝落盘）；两条路线都会带一份 `openocd.cfg`（CMSIS-DAP + `hla_swd` + 2 MHz） |
+| 从零建工程 | `stm32_project_create`：`route: "hal"` 用模板快照 + 固件包 Drivers（与 CubeMX GUI 新建的工程逐字节一致）；`route: "register"` 建不用 CubeMX 的寄存器版工程，CMSIS 模板首次从网上下到缓存、之后复用（每个文件都钉了上游 sha256，改过就拒绝落盘）；`mcu` 指定型号（两条路线都吃；HAL 路线按型号渲染启动文件 / 设备宏 / `<DeviceId>_FLASH.ld`）；两条路线都会带一份 `openocd.cfg`（CMSIS-DAP + `hla_swd` + 2 MHz） |
 | 导出工程 | `stm32_project_export`：源码打成一个 zip（默认不带 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`），可选把 `.elf` 一起带上，并写一份开箱 README |
 | `.ioc` 事务 | `stm32_ioc_inspect`（只读解析）→ `stm32_ioc_plan`（算 diff，不写盘）→ `stm32_ioc_apply`（SHA 校验 + 备份 + 回滚） |
 | 只改 USER CODE | `stm32_code_patch`：只写 `/* USER CODE BEGIN X */` 与 `END X` 之间，块外逐字节不动 |
@@ -154,7 +155,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
-| `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号，CMSIS 头与启动文件从缓存取）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
+| `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——F1 全系都吃；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
 | `stm32_firmware_install` | 缺固件包时的一条龙：`dryRun`（默认）只出计划——装到哪、下哪两个源码仓、几条自检判据；`dryRun: false` + `confirm: true` 才真下（GitHub 上 HAL 驱动与 CMSIS 设备支持两个源码包 + 内核头，合计约 2 MB），组装成与官方同构的 `STM32Cube_FW_<族>_V<版本>` 包（自写 `package.xml`）并过五条自检。已有官方包时什么都不做；默认装到 `<CubeMX 根>/dsh-firmware`（不是 `Repository`——塞自造版本号会被 CubeMX 静默忽略），生成时由 `stm32_generate` 用 `setCustomFWPath` 指过去 |
@@ -164,7 +165,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_ioc_inspect` | 解析 MCU 型号、引脚/信号/标签、外设与中断、时钟树、工程设置；会报「没开 Serial Wire 会生成 `SWJ_DISABLE`」这类致命风险 |
-| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO、一键补 Serial Wire |
+| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率） |
 | `stm32_ioc_apply` | 必须带 `planId`；写盘前再核 SHA（中途被手改就拒绝），备份后原子替换，写完重新解析校验，不过自动回滚。支持 `rollbackFrom` |
 
 ### 代码与构建
@@ -210,6 +211,12 @@ pnpm add "link:D:\path\to\dsh-stm32"
 - **烧前守卫。** 如果 `.ioc` 的 SYS 调试口不是 Serial Wire（PA13/PA14 缺失或被设成 `No_Debug`），CubeMX 会生成 `__HAL_AFIO_REMAP_SWJ_DISABLE()`——烧进去 SWD 立刻失联，只能 BOOT0 救砖。这种工程 `stm32_flash` 直接拒绝；确实要烧得显式传 `allowNoDebug: true`。
 - **探针只有一块。** 烧录、调试、后台会话同一时刻只能有一个；`build` / `flash` / `debug_run` / `generate` 开跑前会先把占着探针的会话关掉。
 
+## 芯片、链接脚本与时钟
+
+- **型号是参数，不是常量。** `stm32_project_create` / `stm32_generate` 按 `mcu` 一起换三样：启动文件（`startup_stm32f103xe.s`）、设备宏（`STM32F103xE`）、链接脚本（`STM32F103RCTx_FLASH.ld`）。HAL 路线走 `src/engine/hal-chip.ts`（`resolveHalChip()` + `renderStartupAndDefine` / `renderLinkerScript` / `renderIoc`），寄存器路线走 `src/data/stm32f1.ts`（`resolveF1Chip()`，14 个容量档，每个启动文件都钉了上游 sha256）。认不出的型号直接给原因，不猜一个上游不存在的启动文件名。
+- **链接脚本按 `DeviceId` 命名：`<DeviceId>_FLASH.ld`。** C8T6 → `STM32F103C8Tx_FLASH.ld`（64 KiB Flash / 20 KiB RAM），RCT6 → `STM32F103RCTx_FLASH.ld`（256 / 48），F107VCT6 → `STM32F107VCTx_FLASH.ld`（256 / 64）。模板里那份旧的 `STM32F103XX_FLASH.ld` 只作 C8T6 的兼容副本；CMake 的 `-T` 一律指向按型号渲染的那份（`pointLinkerFlagAt()` 把工具链文件里的旧名改指过去，避免两个 `-T` 让 ld 取错脚本）。
+- **时钟就近，不可达就明说。** `stm32_ioc_plan` 的 `clock: { targetHz }`（也可 `pllMul` 钉死倍频、`pllSource` 选 HSE / HSI）枚举全部可行的 PLL 组合，取 |SYSCLK − 目标| 最小的一档，并把差距写进结论：要 60 MHz 时 F1 的 PLL 只能整数倍频、HSE 8 MHz 拼不出这一档，于是选 64 MHz 并标注「不可达，已选 64 MHz（+4 MHz）」（同距取更高档）。同一次 plan 里把 `SYSCLKFreq_VALUE` / `HCLKFre` / `PLLMUL` / APB1·APB2·ADC 分频这些派生键**全量重算**——只改 SYSCLK 不动它们，CubeMX 会按旧值重算或干脆不认；同时列出逐外设频率、UART 波特率的整除误差与几个备选档。超限（SYSCLK > 72 MHz、APB1 > 36 MHz、ADC > 14 MHz、USB 要 48 MHz 却不在 PLLCLK/1.5 这条路上）时**一个键都不写**。
+- **烧前五项一致。** `stm32_doctor` 核对「`.ioc` 型号 ↔ 启动文件名 ↔ cmake 里的设备宏 ↔ `.ld` 的 MEMORY 容量 ↔ `.elf` 的 Flash 占用」，任一错配报 blocker。`.elf` 那份占用是读 ELF program header 的 `p_filesz` 累加，不是文件大小——带 `-g3` 时 20 KiB 固件的 `.elf` 能有 600 KB，按文件大小判会误报「超 Flash」。
 ## 配置
 
 ### 用户配置文件（`~/.dsh-stm32/config.json`）
@@ -316,7 +323,7 @@ source [find target/stm32f1x.cfg]
 | 限制 | 说明 | 有没有办法 |
 | --- | --- | --- |
 | 只在 **Windows** 上验证 | `stm32_generate` 依赖 `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`，Linux/macOS 上的 CubeMX 不是这个形态 | 暂无；烧录/调试/读寄存器在 Linux 上若 openocd 与 gdb 齐全可能可用，但未验证 |
-| 只支持 **STM32F103C8T6** | 引脚表、`.ioc` 引脚校验、链接脚本模板都按 64 KiB Flash / 20 KiB RAM 的 C8T6 写 | 换芯片要改 `src/data/chips.ts` 与 `templates/` |
+| 只覆盖 **STM32F1 全系** | 型号 → 启动文件 / 设备宏 / 链接脚本的映射只做了 F1（`src/data/stm32f1.ts` + `src/engine/hal-chip.ts`，14 个容量档）；时钟树也只认 F1（HSE 8 MHz、PLL ×2..×16、SYSCLK ≤72 MHz） | 加其它族要补真实仓库名与逐文件实测 sha256（`src/data/cmsis-sources.ts`、`src/data/firmware-packages.ts`）并补一份时钟上限表；引脚表可由本机 CubeMX `db/mcu/*.xml` 派生（`deriveChipPinTable`） |
 | 默认探针是 **CMSIS-DAP** | 没有 `openocd.cfg` 时回退 cmsis-dap | 用 `openocd.cfg` 换 `interface/stlink.cfg`（见上） |
 | 新增外设要**手工补 HAL 源** | 插件只落位 CubeMX 的 `Src/` 与 `Inc/`（→ `Core/Src`、`Core/Inc`），CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 不搬；开了定时器/串口/ADC 之后要自己把 `stm32f1xx_hal_<外设>.c` 加进源清单 | 改工程里 `cmake/stm32cubemx/CMakeLists.txt` 的 `STM32_Drivers_Src`，或写进 `cmake/user/CMakeLists.txt` 的 `target_sources` |
 | 生成/建工程需要 **CubeMX + F1 固件包** | 固件包版本默认 `STM32Cube_FW_F1_V1.8.7` | 换版本传 `firmwarePackage` |
@@ -343,13 +350,25 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 26 个离线套件、374 个用例；不需要板子、CubeMX、工具链
+npm test                 # 29 个离线套件、418 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
+npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
 ```
 
-CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test`（windows-latest）。
+CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **372 pass + 2 skipped**，开发机上是 374 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **416 pass + 2 skipped**，开发机上是 418 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+
+### 发布形态三分法（先把东西放哪想清楚，再写包）
+
+| 放哪 | 内容 | 量级 |
+| --- | --- | --- |
+| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 99 个文件 / 525.7 KB，解包 1538.3 KB；其中 `templates/**` 38.5 KB |
+| 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包 | 缓存可用 `stm32_cache list/verify/purge` 管 |
+| 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
+
+护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` ≤ 60 KB、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 
@@ -371,8 +390,9 @@ src/
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）
-test/                      离线套件 + fixtures + 真机 e2e
-docs/                      规格书 + 开发笔记
+test/                      离线套件（29 个）+ fixtures + 真机 e2e
+scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-chip-table / gen-xcube-catalog / copy-client）
+docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/（不进 npm 包）
 ```
 
 ## 文档

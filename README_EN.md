@@ -1,13 +1,13 @@
 # dsh-stm32
 
-> Hand the whole STM32F103C8T6 development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc → generate code → build → debug → flash.
+> Hand the whole **STM32F1 family** (F100/101/102/103/105/107) development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc (clocks included) → generate code → build → debug → flash.
 
 [中文](./README.md) · [Quick start](#quick-start-a-minimal-end-to-end-check-empty-directory-to-a-blinking-led) · [Features](#features) · [Tool reference](#tool-reference) · [Slash commands](#slash-commands) · [Design notes](#design-notes) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [Specification](docs/dsh-stm32-plugin-规格.md)
 
 [![GitHub stars](https://img.shields.io/github/stars/JingYu-er/dsh-stm32?color=4a6cf7)](https://github.com/JingYu-er/dsh-stm32)
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
-[![MCU](https://img.shields.io/badge/MCU-STM32F103C8T6-4a6cf7)](#known-limitations)
+[![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 20 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
@@ -67,8 +67,9 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 374 offline cases, no board needed
+npm test                            # optional: 418 offline cases in 29 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
+npm run test:size                   # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
 ```
 
 Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
@@ -122,7 +123,7 @@ The blinking LED is the **smallest smoke test** for this chain: it walks create 
 | Confirm a peripheral is really running after flashing | `stm32_regs_read` reads any peripheral register (`TIM2_CNT`, `USART1_SR`, `ADC1_DR` …), or `stm32_debug_eval` reads a variable | Reading registers by physical address verified (`GPIOC_ODR` / `AFIO_MAPR`) |
 | Something is wrong and you need the live state | `stm32_debug_run` halts at `main` for one snapshot; use `stm32_debug_session` + `stm32_debug_eval` for continuous debugging | Verified (halts at `main () at main.c:67`) |
 
-So the blinking LED is the acceptance sample, not the ceiling: **this covers the whole engineering chain, not one demo.** The real boundaries are the ones under [Known limitations](#known-limitations) — F103C8T6 only, verified on Windows only, CMSIS-DAP by default, plus the manual HAL-source step above. Peripheral types themselves are not limited by the tools: whatever the `.ioc` can configure goes through the same generate → build → flash → read-back chain; it just has not been tested peripheral by peripheral yet, so run `stm32_doctor` before starting a real project.
+So the blinking LED is the acceptance sample, not the ceiling: **this covers the whole engineering chain, not one demo.** The real boundaries are the ones under [Known limitations](#known-limitations) — the STM32F1 family only (F100/101/102/103/105/107; the verified board is a C8T6), verified on Windows only, CMSIS-DAP by default, plus the manual HAL-source step above. Peripheral types themselves are not limited by the tools: whatever the `.ioc` can configure goes through the same generate → build → flash → read-back chain; it just has not been tested peripheral by peripheral yet, so run `stm32_doctor` before starting a real project.
 
 ## Features
 
@@ -132,7 +133,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
 | Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
 | Choose the technical route | `stm32_route_plan`: for **this project's** requirements, lays out the HAL and register cost per peripheral (effort / readability / debugging), then says whether what is missing is installable-by-the-plugin or human-only (CubeMX is a GUI wizard needing an ST account; firmware packages are only maintained by the CubeMX package manager) |
-| Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use (every file is pinned by upstream sha256 and refused if it changed); both routes also ship an `openocd.cfg` (CMSIS-DAP + `hla_swd` + 2 MHz) |
+| Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use (every file is pinned by upstream sha256 and refused if it changed); `mcu` names the part (both routes accept it; the HAL route renders its startup file / device define / `<DeviceId>_FLASH.ld` from it); both routes also ship an `openocd.cfg` (CMSIS-DAP + `hla_swd` + 2 MHz) |
 | Export a project | `stm32_project_export`: packs the sources into one zip (without `build/`, `.dsh-stm32/`, `node_modules/`, `.git/`), optionally including the `.elf`, plus a hand-off README |
 | `.ioc` as a transaction | `stm32_ioc_inspect` (read-only parse) → `stm32_ioc_plan` (diff, no writes) → `stm32_ioc_apply` (SHA check + backup + rollback) |
 | USER CODE only | `stm32_code_patch`: writes only between `/* USER CODE BEGIN X */` and `END X`; everything else untouched |
@@ -163,7 +164,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Tool | What it does |
 | --- | --- |
 | `stm32_ioc_inspect` | Parses MCU part, pins/signals/labels, peripherals and interrupts, clock tree, project settings; reports fatal risks such as "no Serial Wire means a generated `SWJ_DISABLE`" |
-| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table, and one-shot Serial Wire repair |
+| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table, one-shot Serial Wire repair, and retargeting clocks to the nearest reachable frequency (`clock: { targetHz }`, derived keys recomputed, per-peripheral frequencies reported) |
 | `stm32_ioc_apply` | Requires a `planId`; re-checks the SHA before writing (refuses if the file changed meanwhile), backs up, replaces atomically, re-parses to validate, rolls back on failure. Supports `rollbackFrom` |
 
 ### Code and build
@@ -209,6 +210,12 @@ Tools are for the model; when you want to act yourself, use a command — one co
 - **Flash guard.** If SYS is not Serial Wire (PA13/PA14 missing or set to `No_Debug`), CubeMX generates `__HAL_AFIO_REMAP_SWJ_DISABLE()` — flash that and SWD is gone, recoverable only via BOOT0. `stm32_flash` refuses such projects; pass `allowNoDebug: true` if you really mean it.
 - **One probe at a time.** Flashing, debugging and a background session cannot coexist; `build` / `flash` / `debug_run` / `generate` release any session holding the probe before they start.
 
+## Chips, linker scripts and clocks
+
+- **The part is a parameter, not a constant.** `stm32_project_create` / `stm32_generate` swap three things together from `mcu`: the startup file (`startup_stm32f103xe.s`), the device define (`STM32F103xE`) and the linker script (`STM32F103RCTx_FLASH.ld`). The HAL route goes through `src/engine/hal-chip.ts` (`resolveHalChip()` + `renderStartupAndDefine` / `renderLinkerScript` / `renderIoc`); the register route goes through `src/data/stm32f1.ts` (`resolveF1Chip()`, 14 density grades, every startup file pinned by upstream sha256). An unknown part returns a reason instead of inventing a startup file that does not exist upstream.
+- **Linker scripts are named after the `DeviceId`: `<DeviceId>_FLASH.ld`.** C8T6 → `STM32F103C8Tx_FLASH.ld` (64 KiB Flash / 20 KiB RAM), RCT6 → `STM32F103RCTx_FLASH.ld` (256 / 48), F107VCT6 → `STM32F107VCTx_FLASH.ld` (256 / 64). The old `STM32F103XX_FLASH.ld` in the template survives only as a C8T6 compatibility copy; CMake's `-T` always points at the rendered one (`pointLinkerFlagAt()` rewrites the old name inside the toolchain file so you never end up with two `-T` flags and the wrong script).
+- **Clocks: nearest, and say so when unreachable.** `stm32_ioc_plan`'s `clock: { targetHz }` (or `pllMul` to pin the multiplier, `pllSource` to pick HSE / HSI) enumerates every reachable PLL combination, takes the one with the smallest |SYSCLK − target| and states the gap: for 60 MHz the F1 PLL only multiplies integers and HSE 8 MHz cannot hit that step, so it picks 64 MHz and reports "unreachable, chose 64 MHz (+4 MHz)" (ties go to the higher step). The same plan **recomputes every derived key** (`SYSCLKFreq_VALUE`, `HCLKFre`, `PLLMUL`, APB1/APB2/ADC dividers) — changing only SYSCLK leaves CubeMX recomputing from stale values or ignoring them — and lists per-peripheral frequencies, UART baud error and a few alternatives. On an out-of-range request (SYSCLK > 72 MHz, APB1 > 36 MHz, ADC > 14 MHz, USB wanting 48 MHz outside PLLCLK/1.5) it **writes no key at all**.
+- **Five consistency checks before flashing.** `stm32_doctor` cross-checks `.ioc` part ↔ startup file name ↔ device define in cmake ↔ `.ld` MEMORY sizes ↔ `.elf` Flash usage, and reports a blocker on any mismatch. The `.elf` figure sums `p_filesz` from the ELF program headers rather than using the file size — with `-g3` a 20 KiB firmware produces a 600 KB `.elf`, which would false-alarm "over Flash".
 ## Configuration
 
 ### User config file (`~/.dsh-stm32/config.json`)
@@ -313,7 +320,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | Limitation | Detail | Workaround |
 | --- | --- | --- |
 | Only verified on **Windows** | `stm32_generate` depends on `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`; CubeMX on Linux/macOS is not shaped like that | None yet; flash/debug/register reads may work on Linux with openocd and gdb present, but are untested |
-| **STM32F103C8T6** only | The pin table, `.ioc` pin validation and linker-script template assume a C8T6 with 64 KiB Flash / 20 KiB RAM | Porting means editing `src/data/chips.ts` and `templates/` |
+| **STM32F1 family** only | The part → startup file / device define / linker script maps exist for F1 only (`src/data/stm32f1.ts` + `src/engine/hal-chip.ts`, 14 density grades); the clock tree knows F1 only (HSE 8 MHz, PLL ×2..×16, SYSCLK ≤72 MHz) | Another family needs real repo names plus per-file measured sha256 (`src/data/cmsis-sources.ts`, `src/data/firmware-packages.ts`) and a clock-limit table; the pin table itself can be derived from the local CubeMX `db/mcu/*.xml` (`deriveChipPinTable`) |
 | Default probe is **CMSIS-DAP** | Falls back to cmsis-dap without an `openocd.cfg` | Put `interface/stlink.cfg` into `openocd.cfg` (see above) |
 | Adding a peripheral needs a **manual HAL source entry** | The plugin only relocates CubeMX's `Src/` and `Inc/` (→ `Core/Src`, `Core/Inc`); the `cmake/stm32cubemx/CMakeLists.txt` CubeMX emits is not applied. Enable a timer/UART/ADC and you must add the matching `stm32f1xx_hal_<peripheral>.c` yourself | Edit `STM32_Drivers_Src` in the project's `cmake/stm32cubemx/CMakeLists.txt`, or add a `target_sources` line in `cmake/user/CMakeLists.txt` |
 | Generation/scaffolding needs **CubeMX + the F1 firmware package** | Package version defaults to `STM32Cube_FW_F1_V1.8.7` | Pass another version via `firmwarePackage` |
@@ -340,13 +347,25 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 26 offline suites, 374 cases; no board, CubeMX, or toolchain needed
+npm test                 # 29 offline suites, 418 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
+npm run test:size        # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test` on every push and PR (windows-latest).
+CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **372 passed + 2 skipped**, while a developer machine runs all 374. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI reports **416 passed + 2 skipped**, while a developer machine runs all 418. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+
+### What ships where (decide before you add a file)
+
+| Where | What | Size |
+| --- | --- | --- |
+| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 99 files / 525.7 KB packed, 1538.3 KB unpacked; `templates/**` alone is 38.5 KB |
+| Git only, not packed | `src/**`, `test/**`, `scripts/**`, `docs/diagrams/**` (two interactive HTML pages) | diagrams are 2 MB raw / 891 KB gz; `files` in `package.json` narrows `docs` to `docs/*.md` |
+| Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages | manage the cache with `stm32_cache list/verify/purge` |
+| Rendered on the spot | `.ioc` content (`renderIoc`), `.ld` MEMORY (`renderLinkerScript`), the cmake source list | rendered per part, never stored as a template |
+
+The guard is `scripts/pack-size.mjs` (`npm run test:size`): tarball ≤ 1.2 MB (1 200 000 B), `templates/**` ≤ 60 KB, no `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll` inside, and `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md` all present.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
@@ -368,8 +387,9 @@ src/
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
   data/                    paths and chip data (paths are data, not logic)
 templates/scaffold/        project template snapshot (CMake / .ld / .vscode / .ioc)
-test/                      offline suites + fixtures + hardware e2e
-docs/                      specification + development notes
+test/                      offline suites (29) + fixtures + hardware e2e
+scripts/                   guards and generators (pack-size / pack-smoke / gen-chip-table / gen-xcube-catalog / copy-client)
+docs/                      specification + development notes + reading guide + diagrams/ (not packed)
 ```
 
 ## Documentation

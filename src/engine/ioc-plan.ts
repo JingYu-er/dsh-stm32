@@ -28,6 +28,8 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { findIocFile, STATE_DIR } from "./generate.js";
 import { parseIocEntries, summarizeIoc } from "./ioc.js";
 import type { IocSummary } from "./ioc.js";
+import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
+import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
 import { isKnownPin } from "../data/chips.js";
 
 export interface PinAddRequest {
@@ -52,6 +54,11 @@ export interface IocPlanRequest {
   pins?: PinAddRequest[];
   /** 确保 Serial Wire 调试口（PA13/PA14），并清掉 No_Debug 遗留。 */
   serialWire?: boolean;
+  /**
+   * 改时钟：{ targetHz } 就近搜，或 { pllSource, pllMul, apb1Div, adcDiv } 定点。
+   * 和 entries 一样只是"算进候选文件"，真正的写入仍然走 applyIocPlan。
+   */
+  clock?: ClockPlanRequest;
 }
 
 export interface IocPlanChange {
@@ -89,6 +96,8 @@ export interface IocPlanReport {
   errors: string[];
   message: string;
   summaryAfter?: IocSummary;
+  /** 时钟报告：没请求 clock 时是 .ioc 现状（只读），请求了就是规划结果。永远有值。 */
+  clockPlan: ClockPlan;
 }
 
 export interface IocApplyReport {
@@ -354,6 +363,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const empty: IocPlanReport = {
     ok: false, projectDir, iocPath: iocPath ?? "", planId: "", sourceSha256: "", candidateSha256: "",
     changes: [], warnings: [], notes: [], errors: [], message: "",
+    clockPlan: emptyClockPlan("还没读到 .ioc，时钟没算"),
   };
   if (iocPath === null || !existsSync(iocPath)) {
     return { ...empty, errors: ["找不到 .ioc（工程根目录下必须有且只有一个 *.ioc，或用 iocPath 指定）"], message: "没生成计划：找不到 .ioc" };
@@ -403,6 +413,27 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     after.delete(trimmed);
   }
 
+  // 时钟：.ioc 里的一段键，和 entries 一起算（不单开工具）。复用 after，所以同一调用里的
+  // entries（例如 RCC.MCOSource）对时钟规划是可见的；规划出的键也是"候选文件"的一部分。
+  const clockPlan = request.clock === undefined
+    ? planClock(undefined, { entries: after })
+    : planClock(request.clock, { entries: after });
+  if (request.clock === undefined) {
+    const achieved = clockPlan.achieved;
+    notes.push(
+      "时钟（只读，未请求改动）：SYSCLK " + formatHz(achieved.sysclkHz) +
+      " / APB1 " + formatHz(achieved.apb1Hz) +
+      " / APB2 " + formatHz(achieved.apb2Hz) +
+      " / ADC " + formatHz(achieved.adcHz),
+    );
+  } else {
+    warnings.push(...clockPlan.warnings);
+    if (clockPlan.note !== "") notes.push("时钟：" + clockPlan.note);
+    for (const item of clockPlan.entries) after.set(item.key, item.value);
+    for (const key of clockPlan.unset) after.delete(key);
+    for (const error of clockPlan.errors) errors.push("时钟：" + error);
+  }
+
   // 安全闸：这两条是踩过坑的硬约束，不满足就不给 plan。
   const candidateText = renderIocText(source, compareEntries(before, after));
   const summary = summarizeIoc(candidateText, iocPath);
@@ -416,12 +447,12 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   }
 
   if (errors.length > 0) {
-    return { ...empty, iocPath, sourceSha256, errors, warnings, notes, message: "没生成计划：" + (errors[0] as string) };
+    return { ...empty, iocPath, sourceSha256, errors, warnings, notes, clockPlan, message: "没生成计划：" + (errors[0] as string) };
   }
 
   const changes = compareEntries(before, after);
   if (changes.length === 0) {
-    return { ...empty, iocPath, sourceSha256, warnings, notes, message: "没有变化：这些键本来就是这个值" };
+    return { ...empty, iocPath, sourceSha256, warnings, notes, clockPlan, message: "没有变化：这些键本来就是这个值" };
   }
 
   const candidateSha256 = sha256Hex(candidateText);
@@ -452,6 +483,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     errors: [],
     message: "已生成计划 " + planId + "：" + String(changes.length) + " 个键变化（新增 " + String(added) + "、删除 " + String(removedCount) + "、修改 " + String(changes.length - added - removedCount) + "）",
     summaryAfter: summary,
+    clockPlan,
   };
 }
 

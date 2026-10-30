@@ -379,7 +379,9 @@ test("npm 包形态：模板里没有 .gitignore 时，register 路线照建工�
     // 其余公共文件一个不少：工程能用
     assert.ok(fs.existsSync(path.join(targetDir, "CMakeLists.txt")));
     assert.ok(fs.existsSync(path.join(targetDir, "CMakePresets.json")));
-    assert.ok(fs.existsSync(path.join(targetDir, "STM32F103XX_FLASH.ld")));
+    // 链接脚本自 0.2 起按型号渲染（C8T6 → STM32F103C8Tx_FLASH.ld），不再拷模板原名
+    assert.ok(fs.existsSync(path.join(targetDir, "STM32F103C8Tx_FLASH.ld")));
+    assert.ok(!fs.existsSync(path.join(targetDir, "STM32F103XX_FLASH.ld")), "模板原名不该再出现在工程里");
     assert.ok(!fs.existsSync(path.join(targetDir, ".gitignore")), "缺失时不该凭空造一个");
   } finally {
     fs.copyFileSync(giBackup, gi);

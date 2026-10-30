@@ -12,6 +12,7 @@ import {
   describeCacheBytes,
   readCacheIndex,
   removeCacheEntry,
+  resolveCacheEntry,
   type CacheEntry,
   type CacheIndex,
 } from "../engine/cache.js";
@@ -119,7 +120,7 @@ export function registerCache(ctx: DshContext): void {
       additionalProperties: false,
       properties: {
         action: { type: "string", enum: ["list", "verify", "fetch", "purge"], description: "list（默认）/ verify / fetch / purge" },
-        id: { type: "string", description: "条目 id，例如 cmsis:F1:startup_stm32f103xb（purge/verify 用）。" },
+        id: { type: "string", description: "条目 id，例如 cmsis:F1:103xb（purge/verify 用）；也认 cmsis:F1:startup_stm32f103xb、F1:B、STM32F103C8T6 这些写法。" },
         mcu: { type: "string", description: "芯片型号，例如 STM32F103C8T6（fetch 用）。" },
         family: { type: "string", description: "只给族时写这里，例如 F1（fetch 用；按中容量档处理）。" },
         confirm: { type: "boolean", description: "purge 且不给 id 时（清空整个缓存）必须为 true；只删一条用 id 即可。" },
@@ -161,7 +162,10 @@ export function registerCache(ctx: DshContext): void {
       if (action === "list" || action === "verify") {
         const entries = listEntries(index, action === "verify");
         if (args.id !== undefined) {
-          const kept = entries.filter((entry) => entry.id === args.id);
+          // 按"用户可能怎么写"解析（cmsis:F1:103xb / 0.1 的 startup_stm32f103xb / F1:B / 型号）。
+          const target = resolveCacheEntry(index, args.id);
+          const kept = target === null ? [] : entries.filter((entry) => entry.id === target.id);
+          const hint = target === null ? "" : target.id === args.id ? "" : "（已按别名解析成 " + target.id + "）";
           return {
             action,
             ok: error === null,
@@ -170,7 +174,7 @@ export function registerCache(ctx: DshContext): void {
             origin: info.origin,
             totalBytes: kept.reduce((sum, entry) => sum + entry.bytes, 0),
             entries: kept,
-            message: (error ?? "") + (kept.length === 0 ? "缓存里没有条目 " + args.id + "。" : "缓存里有 " + String(kept.length) + " 个条目。"),
+            message: (error ?? "") + (kept.length === 0 ? "缓存里没有条目 " + args.id + "。" : "缓存里有 " + String(kept.length) + " 个条目" + hint + "。"),
           };
         }
         return {
@@ -216,7 +220,9 @@ export function registerCache(ctx: DshContext): void {
 
       // purge
       if (args.id !== undefined) {
-        const removed = removeCacheEntry(args.id, process.env);
+        // 同样先解析别名：0.1 的 id 写法也得删得掉，否则用户以为删了、下次还是旧文件。
+        const target = resolveCacheEntry(index, args.id);
+        const removed = target === null ? { removed: false, indexPath: info.indexPath } : removeCacheEntry(target.id, process.env);
         const after = readCacheIndex(process.env).index;
         const entries = listEntries(after, false);
         return {
@@ -227,7 +233,9 @@ export function registerCache(ctx: DshContext): void {
           origin: info.origin,
           totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
           entries,
-          message: removed.removed ? "已删掉缓存条目 " + args.id + "（目录也清了）。" : "缓存里没有条目 " + args.id + "，什么都没删。",
+          message: removed.removed
+            ? "已删掉缓存条目 " + (target === null ? args.id : target.id) + "（目录也清了）。"
+            : "缓存里没有条目 " + args.id + "，什么都没删。",
         };
       }
       const all = readCacheIndex(process.env).index.entries;

@@ -4,7 +4,9 @@
 > 面向使用者的说明已移到仓库根目录的 [README.md](../README.md)。
 # dsh-stm32
 
-DSH 插件（宿主侧，无 UI）：把 STM32（当前只支持 STM32F103C8T6）的 **环境探测 → .ioc 事务 → 生成工程 → 编译 → 烧录 → 调试** 变成一组可被模型调用的工具。
+DSH 插件（宿主侧，无 UI）：把 STM32F1 全系（F100/101/102/103/105/107；0.1.x 时只有 STM32F103C8T6 一块板）的 **环境探测 → .ioc 事务（含时钟）→ 生成工程 → 编译 → 烧录 → 调试** 变成一组可被模型调用的工具。
+
+> **2026-10-30 更新**：F1 全系已支持，HAL 与寄存器两条路线都吃任意 F1 型号，时钟配置已并入 `stm32_ioc_plan`。本文件正文里凡是「只支持 / 只覆盖 C8T6」的句子都是当时的历史记录（按时间记账的要求保留原文），最新口径见 §28。
 
 规格书：[`docs/dsh-stm32-plugin-规格.md`](docs/dsh-stm32-plugin-规格.md)（v0.2）。
 
@@ -27,7 +29,7 @@ git clone git@github.com:JingYu-er/dsh-stm32.git        # 或 https://github.com
 cd dsh-stm32
 npm install --no-audit --no-fund                   # 只装 typescript
 npm run build                                       # tsc -> lib/
-npm test                                            # 可选：80 个离线用例
+npm test                                            # 可选：418 个离线用例（29 个套件）
 ```
 
 然后把 `lib/` 用 `link:` 挂进 dsh 的 profile 并重启 dsh（见下一节）。宿主要求：
@@ -40,7 +42,7 @@ npm test                                            # 可选：80 个离线用�
 | STM32CubeMX | `stm32_generate`、首次建工程 | 生成类工具不可用，其余照常 |
 | STM32Cube 固件包 F1（随 CubeMX 安装） | `stm32_project_create` 抄 Drivers | 建骨架报「找不到固件包」 |
 
-默认路径在 [`src/data/search-roots.ts`](src/data/search-roots.ts)（msys64 优先），可用 `STM32_BIN_DIRS` / `STM32_CUBEMX_ROOT` 覆盖。当前只支持 **STM32F103C8T6**（引脚表见 [`src/data/chips.ts`](src/data/chips.ts)）。
+默认路径在 [`src/data/search-roots.ts`](src/data/search-roots.ts)（msys64 优先），可用 `STM32_BIN_DIRS` / `STM32_CUBEMX_ROOT` 覆盖。型号覆盖 **STM32F1 全系**（F100/101/102/103/105/107，2026-10-30 起；本机验证板仍是 C8T6）：启动文件 / 设备宏 / 链接脚本由 [`src/data/stm32f1.ts`](src/data/stm32f1.ts) + [`src/engine/hal-chip.ts`](src/engine/hal-chip.ts) 派生，引脚表内置一份、也可由本机 CubeMX `db/mcu/*.xml` 派生（见 §28）。
 ## 开发
 
 ```powershell
@@ -1992,3 +1994,123 @@ RAM 表按「line:容量字母」而不是按容量档——xE 跨 C/D/E 三个�
 test/stm32f1-units.test.mjs 11 例：C8T6 与既有事实一致、RCT6 走 xE、C/D/E 三字母 RAM 不同、F107 只有 xC、不存在的档位明确拒绝、未知 line 与坏格式与空输入与坏封装后缀都给原因、无温度后缀也认、F103:xb 与完整型号同解、6 条 line 的每个档位都能反推回启动文件名、RAM 未收录只给 note，以及「本机有固件包时，14 个组合的启动文件与设备头都真实存在」（CI 上自动 skip）。
 
 npm run build exit 0；npm test 26 套件 374 pass / 0 fail（CI 372 + 2 skipped）。README / README_EN / reading-guide.md 第 9 章已同步。
+
+## 28. F1 全系落地：HAL/寄存器两条路 + 时钟并入 .ioc 事务 + 薄表（2026-10-30）
+
+§27 把「型号 → 启动文件 / 设备宏 / 容量」抽成了一张事实表，这一批把这张表接到三条链路上（HAL 建工程、寄存器建工程、.ioc 时钟事务），再加一层一致性护栏与一份全族薄表。四件事各自独立可回退，改动没有新开工具：时钟走的是既有的 `stm32_ioc_plan`，薄表是新脚本产出的数据文件。
+
+### 28.1 t1：HAL 路线不再写死 C8T6（新增 src/engine/hal-chip.ts，284 行）
+
+原来的 scaffold 把三个型号相关的文件写死在代码里：`startup_stm32f103xb.s`（拷哪个启动文件）、`STM32F103XX_FLASH.ld`（链接脚本）、`demo.ioc`（工程名与 MCU 字段）。这三处现在都改成**按芯片渲染**。
+
+`src/engine/hal-chip.ts` 只有两件事：派生与渲染，全是字符串函数（不起进程、不写盘），所以能在**写盘之前**把整份产物渲染完——渲染失败时一个字节都不落盘，不会留下半截工程。
+
+- `resolveHalChip(input)`：型号 → 启动文件 / 设备宏 / `.ld` 名 / 包名（复用 §27 的 `resolveF1Chip`，认完整型号、去温度后缀、`F103:xb`）。
+- `renderStartupAndDefine`：`STM32F103RCT6 → startup_stm32f103xe.s + STM32F103xE`。
+- `renderLinkerScript`：把模板的 MEMORY 两行（RAM / FLASH）与注释两行换成 `STM32F103RCTx_FLASH.ld`，256 KiB / 48 KiB。
+- `renderIoc`：demo.ioc 的 `Mcu.CPN`、引脚与时钟键一起按型号重写。
+- `pointLinkerFlagAt`：工具链文件里写死的 `-T STM32F103XX_FLASH.ld` 改成指向新名。**这一步不做就完蛋**——要么链到旧脚本（容量不对），要么命令行上出现两个 `-T`（链哪个看顺序）。
+
+链接脚本从这一批起按 `<DeviceId>_FLASH.ld` 命名：
+
+| 型号 | 启动文件 | 设备宏 | 链接脚本 | Flash / RAM |
+| --- | --- | --- | --- | --- |
+| STM32F103C8T6 | startup_stm32f103xb.s | STM32F103xB | STM32F103C8Tx_FLASH.ld | 64 / 20 KiB |
+| STM32F103RCT6 | startup_stm32f103xe.s | STM32F103xE | STM32F103RCTx_FLASH.ld | 256 / 48 KiB |
+| STM32F107VCT6 | startup_stm32f107xc.s | STM32F107xC | STM32F107VCTx_FLASH.ld | 256 / 64 KiB |
+
+旧名 `templates/scaffold/STM32F103XX_FLASH.ld` 保留为 **C8T6 的兼容副本**（`templates/` 的文件数没变，scaffold 的文件数断言仍 15），但 cmake 的 `-T` 一律指向按型号命名的那份。
+
+实测（真建工程）：RCT6 → `startup_stm32f103xe.s` / `STM32F103xE` / `STM32F103RCTx_FLASH.ld`（256 KiB、48 KiB）；F107VCT6 → `startup_stm32f107xc.s` / `STM32F107xC` / `STM32F107VCTx_FLASH.ld`（256 KiB、64 KiB）；C8T6 不回归（`templateFiles` 仍 15，链接脚本换成 `STM32F103C8Tx_FLASH.ld`）。
+
+### 28.2 t2：寄存器路线泛化到 14 个容量档
+
+`src/data/cmsis-sources.ts`（392 行）重写。三处要点：
+
+1. `startupChoiceFor(mcu)` 不再自己认型号，改成委托 `resolveF1Chip`，并保留旧写法的兼容解析：`F1:B`、`F1:8`、`F103:xb`、`STM32F103C8T6` 四种输入同解。老工程里缓存过的条目 id（`F1:B` 那种）也能读。
+2. `STARTUP_SHA256` 从 1 条变 14 条，**全部是真实下载后算的**（2026-10-30 UTC）。来源：`https://fastly.jsdelivr.net/gh/STMicroelectronics/cmsis-device-f1@master/Source/Templates/gcc/<startup>.s`，备用 `cdn.jsdelivr.net` / `raw.githubusercontent.com` / `ghproxy.net`。sha256 表里连文件字节数一起记，失败信息能直接告诉你「是上游挪了内容还是网络换了页面」。
+3. 缓存条目 id 改成 `cmsis:F1:103xb`（族 + 容量档），`chipEntryId` / `parseCmsisEntryRef` / `cmsisEntryAliases` 三件套负责新旧 id 互认。
+
+另两个新模块：
+
+- `src/engine/register-clock.ts`（261 行）：寄存器版的时钟代码生成。每条 line 的最高 SYSCLK 不同——**F100 24 / F101 36 / F102 48 / F103·F105·F107 72 MHz**；HSE 8 MHz 乘到上限（F101 走 HSE/2×9 才凑得出 36 MHz）；FLASH latency 按频率给 0/1/2（F100 的设备头里没有 latency 字段，自动跳过）；APB1 在 >36 MHz 时 ÷2；HSE 起不来就退到 HSI/2×N 并写警告。生成的 `clock_init()` 插在 main() 第一行，末尾 `SystemCoreClockUpdate()` 让 SysTick 与 delay_ms 跟着对。
+- `src/engine/register-linker.ts`（152 行）：按型号渲 `<DeviceId>_FLASH.ld`（改 MEMORY 的 RAM/FLASH 两行 + 注释两行）。F100/F101/F102 的 RAM 不在 §27 的表里，这里用 CubeMX db 的最小值兜底**并明确警告**——宁可报小，也不要让栈跑出真 RAM。
+
+于是寄存器路线对 F1 的 14 个容量档全部可用，且**不需要 CubeMX、不需要固件包**，只靠下载缓存（第二次起完全离线）。
+
+### 28.3 t3：时钟配置并入 stm32_ioc_plan（不新开工具）
+
+为什么不做成 `stm32_clock_plan`：时钟改动本来就是改 .ioc 键，而 .ioc 只能走「plan → 用户确认 → apply」这一条事务。新开工具等于让用户可以绕过 SHA 校验直接写时钟。
+
+新增两张：`src/data/clock-f1.ts`（215 行，事实：PLL 源 HSE 8 MHz / HSI÷2 4 MHz / HSI 8 MHz、×2..×16、上限 SYSCLK 72 / APB1 36 / APB2 72 / ADC 14 / USB 48、APB1/APB2/ADC 分频表、14 条外设→总线、UART 波特率档、20 个 RCC IPParameters）与 `src/engine/clock-plan.ts`（801 行，求解）。
+
+求解顺序：枚举全部可行组合 → 取 `|sysclk − target|` 最小（**同距取更高档**，所以 60 MHz 的目标落在 64 MHz，而不是 56 MHz）→ 与 .ioc 现有键做 diff → 派生键**全量重算** → 给逐外设频率表、UART 波特率整除误差、备选档位。
+
+`mode` 四态：`snapshot`（只看不写，未请求时钟时的缺省）/ `nearest`（就近）/ `explicit`（钉死倍频）/ `none`。任何早退分支都必须带 `clockPlan`（`IocPlanReport.clockPlan` 是必填字段，不是 `null`），这样报告形状统一、schema 不用多态。
+
+实测（真实 `test/fixtures/project/demo.ioc`，`clock: { targetHz: 60000000 }`，dry plan 未 apply）：
+
+- planId `b4f83c6165de72f7`，17 个键变化（新增 1、删除 0、修改 16）；
+- 结论：目标 60 MHz **不可达**，已选 64 MHz（差 +4 MHz）。F1 的 PLL 只能整数倍频（×2..×16），HSE 8 MHz 拼不出这一档；HSI÷2 4 MHz ×15 正好 60 MHz，但 HSI 精度 ±1% 会把 UART 一起带漂，所以默认没选它（备选里能看到）；
+- 总线：SYSCLK 64 / HCLK 64 / APB1 32（÷2，定时器 64）/ APB2 64（÷1）/ ADC 10.667 MHz（÷6，.ioc 里写成 10666667）/ USB 不可用；
+- 逐外设：USART1@64、SPI1@64、TIM1@64、ADC1/2@10.667；USART2/3@32、SPI2@32、I2C1/2@32、TIM2/3/4@64；
+- 波特率误差（16 倍过采样）：USART1@64 MHz 最差 115200 −0.080%，USART2@32 MHz 最差 57600 −0.080%；
+- 写入 21 个 RCC 键（含 `RCC.IPParameters` 合并），源 .ioc 未被修改（`ok=true` 但 dry）。
+
+错误路径是硬的：SYSCLK >72 / APB1 >36 / ADC >14 时**一个键都不写**，只报错并给最近可行档位。
+
+### 28.4 t4：doctor 五项一致性 + 引脚表从本机 db 派生
+
+`src/engine/doctor.ts`（665 行，+382）加了 `checkChipConsistency` / `collectChipConsistency`，比原计划的四项多拆一项：
+
+1. 芯片型号 ↔ 启动文件名（例：RCT6 却只有 `startup_stm32f103xb.s` → blocker，并写出该有的名字）；
+2. 启动文件 ↔ cmake 设备宏（`STM32F103xB` 配 xE 启动文件 → blocker，提示重跑 `stm32_generate`）；
+3. `.ld` 的 MEMORY ↔ 芯片实际容量（小于芯片 → note「浪费了 N KiB」；大于 → blocker，RAM 同理）；
+4. `.elf` 的 Flash 占用 ↔ Flash 容量（超了 → blocker，≥90% → note）；
+5. .ioc 用到的引脚是否在封装里（本机 db 有封装表时才算）。
+
+第四项踩了个真坑：**别用 .elf 文件大小判超 Flash**。工作区里那个正经 C8T6 工程，`.elf` 有 641.5 KiB——全是 `-g3` 的调试信息，按文件大小判会把 64 KiB 的芯片判成超容量。改成读 ELF program header，只累加 `p_paddr` 落在 `0x08000000` 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`，同一工程立刻变成 0 blocker。解析不出 program header 时才退回文件大小，并在 notes 里注明「按文件大小粗算」。
+
+`src/data/chips.ts`（202 行，+162）：保留原 `CHIPS` / `findChip` / `isKnownPin` 的语义（未知型号一律放行，不猜、不误拦），新增 `parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，`PC13-TAMPER-RTC → PC13`，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / builtin / unknown`：db 命中就注明来源 XML 与引脚数，否则明说「未与本机 db 校验」，都没有就说明未知引脚一律放行。
+
+### 28.5 包体三分法与护栏
+
+这一批开始往仓库里加东西（薄表、图、脚本），先把「什么东西放哪」定下来，否则包体迟早失控：
+
+| 类别 | 内容 | 实测 |
+| --- | --- | --- |
+| 随 npm 包 | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、LICENSE、`docs/*.md` | tarball 525.7 KB / 99 个文件，解包 1538.3 KB，templates/** 38.5 KB |
+| 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**` | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 files 从 `docs` 收窄成 `docs/*.md` |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头、HAL 固件包 | 带 sha256 校验，缓存在本机 |
+| 现造 | `.ioc` 内容（`renderIoc`）、`.ld` MEMORY（`renderLinkerScript`）、cmake 源清单（`refreshCubemxCmakeLists`） | 不进包，按型号生成 |
+
+护栏是 `scripts/pack-size.mjs`（80 行，`npm run test:size`，CI 在 `test:pack` 之后跑）：tarball ≤1.2 MB、`templates/**` ≤60 KB、包内禁止 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。它用 `npm pack --dry-run --json` 拿文件清单，不写盘。
+
+### 28.6 芯片薄表：scripts/gen-chip-table.mjs（371 行）
+
+目标是一份「不联网、不依赖 CubeMX 运行时」的芯片事实表，供将来扩族时查容量与封装，也方便人肉核对。
+
+- 来源：本机 CubeMX 的 `db/mcu/*.xml`（2019 个 xml，其中 `compatibility.xml` / `families.xml` / `rules.xml` 不是 MCU，真正 2016 颗；F1 系 58 个）。
+- XML 里**没有 CPN 字段**，只有 `RefName` 模式（`STM32F103C(8-B)Tx` 这种带备选字母的写法），文件名 = `Mcu.Name` = `.ioc` 里的 join key，CPN 由 RefName 展开派生。
+- 输出 `src/data/chip-table.json`：2016 行、157546 字节（gz 后约 10 KB），字段为 CPN / 内核 / 主频 / RAM / Flash / 电压 / 引脚数。文件头写明「脚本生成，不要手改」，并注明插件当前只消费 F1 那一段、其余为将来扩族备查。
+- `--check` 模式：重新从 db 抽一遍，与已落盘的文件比对，不一致就 exit 1（给 CI 用）。
+- 安装位置不必手填：`--mcu-dir` > `--cube-mx-root` > `STM32_CUBEMX_ROOT` > `~/.dsh-stm32/config.json` 的 `cubeMxRoot` > 默认位置 > 扫盘发现（本机 CubeMX 装在 `D:/app/STM32CubeMX`，就是靠扫盘找到的——只扫目录、不读注册表，扫不到就让人用 `--cube-mx-root` 指过来）。
+- 读不到 db（没装 CubeMX / 路径不对）时**明确报错退出，不写半截文件**（先写临时文件再 rename，校验通过才替换）。
+
+### 28.7 文档口径
+
+README / README_EN / `docs/reading-guide.md` / `src/skill/stm32-workflow.ts` 里「只支持 STM32F103C8T6」的说法全部改口成 **F1 全系**（F100/101/102/103/105/107），并补了两件最容易漏的事：
+
+- **链接脚本命名规则**：`<DeviceId>_FLASH.ld`（`STM32F103C8Tx_FLASH.ld` / `STM32F103RCTx_FLASH.ld` / `STM32F107VCTx_FLASH.ld`），旧名 `STM32F103XX_FLASH.ld` 只是 C8T6 的兼容副本；命令行上只能有一个 `-T`。
+- **时钟就近策略**：目标频率不可达时选最接近的一档并**显式标注差多少**（60 MHz → 「不可达，已选 64 MHz（+4 MHz）」），同距取更高档；派生键全量重算；超限一个键都不写。
+
+skill 的 R2 现在点名「本型号的启动文件 + 本型号的 `.ld`」，R3 补了时钟走同一条事务，`§四 踩过的坑` 加了两条：裸 `cmake -S . -B build` 不读 `CMakePresets.json` 会丢工具链文件（必须 `cmake --preset default` 或显式 `-DCMAKE_TOOLCHAIN_FILE`）；换芯片后别留旧链接脚本名（`-T` 两个 .ld 时链哪个看顺序，症状是「编译过、上板跑飞」）。
+
+### 28.8 验证
+
+- `npm run build` → exit 0。
+- `npm test` → **29 套件 418 pass / 0 fail**（CI 上 416 pass + 2 skipped）；本批新登记 `hal-route-units`（12 例）、`clock-units`（14 例）、`doctor-chip-units`（15 例），既有套件未回归。
+- `node scripts/gen-chip-table.mjs --check` → exit 0（生成物与 db 一致）。
+- `npm run test:size` → exit 0（tarball 525.7 KB / 上限 1171.9 KB，templates 38.5 KB / 上限 60 KB）。
+
+注：§27.5 里的「26 套件 374 例」是当时的数，现在是 29 套件 418 例（captain 口径里的 28 个套件少算了 `schema-guard`）；§27.3 的坑、§27.4 的接口都还成立，只是 `startupChoiceFor` 现在委托给 `resolveF1Chip` 了。

@@ -1,7 +1,7 @@
 # dsh-stm32 源码精读指南
 
 > 面向：第一次读这个仓库、并且要改它的人。
-> 规模：65 个 TypeScript 文件约 20.3k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。
+> 规模：72 个 TypeScript 文件约 24.3k 行（另有脚本生成的 src/data/chip-table.json 2044 行），外加一个手写的浏览器 bundle（client/client.js，682 行）。
 > 读完这份指南你应该能回答：一次工具调用从宿主进来到 openocd 退出中间经过了谁；哪几条不变量破了一定出事；要改某个功能得动哪几个文件；哪些行为有测试兜着、哪些只能上板子验。
 >
 > 配套文档：docs/development-notes.md（按时间记的决策与被坑记录）、docs/logic-audit.md（历史审计条目）、README.md（用户视角）。
@@ -27,8 +27,8 @@
 | --- | --- | --- | --- |
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
 | L3 契约层 | src/tools（19 个文件：20 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
-| L2 逻辑层 | src/engine（36 个模块） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
-| L1 事实表 | src/data（6 个模块） | 芯片表、镜像 URL、固件族、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
+| L2 逻辑层 | src/engine（41 个模块） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
+| L1 事实表 | src/data（8 张事实表 + 1 份生成的芯片薄表） | 芯片表（含由 CubeMX db 派生的引脚表与 chip-table.json）、镜像 URL、固件族、F1 容量档、F1 时钟树、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
 
 跨层的只有两样东西：**SubprocessService**（进程能力，从 ctx 一路当参数传到 engine）和 **DshContext**（宿主服务袋）。
 
@@ -49,11 +49,11 @@ flowchart TD
   IDX --> SKILL["src/skill/stm32-workflow.ts<br/>红线 skill"]
   IDX --> WEB["src/engine/web-routes.ts<br/>6 条 HTTP 路由"]
   IDX --> EVT["turn/end、session/disposed、dispose<br/>把探针还回去"]
-  TOOLS --> ENGINE["src/engine/*<br/>36 个纯逻辑模块"]
+  TOOLS --> ENGINE["src/engine/*<br/>41 个纯逻辑模块"]
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
-  ENGINE --> DATA["src/data/*<br/>6 张事实表"]
+  ENGINE --> DATA["src/data/*<br/>8 张事实表"]
   ENGINE --> RUN["src/engine/subprocess-runner.ts"]
   RUN --> OS["宿主 subprocess 服务"]
   OS --> BIN["gcc / cmake / ninja / openocd / gdb<br/>java(CubeMX) / reg.exe / pacman / objcopy"]
@@ -67,13 +67,13 @@ flowchart TD
 | 目录 | 文件数 | 行数 | 说明 |
 | --- | --- | --- | --- |
 | src/ | 4 | 795 | index.ts 119、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
-| src/tools/ | 19 | 4832 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施） |
-| src/engine/ | 37 | 13824 | 见第 5 章；最大的是 msys2-install.ts 2313 行 |
-| src/data/ | 6 | 1803 | 见第 6 章 |
-| templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg） |
+| src/tools/ | 19 | 5078 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 route-plan.ts 573 行 |
+| src/engine/ | 41 | 15919 | 见第 5 章；最大的是 msys2-install.ts 2313 行，其次是 clock-plan.ts 801 行 |
+| src/data/ | 9 | 4592 | 8 张 .ts 事实表共 2548 行 + 脚本生成的 chip-table.json（2044 行 / 2016 颗芯片），见第 6 章 |
+| templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
-| test/ | 25 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
-| scripts/ | 3 | — | copy-client.mjs、pack-smoke.mjs、gen-xcube-catalog.mjs |
+| test/ | 29 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
+| scripts/ | 5 | 776 | copy-client.mjs(24)、gen-chip-table.mjs(371)、gen-xcube-catalog.mjs(151)、pack-size.mjs(80)、pack-smoke.mjs(150) |
 
 ## 2. 阅读顺序
 
@@ -84,10 +84,10 @@ flowchart TD
 | 1 | src/index.ts、src/types.ts | 315 | 插件怎么被加载？宿主给了我什么？工具/命令/skill/路由各自怎么注册？ | 20 分钟 |
 | 2 | src/tools/flash.ts → src/engine/flash.ts → src/engine/subprocess-runner.ts → src/engine/tool-env.ts | 915 | 一次工具调用从头到尾长什么样？参数怎么校验？进程怎么起、环境变量怎么注入？ | 1 小时 |
 | 3 | src/engine/toolchain-gate.ts → probe.ts → src/data/search-roots.ts → src/data/toolchain-config.ts | 1649 | 门禁怎么判「缺件」？为什么快路径也要跑一次版本命令？配置文件的 CAS 写是什么？ | 1.5 小时 |
-| 4 | src/engine/generate.ts → generate-script.ts → generate-cache.ts → layout.ts → ioc.ts → ioc-plan.ts → code-patch.ts → text-file.ts → usercode-merge.ts | 2385 | CubeMX 怎么被驱动？产物怎么搬进 Core/？为什么改代码要按字节拼接？.ioc 事务的 SHA 校验挡的是什么？ | 2.5 小时 |
-| 5 | src/engine/scaffold.ts → register-template.ts → vscode-config.ts → build.ts → project-export.ts → zip.ts → fs-longpath.ts | 1936 | 新工程怎么造出来？寄存器路线为什么不碰 CubeMX？编译产物 hex/bin 怎么来？导出的 zip 里为什么没有 build/？ | 2 小时 |
-| 6 | src/engine/fetch.ts → cache.ts → tar.ts → firmware-install.ts → thirdparty.ts → xcube.ts → msys2-install.ts | 4623 | sha256 门禁在哪一环？缓存怎么保证可恢复？固件包为什么装到 dsh-firmware？安装计划怎么做到只报缺件？ | 3 小时 |
-| 7 | src/engine/debug.ts → debug-session.ts → regs.ts → doctor.ts → route-plan.ts → web-api.ts → client/client.js → src/commands/register.ts | 3706 | 调试会话的租约与归属怎么算？扫描链/寄存器怎么读？路线评估的判定规则？设置面板走什么通道？ | 2.5 小时 |
+| 4 | src/engine/generate.ts → generate-script.ts → generate-cache.ts → layout.ts → ioc.ts → ioc-plan.ts → clock-plan.ts → code-patch.ts → text-file.ts → usercode-merge.ts | 3229 | CubeMX 怎么被驱动？产物怎么搬进 Core/？为什么改代码要按字节拼接？.ioc 事务的 SHA 校验挡的是什么？时钟怎么就近取档、目标不可达时怎么写？ | 3 小时 |
+| 5 | src/engine/scaffold.ts → hal-chip.ts → register-template.ts → register-clock.ts → register-linker.ts → vscode-config.ts → build.ts → project-export.ts → zip.ts → fs-longpath.ts | 2798 | 新工程怎么造出来？两条路线为什么差别这么大（HAL 碰 CubeMX / 寄存器只用缓存）？型号怎么变成启动文件、设备宏和 `<DeviceId>_FLASH.ld`？编译产物 hex/bin 怎么来？ | 2.5 小时 |
+| 6 | src/engine/fetch.ts → cache.ts → tar.ts → firmware-install.ts → thirdparty.ts → xcube.ts → msys2-install.ts | 4652 | sha256 门禁在哪一环？缓存怎么保证可恢复？固件包为什么装到 dsh-firmware？安装计划怎么做到只报缺件？ | 3 小时 |
+| 7 | src/engine/debug.ts → debug-session.ts → regs.ts → doctor.ts → route-plan.ts → web-api.ts → client/client.js → src/commands/register.ts | 4082 | 调试会话的租约与归属怎么算？扫描链/寄存器怎么读？doctor 怎么核对型号/启动文件/.ld 是否配套？路线评估的判定规则？设置面板走什么通道？ | 3 小时 |
 
 每一站的「流程」在第 7 章都有对应的图，读到不懂的地方先跳到图上找位置。
 
@@ -131,11 +131,11 @@ ctx.on("dispose", () => { void debugSessions.stop("插件卸载"); });
 
 ### 3.3 src/skill/stm32-workflow.ts（35 行）
 
-内容是一屏红线（R1–R5），运行时注册而不是打包成文件——「凡是能注册的服务就不要依赖路径约定」。
+内容是一屏红线（R1–R5 + 12 条踩过的坑），运行时注册而不是打包成文件——「凡是能注册的服务就不要依赖路径约定」。口径已从「本机这块 C8T6」改成 **STM32F1 全系**（F100/101/102/103/105/107）：换型号必须启动文件、设备宏、链接脚本三者一起换，外加时钟跟着 line 的上限走。
 
 - **R1** 代码只写在 `/* USER CODE BEGIN X */` 与 `END` 之间（CubeMX 承诺原样保留的唯一区域）。
-- **R2** 不许改生成区（main()、MX_*_Init()、main.h 的 Private defines、*_hal_msp.c、*_it.c、CMakeLists、.mxproject、.ioc）——理由很具体：这些文件由 .ioc 重写，手改会被无声覆盖且编译不报错。
-- **R3** .ioc 只能走事务：`stm32_ioc_plan` → 用户确认 → `stm32_ioc_apply`，参数名是 **planId**（不是 plan_id），源文件 SHA-256 变了就拒绝。
+- **R2** 不许改生成区（main()、MX_*_Init()、main.h 的 Private defines、*_hal_msp.c、*_it.c、CMakeLists、.mxproject、.ioc、以及本型号的启动文件与链接脚本）——理由很具体：这些文件由 .ioc 重写，手改会被无声覆盖且编译不报错。链接脚本按 `<DeviceId>_FLASH.ld` 命名（C8T6 → `STM32F103C8Tx_FLASH.ld`、RCT6 → `STM32F103RCTx_FLASH.ld`、F107VCT6 → `STM32F107VCTx_FLASH.ld`），旧名 `STM32F103XX_FLASH.ld` 只是 C8T6 的兼容副本。
+- **R3** .ioc 只能走事务：`stm32_ioc_plan` → 用户确认 → `stm32_ioc_apply`，参数名是 **planId**（不是 plan_id），源文件 SHA-256 变了就拒绝。改时钟也走同一条事务（`clock: { targetHz }` 或钉死 `pllMul`）：目标频率不可达时报告写「不可达，已选 X MHz（±Y）」并把派生键（PLLMUL / SYSCLKFreq_VALUE / HCLKFrequency / APB1-APB2 prescaler）全量重算；超限（SYSCLK >72、APB1 >36、ADC >14）一个键都不写。
 - **R4** 不许生成 No_Debug 的 SYS 配置（会关掉 PA13/PA14 的 SWD，烧一次就永久失联，只能 BOOT0 救）。
 - **R5** 烧录与调试分开：flash 一次性 program-verify-reset-exit，debug_run 只在需要时开调试会话。
 
@@ -195,26 +195,26 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | `stm32_env_probe` | env-probe.ts（284） | probe.buildTargets / probeAll + search-roots.resolveSearchConfig | 无 |
 | `stm32_env_install` | env-install.ts（550） | msys2-install.planOrInstallMsys2 | 无 |
 | `stm32_firmware_install` | firmware-install.ts（288） | firmware-install.planOrInstallFirmware | 无 |
-| `stm32_project_create` | project-create.ts（325） | scaffold.createProjectScaffold / register-template.createRegisterProject | build（仅 register 路线；hal 路线降级成 warnings） |
+| `stm32_project_create` | project-create.ts（344） | scaffold.createProjectScaffold（型号 → hal-chip 渲染启动文件/设备宏/.ld/.ioc）/ register-template.createRegisterProject | build（仅 register 路线；hal 路线降级成 warnings） |
 | `stm32_project_export` | project-export.ts（122） | project-export.runExport | 无 |
 | `stm32_code_patch` | code-patch.ts（130） | code-patch.patchUserCode | 无 |
 | `stm32_generate` | generate.ts（308） | generate.runGenerate | generate（CubeMX 启动器 + JRE） |
 | `stm32_ioc_inspect` | ioc-inspect.ts（241） | ioc.summarizeIoc | 无 |
-| `stm32_ioc_plan` | ioc-plan.ts（176） | ioc-plan.planIocChanges | 无 |
+| `stm32_ioc_plan` | ioc-plan.ts（395） | ioc-plan.planIocChanges + clock-plan.planClockChanges（引脚 / 键 / 时钟进同一个 candidate） | 无 |
 | `stm32_ioc_apply` | ioc-apply.ts（135） | ioc-plan.applyIocPlan / rollbackIoc | 无 |
 | `stm32_build` | build.ts（243） | build.runBuild | build（gcc + cmake + ninja） |
 | `stm32_flash` | flash.ts（185） | flash.runFlash | flash（openocd） |
-| `stm32_debug_run` | debug.ts（205） | debug.runDebugRun | debug（openocd + gdb） |
+| `stm32_debug_run` | debug.ts（211） | debug.runDebugRun | debug（openocd + gdb） |
 | `stm32_debug_session` / `_eval` / `_stop` | debug-session.ts（265，三工具同文件） | debug-session.DebugSessionManager（单例 debugSessions）+ releaseProbeFor | debug（仅 session 启动时） |
 | `stm32_regs_read` | regs.ts（218） | regs.runRegsRead | debug |
 | `stm32_route_plan` | route-plan.ts（573） | engine/route-plan.assessRoute + toolchain-gate | register-ok → build；其余 → generate；unclear → 不查 |
-| `stm32_cache` | cache.ts（266） | engine/cache 全套 | 无 |
-| `stm32_doctor` | doctor.ts（192） | doctor.runDoctor | 无（它自己就是体检） |
+| `stm32_cache` | cache.ts（274） | engine/cache 全套 | 无 |
+| `stm32_doctor` | doctor.ts（192） | doctor.runDoctor + collectChipConsistency（型号/启动文件/设备宏/.ld/Flash 五项一致性） | 无（它自己就是体检） |
 | —（基础设施） | project-dir.ts（120） | resolveProjectDir / validateToolArgs | — |
 
 两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**route-plan.ts 573 行**是 tools 层里最大的，因为它的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
 
-## 5. engine 层：37 个模块，十个域
+## 5. engine 层：41 个模块，十个域
 
 下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。
 
@@ -242,7 +242,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | build.ts（493） | `runBuild(subprocess, request)`：选 preset（`pickConfigurePreset` 优先 Debug）→ `cmake --preset` → `cmake --build` → `findElf`（= `pickElf`：CMakeCache 的 CMAKE_PROJECT_NAME 优先，否则取 mtime 最新的 .elf；`elfCandidates` 列出全部候选，`elfSelectionNote` 在候选多于 1 个时把「选了哪个、其他候选的 mtime」写进 notes）→ 解析内存占用（`parseMemoryUsage`，GNU ld 的 `RAM: 1584 B 20 KB 7.73%` 格式）→ 错误行（`parseBuildErrors`）与警告数（`countWarnings`）→ 按需跑 objcopy 出 hex/bin（`converted`，失败只写 note 不判失败）。辅助导出：`presetDirs`、`detectBuildDir`。 |
 | layout.ts（50） | 生成物的落位约定：`GEN_SRC_DIR = "Src"`、`GEN_INC_DIR = "Inc"`、`PROJECT_SRC_DIR = "Core/Src"`、`PROJECT_INC_DIR = "Core/Inc"`、`mapGeneratedPath(rel)`、`listGeneratedFiles`。CubeMX 无头模式吐在 `.dsh-stm32/gen/Src|Inc`，由这里映射回工程的 Core/。 |
 
-### 5.4 烧录、调试与诊断（5 个，1881 行）
+### 5.4 烧录、调试与诊断（5 个，2257 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
@@ -250,9 +250,9 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | debug.ts（406） | 一次性调试快照 `runDebugRun`：挑端口（`pickPort`，默认 3333，占用则顺延）→ 起 openocd（`waitForListening` 等 "Listening on port"）→ 起 gdb 跑一串 -ex（file / break / info registers / bt / info locals / monitor reset run / detach）→ `parseGdbOutput` 提取断点命中、寄存器、调用栈、locals → ok 判据看 exitCode + probe.errors + hitBreakpoint（审计 A26）。失败时：`errorCodeOfLines` 归类（与 flash 同一枚举）、`debugHintFor` 给下一步、`probeMissingLines` 命中就跑 `usbDiagnosis`、日志用 `keyLogTail(lines, 40)`（优先留 adapter/Error 行，而不是「最后 15 行」）、`firstProblemLine` 把首条根因塞进 errors。 |
 | debug-session.ts（516） | 长会话租约。`DebugSessionManager` 管「一个常驻 openocd + 多次短命 gdb -batch eval」，空闲 90 s、总时长 10 min、turn/end 立刻释放；`releaseProbeFor(reason)` 是别的工具（flash/regs/debug_run）动探针前必须调的一步（审计 B16：先释放再门禁）。三个纯函数是好单测点：`normalizeHexAddress`、`parseGdbPrintedHex`、`parseMarkedWords`（按 `echo ===DSH:<tag>===` 分段对齐，修「中间某个地址读失败导致后面值整体前移」）。 |
 | regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。与 debug-session 的区别是「一次性、不复位」，起完就关。 |
-| doctor.ts（289） | 体检。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录。 |
+| doctor.ts（665） | 体检 + 配套性核对。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录；最后跑 **checkChipConsistency / collectChipConsistency** 的五项一致性：① 型号 ↔ 启动文件名 ② 启动文件 ↔ cmake 设备宏 ③ `.ld` MEMORY 容量 ↔ 芯片实际容量 ④ `.elf` Flash 占用 ↔ Flash 容量 ⑤ .ioc 用到的引脚是否在封装内。配套纯函数 `parseLinkerMemory`（认 20K / 0x5000 / 65536，算式不算）、`deviceDefinesIn`、`elfFlashBytes`（读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 PT_LOAD 的 `p_filesz`）、`findLinkerScript` / `linkerScriptNames`（多个 .ld 时优先非 STM32F103XX_FLASH.ld 的那个）。 |
 
-### 5.5 生成、编码与 .ioc 事务（9 个，2825 行）
+### 5.5 生成、编码、.ioc 事务与时钟（10 个，3659 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
@@ -263,25 +263,29 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | code-patch.ts（215） | `patchUserCode`：只改一个 USER CODE 块（replace / append），块内出现 `{` 或 `}` 拒绝（结构行守卫），写前备份，写回**按字节拼接**（见 text-file）。`listUserCodeLabels` 列出可用标签。 |
 | text-file.ts（172） | 编码层。`detectEncoding`（BOM → utf8-bom；空 → utf8；严格 UTF-8 成 → utf8；再试 gb18030；否则 unknown）、`decodeText`、`encodeText`（gb18030 只允许纯 ASCII——Node 只有解码器没有编码器）、`readTextFile`、`lineStarts`、`replaceLineRange`（未改的行原字节照抄，只把新增行按原编码插入）。**这是「中文注释不被写坏」的唯一保障**。 |
 | ioc.ts（202） | .ioc 只读解析：`parseIocEntries`、`decodeIocValue`、`summarizeIoc`（MCU、时钟树、引脚、外设、调试口、工程设置、警告）。 |
-| ioc-plan.ts（582） | .ioc 事务。`planIocChanges` 算出逐键 diff + 源 SHA-256 → planId；`applyIocPlan` 校验 SHA 后原子替换（备份到 backups/<stamp>-ioc）；`rollbackIoc(backupFrom)` 回滚；辅助 `renderIocText`、`compareEntries`、`sha256Hex`、`encodeIocValue`、`loadPlan`。引脚写入保序（审计 A3）：只追加新增，不因缺 .Signal 删已有项。 |
-| cmake-sources.ts（479） | **老洞的补丁**：CubeMX 无头生成从不重写 `cmake/stm32cubemx/CMakeLists.txt`，那份源清单永远停在脚手架快照上。`collectCmakeSources` 从磁盘反推真相（`pickStartupFile` 选启动文件 → `deviceDefineFromStartup` 得 `STM32F103xB` → `familyTokensFromStartup` 得家族目录 `STM32F1xx` → `halModulesInUse` 由 `stm32f1xx_hal_conf.h` 的 `HAL_xxx_MODULE_ENABLED`（先 `stripComments`，注释掉的不算）∪ `Core/Src` 源码里的 `#include "stm32f1xx_hal_x.h"` 求并集），`refreshCubemxCmakeLists` 只重写三个 managed 块（设备宏 / 应用清单 / 驱动清单），保留原顺序、摘掉磁盘上已不存在的条目、缺的追加到末尾；`dominantEol` 按多数行尾写回、内容一致时一个字节都不写；`describeRefresh` 生成一句人话进 generate 的 notes。 |
+| ioc-plan.ts（614） | .ioc 事务。`planIocChanges` 算出逐键 diff + 源 SHA-256 → planId；`applyIocPlan` 校验 SHA 后原子替换（备份到 backups/<stamp>-ioc）；`rollbackIoc(backupFrom)` 回滚；辅助 `renderIocText`、`compareEntries`、`sha256Hex`、`encodeIocValue`、`loadPlan`。引脚写入保序（审计 A3）：只追加新增，不因缺 .Signal 删已有项。 |
+| clock-plan.ts（801） | 时钟规划（t3 新增）。`planClockChanges`：枚举 PLL 源 × 倍频 × 分频的全部可行组合 → 取 `|sysclk − target|` 最小（同距取更高档，所以 60 MHz 的目标落在 64 MHz，报告里写「不可达，已选 64 MHz（+4 MHz）」）→ 与 .ioc 现有键做 diff，`PLLMUL`、`SYSCLKFreq_VALUE`、`HCLKFrequency`、`APB1/APB2Prescaler` 这些派生键**全量重算**（只改源键会让 CubeMX 按旧频率理解）→ 再给逐外设频率表与 UART 波特率整除误差。`mode` 四态：`snapshot`（只看不写）/ `nearest`（默认就近）/ `explicit`（钉死 pllMul）/ `none`。超限（SYSCLK >72、APB1 >36、ADC >14）时**一个键都不写**，只报错。参数化在 src/data/clock-f1.ts。 |
+| cmake-sources.ts（480） | **老洞的补丁**：CubeMX 无头生成从不重写 `cmake/stm32cubemx/CMakeLists.txt`，那份源清单永远停在脚手架快照上。`collectCmakeSources` 从磁盘反推真相（`pickStartupFile` 选启动文件 → `deviceDefineFromStartup` 得 `STM32F103xB` → `familyTokensFromStartup` 得家族目录 `STM32F1xx` → `halModulesInUse` 由 `stm32f1xx_hal_conf.h` 的 `HAL_xxx_MODULE_ENABLED`（先 `stripComments`，注释掉的不算）∪ `Core/Src` 源码里的 `#include "stm32f1xx_hal_x.h"` 求并集），`refreshCubemxCmakeLists` 只重写三个 managed 块（设备宏 / 应用清单 / 驱动清单），保留原顺序、摘掉磁盘上已不存在的条目、缺的追加到末尾；`dominantEol` 按多数行尾写回、内容一致时一个字节都不写；`describeRefresh` 生成一句人话进 generate 的 notes。 |
 
-### 5.6 造工程与导出（5 个，1336 行）
+### 5.6 造工程、链接脚本与导出（8 个，2198 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| scaffold.ts（421） | HAL 路线脚手架。`preflightTarget`（工程名合法 → 目录非空 → hal 且已有同名 .ioc 就拒绝，指向 ioc_plan/apply）、`backupBeforeOverwrite` + `backupWarning`（只备份真会被覆盖的文件）、`mkdirTracked` / `cleanupAfterFailure`（失败只回收本次新建）、`resolveFirmwareRoot`（Repository → dsh-firmware → extraDirs）、`createProjectScaffold`、`templateDir`、常量 `DEFAULT_FIRMWARE_PACKAGE` / `SCAFFOLD_PROJECT_NAME`。复制走 fs-longpath。 |
-| register-template.ts（490） | 寄存器路线（不碰 CubeMX）。`resolveStartupChoice`（按型号/族选启动文件与宏）、`ensureCmsisTemplate`（从镜像下载 10 个文件到缓存并校验 sha256）、`createRegisterProject`（拷模板 → 写设备头/启动文件/链接脚本 → 生成 main.c）。模板文件缺失分「必需」与「可选」（.gitignore 是可选，缺了给 warning 不阻断）。 |
+| scaffold.ts（518） | HAL 路线脚手架。`preflightTarget`（工程名合法 → 目录非空 → hal 且已有同名 .ioc 就拒绝，指向 ioc_plan/apply）、`backupBeforeOverwrite` + `backupWarning`（只备份真会被覆盖的文件）、`mkdirTracked` / `cleanupAfterFailure`（失败只回收本次新建）、`resolveFirmwareRoot`（Repository → dsh-firmware → extraDirs）、`createProjectScaffold`、`templateDir`、常量 `DEFAULT_FIRMWARE_PACKAGE` / `SCAFFOLD_PROJECT_NAME`。复制走 fs-longpath。型号相关的启动文件、设备宏、`<DeviceId>_FLASH.ld` 与 demo.ioc 由 hal-chip 在**写盘之前**渲染成字符串，渲染失败时一个字节都不写。 |
+| hal-chip.ts（284） | HAL 路线的「型号 → 生成物」派生与纯文本渲染（t1 新增）。`resolveHalChip(input)` 复用 F1Chip，`renderStartupAndDefine`（RCT6 → startup_stm32f103xe.s + STM32F103xE）、`renderLinkerScript`（把 STM32F103XX_FLASH.ld 的 MEMORY 两行与注释两行换成 `<DeviceId>_FLASH.ld`，RCT6 是 256 KiB / 48 KiB）、`renderIoc`（demo.ioc 的 Mcu.CPN、引脚、时钟键）、`pointLinkerFlagAt`（把工具链文件里写死的 `-T STM32F103XX_FLASH.ld` 改指新名，否则命令行上会出现两个 -T）。全是字符串函数，所以能先渲染后落盘。 |
+| register-template.ts（558） | 寄存器路线（不碰 CubeMX）。`resolveStartupChoice`（按型号/族选启动文件与宏）、`ensureCmsisTemplate`（从镜像下载 10 个文件到缓存并校验 sha256）、`createRegisterProject`（拷模板 → 写设备头/启动文件/链接脚本 → 生成 main.c）。模板文件缺失分「必需」与「可选」（.gitignore 是可选，缺了给 warning 不阻断）。模板里已不写死任何型号：启动文件、设备宏、设备头、`.ld`、时钟全部按 `resolveF1Chip` 的结果参数化（14 个容量档）。 |
+| register-clock.ts（261） | 寄存器版的时钟初始化代码生成（不碰 CubeMX）。按 line 取最高 SYSCLK：F100 24 / F101 36 / F102 48 / F103·F105·F107 72 MHz；HSE 8 MHz ×N（F101 走 HSE/2×9 凑 36 MHz）；FLASH latency 按频率给 0/1/2（F100 的设备头里没有 latency 字段，自动跳过）；APB1 在 >36 MHz 时 ÷2；HSE 起不来就退 HSI/2×N 并写警告。产出的 `clock_init()` 插在 main() 第一行，末尾 `SystemCoreClockUpdate()` 让 SysTick 与 delay_ms 跟着对。 |
+| register-linker.ts（152） | 寄存器版的链接脚本渲染：按型号换掉 `<DeviceId>_FLASH.ld` 的 MEMORY RAM/FLASH 两行。F100/F101/F102 的 RAM 不在 src/data/stm32f1.ts 的表里，用 CubeMX db 的最小值兜底**并明确警告**（宁可小——栈必须留在真 RAM 内）。 |
 | vscode-config.ts（118） | `VSCODE_PLACEHOLDERS`（gdb / toolchain / cmake / svd 四个占位符）、`detectVscodeFill`（按本机探测结果填）、`fillVscodeTemplate`（没值的整行删掉并记 dropped，绝不写空串）、`describeDroppedPlaceholder`。模板里因此不出现任何开发机绝对路径（审计 B1）。 |
 | project-export.ts（155） | `runExport`：收集源文件（跳过 build / .dsh-stm32 / node_modules / .git）→ 可选带 prebuilt（elf/hex/bin）→ 可选内联 README → 打 zip。 |
 | zip.ts（152） | 自写的最小 store-only zip（不压缩、不引依赖）：`crc32`、`makeZip`、`listZipEntries`（测试用来验内容）。 |
 
-### 5.7 下载、缓存与固件包（7 个，2283 行）
+### 5.7 下载、缓存与固件包（7 个，2456 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| fetch.ts（341） | `fetchOne(target, destRoot, options)`：按 URL 列表依次尝试 → 校验内容特征（markers）→ 校验 sha256（有声明时）→ 落到目标路径；`fetchAll` 汇总。失败信息带「期望 / 实际」两个哈希，方便判断是上游挪了内容。**同一源内断点续传**（F3c）：`streamOnce(url, part, startAt, …)` 用 `Range: bytes=N-` 流式写 `.part-<pid>-<seq>`，watchdog 在 `stallMs`（默认 10 s）内判停滞或平均速率 < `minBytesPerSec`（默认 1024）就 abort，返回 `slow: true` 让 `fetchOne` 从已落盘字节续一次；服务器回 200（无视 Range）时截断重写，只有 206 才追加——**换源一律从零开始**（不同源的字节不保证同一份）。**校验失败必须连 `.part` 一起删**（T1 实测抓到的泄漏）：体量 / 网页 / markers / sha256 四道都不通过时走局部 `reject(reason)`——它把失败原因记进 `attempts` 再 `removeQuietly(part)`，否则半成品会长期躺在缓存目录里等着占满磁盘。 |
-| cache.ts（347） | 缓存索引（默认 %LOCALAPPDATA%\dsh-stm32\cache，可用 DSH_STM32_CACHE 覆盖）。`CACHE_INDEX_VERSION`、`readCacheIndex` / `writeCacheIndex`（坏索引先改名 index.json.broken-<ts>；tmp 唯一名 + rename 失败先备份旧索引再重试；`CacheIndexWriteError` 让上层知道是索引写坏了，审计 A2/A12）、`upsertCacheEntry` / `removeCacheEntry` / `findCacheEntry`、`checkCacheEntry`（按 sha256 验证，审计 A38）、`sha256OfFile`、`describeCacheBytes`。 |
+| fetch.ts（347） | `fetchOne(target, destRoot, options)`：按 URL 列表依次尝试 → 校验内容特征（markers）→ 校验 sha256（有声明时）→ 落到目标路径；`fetchAll` 汇总。失败信息带「期望 / 实际」两个哈希，方便判断是上游挪了内容。**同一源内断点续传**（F3c）：`streamOnce(url, part, startAt, …)` 用 `Range: bytes=N-` 流式写 `.part-<pid>-<seq>`，watchdog 在 `stallMs`（默认 10 s）内判停滞或平均速率 < `minBytesPerSec`（默认 1024）就 abort，返回 `slow: true` 让 `fetchOne` 从已落盘字节续一次；服务器回 200（无视 Range）时截断重写，只有 206 才追加——**换源一律从零开始**（不同源的字节不保证同一份）。**校验失败必须连 `.part` 一起删**（T1 实测抓到的泄漏）：体量 / 网页 / markers / sha256 四道都不通过时走局部 `reject(reason)`——它把失败原因记进 `attempts` 再 `removeQuietly(part)`，否则半成品会长期躺在缓存目录里等着占满磁盘。 |
+| cache.ts（370） | 缓存索引（默认 %LOCALAPPDATA%\dsh-stm32\cache，可用 DSH_STM32_CACHE 覆盖）。`CACHE_INDEX_VERSION`、`readCacheIndex` / `writeCacheIndex`（坏索引先改名 index.json.broken-<ts>；tmp 唯一名 + rename 失败先备份旧索引再重试；`CacheIndexWriteError` 让上层知道是索引写坏了，审计 A2/A12）、`upsertCacheEntry` / `removeCacheEntry` / `findCacheEntry`、`checkCacheEntry`（按 sha256 验证，审计 A38）、`sha256OfFile`、`describeCacheBytes`。 |
 | tar.ts（288） | `extractTarGz(archive, destRoot, options)`：解 gzip + tar，路径白名单（`isSafeRelative` 拒反斜杠、冒号、.. 与空段）、类型白名单（`entryKind`：0/空/5 正常，x/g/L/K 元数据，其余跳过并记名，审计 A4）、声明长度超出实际数据判截断整次失败。 |
 | firmware-install.ts（760） | 固件包下载与组装。`firmwareInstallPlan` / `installFirmware` / `planOrInstallFirmware`：选址（`isProtectedSystemDir` 拒绝 Program Files 之类、`orderCubeMxRoots` 把本机存在的排前面、`hasCubeMxExe` 只对真 CubeMX 目录建 dsh-firmware）→ 下载 2 个归档 + 5 个内核头 → `extractTarGz` → `verifyFirmwarePackage` → 写 `installed.json` 记录（`FIRMWARE_RECORD_FILE`）→ `firmwareExtraDirs` 让 generate/scaffold 也能找到非标准落点。 |
 | thirdparty.ts（281） | 生成期间临时停放 CubeMX 的第三方包索引（`PARKED_NAME = "pdsc.dsh-parked"`、`needsThirdpartyPacks`、`parkThirdpartyDb`），有 X-CUBE 包的工程保持原样；`cubeMxUserHome`。 |
@@ -307,16 +311,19 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | --- | --- |
 | route-plan.ts（645） | 「这笔功能该走 HAL 还是寄存器」。`PERIPHERAL_RULES`（外设规则表：关键词 → HAL/寄存器各自的代价与风险）、`assessRoute(input)` → `RouteAssessment`（verdict：hal-only / both-viable / register-ok / unclear）、`familyOf`、`findFirmwarePackage`、`VERDICT_LABEL`。工具层再把它和门禁、安装指引拼成一份输出。 |
 
-## 6. data 层：6 张事实表（1803 行）
+## 6. data 层：8 张事实表（2548 行）+ 1 份生成的芯片薄表
 
 | 模块 | 行数 | 内容 |
 | --- | --- | --- |
-| chips.ts | 48 | `CHIPS` 芯片表（F103C8T6 等）、`findChip`、`isKnownPin`。引脚合法性由它兜底。 |
-| cmsis-sources.ts | 250 | 寄存器路线的下载源：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（按容量选 startup 与宏）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / STARTUP / CORE_HEADER）。**改这里等于改「离线可复现」的边界**。 |
+| chips.ts | 202 | 内置 `CHIPS` 芯片表（F103C8T6 等）、`findChip`、`isKnownPin`（未知型号一律放行，不猜），外加**由本机 CubeMX db 派生引脚表**的一整套：`parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，`PC13-TAMPER-RTC → PC13`，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / builtin / unknown`（db 命中就注明来源 XML 与引脚数，否则明说「未与本机 db 校验」）。引脚合法性由它兜底。 |
+| cmsis-sources.ts | 392 | 寄存器路线的下载源与型号映射：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（委托 resolveF1Chip，兼容 `F1:B` / `F1:8` / `F103:xb` / `STM32F103C8T6` 四种写法）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / **STARTUP 14 条** / CORE_HEADER）、缓存条目 id 与解析（`chipOf`、`cmsisGroupKey`、`cmsisEntryId` → `cmsis:F1:103xb`、`chipEntryId`、`parseCmsisEntryRef`、`cmsisEntryAliases`）。**改这里等于改「离线可复现」的边界**：F1 的 14 个容量档 sha256 全部是 2026-10-30 真实下载实测的。 |
+| stm32f1.ts | 234 | F1 的容量档事实表（两条路线共用的唯一型号来源）。`F1_LINES`（6 条 line：100 xb/xe、101 x6/xb/xe/xg、102 x6/xb、103 x6/xb/xe/xg、105 xc、107 xc）、`GROUP_BY_LETTER`、`FLASH_BY_LETTER`、`RAM_BY_LINE_LETTER`（同字母在不同 line 差很多：字母 C 在 F103 是 256 KiB Flash / 48 KiB RAM，在 F105/F107 是 64 KiB RAM）、`PINS_BY_PACKAGE`（T36 / C48 / R64 / V100 / Z144）、`resolveF1Chip(input)` → `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`。 |
+| clock-f1.ts | 215 | F1 时钟树的事实表：PLL 源（HSE 8 MHz / HSI÷2 4 MHz / HSI 8 MHz，后者 `selectable=false`）、倍频 ×2..×16、上限（SYSCLK 72 / APB1 36 / APB2 72 / ADC 14 / USB 48 且必须 PLLCLK=72÷1.5）、APB1/APB2/ADC 分频表、14 条外设→总线、UART 波特率档、20 个 RCC IPParameters 名单。 |
 | firmware-packages.ts | 463 | 固件包事实表：`FIRMWARE_FAMILIES`（目前只有 F1）、`firmwareFamilyOf`、`firmwareVersionTags`、`packageXmlText`、`firmwarePlanFor`、`verifyFirmwarePackage`、`DSH_FIRMWARE_DIR_NAME = "dsh-firmware"`、`dshFirmwareDir`、`firmwareNeedFromIoc`（从 .ioc 的包名推族与版本）、`looksLikeFirmwarePackage`、`locateFirmwarePackage(root, packageName, extraDirs)` → `FirmwareLocation`（source：repository / dsh-firmware / cache / custom）、`firmwareSourceLabel`、`FirmwareExtraDir`。 |
 | install-guides.ts | 251 | 安装指引文本：`COMPONENT_INSTALLABILITY`（哪些 pacman 能代装、哪些必须人装）、`cubeMxGuide`、`firmwareGuide`、`guideFor`（用 Map 查而不是 in，避免原型链误判）、`guidesFor`、`guideLines`、`firmwareSizeHint`、`familyPrefix`。 |
 | search-roots.ts | 421 | 见 5.2。 |
 | toolchain-config.ts | 370 | 见 5.2。 |
+| chip-table.json | 2044 | **脚本生成的薄表**（`node scripts/gen-chip-table.mjs` 产出，不要手改）：2016 颗芯片的 CPN / 内核 / 主频 / RAM / Flash / 电压 / 引脚数，来源是本机 CubeMX 的 `db/mcu/*.xml`。插件当前只消费 F1 那一段，其余为将来扩族备查；`--check` 模式给 CI 用（生成物与 db 不一致就红）。 |
 
 ## 7. 关键流程
 
@@ -654,6 +661,7 @@ flowchart LR
 | 19 | 生成期间 pdsc 停放必须在 finally 还原 | 用户的第三方包索引「消失」 | thirdparty.ts + generate.ts |
 | 20 | 零运行时依赖、lib/ 入库 | 装上就坏 / 用户机器没有编译器 | package.json、tsconfig |
 | 21 | cmake 源清单必须跟着 startup 与 hal_conf 走 | 开了外设也链接失败（undefined reference to HAL_xxx_Init） | cmake-sources.refreshCubemxCmakeLists、generate.ts 两处调用 |
+| 22 | 链接脚本按 `<DeviceId>` 命名，命令行上只能有一个 `-T` | 链接的是别人的 MEMORY：编译过、烧到小容量芯片上跑飞（.ld 说 256 KiB，实际只有 64 KiB） | hal-chip.pointLinkerFlagAt、register-linker.renderLinkerScript、doctor.checkChipConsistency ①③ |
 
 ## 9. 测试体系
 
@@ -661,13 +669,15 @@ flowchart LR
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 26 个套件 374 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
-| e2e 脚本 | test/e2e-*.mjs（12 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
-| 发布形态 | scripts/pack-smoke.mjs（npm run test:pack） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程。CI 上跑 |
+| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 29 个套件 418 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
+| e2e 脚本 | test/e2e-*.mjs（15 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
+| 发布形态 | scripts/pack-smoke.mjs（npm run test:pack）+ scripts/pack-size.mjs（npm run test:size） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程；pack-size 再守包体（tarball ≤1.2 MB、templates/** ≤60 KB、包内禁二进制、必需文件齐全）。CI 上两连跑 |
 
-### 9.2 26 个套件一览（test/run-units.mjs 的 suites 数组顺序）
+### 9.2 29 个套件一览（test/run-units.mjs 的 suites 数组顺序）
 
-build-units、cache-units、stm32f1-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
+build-units、cache-units、stm32f1-units、hal-route-units、clock-units、doctor-chip-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
+
+开发机上 418 例全跑；CI 上是 **416 pass + 2 skipped**（两条用例依赖本机路径）。
 
 约定：
 - 测试 import ../lib/，所以**改 src 必须先 npm run build**（否则测的是旧代码，最容易自欺的地方）。
@@ -696,7 +706,10 @@ const fake = {
 | --- | --- | --- |
 | 加一个工具 | src/engine/<域>.ts（逻辑）→ src/tools/<x>.ts（schema + 渲染）→ src/index.ts 注册 | output schema、formatXReport、test/tool-contract-units、schema-guard |
 | 改报告字段 | src/tools/<x>.ts 的 reportSchema + 渲染 | schema-guard 必须有对应断言 |
-| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts | 仓库名不能猜；sha256 要实测 |
+| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts（引脚表可交给 deriveChipPinTable 从 db 派生）、再补一份 clock-f1 那样的时钟上限表（否则寄存器版只能不出 clock_init） | 仓库名不能猜；sha256 逐文件实测并把来源 URL 记进表里（F1 的 14 条就是这么来的） |
+| 加芯片型号（同族容量档） | src/data/stm32f1.ts（容量档与引脚数）→ src/engine/hal-chip.ts（渲染启动文件/宏/.ld/.ioc）→ register-template.ts / register-linker.ts / register-clock.ts | 三条路都要试：HAL 建工程、寄存器建工程、doctor 一致性；stm32f1-units / hal-route-units / doctor-chip-units 会红 |
+| 改时钟树 | src/data/clock-f1.ts（PLL 源/分频/外设→总线）→ src/engine/clock-plan.ts（枚举/就近/diff）→ src/tools/ioc-plan.ts（参数与渲染）→ src/engine/register-clock.ts（寄存器版） | clock-units 14 例兜「60→64」「超限一个键都不写」；派生键必须全量重算 |
+| 更新芯片薄表 | `node scripts/gen-chip-table.mjs` 重跑 → src/data/chip-table.json 更新 | 生成物不要手改；`--check` 给 CI；读不到 CubeMX db 时必须报错退出而不是写半截文件 |
 | 改工程模板 | templates/scaffold/*，若新增文件同步 scaffold.ts 的 SHARED_TEMPLATE_FILES | scaffold-patch-units 的文件数断言会红 |
 | 改设置面板 | client/client.js（前端）+ engine/web-api.ts（逻辑）+ web-api-units | 前端不经打包器，语法要保守 |
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |
@@ -712,10 +725,13 @@ const fake = {
 3. **firmware-install 的 existing 分支 nextStep 文案**偏旧（还停在「直接调 stm32_generate」的说法）。
 4. **四种 errorCode 只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验。
 5. **P2（多芯片 + HAL 外设源文件按需落位）与 P3（gdb MI 常驻）** 未开工。
-6. **templates/scaffold/build/** 里有一份 4 个文件、29 KB 的构建残留（CMakeConfigureLog 等），代码没有引用它，但 package.json 的 files 里有 templates，会把它一起打进发行包——属于该清掉的杂物。
+6. **docs/diagrams/** 那两张 HTML 图有 2 MB 原始 / 891 KB gz，已经不进 npm 包**（package.json 的 files 从 docs 收窄成 docs/*.md）。这事现在由 `scripts/pack-size.mjs`（npm run test:size）守着：tarball ≤1.2 MB、templates/** ≤60 KB、包内禁 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。实测包体 509.9 KB / 99 个文件。
 7. **CI 上的 test:pack** 只在本机跑过；第一次在 GitHub Actions 上跑还没有记录。
 8. 斜杠命令的卡片渲染只有用户手输能验，工具层测不到。
 9. **.elf 的选择依赖 CMakeCache**：工程名优先来自 `CMAKE_PROJECT_NAME`，手工删了 CMakeCache 或换了构建目录后只能退化为「mtime 最新」，此时以报告 notes 里的候选列表为准。
+10. **裸 `cmake -S . -B build` 会丢工具链文件**：工具链只由 `CMakePresets.json` 注入（`cmake/gcc-arm-none-eabi.cmake`），不走 preset 就得自己给 `-DCMAKE_TOOLCHAIN_FILE`，否则 configure 用宿主 gcc、链接时找不到启动文件。
+11. **别用 .elf 文件大小判「超 Flash」**：带 `-g3` 的 20 KiB 固件，.elf 里有 600 KB 调试信息，按文件大小判会把正经 C8T6 工程误报成超容量。doctor 因此读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`；解析不出 program header 时才退回文件大小并注明是粗算。
+12. **换芯片后别留旧链接脚本名**：`-T` 出现两个 .ld 时链哪个取决于顺序，症状是「编译过、上板跑飞」。hal-chip.pointLinkerFlagAt 会把工具链里的旧名改指新名，doctor 的 ①③ 两项检查也会先报 blocker。
 
 ---
 
