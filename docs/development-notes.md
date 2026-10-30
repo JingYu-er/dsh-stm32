@@ -1966,3 +1966,29 @@ CubeMX 无头生成（`generate all_code_in_main` + `generate code`）只重写 
 新套件 `test/cmake-sources-units.test.mjs`（15 例）：设备宏/家族反推、启动文件排序、原样工程零写入、换芯片（startup + 设备宏一起换、旧 startup 从清单摘掉）、开 UART 只加真存在的 `hal_uart.c` 且第二次幂等、hal_conf 开着但驱动包缺 `.c` 时只进 notes、hal_conf 里那一圈 `#include` 不算用到、源码手写 `#include` 也算、ADC 连 `_ex` 一起加、删掉的驱动文件从清单摘除、dryRun 不写盘、非 CMake 布局/无启动文件 `ok=false`、注释掉的 `#define` 不算启用、CRLF/LF 混排零写入，以及一条接线回归（伪造 `cubemx/jre/bin/java.exe` + 缓存命中，`runGenerate` 在 `skipped=true` 时也必须把 `hal_uart.c` 写进清单）；`test/run-units.mjs` 已登记。
 
 `npm run build` exit 0；`npm test` → **25 套件 363 pass / 0 fail**（CI 361 + 2 skipped）；`npm run test:pack` exit 0（16 个必须文件齐全、解包产物能建寄存器工程）。README / README_EN / `reading-guide.md` 第 9 章已同步到 363 / 361。
+## 27. F1 全系第一步：src/data/stm32f1.ts（2026-10-30）
+
+### 27.1 为什么先做这一层
+
+扩 F1 全系的最小切口不是改工具，而是把「型号 → 启动文件 / 设备宏 / 容量」这条事实单独拎出来。原来这条映射散在 src/data/cmsis-sources.ts:105-123 的 startupChoiceFor（只认 STM32F103 加三个字母）和 src/data/chips.ts 的一张 C8T6 引脚表里。
+
+### 27.2 数据来源（优先级）
+
+1. 固件包 Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc 里真实存在的启动文件——实测 14 个：f100xb/xe、f101x6/xb/xe/xg、f102x6/xb、f103x6/xb/xe/xg、f105xc、f107xc。设备头在同级 Include/，14 个同名（没有 f106）。
+2. 本机 CubeMX db/mcu/*.xml（Flash/RAM/引脚数，将来做校验用）。
+3. 文件内置的容量字母表。
+### 27.3 两个真坑（都是实测暴露的）
+
+- 容量字母到容量档不是全局映射：字母 C 在 F103 上是 xE（startup_stm32f103xe.s），在 F105/F107 上却是 xC（startup_stm32f105xc.s）。第一版用全局表直接映射，STM32F107VCT6 被判成「没有 xe 这一档」而返回 null。修法：chooseGroup 先试「该 line 真有 x 加字母」，不行再退回全局表。
+- F106 不存在：最初凭「F105/F106 共用」的旧笔记加了 code 106，结果对着固件包实测没有 startup_stm32f106xc.s，测试直接红。删掉该 line——宁可少一条，也不要编一个上游没有的文件。
+
+### 27.4 接口与边界
+
+resolveF1Chip(input) 支持三种输入：完整型号（STM32F103RCT6）、去掉温度后缀（STM32F103C8）、显式容量档（F103:xb）。返回 { chip, reason }：认不出时 chip=null 且 reason 是人话（「F107 没有 xb 这一容量档（上游真实档位：xc）」这种），绝不返回一个不存在的启动文件名。
+
+RAM 表按「line:容量字母」而不是按容量档——xE 跨 C/D/E 三个字母，RAM 分别是 48/64/64 KiB；查不到就 ramBytes=null 并进 notes，不猜数字。
+### 27.5 验证
+
+test/stm32f1-units.test.mjs 11 例：C8T6 与既有事实一致、RCT6 走 xE、C/D/E 三字母 RAM 不同、F107 只有 xC、不存在的档位明确拒绝、未知 line 与坏格式与空输入与坏封装后缀都给原因、无温度后缀也认、F103:xb 与完整型号同解、6 条 line 的每个档位都能反推回启动文件名、RAM 未收录只给 note，以及「本机有固件包时，14 个组合的启动文件与设备头都真实存在」（CI 上自动 skip）。
+
+npm run build exit 0；npm test 26 套件 374 pass / 0 fail（CI 372 + 2 skipped）。README / README_EN / reading-guide.md 第 9 章已同步。
