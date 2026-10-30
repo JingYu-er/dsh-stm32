@@ -1,0 +1,11 @@
+{
+  "version": "2026.10.31-1",
+  "schema": 2,
+  "profiles": [
+    "full"
+  ],
+  "installedAt": "2026-10-31T00:00:00.000Z",
+  "source": "fixtures",
+  "fileCount": 1,
+  "totalBytes": 18375
+}

@@ -18,7 +18,7 @@
 
 大多数「让 AI 帮忙写 STM32」的做法停在代码层：它给你一段 `main.c`，至于这段代码能不能编译、烧进去灯到底闪没闪，还是你自己开 CubeMX、切终端、按 F5。**模型看不到板子，也就没法对自己的代码负责。**
 
-这个插件把硬件侧也接到 DSH 上：`.ioc` 能读能改（事务 + 回滚）、代码落在 `USER CODE` 块里、生成和编译能拿到真实的报错行、烧录是一条**不经过调试器**的独立路径、烧完还能用寄存器把状态读回来。每一步都返回结构化证据（`planId`、`file:line:col`、`Verified OK`、`GPIOC_ODR` 的 bit13），模型据此决定下一步，而不是猜。
+这个插件把硬件侧也接到 DSH 上：`.ioc` 能读能改（事务 + 回滚）、代码落在 `USER CODE` 块里、生成和编译能拿到真实的报错行、烧录是一条**不经过调试器**的独立路径、烧完还能用寄存器把状态读回来。每一步都返回结构化证据（`planId`、`file:line:col`、`Verified OK`、`GPIOC.ODR` 的 bit13（有 SVD 时报告直接写 `ODR13=1`）），模型据此决定下一步，而不是猜。
 
 这就是「更彻底的面向 DSH 硬件编程」：**模型不只是写代码——它能把代码烧进板子，再把板子上的状态从寄存器里读回来跟自己的预期对账。**
 
@@ -29,7 +29,7 @@
 | 写代码 | 整文件编辑，一不小心写进生成区，重新生成就没了 | `stm32_code_patch` 只写 `USER CODE` 块，块外逐字节不动 |
 | 编译 | 使用keil编译或使用vscode插件编写cmake文件 | DSH 通过/stm32-build [dir] [--clean] 自动编译 |
 | 烧录 | 使用keil烧录或自己写 `tasks.json` 调 openocd | DSH 通过/stm32-debug [dir]自动烧录 |
-| 验证 | 断点调试，自己查看寄存器的值 | 烧完用 `stm32_regs_read` 把状态读回来：`GPIOC_ODR` 两次采样看计数器递增，`AFIO_MAPR` 确认 SWD 没被固件关掉 |
+| 验证 | 断点调试，自己查看寄存器的值 | 烧完用 `stm32_regs_read` 把状态读回来：`GPIOC.ODR` 两次采样看计数器递增（有 SVD 时直接显示 `ODR5=1`），`AFIO.MAPR` 确认 SWD 没被固件关掉 |
 | 调试 | `F5` + 手动下断点、看完再关会话 | `stm32_debug_run` 停在 `main` 抓一次现场即释放；要连续调才开 `stm32_debug_session`，空闲自动关 |
 
 
@@ -98,7 +98,9 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 3 | 按 `.ioc` 无头跑 CubeMX，产物落到 `Core/` | `stm32_generate` | 首次 130–175 s；之后再跑，`.ioc` 与产物都没变会**直接跳过**（<1 s） |
 | 4 | 编译（首次自动 `cmake --preset`） | `stm32_build` | 配置 ~5 s + 编译 3 s |
 | 5 | **只烧录**：program + verify + reset | `stm32_flash` | 2.1–2.6 s |
-| 6 | 读回 `GPIOC_ODR`，确认状态确实在翻 | `stm32_regs_read` | 0.4–1.3 s |
+| 6 | 读回 `GPIOC.ODR`（或地址 `0x4001100C`），确认状态确实在翻 | `stm32_regs_read` | 0.4–1.3 s |
+
+> 第 6 步用的是符号写法（`GPIOC.ODR`）。它靠资源包里的 SVD 表：`stm32_assets action="refresh" profile="full"`（128 个文件，其中 SVD 1.71 MiB）。只装了 `core` 也能读——但要写地址 `0x4001100C`，报告里没有寄存器名，也没有位域解释。
 
 模型侧就是一句话：「在 `D:\work\blink` 建一个 STM32F103C8T6 的闪灯工程，编译并烧进去」。想自己敲就：
 
@@ -123,7 +125,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 多源文件、自己写的模块 | 写进 `cmake/user/CMakeLists.txt`，模板已留好位置 | 位置就位；未单独实测 |
 | 业务代码 | `stm32_code_patch` 按块写入，重新生成时按标签搬回 | 已实测（append / replace / 标签写错会列出全部可用标签） |
 | 调参数、改时钟 | `.ioc` 事务：先 diff → SHA 校验 → 备份 → 失败回滚 | 已实测 |
-| 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器（`TIM2_CNT`、`USART1_SR`、`ADC1_DR`…），或 `stm32_debug_eval` 读变量 | 按物理地址读寄存器已实测（`GPIOC_ODR` / `AFIO_MAPR`） |
+| 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器——符号名 `TIM2.CNT` / `USART1.SR` / `ADC1.DR`…或物理地址 `0x40000024`；只写外设名 `GPIOC` 就把它的 7 个寄存器整体 dump。也可以 `stm32_debug_eval` 读变量 | 地址写法已上板实测（`0x4001100C` / `0x40010004`）；符号名与位域解释用真实资源包 + 假探针验证，**真机待复测**（开发笔记 §31.11） |
 | 出问题要看现场 | `stm32_debug_run` 停在 `main` 抓一次；要连续调就开 `stm32_debug_session` + `stm32_debug_eval` | 已实测（停在 `main () at main.c:67`） |
 
 所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——芯片支持 F1 全系（F100/101/102/103/105/107，本机验证板是 C8T6）但只到 F1、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
@@ -145,7 +147,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 编译 | `stm32_build`：构建目录与 `.elf` 自动推断、错误去重、链接后解析 RAM/FLASH 占用；`artifacts` 里要 `hex` / `bin` 就用同一套 `arm-none-eabi-objcopy` 转出来 |
 | 烧录 | `stm32_flash`：openocd `program verify reset exit`，烧完释放探针；烧前检查 `.ioc` 是否开了 Serial Wire；失败时给结构化 `probeError`（`kind` / `cause` / `hint` / `evidence` / `retryable`，`kind` 收 8 类） |
 | 调试 | `stm32_debug_run` / `stm32_debug_session` / `stm32_debug_eval` / `stm32_debug_stop` |
-| 验证"真的在跑" | `stm32_regs_read`：按物理地址把任意外设寄存器读回来，halt 读值后 `resume`，不复位芯片 |
+| 验证"真的在跑" | `stm32_regs_read`：按地址或符号名（`GPIOC.ODR`）把任意外设寄存器读回来，有 SVD 时顺带解位域（`→ ODR5=1`）；halt 读值后 `resume`，不复位芯片 |
 | 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
@@ -160,7 +162,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
 | `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——F1 全系都吃；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
-| `stm32_assets` | 管**设备事实资源包**（芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "refresh"`（默认 `profile: "core"`，约 180 KB；已装同版本直接复用）从 GitHub → jsDelivr → gitcode 多源拉 `manifest.json`，逐文件钉 sha256 装到 `~/.dsh-stm32/assets/<版本>/`；`list` / `verify` / `prune` 管各版本。**插件不再内置任何芯片表**，设备事实只从这里读，第一次用要联网装一次，装好后离线可用 |
+| `stm32_assets` | 管**设备事实资源包**（芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "refresh"`（默认 `profile: "core"`，30 个文件约 237 KiB；已装同版本直接复用；`profile: "full"` 是 128 个文件，多加 SVD 等表）从 GitHub → jsDelivr → gitcode 多源拉 `manifest.json`，逐文件钉 sha256 装到 `~/.dsh-stm32/assets/<版本>/`；`list` / `verify` / `prune` 管各版本。**插件不再内置任何芯片表**，设备事实只从这里读，第一次用要联网装一次，装好后离线可用 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
 | `stm32_firmware_install` | 缺固件包时的一条龙：`dryRun`（默认）只出计划——装到哪、下哪两个源码仓、几条自检判据；`dryRun: false` + `confirm: true` 才真下（GitHub 上 HAL 驱动与 CMSIS 设备支持两个源码包 + 内核头，合计约 2 MB），组装成与官方同构的 `STM32Cube_FW_<族>_V<版本>` 包（自写 `package.xml`）并过五条自检。已有官方包时什么都不做；默认装到 `<CubeMX 根>/dsh-firmware`（不是 `Repository`——塞自造版本号会被 CubeMX 静默忽略），生成时由 `stm32_generate` 用 `setCustomFWPath` 指过去 |
@@ -190,7 +192,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_debug_session` | 常驻 openocd 会话（`.elf` 自动解析），空闲 90 s 自动关、硬上限 10 min |
 | `stm32_debug_eval` | 在会话里执行 gdb 命令或读表达式（如 `g_led_blink_count`），读完立刻 `resume` + `detach` |
 | `stm32_debug_stop` | 立刻释放探针，幂等 |
-| `stm32_regs_read` | 读 `GPIOC_ODR`、`AFIO_MAPR` 等物理地址；收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零。连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
+| `stm32_regs_read` | 读寄存器，`addresses` 五种写法：物理地址 `0x4001100C` / `4001100C`、符号名 `GPIOC.ODR` / `GPIOC->ODR`、只写外设名 `GPIOC`（按偏移升序把它的 7 个寄存器整体 dump，上限 64 条）。装了资源包的 `full` profile 时，每条样本带规范化名与**置位位域**（`GPIOC.ODR (0x4001100C) = 0x00000020  → ODR5=1`）；未知外设会列出可用的前 10 个（共 53 个），未知寄存器会列出该外设的已知寄存器；没有 SVD 时纯地址照读（只是没有名字与位域），符号名报错并提示 `stm32_assets refresh --profile full`。收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零；连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
 | `stm32_rtt` | **RTT 日志**（不占串口）：`action: "start"` 先用 `mdw` 读三个字确认 RAM 里真有 `SEGGER RTT` 控制块（`addr` 填控制块起始地址，不是通道缓冲地址），再发 `rtt setup/start/server start`；没有活跃会话时自己起一个。`action: "dump"` 读 `seconds`（默认 3 s）或 `maxRecords`（默认 200 条），返回 `records[{ t, level, text }]`——`level` 是**保留到哪一级**（1 error / 2 warn / 3 info / 4 debug，默认 4 全要），`dropped` / `truncated` 如实报。`action: "stop"` 幂等（turn 结束也会自动停），`action: "status"` 看端口与已运行时长。目标必须**真在跑**（`rtt start` 读的是运行时 RAM）。失败带 `probeError`：控制块全 0 = 固件没调 `rtt_init()`、魔数不符 = `addr` 填错、连不上 = 会话掉了或 9090 端口被占 |
 
 ### 固件里怎么加 RTT（最短示例）
@@ -362,6 +364,7 @@ source [find target/stm32f1x.cfg]
 | 生成/建工程需要 **CubeMX + F1 固件包** | 固件包版本默认 `STM32Cube_FW_F1_V1.8.7` | 换版本传 `firmwarePackage` |
 | 未在别人的机器上验证 | 本机：Windows 10 + MSYS2 UCRT64 + DAPLink + 蓝丸；其余组合靠反馈 | 遇到问题请附 `stm32_doctor` 的完整输出开 issue |
 | **RTT 只有通道 0**，帧是我们自己的约定 | `stm32_rtt` 只解析通道 0，头是 13 字节（4 B 长度 + 1 B 级别 + 8 B 时间戳 + UTF-8 正文）；既不是 defmt，也不是 SEGGER 原生裸字节——原生客户端（RTT Viewer / J-Link RTT Client）读通道 0 会把这 13 字节当正文。RTT 还依赖目标 RAM：不调 `rtt_init()` 就没有控制块，环满时整条丢 | 级别当过滤（`level: 3` 只看 info 以上），结构化内容塞进 `text` 里自己放 JSON；通道数与环大小改 `rtt.h` 的 `RTT_UP_CHANNELS` / `RTT_BUF_SIZE`（默认 3×1 KB = 3 KB `.bss`，C8T6 只有 20 KB）；要 defmt 解码或原生 RTT 输出是另一个功能 |
+| **寄存器符号名与位域解释要靠资源包的 `full` profile** | `GPIOC.ODR` / `GPIOC->ODR` 与外设 dump（只写 `GPIOC`）都从 `device/f1/svd/<line>.json` 解析，这份数据由 ST 的 SVD 派生（ST EULA，1.71 MiB），`core`（30 个文件约 237 KiB）里没有；覆盖线只有 100/101/102/103/105/107。没有 SVD 时纯地址照读，只是没有名字和位域；符号名会报错并提示怎么补 | `stm32_assets action="refresh" profile="full"`（128 个文件）；不想装就写 `0x` 开头的地址 |
 
 ## 排错
 
@@ -373,7 +376,7 @@ source [find target/stm32f1x.cfg]
 | 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 借用会话里那个 openocd，notes 会写清「复用调试会话（gdb 端口 N，tcl 端口 M），没有另起 openocd」。B3 之后默认走 **Tcl RPC 直读**（一条 TCP 连接：halt → 读 pc → 连续 `mdw` → resume，毫秒级），所以 `report.command` 是 `gdb-multiarch …` 只说明 Tcl 快路径没成、回退到了会话里的 gdb，原因写在 notes 里；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | 工具直接回「缺 arm-none-eabi-gcc…，这次没有开始编译」 | 这是开工前门禁（`envCheck` 默认 `block`）拦下来的，不是 bug：它比跑到一半才发现省时间。回一句「装」，模型调 `stm32_env_install` 出计划；确认后装好并写配置文件，**下一条命令就能用，不必重启**。想先看全貌就 `/stm32-env`；只想先跑起来就传 `envCheck: "warn"`（照做但写警告）或 `"off"`（不查） |
-| 第一次建工程回「设备事实还没就绪……先跑 stm32_assets refresh，或检查网络」 | 插件不内置芯片表：型号 → 启动文件 / 设备宏 / Flash / RAM 的事实只从本地资源包缓存（`~/.dsh-stm32/assets/<版本>/`）读。联网跑一次 `stm32_assets`（`action: "refresh"`，默认 `profile: "core"`，约 180 KB），装好后离线可用；`DSH_STM32_ASSETS` 可换根目录 |
+| 第一次建工程回「设备事实还没就绪……先跑 stm32_assets refresh，或检查网络」 | 插件不内置芯片表：型号 → 启动文件 / 设备宏 / Flash / RAM 的事实只从本地资源包缓存（`~/.dsh-stm32/assets/<版本>/`）读。联网跑一次 `stm32_assets`（`action: "refresh"`，默认 `profile: "core"`，30 个文件约 237 KiB），装好后离线可用；`DSH_STM32_ASSETS` 可换根目录 |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
@@ -400,7 +403,7 @@ GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的�
 | --- | --- | --- |
 | 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 99 个文件 / 525.7 KB，解包 1538.3 KB；其中 `templates/**` 38.5 KB |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
-| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（chips.json / memory.json / .ioc 模板 / .ld / SVD，core 约 180 KB；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（chips.json / memory.json / .ioc 模板 / .ld / SVD，core 30 个文件约 237 KiB、full 128 个文件——SVD 在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
 
 护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` ≤ 60 KB、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
@@ -425,7 +428,7 @@ src/
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）
-test/                      离线套件（35 个，run-units 登记）+ fixtures + 真机 e2e
+test/                      离线套件（36 个，run-units 登记）+ fixtures + 真机 e2e
 scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-xcube-catalog / copy-client）
 docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/（不进 npm 包）
 ```
@@ -434,7 +437,7 @@ docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/�
 
 - [规格书](docs/dsh-stm32-plugin-规格.md)：工具契约、状态机、验收 A1–A13 的判定标准
 - [开发笔记](docs/development-notes.md)：里程碑、宿主契约踩坑、每个工具的实现细节与实测数据
-- [源码精读指南](docs/reading-guide.md)：分层阅读顺序、每个文件的职责与关键导出、14 张流程图、20 条不变量
+- [源码精读指南](docs/reading-guide.md)：分层阅读顺序、每个文件的职责与关键导出、14 张流程图、23 条不变量
 - 可视化：[架构总览](docs/diagrams/dsh-stm32-architecture.html) / [主线旅程](docs/diagrams/dsh-stm32-journey.html)（单文件 HTML，离线可开，可导出 PNG/SVG）
 
 ## 许可证

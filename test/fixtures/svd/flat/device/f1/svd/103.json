@@ -1,0 +1,805 @@
+{
+  "schema": 2,
+  "family": "STM32F1",
+  "line": "103",
+  "device": "STM32F103xx",
+  "sizeUnit": "bits",
+  "addressUnitBits": 8,
+  "source": {
+    "kind": "cmsis-svd",
+    "repo": "posborne/cmsis-svd",
+    "path": "data/STMicro/STM32F103xx.svd",
+    "url": "https://github.com/posborne/cmsis-svd/blob/main/data/STMicro/STM32F103xx.svd",
+    "file": "STM32F103xx.svd",
+    "device": "STM32F103xx"
+  },
+  "notes": [
+    "测试夹具：只保留单测用到的外设/寄存器，字段名与真实 SVD 一致。"
+  ],
+  "counts": {
+    "peripherals": 5,
+    "registers": 21,
+    "fields": 117
+  },
+  "peripherals": [
+    {
+      "name": "GPIOA",
+      "baseAddress": "0x40010800",
+      "registers": [
+        {
+          "name": "CRL",
+          "addressOffset": "0x00",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "MODE0",
+              "bitOffset": 0,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF0",
+              "bitOffset": 2,
+              "bitWidth": 2
+            },
+            {
+              "name": "MODE1",
+              "bitOffset": 4,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF1",
+              "bitOffset": 6,
+              "bitWidth": 2
+            }
+          ]
+        },
+        {
+          "name": "CRH",
+          "addressOffset": "0x04",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "MODE0",
+              "bitOffset": 0,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF0",
+              "bitOffset": 2,
+              "bitWidth": 2
+            },
+            {
+              "name": "MODE1",
+              "bitOffset": 4,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF1",
+              "bitOffset": 6,
+              "bitWidth": 2
+            }
+          ]
+        },
+        {
+          "name": "IDR",
+          "addressOffset": "0x08",
+          "size": 32,
+          "access": "read-only",
+          "fields": [
+            {
+              "name": "IDR0",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR1",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR2",
+              "bitOffset": 2,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR3",
+              "bitOffset": 3,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR4",
+              "bitOffset": 4,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR5",
+              "bitOffset": 5,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR6",
+              "bitOffset": 6,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR7",
+              "bitOffset": 7,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR8",
+              "bitOffset": 8,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR9",
+              "bitOffset": 9,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR10",
+              "bitOffset": 10,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR11",
+              "bitOffset": 11,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR12",
+              "bitOffset": 12,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR13",
+              "bitOffset": 13,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR14",
+              "bitOffset": 14,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR15",
+              "bitOffset": 15,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "ODR",
+          "addressOffset": "0x0C",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "ODR0",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR1",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR2",
+              "bitOffset": 2,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR3",
+              "bitOffset": 3,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR4",
+              "bitOffset": 4,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR5",
+              "bitOffset": 5,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR6",
+              "bitOffset": 6,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR7",
+              "bitOffset": 7,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR8",
+              "bitOffset": 8,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR9",
+              "bitOffset": 9,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR10",
+              "bitOffset": 10,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR11",
+              "bitOffset": 11,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR12",
+              "bitOffset": 12,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR13",
+              "bitOffset": 13,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR14",
+              "bitOffset": 14,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR15",
+              "bitOffset": 15,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "BSRR",
+          "addressOffset": "0x10",
+          "size": 32,
+          "access": "read-write",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "name": "GPIOC",
+      "baseAddress": "0x40011000",
+      "registers": [
+        {
+          "name": "CRL",
+          "addressOffset": "0x00",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "MODE0",
+              "bitOffset": 0,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF0",
+              "bitOffset": 2,
+              "bitWidth": 2
+            },
+            {
+              "name": "MODE1",
+              "bitOffset": 4,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF1",
+              "bitOffset": 6,
+              "bitWidth": 2
+            }
+          ]
+        },
+        {
+          "name": "CRH",
+          "addressOffset": "0x04",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "MODE0",
+              "bitOffset": 0,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF0",
+              "bitOffset": 2,
+              "bitWidth": 2
+            },
+            {
+              "name": "MODE1",
+              "bitOffset": 4,
+              "bitWidth": 2
+            },
+            {
+              "name": "CNF1",
+              "bitOffset": 6,
+              "bitWidth": 2
+            }
+          ]
+        },
+        {
+          "name": "IDR",
+          "addressOffset": "0x08",
+          "size": 32,
+          "access": "read-only",
+          "fields": [
+            {
+              "name": "IDR0",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR1",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR2",
+              "bitOffset": 2,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR3",
+              "bitOffset": 3,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR4",
+              "bitOffset": 4,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR5",
+              "bitOffset": 5,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR6",
+              "bitOffset": 6,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR7",
+              "bitOffset": 7,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR8",
+              "bitOffset": 8,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR9",
+              "bitOffset": 9,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR10",
+              "bitOffset": 10,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR11",
+              "bitOffset": 11,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR12",
+              "bitOffset": 12,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR13",
+              "bitOffset": 13,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR14",
+              "bitOffset": 14,
+              "bitWidth": 1
+            },
+            {
+              "name": "IDR15",
+              "bitOffset": 15,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "ODR",
+          "addressOffset": "0x0C",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "ODR0",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR1",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR2",
+              "bitOffset": 2,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR3",
+              "bitOffset": 3,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR4",
+              "bitOffset": 4,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR5",
+              "bitOffset": 5,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR6",
+              "bitOffset": 6,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR7",
+              "bitOffset": 7,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR8",
+              "bitOffset": 8,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR9",
+              "bitOffset": 9,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR10",
+              "bitOffset": 10,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR11",
+              "bitOffset": 11,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR12",
+              "bitOffset": 12,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR13",
+              "bitOffset": 13,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR14",
+              "bitOffset": 14,
+              "bitWidth": 1
+            },
+            {
+              "name": "ODR15",
+              "bitOffset": 15,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "BSRR",
+          "addressOffset": "0x10",
+          "size": 32,
+          "access": "read-write",
+          "fields": []
+        },
+        {
+          "name": "BRR",
+          "addressOffset": "0x14",
+          "size": 32,
+          "access": "read-write",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "name": "RCC",
+      "baseAddress": "0x40021000",
+      "registers": [
+        {
+          "name": "CR",
+          "addressOffset": "0x00",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "HSION",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "HSIRDY",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "HSITRIM",
+              "bitOffset": 3,
+              "bitWidth": 5
+            },
+            {
+              "name": "HSICAL",
+              "bitOffset": 8,
+              "bitWidth": 8
+            },
+            {
+              "name": "HSEON",
+              "bitOffset": 16,
+              "bitWidth": 1
+            },
+            {
+              "name": "HSERDY",
+              "bitOffset": 17,
+              "bitWidth": 1
+            },
+            {
+              "name": "HSEBYP",
+              "bitOffset": 18,
+              "bitWidth": 1
+            },
+            {
+              "name": "CSSON",
+              "bitOffset": 19,
+              "bitWidth": 1
+            },
+            {
+              "name": "PLLON",
+              "bitOffset": 24,
+              "bitWidth": 1
+            },
+            {
+              "name": "PLLRDY",
+              "bitOffset": 25,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "CFGR",
+          "addressOffset": "0x04",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "SW",
+              "bitOffset": 0,
+              "bitWidth": 2
+            },
+            {
+              "name": "SWS",
+              "bitOffset": 2,
+              "bitWidth": 2
+            },
+            {
+              "name": "HPRE",
+              "bitOffset": 4,
+              "bitWidth": 4
+            },
+            {
+              "name": "PPRE1",
+              "bitOffset": 8,
+              "bitWidth": 3
+            },
+            {
+              "name": "PPRE2",
+              "bitOffset": 11,
+              "bitWidth": 3
+            },
+            {
+              "name": "ADCPRE",
+              "bitOffset": 14,
+              "bitWidth": 2
+            },
+            {
+              "name": "PLLSRC",
+              "bitOffset": 16,
+              "bitWidth": 1
+            },
+            {
+              "name": "PLLXTPRE",
+              "bitOffset": 17,
+              "bitWidth": 1
+            },
+            {
+              "name": "PLLMUL",
+              "bitOffset": 18,
+              "bitWidth": 4
+            },
+            {
+              "name": "USBPRE",
+              "bitOffset": 22,
+              "bitWidth": 1
+            },
+            {
+              "name": "MCO",
+              "bitOffset": 24,
+              "bitWidth": 3
+            }
+          ]
+        },
+        {
+          "name": "APB2RSTR",
+          "addressOffset": "0x0C",
+          "size": 32,
+          "access": "read-write",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "name": "USART1",
+      "baseAddress": "0x40013800",
+      "registers": [
+        {
+          "name": "SR",
+          "addressOffset": "0x00",
+          "size": 32,
+          "access": "read-only",
+          "fields": [
+            {
+              "name": "PE",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "FE",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "RXNE",
+              "bitOffset": 5,
+              "bitWidth": 1
+            },
+            {
+              "name": "TC",
+              "bitOffset": 6,
+              "bitWidth": 1
+            },
+            {
+              "name": "TXE",
+              "bitOffset": 7,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "DR",
+          "addressOffset": "0x04",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "DR",
+              "bitOffset": 0,
+              "bitWidth": 9
+            }
+          ]
+        },
+        {
+          "name": "BRR",
+          "addressOffset": "0x08",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "DIV_Fraction",
+              "bitOffset": 0,
+              "bitWidth": 4
+            },
+            {
+              "name": "DIV_Mantissa",
+              "bitOffset": 4,
+              "bitWidth": 12
+            }
+          ]
+        },
+        {
+          "name": "CR1",
+          "addressOffset": "0x0C",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "RE",
+              "bitOffset": 2,
+              "bitWidth": 1
+            },
+            {
+              "name": "TE",
+              "bitOffset": 3,
+              "bitWidth": 1
+            },
+            {
+              "name": "UE",
+              "bitOffset": 13,
+              "bitWidth": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TIM2",
+      "baseAddress": "0x40000000",
+      "registers": [
+        {
+          "name": "CR1",
+          "addressOffset": "0x00",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "CEN",
+              "bitOffset": 0,
+              "bitWidth": 1
+            },
+            {
+              "name": "UDIS",
+              "bitOffset": 1,
+              "bitWidth": 1
+            },
+            {
+              "name": "OPM",
+              "bitOffset": 3,
+              "bitWidth": 1
+            }
+          ]
+        },
+        {
+          "name": "CNT",
+          "addressOffset": "0x24",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "CNT",
+              "bitOffset": 0,
+              "bitWidth": 16
+            }
+          ]
+        },
+        {
+          "name": "PSC",
+          "addressOffset": "0x28",
+          "size": 32,
+          "access": "read-write",
+          "fields": [
+            {
+              "name": "PSC",
+              "bitOffset": 0,
+              "bitWidth": 16
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

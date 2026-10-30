@@ -2330,5 +2330,158 @@ HAL 版**不预置 rtt.c**：`Core/**` 是 CubeMX 生成区，自己的 `.c` 放
 
 - **真机 dump 未达成**：26 例全部离线（假 subprocess + 假 Tcl / 假端口），真机上只做到「建工程 + 编译 + `nm` 取址」，**没有一次「真板子 + 真探针 + 真 dump」**。原因与本批改动无关：手头的 WCH-Link 在 §29.2 就报 `Error: CMSIS-DAP command CMD_INFO failed.`，而 `rtt start` 需要目标真在跑，探针不通就无从验证。**复测方法**：换回 CMSIS-DAP 探针 → `stm32_flash` 烧一个取消注释的寄存器工程 → `arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT` → `stm32_rtt action=start addr=<addr>` → `stm32_rtt action=dump seconds=3`。
 - **只有通道 0 / 无 defmt**：见 30.6，是设计取舍不是欠账（多通道要先在帧头里加通道标识，defmt 解码要另一个依赖）。
-- **行数口径**：reading-guide 的行数是「在既有数字上加增量」，不是重算——tools 19 → 20 个文件 / 5078 → 5486 行、engine 41 → 42 个文件 / 15919 → 16643 行、§5.4 8 → 9 个 / 3160 → 3884 行。目录里的真实数字比表里的旧值大得多（tools 21 个文件 6157 行、engine 46 个文件 18980 行），顺手重算会把文档任务做成改表任务（与 §29.6 同一条原则，这里如实记一笔）。
+- **行数口径**：reading-guide 的行数是「在既有数字上加增量」，不是重算——tools 19 → 20 个文件 / 5078 → 5486 行、engine 41 → 42 个文件 / 15919 → 16643 行、§5.4 8 → 9 个 / 3160 → 3884 行。目录里的真实数字比表里的旧值大得多（tools 21 个文件 6157 行、engine 46 个文件 18980 行），顺手重算会把文档任务做成改表任务（与 §29.6 同一条原则，这里如实记一笔）。**D 阶段末已改口径**：全书按文件换行符数重数了一遍（`src/tools` 21 个文件 6623 行、`src/data` 10 个 3599 行），本条只记录 C 阶段当时的做法，别再拿 5486 / 16643 这两个数字当现状。
+
+## 31. D 阶段：SVD 寄存器命名与位域解释（2026-10-31）
+
+这一批只做一件事：**让寄存器从「一串十六进制地址」变成「有名字、有位域」的东西**。做法不是自己维护一张寄存器表，而是接资源仓库里的 SVD 事实表（`device/f1/svd/<line>.json`）：工具层把 `GPIOC.ODR` 解析成 `0x4001100C`，读回来的 `0x00000020` 再按位域拆成 `ODR5=1`。不新增工具、不改 engine、不动固件模板——`stm32_regs_read` 的手感不变，只是它的 `addresses` 多了几种写法、报告多了几个字段。
+
+### 31.1 为什么用 SVD，而不是内置一张寄存器表
+
+「这个外设的基址是多少、这个寄存器偏移多少、这一位叫什么」这三件事只有 ST 的 SVD 有完整答案。三条路摆在面前，选了第三条：
+
+| 方案 | 为什么不选 |
+| --- | --- |
+| 插件内置一张 F1 寄存器表 | 等于手工重写一遍 SVD，还写不全：光 103 一条线就有 53 个外设 / 722 个寄存器 / 4833 个位域。手写表从一开始就是过期数据 |
+| 运行时解析 ST 的原始 `.svd` XML | 每条产品线 0.5–1.5 MB XML，而本插件**零运行时依赖**（不变量 20），带一个 XML 解析器等于自己养一个依赖；而且插件里没有任何地方需要一个通用 XML 解析器 |
+| **资源仓库把 SVD 先解析成精简 JSON，插件只读** | 解析一次、六条线复用；插件侧只做「查表 + 解码」，零依赖、纯只读（`src/data/svd.ts` 不写盘、不联网、不起进程） |
+
+资源仓库的 `scripts/build-assets.mjs` 在构建时把 ST 的 `STM32F1<line>xx.svd` 裁成只含**外设基址 / 寄存器偏移 / 字段 bitOffset+bitWidth** 的 JSON（实测 `103.json` 里连一个 `description` 字段都没有），六条产品线合计 **266 个外设 / 3703 个寄存器 / 27881 个位域，1,795,459 字节 ≈ 1.71 MiB**（103 那份 319,901 字节）。
+
+**许可上这是硬约束**：原始 SVD 是 STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 `data/STMicro/License.html`），不能随插件分发。所以资源仓库只存「编译结果」——地址与位宽这类事实，不含 ST 的说明文字——并且标在 `profile: "full"` 里（`manifest.json` 的 `files[].profile`）：`full` 是 128 个文件，`core`（30 个文件 ≈ 237 KiB，见 §29.6 那笔账）里**没有 SVD**。用户跑一次 `stm32_assets refresh --profile full` 就装到 `~/.dsh-stm32/assets/<版本>/device/f1/svd/`；插件之后只读本地缓存，不再联网、也不再分发。
+
+### 31.2 工程 → line：先看 `.ioc`，再按型号兜底
+
+一份 SVD 事实表对应一条产品线，所以「读哪个 JSON」要先回答「这块板是哪条线」。`resolveProjectSvd(projectDir, env)` 的顺序是：
+
+1. 工程里的 `.ioc` 读 `Mcu.CPN`（如 `STM32F103C8T6`）→ 资源包的 `device/f1/chips.json` 里这一颗的 `line` 字段 → `device/f1/svd/103.json`。`source: "chips.json"`。
+2. `.ioc` 有型号但 `chips.json` 里没有这颗（资源包没装 / 直指资源仓库本体而没有 `install.json`）：按 `/^STM32F(\d{3})/` 兜底，落在 `SVD_KNOWN_LINES = ["100","101","102","103","105","107"]` 之内就用。`source: "cpn"`，note 里明说「line 是按型号编号兜底推出来的」。
+3. 都没有：`source: "none"`，`device: null`，`failure` 说明原因——**不抛异常**，因为「没有 SVD」只是少一层增强，不是错误。
+
+只有这六条线有数据；同一 line 下的所有容量档/封装共享同一份（C8T6 与 RCT6 都是 `103.json`）。105 与 107 各一份、不合并。成功时 note 会写清用的是哪份：「位域解释来自 SVD line=103（STM32F103xx，53 个外设 / 722 个寄存器 / 4833 个位域，资源包 <版本>）」。
+
+缓存键是 `path+size+mtimeMs`：资源包升级、重装、手改后自动失效，不需要 reset 钩子；`svdCacheStats()` / `resetSvdCache()` 只给单测证明「命中不重复读盘」。
+
+### 31.3 五种写法，以及它们为什么等价
+
+`addresses` 的每一项现在可以是下面五种之一，大小写、首尾空格、箭头两侧的空格都容错：
+
+| 写法 | 例子 | 解析成 | 备注 |
+| --- | --- | --- | --- |
+| 地址（带 `0x`） | `0x4001100C` | 原样读 | 没有 SVD 也能用；有 SVD 时反查名字 |
+| 地址（不带 `0x`） | `4001100C` | 同上 | 八位十六进制，统一成 8 位大写输出 |
+| 符号名 | `GPIOC.ODR` | 基址 0x4001100C | 手册里的 `GPIOC_ODR` 写成点更顺 |
+| C 风格箭头 | `GPIOC->ODR` | 同上 | 与 `.` 完全等价 |
+| 纯外设名 | `GPIOC` | 该外设全部寄存器（升序，上限 64） | 顺带 dump，见 31.6 |
+
+解析与去重都发生在**碰探针之前**（`planRegReads`）：所有 ref 先解析成地址列表、去重、决定每条的目标类型，全绿了才 `ensureSession`。所以符号写错时一个进程都不会 spawn，不会白占探针——这条和 B4 的断点预算（§29.3）是同一个原则。
+
+去重与别名在 notes 里会出声：
+
+- `["GPIOC.ODR", "0x4001100C", "RCC.CR"]` → 只读 2 个地址，note：`「0x4001100C」与「GPIOC.ODR」指向同一个地址 0x4001100C，只读一次`。
+- `["GPIOC.ODR", "RCC.CR", "GPIOC.ODR"]` → note：`「GPIOC.ODR」重复了，只读一次`。
+
+### 31.4 报告长什么样
+
+`samples` 从三个字段变成六个**全部必填**（`additionalProperties: false`，不变量 6）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `address` | 8 位大写十六进制，如 `0x4001100C` |
+| `value` | 读到的值，8 位大写十六进制 |
+| `ok` | 这一条读成功没有 |
+| `ref` | 用户原样写的那个字符串（`GPIOC.ODR` / `0x4001100C` / `GPIOC`） |
+| `name` | 规范化名字（`GPIOC.ODR`）；纯地址且没有 SVD 时就是地址本身 |
+| `fields` | **只列置位**的位域，元素 `{name, bits, value}`；`bits` 单 bit 写 `"5"`、区段写 `"3:7"`，`value` 已按 `bitOffset` 右移 |
+
+渲染出来的样本行长这样（`GPIOC.ODR` 读回 0x20，`RCC.CR` 读回 0x83）：
+
+```text
+  GPIOC.ODR (0x4001100C) = 0x00000020  → ODR5=1
+  RCC.CR (0x40021000) = 0x00000083  → HSION=1, HSIRDY=1, HSITRIM=16
+```
+
+（等号后一个空格、箭头前两个空格；值为 0 时只到等号、没有箭头，`fields: []`。）
+
+`message` 的单位跟着目标类型走：这次读里只要有一个符号名或外设名，就说「读到 N 个寄存器」；纯地址仍是「N 个地址」。另外 notes 会补一句 line 来源（见 31.2），所以报告本身就能回答「这个解释是哪来的」。
+
+### 31.5 位域解码的口径
+
+`decodeRegisterValue(register, value)` 是纯函数，五个输出：
+
+| 输出 | 含义 |
+| --- | --- |
+| `fields` | 值里**为 1** 的字段：`{name, bitOffset, bitWidth, value, bits}`（`bits` 由 `formatBits` 生成，与报告字段同源） |
+| `set` / `clear` | 置位名与清位名两组（样本只带 `fields`；`clear` 留给以后做「清位建议」的人） |
+| `uncovered` / `uncoveredBits` | 没被任何字段覆盖的位数与位掩码。`GPIOC.ODR` 是 16 个单 bit 全覆盖，读 0x00000004 → `ODR2=1`、`uncovered=0` |
+
+三条取舍：
+
+- **只报置位**。一整屏「ODR0=0、ODR1=0…」没有信息量；值为 0 的字段读者自己知道是 0。
+- **不猜枚举名**。SVD 里有 `enumeratedValues` 这类东西，但「寄存器这一位等于 2 是什么意思」是数据手册正文的事；事实表里没有，插件也不编。给出的是位名 + 数值。
+- **位宽按寄存器 `size`**（SVD 33 个，F1 基本都是 32），没有 SVD 时按 32 位处理。`value` 是右移后的原值，不做符号扩展。
+
+### 31.6 外设 dump：7 条、64 条上限
+
+只写外设名（`GPIOC`）时，按 `addressOffset` 升序把该外设的全部寄存器读出来并逐条解释：
+
+- `GPIOC` → **7 条**：`CRL`、`CRH`、`IDR`、`ODR`、`BSRR`、`BRR`、`LCKR`（最后一条 `GPIOC.LCKR @ 0x40011018`），note：`「GPIOC」是外设名：dump 了它的 7 个寄存器（基址 0x40011000）`。
+- `RCC` → 10 条（基址 0x40021000）。
+- 上限 `REG_DUMP_MAX = 64`：超过时只 dump 地址最小的前 64 条，并在 note 里写「外设 X 有 N 个寄存器，只 dump 了地址最小的前 64 个（剩下的写 X.寄存器名 单独读）」。没有新增「dump」这种 action，也没新增工具——`addresses` 里的一项就是一个读目标。
+
+### 31.7 缺 SVD 时的回退：地址照读，符号名报错
+
+两种情形分开处理，因为它们的「用户预期」不一样：
+
+- **纯地址**（`0x4001100C` / `4001100C`）：照读。`name` 就是地址、`fields` 是空数组，note 写「没有可用的 SVD：这次只给值，没有名字与位域解释（SVD 只在 profile=full 里：先跑 `stm32_assets refresh --profile full`）」。门禁不拦——读一个地址不需要 SVD。
+- **符号名 / 外设名**：解析不了就是错误（`ok: false`，不 spawn 进程），文案同上并给出可执行下一步：「`「GPIOC.ODR」不是物理地址；符号名/外设名要靠 SVD 才能解析：SVD 只在 profile=full 里：先跑 stm32_assets refresh --profile full（或者直接写 0x 开头的地址）。`」
+
+有 SVD 但名字写错，则尽量列出现成可用的名字（`REGS_SUGGEST_PERIPHERALS = 10`）：
+
+```text
+资源包（line=103）里没有外设 GPIOZ；可用外设（前 10 个）：FSMC、PWR、RCC、GPIOA、GPIOB、GPIOC、GPIOD、GPIOE、GPIOF、GPIOG（共 53 个）
+外设 GPIOC 里没有寄存器 ODRX；已知寄存器：CRL、CRH、IDR、ODR、BSRR、BRR、LCKR（共 7 个）。
+```
+
+一个名字既不是已知外设、也不像 `X.Y` 时，会同时说这两件事：「`资源包（line=103）里没有外设 FOO，也不像 GPIOC.ODR 这种寄存器写法；可用外设（前 10 个）：…（共 53 个）`」。
+
+`loadSvd` 本身**不抛**（返回 `{device, failure}`），只有「明确要一个寄存器 / 一段地址」的 API（`resolveRegisterRef` / `describeAddress`）才抛 `SvdError`，`code` 收 9 类：`assets-missing` / `svd-missing` / `svd-invalid` / `line-invalid` / `ref-invalid` / `value-invalid` / `peripheral-unknown` / `register-unknown` / `address-unknown`。严格解析是有意的：外设 / 寄存器 / 字段任何一条不合法就整份拒绝——装错文件比没装更危险，半个位域表会解释出错误的位。
+
+### 31.8 代码落点
+
+| 文件 | 行数 | 干什么 |
+| --- | --- | --- |
+| `src/data/svd.ts` | 837（新） | 加载（`loadSvd` / `loadSvdForLine` / `requireSvd` / `svdLineForChip`）、符号解析（`resolveRegisterRef`）、反向查（`describeAddress`，给一个地址说它属于哪个寄存器的第几字节）、解码（`decodeRegisterValue`）、渲染小件（`formatDecodedFields` / `formatAddress` / `formatOffset`）、`SvdError`、`SVD_FULL_PROFILE_HINT` 一份文案 |
+| `src/tools/regs.ts` | 735（原 272，+463） | 五种写法的解析与去重（`planRegReads`）、工程 → line（`resolveProjectSvd`）、样本装饰（`decorateSamples`）、渲染（`describeRegSample` / `formatBits`）、`REG_DUMP_MAX` / `REGS_SUGGEST_PERIPHERALS` |
+| `test/svd-units.test.mjs` | 39 例（新） | 26 例符号解析与解码（D1）+ 13 例工具层端到端（D2，含假 subprocess 与假 Tcl 服务端） |
+| `test/fixtures/svd/` | 3 种布局 | flat（直接指向资源仓库本体）、versioned（`<root>/<version>/`）、badline（坏数据必须整份拒绝） |
+
+engine 的 `src/engine/regs.ts` **一行没动**：它仍旧只负责「生成 openocd 脚本 / 解析 mdw 日志」，符号解析与位域解释全在 tools 层与 data 层。这也是这一阶段几乎没有回归风险的原因——21 个工具的数量与 engine 45 个模块都不变。
+
+### 31.9 文档口径
+
+- `README.md` / `README_EN.md`：`regs_read` 的示例从纯地址改成符号名与地址并列（`GPIOC.ODR` / `0x4001100C`），并注明符号名要资源包的 `full` profile；工具表那一行重写为「五种写法 + dump 上限 + 缺 SVD 的回退」；「已知限制」加一行（SVD 只在 full、只覆盖 F1 六条线）。
+- `docs/reading-guide.md`：§0 与 §1.1 与 §6 的 data 层从 9 个模块改成 **10 个模块 3599 行**并加 `svd.ts` 一行；§1.1 / §4.1 / §4.2 / §5 / §6 的行数按「文件换行符数」统一重数过一遍（口径见下文 31.11）；§4.2 的 `stm32_regs_read` 行改为 `regs.ts（735）`、「工具层解析符号名」；§5.4 补一句 engine 不动；§8 加不变量 23（寄存器名字只能来自 SVD）；§9.1 / §9.2 改成 **36 套件 562 例**并加 `svd-units` 39 例；§10 加两行（改写法 / 更新 SVD 表）；§11 加坑 15（真机未复测）。
+- 数字口径：D1 加 26 例、D2 加 13 例，合计 **39**；`npm test` 从 523 → **562**，套件 35 → **36**；工具数仍是 **21**，engine 仍是 **45** 个模块。
+
+### 31.10 验证
+
+- `npm run build` → exit 0（typecheck 同）。
+- `node --test test/svd-units.test.mjs` → **39 pass / 0 fail**（26 + 13）。
+- `npm test` → **36 个套件 562 pass / 0 fail**（前 35 套件 523 例 + `svd-units` 39 例，无回归；`run-units.mjs` 里 `svd-units` 排在 `rtt-units` 之后）。
+- 真实资源包实测（`DSH_STM32_ASSETS` 直指资源仓库，line=103，53 外设 / 722 寄存器 / 4833 位域）：
+  - `GPIOC.ODR` → 0x4001100C（基址 0x40011000 + offset 0x0C，16 个位域）；`GPIOC->ODR` 同；`RCC.CR` → 0x40021000（10 个位域）。
+  - 反向：`0x4001100C` → `GPIOC.ODR`；`describeAddress(0x4001100E)` → `GPIOC.ODR`、`exact: false`、`offsetInRegister: 2`。
+  - 解码：`GPIOC.ODR` 读 0x00000020 → `ODR5=1`；`RCC.CR` 读 0x00000083 → `HSION=1, HSIRDY=1, HSITRIM=16`；读 0 → `fields: []`、无箭头。
+  - dump：`GPIOC` → 7 条（`CRL`…`LCKR`），`RCC` → 10 条；`BSRR` 读 0x1 → `BS0=1`。
+  - 混传 `["GPIOC.ODR", "0x4001100C", "RCC.CR"]` → 只读 2 个地址，note 说明别名去重。
+- 端到端用**假 subprocess + 假 Tcl 服务端**跑（不起真 openocd），覆盖「符号名 + 地址混传 / dump / 64 条截断 / 四种写法等价 / 未知外设建议 / 未知寄存器 / 无 SVD 回退 / 去重 / 位域置位 / line 推断 / 未知符号不 spawn」。
+
+### 31.11 偏差备案
+
+- **真机未复测**：符号名与位域解释的证据是「真实资源包 + 假探针」，**没有一次「真板子 + 真探针 + `GPIOC.ODR`」**。原因与 §29.2 / §30.9 同源（手头的 WCH-Link 在 `CMD_INFO failed` 上过不去）。**复测方法**：换回 CMSIS-DAP 探针，`stm32_regs_read addresses=["GPIOC.ODR","0x4001100C"]`，看 `samples[0].name` / `fields` 与 notes 里的 line 来源；顺带把 B3 的真机计时（坑 13）与 RTT 的真机 dump（坑 14）一起补掉。
+- **行数口径**：D 阶段末把全书行数按**文件换行符数**（node `split('\n')`，等价编辑器的「块末行号」）重数了一遍，第 1、4.1、4.2、5、6 章现在都用这个口径：`src/tools` 21 个文件 **6623** 行、`src/data` 10 个文件 **3599** 行、`src/engine` 46 个文件 **18981** 行（第 5 章只表格化了 45 个模块，`engine/assets.ts` 1162 行未单列）；`regs.ts` **272 → 735（+463）**、`svd.ts` **837（新）**。之前用 PowerShell `(Get-Content f).Count` / `Measure-Object -Line` 量的会少算几十行（regs.ts 报 705、实际 735），那批数字已作废——教训写进 §31.11 这条。
+- **用例数口径**：D2 的交付报告里写「追加 12 个用例（文件 39 例）」，实测文件是 39 例 = 26 + 13；文档按 **39** 记。
+- **SVD 事实表体积**：六条线 1.71 MiB，`full` 档 128 个文件；`core` 仍是 30 个文件 / 237 KiB。与 §29.6 那笔「core 不在 180 KB」的账一致，没有新的口径变化。
+
 
