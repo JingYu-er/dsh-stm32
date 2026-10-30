@@ -89,7 +89,7 @@ const FULL_GLOBS = [...CORE_GLOBS, "chipdb/**", "diagrams/**"];
 const CORPUS = [
   { path: "device/f1/chips.json", body: '{"chips":[{"cpn":"STM32F103C8T6"}]}\n' },
   { path: "device/f1/memory.json", body: '{"devices":[]}\n' },
-  { path: "device/f1/svd-f1.json", body: '{"peripherals":[]}\n' },
+  { path: "device/f1/svd/103.json", body: '{"peripherals":[]}\n' },
   { path: "ioc/minimal/STM32F103C8T6.ioc", body: "Mcu.CPN=STM32F103C8T6\n" },
   { path: "ld/f1/STM32F103C8T6_FLASH.ld", body: "MEMORY { FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 64K }\n" },
   { path: "chipdb/f1/TEST.xml", body: "<device/>\n" },

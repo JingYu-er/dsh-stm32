@@ -2,7 +2,7 @@
  * 资源包（dsh-stm32-assets）下载器：manifest → 逐文件 sha256 → 本地缓存。
  *
  * 为什么要有这一层：插件自带的 chip-table.json / stm32f1.ts / templates 只覆盖"能离线就离线"的
- * 那一部分；device 事实层（chips.json / memory.json / svd-f1.json）、ioc 模板、链接脚本属于
+ * 那一部分；device 事实层（chips.json / memory.json / svd/<line>.json）、ioc 模板、链接脚本属于
  * "会随上游长大"的资源，塞进 npm 包会让包体无限膨胀（用户 2026-10-24 的决定）。做法是把它们
  * 放进独立仓库 dsh-stm32-assets，按 profile 按需下载到 <home>/.dsh-stm32/assets/<version>/，
  * 之后复用；每个文件都带 sha256，装坏/装半截宁可整次拒绝，也不给上层一份"看起来装好了"的目录。

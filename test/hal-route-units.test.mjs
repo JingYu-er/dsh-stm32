@@ -86,6 +86,40 @@ test("STM32F107VCT6（xC，LQFP100）：启动文件是 startup_stm32f107xc.s", 
   assert.equal(facts.linkerScript, "STM32F107VCTx_FLASH.ld");
 });
 
+test("F100RET6 / F101VET6（xE 档）：按 ST 官方 .ld 的 32K / 48K 建，链接脚本跟着走", () => {
+  // 事实来源：STM32F100XE_FLASH.ld → 512K FLASH / 32K RAM；STM32F101XE_FLASH.ld → 512K FLASH / 48K RAM。
+  const f100 = factsOf("STM32F100RET6");
+  assert.equal(f100.deviceId, "STM32F100RETx");
+  assert.equal(f100.mcuName, "STM32F100R(C-D-E)Tx", "CubeMX db 里 100 的 R 封装确实有 C-D-E 分组");
+  assert.equal(f100.packageName, "LQFP64");
+  assert.equal(f100.startup, "startup_stm32f100xe.s");
+  assert.equal(f100.deviceDefine, "STM32F100xE");
+  assert.equal(f100.deviceHeader, "stm32f100xe.h");
+  assert.equal(f100.flashBytes, 512 * 1024);
+  assert.equal(f100.ramBytes, 32 * 1024);
+  assert.equal(f100.linkerScript, "STM32F100RETx_FLASH.ld");
+  assert.equal(f100.keepLegacyLinkerScript, false, "旧名是 64K/20K，F100xE 绝不能留");
+
+  const f101 = factsOf("STM32F101VET6");
+  assert.equal(f101.deviceId, "STM32F101VETx");
+  assert.equal(f101.packageName, "LQFP100");
+  assert.equal(f101.startup, "startup_stm32f101xe.s");
+  assert.equal(f101.deviceDefine, "STM32F101xE");
+  assert.equal(f101.flashBytes, 512 * 1024);
+  assert.equal(f101.ramBytes, 48 * 1024);
+  assert.equal(f101.linkerScript, "STM32F101VETx_FLASH.ld");
+
+  const template = templateText(LEGACY_LINKER_SCRIPT);
+  const rendered100 = renderLinkerScript(template, f100);
+  assert.ok(rendered100.includes("Linker script for STM32F100RETx series"));
+  assert.ok(rendered100.includes("512Kbytes FLASH and 32Kbytes RAM"), rendered100.slice(0, 600));
+  assert.ok(rendered100.includes("RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 32K"));
+  const rendered101 = renderLinkerScript(template, f101);
+  assert.ok(rendered101.includes("Linker script for STM32F101VETx series"));
+  assert.ok(rendered101.includes("512Kbytes FLASH and 48Kbytes RAM"), rendered101.slice(0, 600));
+  assert.ok(rendered101.includes("RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 48K"));
+});
+
 test("链接脚本渲染：C8T6 逐字节等于模板（老工程兼容）", () => {
   const template = templateText(LEGACY_LINKER_SCRIPT);
   const rendered = renderLinkerScript(template, factsOf("STM32F103C8T6"));
@@ -164,8 +198,10 @@ test("认不出的型号一律拒绝，且理由是给用户看的", () => {
   const cases = [
     ["STM32F407VGT6", /F1/u],
     ["F103:xb", /容量档|完整型号|封装/u],
-    // RAM 现在优先取 CubeMX db 的容量档值，F100C8T6 已经能建；F100xE 只在区间型分组里，仍然拒绝。
-    ["STM32F100CET6", /RAM/u],
+    // RAM 优先取手写表（ST 官方 .ld），其次取 CubeMX db 的容量档值：F100C8T6 / F100xE / F101xE 都能建；
+    // 两边都查不到的中间档（100xC / 101xC）仍然拒绝 —— 链接脚本的 RAM 长度不许猜。
+    ["STM32F100RCT6", /RAM/u],
+    ["STM32F101RCT6", /RAM/u],
     ["STM32F107VBT6", /容量档|xb/u],
     ["", /^$/u],
   ];

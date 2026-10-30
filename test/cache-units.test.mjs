@@ -836,10 +836,11 @@ test("createRegisterProject：F1 全系三种 line 各自的链接脚本 / 时�
       define: "STM32F101xE",
       deviceId: "STM32F101VETx",
       flash: "512K",
-      ram: "32K",
+      // ST 官方 STM32F101XE_FLASH.ld 的 MEMORY: RAM = 48K（手写表已收，不再走 db 的 32K 保守下限）
+      ram: "48K",
       sysclk: 36_000_000,
       flashLatency: true,
-      ramExact: false,
+      ramExact: true,
     },
     {
       mcu: "STM32F107VCT6",
@@ -894,7 +895,7 @@ test("createRegisterProject：F1 全系三种 line 各自的链接脚本 / 时�
       } else {
         assert.equal(main.includes("FLASH->ACR"), false, item.mcu + " 没有 LATENCY 位，不许写 FLASH->ACR");
       }
-      // RAM 用的是 CubeMX db 的保守下限（真值未知）：必须说出来，不能悄悄按 20K 处理
+      // RAM 只能取 CubeMX db 的保守下限时（真值未知）必须说出来，不能悄悄按 20K 处理
       const notes = report.warnings.join("；");
       if (!item.ramExact) assert.match(notes, /RAM/u);
       assert.match(notes, /clock_init\(\)|SYSCLK/u);

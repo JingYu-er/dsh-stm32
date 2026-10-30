@@ -109,12 +109,39 @@ test("RAM 兜底：手写表没有时用 CubeMX db 的容量档值，并注明�
   assert.match(chip.notes.join(" "), /取自 CubeMX db/u);
 });
 
-test("RAM 两边都查不到时必须给 note 而不是编数字（F100xE 只在区间型分组里）", () => {
-  const { chip } = resolveF1Chip("STM32F100CET6");
-  assert.ok(chip);
-  assert.equal(chip.group, "xe");
-  assert.equal(chip.ramBytes, null);
-  assert.match(chip.notes.join(" "), /RAM 大小未收录/u);
+test("F100xE / F101xE：RAM 取 ST 官方 .ld 的 MEMORY 段（32K / 48K），不是分组下限", () => {
+  // 事实来源：STM32Cube_FW_F1_V1.8.7/.../Templates/gcc/linker/STM32F100XE_FLASH.ld 的 RAM = 32K、
+  //            STM32F101XE_FLASH.ld 的 RAM = 48K（两颗 Flash 都是 512K）。
+  const f100 = resolveF1Chip("STM32F100CET6");
+  assert.ok(f100.chip);
+  assert.equal(f100.chip.group, "xe");
+  assert.equal(f100.chip.startup, "startup_stm32f100xe.s");
+  assert.equal(f100.chip.deviceDefine, "STM32F100xE");
+  assert.equal(f100.chip.flashBytes, 512 * 1024);
+  assert.equal(f100.chip.ramBytes, 32 * 1024);
+  assert.deepEqual(f100.chip.notes, [], "手写表里有值，不该再报「未收录」或「取自 db」");
+
+  const f101 = resolveF1Chip("STM32F101CET6");
+  assert.ok(f101.chip);
+  assert.equal(f101.chip.group, "xe");
+  assert.equal(f101.chip.startup, "startup_stm32f101xe.s");
+  assert.equal(f101.chip.flashBytes, 512 * 1024);
+  assert.equal(f101.chip.ramBytes, 48 * 1024);
+  assert.deepEqual(f101.chip.notes, []);
+
+  // 同一个「xe」档在 F100 与 F101 上 RAM 不同（32K vs 48K）：仍然不能按档查
+  assert.equal(f100.chip.group, f101.chip.group);
+  assert.notEqual(f100.chip.ramBytes, f101.chip.ramBytes);
+});
+
+test("RAM 两边都查不到时必须给 note 而不是编数字（F100xC / F101xC 这类中间档仍未收录）", () => {
+  for (const mcu of ["STM32F100RCT6", "STM32F101RCT6"]) {
+    const { chip } = resolveF1Chip(mcu);
+    assert.ok(chip, mcu + " 应当能解析出启动文件/设备头");
+    assert.equal(chip.group, "xe", mcu + " 走 XE 档");
+    assert.equal(chip.ramBytes, null, mcu + " 的 RAM 不许猜");
+    assert.match(chip.notes.join(" "), /RAM 大小未收录/u, mcu + " 必须说明未收录");
+  }
 });
 
 test("本机有固件包时：每个解析出的启动文件都真实存在（无固件包则跳过）", (t) => {

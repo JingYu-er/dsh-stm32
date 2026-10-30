@@ -1,7 +1,7 @@
 /**
  * L3：stm32_assets —— 把资源仓库里"会随上游长大"的那部分按需下到本地。
  *
- * 为什么不塞进 npm 包：device 事实层（chips.json / memory.json / svd-f1.json）、12 份 ioc 模板、
+ * 为什么不塞进 npm 包：device 事实层（chips.json / memory.json / svd/<line>.json）、14 份 ioc 模板、
  * 12 份链接脚本已经是 90+ 个文件、几百 KB，chipdb/diagrams 更多；打进包里等于每次改一颗芯片就
  * 发一次版。所以放独立仓库，按 profile 下载 + sha256 校验 + 本地缓存，装好之后完全离线可用。
  *
@@ -177,7 +177,7 @@ export function registerAssets(ctx: DshContext, options: AssetsToolOptions = {})
   ctx.tools.register({
     name: ASSETS_TOOL,
     description:
-      "按需下载资源包 dsh-stm32-assets（device 事实层 device/f1/chips.json·memory.json·svd-f1.json、ioc 模板、链接脚本；profile=full 另含 chipdb/diagrams）到本地 ~/.dsh-stm32/assets/<version>/（DSH_STM32_ASSETS 可覆盖），逐文件按 manifest 的 sha256 校验，装好之后离线复用。action=list 看本地版本/文件/占用；refresh 拉 manifest 并按 profile 安装（默认 core，源顺序 GitHub → jsDelivr → GitCode 自动回退，报告里写明实际走的源）；verify 逐个 sha256 复核；prune 只留当前与上一版。下载失败不抛错：ok=false + 人话原因，内置表（src/data/chip-table.json + src/data/stm32f1.ts）仍可建工程。",
+      "按需下载资源包 dsh-stm32-assets（device 事实层 device/f1/chips.json·memory.json·svd/<line>.json、ioc 模板、链接脚本；profile=full 另含 chipdb/diagrams）到本地 ~/.dsh-stm32/assets/<version>/（DSH_STM32_ASSETS 可覆盖），逐文件按 manifest 的 sha256 校验，装好之后离线复用。action=list 看本地版本/文件/占用；refresh 拉 manifest 并按 profile 安装（默认 core，源顺序 GitHub → jsDelivr → GitCode 自动回退，报告里写明实际走的源）；verify 逐个 sha256 复核；prune 只留当前与上一版。下载失败不抛错：ok=false + 人话原因，内置表（src/data/chip-table.json + src/data/stm32f1.ts）仍可建工程。",
     parameters: {
       type: "object",
       additionalProperties: false,
