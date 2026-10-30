@@ -17,6 +17,7 @@ const suites = [
   "probe-error-units.test.mjs",
   "probe-session-units.test.mjs",
   "breakpoints-units.test.mjs",
+  "rtt-units.test.mjs",
   "stm32f1-units.test.mjs",
   "hal-route-units.test.mjs",
   "clock-units.test.mjs",

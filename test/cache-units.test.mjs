@@ -573,11 +573,19 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.equal(report.route, "register");
     assert.equal(report.startup, "startup_stm32f103xb.s");
     assert.equal(report.deviceDefine, "STM32F103xB");
-    assert.equal(report.templateFiles, 7);
+    // 2(CMakeLists+main.c) + 2(rtt.c/rtt.h) + 3(公共文件) + 1(.gitignore) + 1(链接脚本)
+    assert.equal(report.templateFiles, 9);
     assert.equal(report.driverFiles, 10);
+
+    // RTT 随寄存器工程就位：CMakeLists 编它、main.c include 它，缺了会 link/编译失败
+    assert.equal(existsSync(join(targetDir, "Core", "Src", "rtt.c")), true, "寄存器工程必须有 Core/Src/rtt.c");
+    assert.equal(existsSync(join(targetDir, "Core", "Inc", "rtt.h")), true, "寄存器工程必须有 Core/Inc/rtt.h");
+    assert.match(readFileSync(join(targetDir, "Core", "Src", "rtt.c"), "utf8"), /SEGGER RTT/u);
+    assert.match(readFileSync(join(targetDir, "Core", "Inc", "rtt.h"), "utf8"), /rtt_init/u);
 
     const cmake = readFileSync(join(targetDir, "CMakeLists.txt"), "utf8");
     assert.match(cmake, /set\(CMAKE_PROJECT_NAME reg\)/u);
+    assert.match(cmake, /Core\/Src\/rtt\.c/u, "CMakeLists 要把 rtt.c 编进可执行文件");
     assert.equal(cmake.includes("add_executable(${CMAKE_PROJECT_NAME}"), true);
     assert.match(cmake, /startup_stm32f103xb\.s/u);
     assert.match(cmake, /STM32F103xB/u);
@@ -878,8 +886,9 @@ test("createRegisterProject：F1 全系三种 line 各自的链接脚本 / 时�
       assert.equal(report.deviceId, item.deviceId);
       assert.equal(report.linkerScript, item.deviceId + "_FLASH.ld");
       assert.equal(report.sysclkHz, item.sysclk, item.mcu + " 的 SYSCLK");
-      assert.equal(report.templateFiles, 7);
+      assert.equal(report.templateFiles, 9);
       assert.equal(report.driverFiles, 10);
+      assert.equal(existsSync(join(targetDir, "Core", "Src", "rtt.c")), true, item.mcu + " 也要带 rtt.c");
 
       const ld = readFileSync(join(targetDir, report.linkerScript), "utf8");
       assert.match(ld, new RegExp("Linker script for " + item.deviceId + " series", "u"));

@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "stm32f1xx.h"
+#include "rtt.h"   /* 模板自带的极简 RTT；不用就把这行和下面 USER CODE BEGIN 2 的示例一起删掉 */
 
 /* 换板子改这两行 */
 #define LED_PORT GPIOC
@@ -63,6 +64,30 @@ int main(void)
 {
     clock_init();   /* 先把频率提到芯片能跑的上限，再配外设 */
     led_init();
+
+    /* USER CODE BEGIN 2 */
+    /*
+     * RTT 调试输出（可选，默认没开）：模板里 rtt.c/rtt.h 已经就位，但 rtt_init()
+     * 不强制调用——工具链开了 --gc-sections，没调用时 rtt.c 的代码和 3 KB 控制块
+     * 缓冲会被整个丢掉，不占 RAM/Flash。要用就取消下面两行的注释：
+     *
+     *     rtt_init();                     // 必须在 clock_init() 之后（时间戳要用 DWT 周期计数器）
+     *     rtt_printf(RTT_LEVEL_INFO, "boot: sysclk=%lu Hz", (unsigned long)SystemCoreClock);
+     *
+     * 之后在宿主侧这样读（openocd 的 rtt 命令 + TCP 端口，插件已经封装好）：
+     *     arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT   // 拿控制块地址
+     *     stm32_rtt action=start addr=0x2000xxxx    // 地址就是 nm 出来的那个，size 用默认 0x400
+     *     stm32_rtt action=dump                     // 打印 {t, level, text} 记录
+     *     stm32_rtt action=stop
+     *
+     * 代价与限制：
+     *   - 3 个上行通道 × 1 KB = 3 KB RAM（C8T6 只有 20 KB）。嫌多就改 rtt.h 里的
+     *     RTT_UP_CHANNELS=1、RTT_BUF_SIZE=256；
+     *   - 控制块是普通 .bss 变量，地址随重链接漂移，所以别把地址写死，每次 nm 一遍；
+     *   - 环满时整条记录丢弃（不阻塞、不覆盖未读数据），rtt_dropped_count() 能看丢了几条；
+     *   - 主循环和中断都能写，但它没加锁：多个上下文并发写要自己关中断。
+     */
+    /* USER CODE END 2 */
 
     while (1) {
         led_toggle();

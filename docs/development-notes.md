@@ -2220,3 +2220,115 @@ Cortex-M3（F1）的硬件断点靠 FPB 的 6 个比较器、观察点靠 DWT �
 - **资源包体积口径**：任务书写「core 约 180 KB」，实际量到 core profile 是 30 个文件 / 242903 字节 ≈ **237 KiB**（大头是 `device/f1/chips.json` 36.1 KiB 与 `memory.json` 34.2 KiB；SVD 那 1.75 MB 属于 `full` profile，不在 core 里）。收尾时已把两份 README 的 180 KB 改成「30 个文件约 237 KiB」，与实测一致。
 - **engine 模块计数**：reading-guide 的表是「逐条列出来的模块数」（41 → 44），不是目录文件数（42 → 45）——`assets.ts` 从来没单独成行，这次没顺手补（避免把文档任务做成改表任务）。
 
+## 30. C 阶段：RTT 日志（openocd rtt + stm32_rtt + 模板侧控制块）（2026-10-31）
+
+这一批只做一件事：**让固件里的 printf 出现在工具输出里，不接串口、不改接线**。做法不是自己写传输，而是把 openocd 自带的 `rtt` 命令用起来，我们只管三头：**控制块**（固件侧，与 SEGGER 兼容）、**帧语法**（级别 + 时间戳）、**工具面**（`stm32_rtt` 的 start / dump / stop / status）。
+
+### 30.1 为什么走 openocd rtt，而不是自研传输
+
+RTT 的传输本质很朴素：调试器通过 SWD 直接读目标 RAM 里的环形缓冲，把新数据搬到宿主。这条链路 openocd 早就有——`rtt setup <addr> <size>` 让它在指定 RAM 区间里认控制块、`rtt start` 打开通道、`rtt server start <port> <channel>` 把它暴露成本地 TCP 端口。传输层是现成的，而且就在我们的调试会话里（B3 之后会话本来就带 Tcl 端口），自己再写一遍没有任何收益：
+
+- 自研传输要么再起一个 openocd（两个进程抢一个探针，正是 §29.2 端口顺延那类翻车的根源），要么自己实现 SWD 批量读（CMSIS-DAP 的 `DAP_TransferBlock` + apswd 那一层，等于把 openocd 重写一遍）。后者远超这一阶段的风险面。
+- 反过来，**沿用 openocd 的传输，我们只需要让固件里的控制块长得像 SEGGER 的**：首 10 字节 `"SEGGER RTT"`、`MaxNumUpBuffers` / `MaxNumDownBuffers`、每通道一个 `rtt_buffer_desc_t{sName,pBuffer,SizeOfBuffer,WrOff,RdOff,Flags}`。于是 `rtt setup/start/server start` 三条命令直接认（布局见 30.4）。
+- **帧格式反而是我们自己的**：SEGGER 原生通道只搬裸字节，没有级别、没有时间戳——而「哪条是 error、这条是几秒前打的」恰恰是排查时最先要的信息。所以在通道 0 的字节流上加 13 字节头（见 30.2）。代价写在 30.6：原生客户端（RTT Viewer / J-Link RTT Client）读通道 0 会把这 13 字节当内容，不会自动拆帧。
+
+一句话：**传输借 openocd，语法归我们**。这也是为什么 src/engine/rtt.ts（724 行，新）里没有一行 SWD 代码，只有「校验控制块 → 发三条 Tcl / 命令行 → 读端口 → 解帧」四件事。
+
+### 30.2 帧约定：13 字节头 + UTF-8 payload
+
+一条记录在通道 0 的环形缓冲里是连续的一段字节：
+
+| 偏移 | 宽度 | 含义 |
+| --- | --- | --- |
+| 0 | 4 | 长度 LE，**含级别 + 时间戳 + payload**，即 `9 + payload 字节数`（不含这 4 字节自己） |
+| 4 | 1 | 级别：1 error / 2 warn / 3 info / 4 debug（固件侧越界夹到 1..4） |
+| 5 | 8 | 时间戳，毫秒，LE（默认 DWT 周期计数器按 `SystemCoreClock` 换算，弱符号可覆盖成 `HAL_GetTick`） |
+| 13 | n | UTF-8 payload，不含结尾 0 |
+
+常量只有一对，两侧都从它派生：`RTT_FRAME_HEADER_BYTES = 13`、`RTT_MIN_FRAME_BYTES = 9`（payload 为空时长度字段的值）。`src/engine/rtt.ts` 里的 `parseRttFrames` / `encodeRttFrame` 一解一编（后者给单测与自检用），`templates/register/Core/Src/rtt.c` 里的 `RTT_FRAME_OVERHEAD` / `RTT_FRAME_MIN_BYTES` 是同名的另一份——`rtt-units` 有一条反算断言钉住「两边算出来的头长与最小长度一致」，改一边不改另一边会红。
+
+解析的三个细节（都是「真出过一次就会记一辈子」的）：
+
+- **先看长度字段，再决定信不信它**：`len < 9` 或 `len > 4096`（`DEFAULT_MAX_FRAME_BYTES`）一律判失步，按字节滑动重找，绝不用一个错长度去读后面的内存。
+- **单帧坏掉不炸整次 dump**：丢掉这一帧、记一条 note，能解出来的记录照常返回。
+- **截断要出声**：本次读到的数据被环覆盖过、或帧头自洽但 payload 已经滚掉时，报告 `truncated: true` 并说明原因，而不是悄悄少几条。
+
+### 30.3 工具面：`stm32_rtt` 的四个动作
+
+一个工具四个 action（`src/tools/rtt.ts`，408 行），共用一份 report schema：
+
+| action | 做什么 | 关键参数 |
+| --- | --- | --- |
+| `start` | 校验控制块 → `rtt setup <addr> <size>` → `rtt start` → `rtt server start <port> 0` | `addr`（必填，控制块起始地址）、`size`（默认 `0x400`）、`banner`、`rttPort`（默认 9090） |
+| `dump` | 连本地 RTT 端口，读 `seconds` 秒或 `maxRecords` 条，解帧、按 `level` 过滤，返回 `records[{t,level,text}]` | `seconds`（默认 3，0.2..60）、`level`（默认 4 = 全要，语义是「保留到哪一级」的上限）、`maxRecords`（默认 200） |
+| `stop` | 关端口 / 停 server，幂等 | — |
+| `status` | 报当前有没有在跑（`running` / `startedAt` / `runningMs` / 端口） | — |
+
+细节：
+
+- **start 先 `mdw` 三个字确认控制块**：`0x47474553`（`SEGG`）/ `0x52205245`（`ER R`）/ 低 16 位 `0x5454`（`TT`）。读回全 0 → 「没调 `rtt_init()`」；不是这个魔数 → 「`addr` 指错了」。这一步在 `rtt setup` **之前**，所以地址填错不会把 openocd 带进一个坏状态。
+- **没有调试会话就自己起一个**：`start` 走 `ensureSession`（与 `stm32_regs_read` 同一个单例），notes 写「没有活跃会话，先起了一个调试会话（gdb 端口 N，tcl 端口 M）」；已有会话则写「复用已有调试会话（tcl 端口 N）」。**只有 `start` 跑工具链门禁**（capability `debug`），`dump` / `stop` / `status` 不跑——读一个本地端口不需要 gcc。
+- **`rtt start` 需要目标在跑**：目标 halt 住时通道不推进（缓冲不写，也就读不到新东西）。工具在 notes 里点明「先 resume 再 dump」；`dump` 自己不发 halt。
+- **错误复用 `ProbeError` 形状**：`kind` 只用 `unknown` / `timeout`（另外七类是探针故障，与 RTT 无关，硬塞进来只会误导），`cause` 来自真实日志行，`hint` 覆盖六种情形：端口占用（换 `rttPort`）、通道连不上（连接超时 + 目标是否在跑）、无会话、控制块全 0 / 魔数不符（都指向「模板里怎么加 RTT」）、Tcl 超时、帧失步。
+- **渲染上限 80 条**：超出打「… 还有 N 条（调大 maxRecords 或分批 dump）」，否则一次 200 条会把卡片刷满。
+- `isConcurrencySafe: false`：RTT 是「一个端口一个会话」的状态机，两个 dump 并发会互抢那条 TCP。
+
+### 30.4 模板侧：寄存器版自带，HAL 版只给说明
+
+`templates/register/Core/{Src/rtt.c,Inc/rtt.h}`（282 + 103 行）随 `stm32_project_create route=register` 一起落地（`templateFiles` 7 → 9）。控制块布局：
+
+| 偏移 | 字段 | 值 / 说明 |
+| --- | --- | --- |
+| 0 | `char acID[16]` | `"SEGGER RTT"` —— openocd `rtt setup` 靠它认块 |
+| 16 | `uint32_t MaxNumUpBuffers` | 3 |
+| 20 | `uint32_t MaxNumDownBuffers` | 0（不做下行，`aDown` 只留一个占位） |
+| 24 | `aUp[3]` | 每个 24 字节：`{sName, pBuffer, SizeOfBuffer, WrOff, RdOff, Flags}` |
+| 96 | `aDown[1]` | 不使用 |
+
+四条 `_Static_assert` 把布局钉死（`acID` 在 0、`MaxNumUpBuffers` 在 16、`aUp` 在 24、描述符 24 字节）——这些偏移是 SEGGER 的 ABI，改了 openocd 就认不出来，所以用编译期断言，而不是注释提醒。通道名是 `Terminal` / `Channel 1` / `Channel 2`（工具只读通道 0）。
+
+写入策略：3 个通道各 1 KB 环形缓冲（`s_up_buf[3][1024]`，共 3 KB `.bss`）。`rtt_ring_write` 先 `memcpy` 数据、**最后**才推进 `WrOff`（读侧不会看到半条帧）；剩余空间放不下整条就返回 0、**整条丢**，不写半条、不阻塞、也不覆盖还没被读走的数据。`rtt_init()` 的顺序是先 `memset`、再填描述符、**最后**才写 ID 魔数——openocd 看到魔数时描述符一定已就绪。它会打开 DWT 周期计数器，所以必须在时钟初始化之后调用。
+
+默认不启用是有意的：`main.c` 只在 `USER CODE BEGIN 2` 里给注释示例，`CMakeLists` 列了 `Core/Src/rtt.c`，但工具链开了 `--gc-sections` 且没人引用 `rtt_init()`——不取消注释时那块 3 KB 缓冲和 rtt.c 的代码都被链接器丢掉（实测默认 RAM 1576 B / FLASH 1368 B，`nm` 里没有 `_SEGGER_RTT`）。取消注释后同一工程实测 RAM **1576 → 5232 B**，控制块落在 **`0x20000DE0`**。
+
+**一个真实链接缺陷（本批唯一改代码的意外）**：只取消 `rtt_init()` / `rtt_printf()` 的注释就去链接，报 `undefined reference to `_sbrk'` —— `vsnprintf` 会牵进 newlib 的堆延伸，而寄存器版模板没有 `syscalls.c`。修法是 rtt.c 里给一份 `__attribute__((weak))` 的 `_sbrk`（直接失败，等于没有堆）：用户自己实现 `_sbrk` 或带 `syscalls.c` 时，强符号自动覆盖它。这条写进了 `rtt.h` 的注释与 `templates/scaffold/RTT.md`，因为它是「照文档加了三行代码却链接不过」最容易撞的那堵墙。
+
+HAL 版**不预置 rtt.c**：`Core/**` 是 CubeMX 生成区，自己的 `.c` 放进去会被下次 `stm32_generate` 覆盖、也违反「只改 USER CODE」的红线。所以只给 `templates/scaffold/RTT.md`（拷到 `App/`、在 `cmake/user/CMakeLists.txt` 里 `target_sources` + `target_include_directories`、只在 USER CODE 块里写 `#include` 与调用），并在 `cmake/user/CMakeLists.txt` 留了钩子注释。
+
+### 30.5 性能、丢帧与「读不到」的三种原因
+
+- **成本在 RAM，不在 CPU**：每通道 1 KB、默认 3 通道 = 3 KB `.bss`（C8T6 20 KB 的 15%）。RAM 紧就改 `rtt.h` 的 `RTT_UP_CHANNELS`（例如 1）/ `RTT_BUF_SIZE`（例如 512），单条 payload 上限 `RTT_MSG_MAX=120` 也能改。
+- **写入 O(payload)、无锁、不阻塞**：主循环和中断都能写；多上下文并发要自己在外面关临界区（rtt.h 明写「不加锁」）。
+- **丢帧是整条丢，不是半条**：环满 / 放不下整条 → 返回 0、丢弃，丢了多少数 `rtt_dropped_count()`（固件本地变量）。**口径要注意**：`stm32_rtt` 报告里的 `dropped` 统计的是**按 `level` 过滤掉的记录条数**，不是环丢弃——两者不是一回事，rtt.h 与这个文件里都写清了。
+- **dump 的默认口径**：3 秒、最多 200 条、单帧上限 4096 字节；`level` 是上限（默认 4 全要，`level=3` 就只要 error/warn/info）。长时间盯日志的正确姿势是「多次 dump」，而不是把 `seconds` 拉到 60——单次越长越容易撞上端口读超时。
+- **「读不到」分三种，工具分开报**：控制块全 0（没 `rtt_init()`）／魔数不符（`addr` 错）／通道连不上（目标停在 halt、会话掉了、端口被占）。这是 §29.1 那套「kind + cause + hint + evidence」的直接延续。
+
+### 30.6 已知限制
+
+- **只有通道 0**：工具只读 `Terminal`。通道 1/2 留给应用自己分用途，插件不读，也没有「按通道分文件」的写法。
+- **没有 defmt 解码**：帧里就是 UTF-8 文本，不理解 Rust `defmt` 的二进制编码，也不解 SEGGER SystemView 的包。要结构化数据只能自己在 payload 里放 JSON，回宿主再解。
+- **RTT 占目标 RAM**：默认 3 KB。C8T6 上同时开 ADC + 串口 + 3 KB RTT 就要算账了，这 3 KB 是「加日志要不要紧」的真实代价。
+- **需要固件先调 `rtt_init()`**：openocd 能认控制块，是因为固件先把魔数和描述符写好了。不调初始化就只有一个全 0 的 RAM 区，工具会明确这么报，而不是含糊地说「连不上探针」。
+- **时间戳是毫秒且不跨复位**：DWT 按 `SystemCoreClock` 换算，时钟不准它就不准；复位后归零。要墙钟就覆盖 `rtt_time_ms()` 接 RTC / `HAL_GetTick`。
+- **原生客户端读不了我们的帧**：RTT Viewer / J-Link RTT Client 读通道 0 会看到 13 字节头（它们不知道我们的帧语法）。
+- **真机 dump 还没有记录**（见 30.9）。
+
+### 30.7 文档口径
+
+- `README.md` / `README_EN.md`：功能表与工具表各加一行 `stm32_rtt`（start / dump / stop / status），并补一节「固件里怎么加 RTT」的最短示例——固件侧三行（`#include "rtt.h"`、`rtt_init()`、`rtt_printf(...)`），宿主侧先 `arm-none-eabi-nm … | findstr _SEGGER_RTT` 取控制块地址，再三次工具调用 `stm32_rtt`（start / dump / stop）；「已知限制」各加一行 RTT 的边界（通道 0 / 帧是我们自己的 / 3 KB RAM）。
+- `docs/reading-guide.md`：tools 从 20 个增至 21 个（§1.1 行数、§3.1 注册顺序、§4 标题与 §4.2 表加 `stm32_rtt` 行）、engine 从 44 个增至 45 个（§5 标题与 §5.4 加 `rtt.ts`，8 个 3160 行 → 9 个 3884 行）、§9.1 / §9.2 改成 **35 套件 523 例**（CI 521 pass + 2 skipped）并加 `rtt-units` 26 例、§10 加一行「改 RTT 帧格式」、§11 补坑 14（RTT 只有离线验证）。
+
+### 30.8 验证
+
+- `npm run build` → exit 0（typecheck 同）。
+- `node --test test/rtt-units.test.mjs` → **26 pass / 0 fail**，进程正常退出（C1 的 20 例 + C2 的 6 条静态断言：模板文件与 CMakeLists 引用、控制块布局与 `used`、魔数与引擎常量反算一致、帧常量 13/9 与级别 1..4、HAL 只留说明、弱 `_sbrk` 兜底）。
+- `npm test` → **35 套件 523 pass / 0 fail**（前 34 套件 497 例 + `rtt-units` 26 例，无回归）。
+- 真工程：用本地真实 CMSIS 缓存（**未联网**）建寄存器工程 → `templateFiles=9`、`Core/Src/rtt.c` 与 `Core/Inc/rtt.h` 就位；`cmake --preset Debug` + `cmake --build` 两次都 exit 0（默认无 `_SEGGER_RTT` 符号，RAM 1576 B）；取消 `USER CODE BEGIN 2` 的注释后同一工程链接出 `_SEGGER_RTT @ 0x20000DE0`，RAM 5232 B。
+- 帧逻辑在主机上编译执行过（64 位布局，帧代码与固件同源），产出的 4 条记录被 `lib/engine/rtt.js` 的 `parseRttFrames` 正确还原成 `{t, level, text}`。
+
+### 30.9 偏差备案
+
+- **真机 dump 未达成**：26 例全部离线（假 subprocess + 假 Tcl / 假端口），真机上只做到「建工程 + 编译 + `nm` 取址」，**没有一次「真板子 + 真探针 + 真 dump」**。原因与本批改动无关：手头的 WCH-Link 在 §29.2 就报 `Error: CMSIS-DAP command CMD_INFO failed.`，而 `rtt start` 需要目标真在跑，探针不通就无从验证。**复测方法**：换回 CMSIS-DAP 探针 → `stm32_flash` 烧一个取消注释的寄存器工程 → `arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT` → `stm32_rtt action=start addr=<addr>` → `stm32_rtt action=dump seconds=3`。
+- **只有通道 0 / 无 defmt**：见 30.6，是设计取舍不是欠账（多通道要先在帧头里加通道标识，defmt 解码要另一个依赖）。
+- **行数口径**：reading-guide 的行数是「在既有数字上加增量」，不是重算——tools 19 → 20 个文件 / 5078 → 5486 行、engine 41 → 42 个文件 / 15919 → 16643 行、§5.4 8 → 9 个 / 3160 → 3884 行。目录里的真实数字比表里的旧值大得多（tools 21 个文件 6157 行、engine 46 个文件 18980 行），顺手重算会把文档任务做成改表任务（与 §29.6 同一条原则，这里如实记一笔）。
+

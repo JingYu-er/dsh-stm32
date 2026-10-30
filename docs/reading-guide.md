@@ -26,8 +26,8 @@
 | 层 | 目录 | 干什么 | 绝对不能干的事 |
 | --- | --- | --- | --- |
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
-| L3 契约层 | src/tools（19 个文件：20 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
-| L2 逻辑层 | src/engine（45 个 .ts，其中 44 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
+| L3 契约层 | src/tools（20 个文件：21 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
+| L2 逻辑层 | src/engine（46 个 .ts，其中 45 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
 | L1 事实表 | src/data（9 个数据模块） | 设备事实（`device-facts.ts` 从资源包缓存读 chips.json；插件不内置芯片表）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
 
 跨层的只有两样东西：**SubprocessService**（进程能力，从 ctx 一路当参数传到 engine）和 **DshContext**（宿主服务袋）。
@@ -44,12 +44,12 @@
 ```mermaid
 flowchart TD
   HOST["DSH 宿主 ctx<br/>tools / subprocess / jobs / webServer / commands / skills"] --> IDX["src/index.ts<br/>apply(ctx) 装配"]
-  IDX --> TOOLS["src/tools/*<br/>20 个工具"]
+  IDX --> TOOLS["src/tools/*<br/>21 个工具"]
   IDX --> CMDS["src/commands/register.ts<br/>7 条斜杠命令"]
   IDX --> SKILL["src/skill/stm32-workflow.ts<br/>红线 skill"]
   IDX --> WEB["src/engine/web-routes.ts<br/>6 条 HTTP 路由"]
   IDX --> EVT["turn/end、session/disposed、dispose<br/>把探针还回去"]
-  TOOLS --> ENGINE["src/engine/*<br/>44 个纯逻辑模块"]
+  TOOLS --> ENGINE["src/engine/*<br/>45 个纯逻辑模块"]
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
@@ -67,12 +67,12 @@ flowchart TD
 | 目录 | 文件数 | 行数 | 说明 |
 | --- | --- | --- | --- |
 | src/ | 4 | 795 | index.ts 119、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
-| src/tools/ | 19 | 5078 | 20 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 route-plan.ts 573 行 |
-| src/engine/ | 41 | 15919 | 见第 5 章；最大的是 msys2-install.ts 2313 行，其次是 clock-plan.ts 801 行 |
+| src/tools/ | 20 | 5486 | 21 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 route-plan.ts 573 行 |
+| src/engine/ | 42 | 16643 | 见第 5 章；最大的是 msys2-install.ts 2313 行，其次是 clock-plan.ts 801 行 |
 | src/data/ | 9 | 2336 | 9 个 .ts 数据模块（其中 device-facts.ts 从资源包缓存读设备事实，仓库里没有任何芯片表），见第 6 章 |
-| templates/ | 17 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc） |
+| templates/ | 20 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc；C 阶段加了寄存器版的 `Core/Src/rtt.c` + `Core/Inc/rtt.h` 与 HAL 脚手架 `scaffold/RTT.md`） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
-| test/ | 31 套件 + 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
+| test/ | 35 套件（run-units 登记）+ 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
 | scripts/ | 4 | 349 | copy-client.mjs(18)、gen-xcube-catalog.mjs(136)、pack-size.mjs(63)、pack-smoke.mjs(132)。芯片表的生成脚本 2026-10-31 已挪到资源仓库（`scripts/build-assets.mjs`） |
 
 ## 2. 阅读顺序
@@ -98,7 +98,7 @@ flowchart TD
 三件事，只有三件：
 
 1. **声明身份与依赖**：`export const name = "dsh-stm32"`、`export const inject = ["tools", "subprocess", "jobs"]`。这三个是硬依赖，缺了插件不加载。
-2. **apply(ctx) 里按「先探测、再操作」的顺序注册 20 个工具**：env_probe → env_install → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → build → flash → debug_run → debug_session → regs_read → route_plan → cache → doctor → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
+2. **apply(ctx) 里按「先探测、再操作」的顺序注册 21 个工具**：env_probe → env_install → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → build → flash → debug_run → debug_session → regs_read → route_plan → rtt → assets → cache → doctor → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
 3. **注册可选层并挂三个事件**：commands / skills 走 `ctx.inject([...], scope => ...)`，宿主没组合这些服务时静默跳过，工具照常工作；webServer 路由在`registerWebRoutes` 里自己判断。
 
 三个事件是本插件唯一的「状态清理入口」，也是很容易读漏的地方：
@@ -152,7 +152,7 @@ ctx.on("dispose", () => { void debugSessions.stop("插件卸载"); });
 
 7 条命令里有 6 条最终调用 engine 的同一个函数（build → runBuild，flash → runFlash …），所以它们和工具的唯一差别是：输入来自文本而不是 JSON、输出是一段中文。
 
-## 4. tools 层：20 个工具 + 1 个基础设施
+## 4. tools 层：21 个工具 + 1 个基础设施
 
 ### 4.1 一个工具文件的固定骨架
 
@@ -188,7 +188,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 2. **门禁在工具层，不在 engine。** engine 假设工具链就位；`blockedReport` / `emptyReport` 是门禁拦截与早退时造「同形报告」的工厂，保证失败也是合法输出。
 3. **`resolveProjectDir` + `validateToolArgs`（tools/project-dir.ts，120 行）是所有工具的共同入口**：前者把 `projectDir` 参数 / 会话工作目录落成绝对路径，后者按 `RequiredArgSpec` 校验必填参数类型，报错文案统一。
 
-### 4.2 20 个工具一览
+### 4.2 21 个工具一览
 
 | 工具 | 文件（行） | engine 入口 | 门禁能力 |
 | --- | --- | --- | --- |
@@ -207,6 +207,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | `stm32_debug_run` | debug.ts（211） | debug.runDebugRun | debug（openocd + gdb） |
 | `stm32_debug_session` / `_eval` / `_stop` | debug-session.ts（265，三工具同文件） | debug-session.DebugSessionManager（单例 debugSessions）+ releaseProbeFor | debug（仅 session 启动时） |
 | `stm32_regs_read` | regs.ts（218） | regs.runRegsRead | debug |
+| `stm32_rtt` | rtt.ts（408） | rtt.startRtt / dumpRtt / stopRtt / rttStatus + probe-session.ensureSession（parseRttFrames / encodeRttFrame 是纯函数） | debug（仅 start） |
 | `stm32_route_plan` | route-plan.ts（573） | engine/route-plan.assessRoute + toolchain-gate | register-ok → build；其余 → generate；unclear → 不查 |
 | `stm32_cache` | cache.ts（274） | engine/cache 全套 | 无 |
 | `stm32_doctor` | doctor.ts（192） | doctor.runDoctor + collectChipConsistency（型号/启动文件/设备宏/.ld/Flash 五项一致性） | 无（它自己就是体检） |
@@ -214,9 +215,9 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**route-plan.ts 573 行**是 tools 层里最大的，因为它的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
 
-## 5. engine 层：44 个模块，十个域
+## 5. engine 层：45 个模块，十个域
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 44 个；`src/engine/` 目录里实际有 45 个 `.ts`——`assets.ts`（资源包装配的小件）还没单独成行，读资源包那条链路时直接从 §5.7 与 `src/data/assets` 一起看。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 45 个；`src/engine/` 目录里实际有 46 个 `.ts`——`assets.ts`（资源包装配的小件）还没单独成行，读资源包那条链路时直接从 §5.7 与 `src/data/assets` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -242,7 +243,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | build.ts（493） | `runBuild(subprocess, request)`：选 preset（`pickConfigurePreset` 优先 Debug）→ `cmake --preset` → `cmake --build` → `findElf`（= `pickElf`：CMakeCache 的 CMAKE_PROJECT_NAME 优先，否则取 mtime 最新的 .elf；`elfCandidates` 列出全部候选，`elfSelectionNote` 在候选多于 1 个时把「选了哪个、其他候选的 mtime」写进 notes）→ 解析内存占用（`parseMemoryUsage`，GNU ld 的 `RAM: 1584 B 20 KB 7.73%` 格式）→ 错误行（`parseBuildErrors`）与警告数（`countWarnings`）→ 按需跑 objcopy 出 hex/bin（`converted`，失败只写 note 不判失败）。辅助导出：`presetDirs`、`detectBuildDir`。 |
 | layout.ts（50） | 生成物的落位约定：`GEN_SRC_DIR = "Src"`、`GEN_INC_DIR = "Inc"`、`PROJECT_SRC_DIR = "Core/Src"`、`PROJECT_INC_DIR = "Core/Inc"`、`mapGeneratedPath(rel)`、`listGeneratedFiles`。CubeMX 无头模式吐在 `.dsh-stm32/gen/Src|Inc`，由这里映射回工程的 Core/。 |
 
-### 5.4 烧录、调试与诊断（8 个，3160 行）
+### 5.4 烧录、调试与诊断（9 个，3884 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
@@ -252,6 +253,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。本身只负责脚本生成与日志解析（`buildRegsScript` / `parseRegsLog`，不复位芯片）；B3 起工具层换成「复用常驻会话 + Tcl RPC 直读」（`ensureSession` + `readWordsViaSession`，RPC 失败回退到会话里的 gdb），没有会话时才起一个并保留 90 s。 |
 | probe-error.ts（257） | 探针故障的**唯一分类入口**（B2）。`ProbeErrorKind` 8 类（no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / timeout / unknown）、运行期枚举 `PROBE_ERROR_KINDS`、`ProbeError{kind,cause,hint,evidence,retryable}`；`classifyProbeFailure({lines,exitCode,stage,timedOut,spawnError})` 的判定顺序是 **MATCHERS 首个命中 → timedOut（timeout） → spawnError → unknown**，所以 MATCHERS 的顺序是敏感的。hint 常量（`HINT_PROBE` / `HINT_BUSY` / `HINT_DP` / `HINT_FLASH_PROTECTED` / `HINT_NO_POWER` / `HINT_TARGET_MISMATCH` / `HINT_TIMEOUT` / `HINT_UNKNOWN`）只此一份；`firstProblemLine` / `probeMissingLines` / `usbNoteFor` 从 flash.ts 迁过来；`formatProbeError` 出「错误：<kind> — <cause>；建议：<hint>」；`PROBE_ERROR_SCHEMA`（additionalProperties:false，五个字段全 required）。不做兼容别名：`errorCode` 字段已删除，flash / debug / session 三条路径共用同一份规则。 |
 | probe-session.ts（365） | 会话复用的快路径（B3）。`sessionInfo` / `touch` / `release(reason)` / `ensureSession(projectDir, opts)` / `withSession` / `readWordsViaSession({addresses})`，以及纯函数 `normalizeWordAddress` / `parseMdwReply` / `parsePcReply` / `tclRoundTrip`。会话的唯一真相仍是 debug-session.ts 的 `debugSessions` 单例——这里不自己存句柄、也不自己算租约；并发靠模块级 starting Promise 去重（同时两次调用只起一个进程）；端口被占直接报 `probe-busy`，不让 openocd 顺延端口去抢探针。读值走 openocd 的 Tcl RPC、一条 TCP 连接（halt → `reg pc` → `mdw`×N → resume，用 0x1a 分帧），tcl 端口没拿到或 RPC 失败就回退到会话里的 gdb 并写 notes。 |
+| rtt.ts（724） | RTT 日志（C 阶段）。控制块沿用 SEGGER 约定（首 10 字节 `"SEGGER RTT"`、描述符 24 字节），传输交给 openocd 的 `rtt setup/start/server start`，本模块只管帧与状态：`startRtt`（`mdw` 三个字校验魔数 `RTT_MAGIC_WORD_0/1/2_LOW` → 发三条命令 → 起本地端口）／`dumpRtt`（连端口读 N 秒或 M 条 → `parseRttFrames` 解帧 → 按 `level` 上限过滤 → `truncated` / `dropped` 如实报）／`stopRtt` / `rttStatus`（`src/index.ts` 在 turn/end 时调 `stopRtt`）。帧是 13 字节头：4B 长度 LE（= 9 + payload）、1B 级别 1..4、8B 时间戳 ms LE、UTF-8 payload；`len < 9` 或 `> 4096` 判失步并按字节滑动重找，单帧坏掉不炸整次 dump。常量 `DEFAULT_RTT_PORT=9090`、`DEFAULT_RTT_SIZE=0x400`、`DEFAULT_DUMP_SECONDS=3`、`DEFAULT_MAX_RECORDS=200`、`RTT_FRAME_HEADER_BYTES=13`、`RTT_MIN_FRAME_BYTES=9`；八条 hint（地址写错 / 没有会话 / 控制块全 0 / 魔数不符 / 端口占用 / 连不上 / Tcl 超时 / 帧失步）只此一份。 |
 | breakpoints.ts（281） | 断点预算（B4）。`BreakpointBudget{code,data}`、`F1_BREAKPOINT_BUDGET = {code:6, data:4}`、`quotaOf(used, limit)`（used 夹在 [0,limit]，给出 used/limit/remaining 三元组）、`budgetFromChipFact`、`readIocCpn`、`resolveBreakpointBudget(projectDir)`（.ioc 的 Mcu.CPN → chips.json 里可选的 breakpoints/watchpoints；没 .ioc、chips.json 没这颗、或没写值都回退 F1 6/4 并说明原因）、`parseBreakpointSpec` / `breakpointFromGdbCommand`、`collectBreakpointRequests({breakAt,breakpoints,preCommands})`（preCommands 里的 break / watch 也计数，同 kind+location 去重）、`planBreakpoints` 出 detail + suggestion。超限在 spawn openocd **之前**就失败，不碰探针、也不关已有会话。 |
 | doctor.ts（665） | 体检 + 配套性核对。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录；最后跑 **checkChipConsistency / collectChipConsistency** 的五项一致性：① 型号 ↔ 启动文件名 ② 启动文件 ↔ cmake 设备宏 ③ `.ld` MEMORY 容量 ↔ 芯片实际容量 ④ `.elf` Flash 占用 ↔ Flash 容量 ⑤ .ioc 用到的引脚是否在封装内。配套纯函数 `parseLinkerMemory`（认 20K / 0x5000 / 65536，算式不算）、`deviceDefinesIn`、`elfFlashBytes`（读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 PT_LOAD 的 `p_filesz`）、`findLinkerScript` / `linkerScriptNames`（多个 .ld 时优先非 STM32F103XX_FLASH.ld 的那个）。 |
 
@@ -678,15 +680,15 @@ flowchart LR
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 34 个套件 497 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
+| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 35 个套件 523 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
 | e2e 脚本 | test/e2e-*.mjs（15 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
 | 发布形态 | scripts/pack-smoke.mjs（npm run test:pack）+ scripts/pack-size.mjs（npm run test:size） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程；pack-size 再守包体（tarball ≤1.2 MB、templates/** ≤60 KB、包内禁二进制、必需文件齐全）。CI 上两连跑 |
 
-### 9.2 34 个套件一览（test/run-units.mjs 的 suites 数组顺序）
+### 9.2 35 个套件一览（test/run-units.mjs 的 suites 数组顺序）
 
-build-units、cache-units、cache-gc-units、assets-units、probe-error-units（23 例）、probe-session-units（16 例）、breakpoints-units（17 例）、stm32f1-units、hal-route-units、clock-units、doctor-chip-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
+build-units、cache-units、cache-gc-units、assets-units、probe-error-units（23 例）、probe-session-units（16 例）、breakpoints-units（17 例）、stm32f1-units、hal-route-units、clock-units、doctor-chip-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、rtt-units、schema-guard。
 
-开发机上 497 例全跑；CI 上是 **495 pass + 2 skipped**（两条用例依赖本机路径）。B 阶段一次加了三个套件：`probe-error-units`（23 例，8 类 kind 与判定顺序）、`probe-session-units`（16 例，会话复用与 Tcl 分帧）、`breakpoints-units`（17 例，6/4 预算与超限文案）。
+开发机上 523 例全跑；CI 上是 **521 pass + 2 skipped**（两条用例依赖本机路径）。B 阶段一次加了三个套件：`probe-error-units`（23 例，8 类 kind 与判定顺序）、`probe-session-units`（16 例，会话复用与 Tcl 分帧）、`breakpoints-units`（17 例，6/4 预算与超限文案）。C 阶段（RTT）加了 `rtt-units`（26 例：20 例帧 / 命令编码 + 6 条模板静态断言），工具数同时从 20 增至 21、engine 模块从 44 增至 45。
 
 约定：
 - 测试 import ../lib/，所以**改 src 必须先 npm run build**（否则测的是旧代码，最容易自欺的地方）。
@@ -725,6 +727,7 @@ const fake = {
 | 改 .elf 选择规则 | engine/build.ts 的 `pickElf` / `elfCandidates` / `elfSelectionNote`（flash、debug_run、doctor、export 全都间接用它） | build-units 里要同时断言「工程名优先」和「退化到最新」两条路 |
 | 加 / 改探针错误分类 | engine/probe-error.ts 的 `classifyProbeFailure` 与 `PROBE_ERROR_KINDS`（MATCHERS 顺序敏感；flash / debug / session 三条路径共用同一份） | 三处同改：probe-error 的 MATCHERS 与 hint、tools 层的 `PROBE_ERROR_SCHEMA` 声明、test/probe-error-units 与 schema-guard |
 | 改 cmake 源清单的认法（设备宏、startup、HAL 模块） | engine/cmake-sources.ts 的 `collectCmakeSources` / `halModulesInUse` | 注释掉的 `#define` 与 `#include` 不能算启用；内容没变必须零写入（cmake-sources-units 15 例兜这两条） |
+| 改 RTT 帧格式（头长、级别含义、长度字段） | engine/rtt.ts 的 `RTT_FRAME_HEADER_BYTES` / `RTT_MIN_FRAME_BYTES` / `parseRttFrames` + templates/register/Core/Src/rtt.c 的 `RTT_FRAME_OVERHEAD` / `RTT_FRAME_MIN_BYTES` / `rtt_ring_write` | 两侧常量必须一致（rtt-units 有一条反算断言），还要同步 templates/scaffold/RTT.md 与两份 README 的三行示例；改帧头等于改 ABI，老固件会被判成帧失步 |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
 
 ## 11. 已知的坑与未做的事
@@ -742,6 +745,7 @@ const fake = {
 11. **别用 .elf 文件大小判「超 Flash」**：带 `-g3` 的 20 KiB 固件，.elf 里有 600 KB 调试信息，按文件大小判会把正经 C8T6 工程误报成超容量。doctor 因此读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`；解析不出 program header 时才退回文件大小并注明是粗算。
 12. **换芯片后别留旧链接脚本名**：`-T` 出现两个 .ld 时链哪个取决于顺序，症状是「编译过、上板跑飞」。hal-chip.pointLinkerFlagAt 会把工具链里的旧名改指新名，doctor 的 ①③ 两项检查也会先报 blocker。
 13. **B3 的真机计时还欠着**：会话复用快路径只有假探针（假 subprocess + 本地假 Tcl 服务端）的数字，真机 10 连读没测成——当时插的是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；同一句在 B3 之前的旧版一次性路径上也复现，所以不是这次改动引入的。**复测方法**：换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
+14. **RTT 只有离线验证**：`rtt-units` 26 例全离线（假 subprocess + 假端口），真机上只做到「建工程 + 编译 + `nm` 取址」，**没有一次真板子 dump**（手头的 WCH-Link 与坑 13 是同一个问题）。「只有通道 0 / 无 defmt 解码 / 默认占 3 KB RAM」是设计取舍，见 development-notes §30.6。**复测方法**：换回 CMSIS-DAP 探针，烧一个取消 `USER CODE BEGIN 2` 注释的寄存器工程，`nm` 拿 `_SEGGER_RTT`，再跑 `stm32_rtt action=start addr=<addr>` + `action=dump seconds=3`。
 
 ---
 

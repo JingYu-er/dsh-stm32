@@ -12,7 +12,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 20 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
+这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 21 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
 ## 为什么需要它
 
@@ -146,6 +146,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 烧录 | `stm32_flash`：openocd `program verify reset exit`，烧完释放探针；烧前检查 `.ioc` 是否开了 Serial Wire；失败时给结构化 `probeError`（`kind` / `cause` / `hint` / `evidence` / `retryable`，`kind` 收 8 类） |
 | 调试 | `stm32_debug_run` / `stm32_debug_session` / `stm32_debug_eval` / `stm32_debug_stop` |
 | 验证"真的在跑" | `stm32_regs_read`：按物理地址把任意外设寄存器读回来，halt 读值后 `resume`，不复位芯片 |
+| 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
 ## 工具参考
@@ -190,6 +191,34 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_debug_eval` | 在会话里执行 gdb 命令或读表达式（如 `g_led_blink_count`），读完立刻 `resume` + `detach` |
 | `stm32_debug_stop` | 立刻释放探针，幂等 |
 | `stm32_regs_read` | 读 `GPIOC_ODR`、`AFIO_MAPR` 等物理地址；收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零。连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
+| `stm32_rtt` | **RTT 日志**（不占串口）：`action: "start"` 先用 `mdw` 读三个字确认 RAM 里真有 `SEGGER RTT` 控制块（`addr` 填控制块起始地址，不是通道缓冲地址），再发 `rtt setup/start/server start`；没有活跃会话时自己起一个。`action: "dump"` 读 `seconds`（默认 3 s）或 `maxRecords`（默认 200 条），返回 `records[{ t, level, text }]`——`level` 是**保留到哪一级**（1 error / 2 warn / 3 info / 4 debug，默认 4 全要），`dropped` / `truncated` 如实报。`action: "stop"` 幂等（turn 结束也会自动停），`action: "status"` 看端口与已运行时长。目标必须**真在跑**（`rtt start` 读的是运行时 RAM）。失败带 `probeError`：控制块全 0 = 固件没调 `rtt_init()`、魔数不符 = `addr` 填错、连不上 = 会话掉了或 9090 端口被占 |
+
+### 固件里怎么加 RTT（最短示例）
+
+寄存器版工程（`route: "register"`）已经把 `Core/Src/rtt.c` 与 `Core/Inc/rtt.h` 建好，但**默认没启用**：没人引用时 `--gc-sections` 会把它们连同 3 KB 环形缓冲一起丢掉（默认固件 1576 B RAM / 1368 B FLASH，`nm` 里没有 `_SEGGER_RTT`）。要开日志，只往 USER CODE 块里加三行：
+
+```c
+/* USER CODE BEGIN 2 */          /* 必须在时钟初始化之后：时间戳按 SystemCoreClock 换算 */
+rtt_init();
+rtt_printf(RTT_LEVEL_INFO, "boot: sysclk=%lu", (unsigned long)SystemCoreClock);
+/* USER CODE END 2 */
+```
+
+（`rtt.h` 已经在 `Core/Inc` 里，也可以再显式写一行 `#include "rtt.h"` 到 `USER CODE BEGIN Includes`。）编译后在宿主侧取控制块地址：
+
+```powershell
+arm-none-eabi-nm build/Debug/<工程名>.elf | findstr _SEGGER_RTT
+```
+
+然后让模型跑这三步（下面是 `stm32_rtt` 的三次工具调用，参数名与工具 schema 一致）：
+
+```text
+stm32_rtt action=start addr=0x20000DE0     # 控制块地址，来自上面那行 nm
+stm32_rtt action=dump seconds=3 level=3    # 读 3 秒内 info 及以上级别
+stm32_rtt action=stop                      # 释放端口；turn 结束也会自动停
+```
+
+启用后 RAM 从 1576 B 涨到 5232 B（3 个 1 KB 环 + 控制块，约占 C8T6 20 KB 的 1/4），FLASH 随 `rtt_printf` 变大（大头是 newlib 的 `vsnprintf`；只要纯文本就改用 `rtt_write` 可以省掉它）。HAL 工程不自带这份源：按 `templates/scaffold/RTT.md` 把 `templates/register/Core/Src/rtt.c` 拷成 `App/rtt.c`、挂进 `cmake/user/CMakeLists.txt`，再照上面三行放进 USER CODE 块。环满时是**整条丢弃**（不写半条），固件侧 `rtt_dropped_count()` 能查丢了多少。
 
 ## 斜杠命令
 
@@ -332,6 +361,7 @@ source [find target/stm32f1x.cfg]
 | 新增外设要**手工补 HAL 源** | 插件只落位 CubeMX 的 `Src/` 与 `Inc/`（→ `Core/Src`、`Core/Inc`），CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 不搬；开了定时器/串口/ADC 之后要自己把 `stm32f1xx_hal_<外设>.c` 加进源清单 | 改工程里 `cmake/stm32cubemx/CMakeLists.txt` 的 `STM32_Drivers_Src`，或写进 `cmake/user/CMakeLists.txt` 的 `target_sources` |
 | 生成/建工程需要 **CubeMX + F1 固件包** | 固件包版本默认 `STM32Cube_FW_F1_V1.8.7` | 换版本传 `firmwarePackage` |
 | 未在别人的机器上验证 | 本机：Windows 10 + MSYS2 UCRT64 + DAPLink + 蓝丸；其余组合靠反馈 | 遇到问题请附 `stm32_doctor` 的完整输出开 issue |
+| **RTT 只有通道 0**，帧是我们自己的约定 | `stm32_rtt` 只解析通道 0，头是 13 字节（4 B 长度 + 1 B 级别 + 8 B 时间戳 + UTF-8 正文）；既不是 defmt，也不是 SEGGER 原生裸字节——原生客户端（RTT Viewer / J-Link RTT Client）读通道 0 会把这 13 字节当正文。RTT 还依赖目标 RAM：不调 `rtt_init()` 就没有控制块，环满时整条丢 | 级别当过滤（`level: 3` 只看 info 以上），结构化内容塞进 `text` 里自己放 JSON；通道数与环大小改 `rtt.h` 的 `RTT_UP_CHANNELS` / `RTT_BUF_SIZE`（默认 3×1 KB = 3 KB `.bss`，C8T6 只有 20 KB）；要 defmt 解码或原生 RTT 输出是另一个功能 |
 
 ## 排错
 
@@ -389,13 +419,13 @@ node test\e2e-flash.mjs
 ```text
 src/
   index.ts                 插件入口（name / inject / apply）
-  tools/                   20 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
+  tools/                   21 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
   engine/                  纯逻辑与工作流（generate / build / flash / debug / ioc / scaffold …）
   commands/register.ts     7 条斜杠命令
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）
-test/                      离线套件（31 个）+ fixtures + 真机 e2e
+test/                      离线套件（35 个，run-units 登记）+ fixtures + 真机 e2e
 scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-xcube-catalog / copy-client）
 docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/（不进 npm 包）
 ```

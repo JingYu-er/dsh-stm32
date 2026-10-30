@@ -248,11 +248,14 @@ test("scaffold：空目录 → 骨架（工程名替换 / .ioc 改名 / Drivers 
   const targetDir = path.join(root, "blink");
   const report = createProjectScaffold({ targetDir, projectName: "blink", cubeMxRoots: [CUBE_ROOT] });
   assert.equal(report.ok, true, report.message);
-  // 15 个工程文件（CMake/.ld/.vscode/.ioc/openocd.cfg/.gitignore）+ Core/Src 下的 sysmem.c、syscalls.c
+  // 16 个工程文件（CMake/.ld/.vscode/.ioc/openocd.cfg/.gitignore/RTT.md）+ Core/Src 下的 sysmem.c、syscalls.c
   // （CubeMX GUI 会生成这两个，CLI 不生成；缺了 cmake/stm32cubemx/CMakeLists.txt 直接配置失败）
-  assert.equal(report.templateFiles, 15);
+  assert.equal(report.templateFiles, 16);
   assert.ok(fs.existsSync(path.join(targetDir, "Core/Src/sysmem.c")));
   assert.ok(fs.existsSync(path.join(targetDir, "Core/Src/syscalls.c")));
+  // HAL 工程不带 rtt.c（那是 CubeMX 生成区，会被重写）；只带一份"怎么加 RTT"的说明
+  assert.ok(fs.existsSync(path.join(targetDir, "RTT.md")), "HAL 工程要有 RTT.md 钩子说明");
+  assert.ok(!fs.existsSync(path.join(targetDir, "Core/Src/rtt.c")), "HAL 工程不该塞 rtt.c 进生成区");
   // 固件包 Drivers 有 5392 个文件，其中 4000+ 是 CMSIS 文档站/DSP 示例/BSP 组件（与编译无关）；
   // scaffold 只拷有用的那部分（实测 629 个、~4 s），这里守住"够用但别把文档也搬进来"。
   assert.ok(report.driverFiles > 600 && report.driverFiles < 900, "Drivers 文件数 " + String(report.driverFiles));

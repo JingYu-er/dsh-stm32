@@ -10,7 +10,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 20 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 21 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -145,6 +145,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Flash | `stm32_flash`: openocd `program verify reset exit`, probe released afterwards; checks that the `.ioc` has Serial Wire enabled; failures carry a structured `probeError` (`kind` / `cause` / `hint` / `evidence` / `retryable`, `kind` is one of 8) |
 | Debug | `stm32_debug_run` / `stm32_debug_session` / `stm32_debug_eval` / `stm32_debug_stop` |
 | Prove it is running | `stm32_regs_read`: reads any peripheral register back by physical address, halts, reads, then `resume` — no chip reset |
+| Firmware logs (RTT) | `stm32_rtt`: a SEGGER-shaped control block in RAM, openocd `rtt setup/start/server start` turns channel 0 into a TCP stream, and a 13-byte frame header carries level and timestamp — no UART, no rewiring |
 | Working discipline for the model | SKILL `stm32-workflow` shipped with the plugin (USER CODE only, never touch generated regions, flash and debug are separate, claims need register evidence) |
 
 ## Tool reference
@@ -189,6 +190,34 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | `stm32_debug_eval` | Runs gdb commands or reads expressions (e.g. `g_led_blink_count`) inside the session, then `resume` + `detach` immediately |
 | `stm32_debug_stop` | Releases the probe immediately, idempotent |
 | `stm32_regs_read` | Reads physical addresses such as `GPIOC_ODR` and `AFIO_MAPR`; finishes with `resume` instead of `reset run`, so a read does not wipe the firmware state. Repeated reads reuse the resident openocd session (milliseconds, no extra process); without a session one is started and kept for 90 s |
+| `stm32_rtt` | **RTT logs** without a UART: `action: "start"` first reads three words with `mdw` to confirm a `SEGGER RTT` control block is really there (`addr` is the control block address, not a channel buffer), then issues `rtt setup/start/server start`; with no live session it starts one itself. `action: "dump"` reads for `seconds` (default 3 s) or up to `maxRecords` (default 200) and returns `records[{ t, level, text }]` — `level` is the **highest level kept** (1 error / 2 warn / 3 info / 4 debug, default 4 = everything), with `dropped` / `truncated` reported honestly. `action: "stop"` is idempotent (also run at turn end), `action: "status"` shows the port and uptime. The target must **actually be running** (`rtt start` reads live RAM). Failures carry `probeError`: an all-zero control block means the firmware never called `rtt_init()`, a magic mismatch means a wrong `addr`, a refused connection means the session died or port 9090 is taken |
+
+### Adding RTT to the firmware (shortest example)
+
+A register-level project (`route: "register"`) already ships `Core/Src/rtt.c` and `Core/Inc/rtt.h`, but **they are off by default**: with nobody referencing them, `--gc-sections` drops the code and the 3 KB ring buffers (the default firmware is 1576 B RAM / 1368 B FLASH and `nm` shows no `_SEGGER_RTT`). To turn logging on, add three lines inside a USER CODE block:
+
+```c
+/* USER CODE BEGIN 2 */          /* must come after clock init: timestamps use SystemCoreClock */
+rtt_init();
+rtt_printf(RTT_LEVEL_INFO, "boot: sysclk=%lu", (unsigned long)SystemCoreClock);
+/* USER CODE END 2 */
+```
+
+(`rtt.h` already sits in `Core/Inc`; you may also add an explicit `#include "rtt.h"` to `USER CODE BEGIN Includes`.) After building, grab the control block address on the host:
+
+```powershell
+arm-none-eabi-nm build/Debug/<project>.elf | findstr _SEGGER_RTT
+```
+
+Then have the model run these three steps (three `stm32_rtt` tool calls, arguments named as in the tool schema):
+
+```text
+stm32_rtt action=start addr=0x20000DE0     # control block address from the nm line above
+stm32_rtt action=dump seconds=3 level=3    # 3 s of info and above
+stm32_rtt action=stop                      # releases the port; also runs at turn end
+```
+
+Enabling it moves RAM from 1576 B to 5232 B (three 1 KB rings plus the control block, about a quarter of the C8T6's 20 KB); FLASH grows with `rtt_printf` (mostly newlib's `vsnprintf` — use `rtt_write` for plain text to avoid it). HAL projects do not ship this source: follow `templates/scaffold/RTT.md`, copy `templates/register/Core/Src/rtt.c` to `App/rtt.c`, wire it into `cmake/user/CMakeLists.txt`, then add the same three lines to the USER CODE block. When a ring is full the **whole record is dropped** (never half of one) and `rtt_dropped_count()` reports the loss.
 
 ## Slash commands
 
@@ -329,6 +358,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | Adding a peripheral needs a **manual HAL source entry** | The plugin only relocates CubeMX's `Src/` and `Inc/` (→ `Core/Src`, `Core/Inc`); the `cmake/stm32cubemx/CMakeLists.txt` CubeMX emits is not applied. Enable a timer/UART/ADC and you must add the matching `stm32f1xx_hal_<peripheral>.c` yourself | Edit `STM32_Drivers_Src` in the project's `cmake/stm32cubemx/CMakeLists.txt`, or add a `target_sources` line in `cmake/user/CMakeLists.txt` |
 | Generation/scaffolding needs **CubeMX + the F1 firmware package** | Package version defaults to `STM32Cube_FW_F1_V1.8.7` | Pass another version via `firmwarePackage` |
 | Not yet verified on other machines | This machine: Windows 10 + MSYS2 UCRT64 + DAPLink + a Blue Pill; other combinations rely on your feedback | Open an issue with the full `stm32_doctor` output |
+| **RTT channel 0 only**, and the frame format is ours | `stm32_rtt` parses channel 0 only, with a 13-byte header (4 B length + 1 B level + 8 B timestamp + UTF-8 text); it is neither defmt nor SEGGER raw bytes — a native client (RTT Viewer / J-Link RTT Client) reading channel 0 sees that header as payload. RTT also lives in target RAM: no `rtt_init()` means no control block, and a full ring drops records | Use `level` as a filter (`level: 3` keeps info and above), put JSON in `text` for structured output; change channel count and buffer size via `RTT_UP_CHANNELS` / `RTT_BUF_SIZE` in `rtt.h` (default 3 × 1 KB = 3 KB `.bss` on a 20 KB C8T6); defmt decoding or native RTT output would be a separate feature |
 
 ## Troubleshooting
 
@@ -386,13 +416,13 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 20 tools, L3 (parameter schema + output contract + rendering)
+  tools/                   the 21 tools, L3 (parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
   commands/register.ts     the 7 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
   data/                    paths and chip data (paths are data, not logic)
 templates/scaffold/        project template snapshot (CMake / .ld / .vscode / .ioc)
-test/                      offline suites (31) + fixtures + hardware e2e
+test/                      offline suites (35, registered in run-units) + fixtures + hardware e2e
 scripts/                   guards and generators (pack-size / pack-smoke / gen-xcube-catalog / copy-client)
 docs/                      specification + development notes + reading guide + diagrams/ (not packed)
 ```

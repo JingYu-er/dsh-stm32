@@ -13,6 +13,7 @@
 
 import { registerCommands } from "./commands/register.js";
 import { debugSessions } from "./engine/debug-session.js";
+import { stopRtt } from "./engine/rtt.js";
 import { registerStm32Skill } from "./skill/stm32-workflow.js";
 import { registerAssets } from "./tools/assets.js";
 import { registerBuild } from "./tools/build.js";
@@ -33,6 +34,7 @@ import { registerProjectCreate } from "./tools/project-create.js";
 import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
+import { registerRtt } from "./tools/rtt.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
 import type { DshContext } from "./types.js";
 
@@ -80,6 +82,7 @@ export function apply(ctx: DshContext): void {
   registerDebugSession(ctx);
   registerRegsRead(ctx);
   registerRoutePlan(ctx);
+  registerRtt(ctx);
   registerAssets(ctx);
   registerCache(ctx);
   registerDoctor(ctx);
@@ -103,6 +106,9 @@ export function apply(ctx: DshContext): void {
   if (typeof ctx.on === "function") {
     ctx.on("session/event", (session: unknown, event: { type?: string } | undefined) => {
       if (event?.type !== "turn/end") return;
+      // RTT 的 rtt server 挂在同一个 openocd 上：会话一关它也跟着没了，本地状态不能继续
+      // 报 running。先收 RTT 再收会话，顺序只影响日志好不好看。
+      void stopRtt();
       // A9：只关这条会话自己开的调试会话。事件结构宿主没公开，所以按可能的位置逐个试；
       // 全都取不到就传空串，debug-session 会退回原来的「无条件关」行为。
       const owner = callerIdOf(event, session);

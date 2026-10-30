@@ -308,7 +308,8 @@ export interface RegisterProjectReport {
  *
  * 链接脚本不在这张表里：它是寄存器路线里唯一必须按型号改的模板（ST 那份写死
  * 64K FLASH / 20K RAM），所以从 HAL 骨架读原文本、改 MEMORY 两行、另存为
- * <DeviceId>_FLASH.ld（见 register-linker.ts）。拷贝数不变，工程文件总数还是 7 个。
+ * <DeviceId>_FLASH.ld（见 register-linker.ts）。这四个文件数目固定；工程文件总数由
+ * templateFiles 计数（CMakeLists + main.c + rtt.c/rtt.h + 这四个 + 链接脚本 = 9）。
  */
 const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "cmake/gcc-arm-none-eabi.cmake", "openocd.cfg"];
 
@@ -328,8 +329,12 @@ function countFiles(root: string): number {
 }
 
 /**
- * 建一个寄存器版工程：模板（CMakeLists + main.c）来自插件，CMSIS/启动文件来自缓存，
- * 工具链与链接脚本复用 HAL 骨架里那几份**不含 HAL 内容**的文件。
+ * 建一个寄存器版工程：模板（CMakeLists + main.c + 可选 RTT 的 rtt.c/rtt.h）来自插件，
+ * CMSIS/启动文件来自缓存，工具链与链接脚本复用 HAL 骨架里那几份**不含 HAL 内容**的文件。
+ *
+ * RTT 那两个文件是"编进来但默认不启用"：main.c 里 rtt_init() 是注释掉的，工具链开了
+ * --gc-sections，所以不调用时 rtt.c 的代码与 3 KB 控制块缓冲会被链接器丢掉，不占 RAM/Flash。
+ * 这样模板既能被 stm32_rtt 直接支持，又不给不用 RTT 的人增加成本。
  */
 export async function createRegisterProject(request: RegisterProjectRequest): Promise<RegisterProjectReport> {
   const startedAt = Date.now();
@@ -408,6 +413,10 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   const required = [
     path.join(regTpl, "CMakeLists.txt"),
     path.join(regTpl, "Core", "Src", "main.c"),
+    // 极简 RTT：CMakeLists 已经 add_executable 了 Core/Src/rtt.c，缺了会 link error；
+    // main.c 里也 include 了 rtt.h，缺了连编译都过不了。所以两个都算必需文件。
+    path.join(regTpl, "Core", "Src", "rtt.c"),
+    path.join(regTpl, "Core", "Inc", "rtt.h"),
     // 链接脚本模板：按型号渲染的那份是从它改出来的，缺了就只能建 C8T6 尺寸的工程
     path.join(halTpl, LINKER_TEMPLATE_FILE),
     ...SHARED_TEMPLATE_FILES.filter((rel) => rel !== ".gitignore").map((rel) => path.join(halTpl, rel)),
@@ -428,7 +437,11 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   // 覆盖前先备份将被覆盖的同名文件；备份失败就一个字节都不写（否则用户的 main.c 就没了）。
   let backup: OverwriteBackup;
   try {
-    backup = backupBeforeOverwrite(targetDir, ["CMakeLists.txt", "Core/Src/main.c", linker.fileName, ...SHARED_TEMPLATE_FILES], "register");
+    backup = backupBeforeOverwrite(
+      targetDir,
+      ["CMakeLists.txt", "Core/Src/main.c", "Core/Src/rtt.c", "Core/Inc/rtt.h", linker.fileName, ...SHARED_TEMPLATE_FILES],
+      "register",
+    );
   } catch (error) {
     return fail("没写任何文件：覆盖前的备份失败（" + String((error as Error).message) + "）。目标目录 " + targetDir + " 未被改动。");
   }
@@ -465,7 +478,8 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   const targetExistedBefore = fs.existsSync(targetDir);
   const driversExistedBefore = fs.existsSync(path.join(targetDir, "Drivers"));
   const createdDirs: string[] = [];
-  let templateFiles = 2;
+  // 2 = CMakeLists.txt + Core/Src/main.c；rtt.c/rtt.h 也是模板直接拷的，一并计数（见下面 3)。
+  let templateFiles = 4;
   try {
     mkdirTracked(path.join(targetDir, "Core", "Src"), createdDirs);
     mkdirTracked(path.join(targetDir, "Core", "Inc"), createdDirs);
@@ -476,7 +490,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
     // 2) 寄存器版 main.c：芯片注释 + 按型号生成的 clock_init()
     fs.writeFileSync(path.join(targetDir, "Core", "Src", "main.c"), fill(fs.readFileSync(path.join(regTpl, "Core", "Src", "main.c"), "utf8")), "utf8");
 
-    // 3) 与 HAL 无关的公共文件：工具链 / presets（.gitignore 缺失时跳过，见上面 missingOptional）
+    // 3) 极简 RTT（SEGGER 兼容控制块 + 我们的 4+1+8+payload 帧）：原样拷，不做占位符替换。
+    //    CMakeLists 已经编它，main.c 已经 include 它；rtt_init() 是否调用由用户在 USER CODE 2 决定。
+    fs.writeFileSync(path.join(targetDir, "Core", "Src", "rtt.c"), fs.readFileSync(path.join(regTpl, "Core", "Src", "rtt.c"), "utf8"), "utf8");
+    fs.writeFileSync(path.join(targetDir, "Core", "Inc", "rtt.h"), fs.readFileSync(path.join(regTpl, "Core", "Inc", "rtt.h"), "utf8"), "utf8");
+
+    // 4) 与 HAL 无关的公共文件：工具链 / presets（.gitignore 缺失时跳过，见上面 missingOptional）
     for (const rel of SHARED_TEMPLATE_FILES) {
       if (rel === ".gitignore" && missingOptional.includes(rel)) continue;
       const dest = path.join(targetDir, rel);
@@ -485,11 +504,11 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
       templateFiles += 1;
     }
 
-    // 4) 按型号渲染的链接脚本：MEMORY 两行 + 注释两行换成本芯片的真实 Flash/RAM
+    // 5) 按型号渲染的链接脚本：MEMORY 两行 + 注释两行换成本芯片的真实 Flash/RAM
     fs.writeFileSync(path.join(targetDir, linker.fileName), linkerText, "utf8");
     templateFiles += 1;
 
-    // 5) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
+    // 6) CMSIS：缓存条目里的 Drivers 整棵拷进工程（与 HAL 工程布局一致）
     fs.cpSync(driversSrc, path.join(targetDir, "Drivers"), { recursive: true });
   } catch (error) {
     // Drivers 整棵是本次拷的（原来没有）→ 可以整棵删；原来就有（覆盖场景）则一个都不动。
@@ -526,6 +545,13 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   // 链接脚本/时钟的告警来自按型号推导本身（RAM 用了保守下限、F100 没有延迟位、HSI 到不了上限…），
   // 用户需要知道"为什么是 64 MHz 而不是 72"。
   warnings.push(...linker.warnings, ...clock.warnings);
+  // RTT 是"编进来但默认不启用"，用户得知道怎么开、以及它会吃多少 RAM——
+  // 否则 dump 时只会看到"控制块是空的"，得回头翻模板。
+  warnings.push(
+    "RTT 已随工程就位（Core/Src/rtt.c + Core/Inc/rtt.h，SEGGER 兼容控制块、通道 0 按 4+1+8+payload 写帧），" +
+      "但默认没启用：取消 main.c 里 USER CODE BEGIN 2 的 rtt_init() 注释才会链进来（否则 --gc-sections 会丢掉它）。" +
+      "启用后 3 个通道 × 1 KB = 3 KB RAM；dump 前先用 nm 拿 _SEGGER_RTT 地址再 stm32_rtt action=start addr=…。",
+  );
   if (template.cacheHit) warnings.push("这次用的是缓存模板（" + template.entryDir + "），没有联网。");
   else warnings.push("模板已下载到缓存（" + template.entryDir + "），以后再建工程不联网。");
 
