@@ -8,14 +8,14 @@ import { test } from "node:test";
 import {
   buildProgramCommand,
   checkNoDebugGuard,
-  errorCodeOfLines,
   findProjectConfig,
   parseFlashLog,
-  probeMissingLines,
   resolveElf,
   toOpenOcdPath,
-  usbNoteFor,
 } from "../lib/engine/flash.js";
+
+// B2：探针故障的归类与提示文案统一在 engine/probe-error.ts（flash / debug 共用一份）。
+import { classifyProbeFailure, probeMissingLines, usbNoteFor } from "../lib/engine/probe-error.js";
 
 import { FIXTURE_PROJECT } from "./fixtures.mjs";
 
@@ -60,21 +60,16 @@ test("probeMissingLines 认出两类找不到设备的行（2a）", () => {
   assert.match(missing[0] ?? "", /CMSIS-DAP/u);
 });
 
-test("errorCodeOfLines（2d）：常见失败各归各码", () => {
-  assert.equal(errorCodeOfLines(["Error: unable to find a matching CMSIS-DAP device"]), "no-probe");
-  assert.equal(errorCodeOfLines(["Error: no device found"]), "no-probe");
-  assert.equal(errorCodeOfLines(["Error: Error connecting DP: cannot read IDR"]), "swd-locked");
-  assert.equal(errorCodeOfLines(["Error: flash programming failed: read protected"]), "flash-protected");
-  assert.equal(errorCodeOfLines(["Error: target voltage may be too low"]), "no-power");
-  assert.equal(errorCodeOfLines(["Error: unexpected idcode"]), "target-mismatch");
-  assert.equal(errorCodeOfLines(["Error: something else entirely"]), "unknown");
-});
-
-test("parseFlashLog（2d）：失败时 errorCode 有值，成功时为空串", () => {
+test("parseFlashLog：只报写入/校验结果与失败行，归类交给 probe-error（B2）", () => {
   const fail = parseFlashLog(["Info : started", "Error: unable to find a matching CMSIS-DAP device", "** Programming Failed **"].join("\n"));
-  assert.equal(fail.errorCode, "no-probe");
+  assert.equal(fail.programmed, false);
+  assert.ok(fail.errors.some((line) => line.includes("CMSIS-DAP")));
+  assert.equal("errorCode" in fail, false, "旧 errorCode 字段已删（不做兼容别名）");
+  assert.equal(classifyProbeFailure({ lines: fail.errors, stage: "flash" }).kind, "no-probe");
+
   const okLog = parseFlashLog(["** Programming Finished **", "** Verified OK **"].join("\n"));
-  assert.equal(okLog.errorCode, "");
+  assert.deepEqual(okLog.errors, []);
+  assert.equal("errorCode" in okLog, false);
 });
 
 test("SWD 守卫（2c）：没有 .ioc 时看 openocd.cfg 的 transport——swd 通过、jtag 警告", () => {
@@ -102,7 +97,7 @@ test("usbNoteFor：unknown 静默、其余以 USB 形态前缀呈现（2a）", (
   assert.match(usbNoteFor("no-dap", "没插好"), /USB 形态：/u);
 });
 
-test("errorCodeOfLines：两个 openocd 抢同一个 CMSIS-DAP 归到 probe-busy（真板子取证）", () => {
+test("classifyProbeFailure：两个 openocd 抢同一个 CMSIS-DAP 归到 probe-busy（真板子取证）", () => {
   // 下面是 2026-10-28 在蓝丸 + CMSIS-DAP 上真抓到的日志（两个 openocd 同时访问探针）。
   const log = [
     "Error: CMSIS-DAP command CMD_DISCONNECT failed.",
@@ -110,8 +105,8 @@ test("errorCodeOfLines：两个 openocd 抢同一个 CMSIS-DAP 归到 probe-busy
     "Error: CMSIS-DAP transfer count mismatch: expected 5, got 1",
     "Error: Failed to write memory at 0x00000004",
   ];
-  assert.equal(errorCodeOfLines(log), "probe-busy");
-  assert.equal(errorCodeOfLines(["libusb_error_busy"]), "probe-busy");
+  assert.equal(classifyProbeFailure({ lines: log, stage: "flash" }).kind, "probe-busy");
+  assert.equal(classifyProbeFailure({ lines: ["libusb_error_busy"], stage: "debug" }).kind, "probe-busy");
 });
 
 test("parseFlashLog 挑出连不上 DP 的错误并去重", () => {

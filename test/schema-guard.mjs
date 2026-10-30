@@ -29,7 +29,7 @@ import { registerIocApply } from "../lib/tools/ioc-apply.js";
 import { outputSchema as iocApplySchema } from "../lib/tools/ioc-apply.js";
 import { registerIocPlan } from "../lib/tools/ioc-plan.js";
 import { outputSchema as iocPlanSchema } from "../lib/tools/ioc-plan.js";
-import { formatDebugReport, outputSchema as debugSchema } from "../lib/tools/debug.js";
+import { debugReportForHost, formatDebugReport, outputSchema as debugSchema } from "../lib/tools/debug.js";
 import { registerCodePatch } from "../lib/tools/code-patch.js";
 import { outputSchema as codePatchSchema } from "../lib/tools/code-patch.js";
 import { outputSchema as doctorSchema } from "../lib/tools/doctor.js";
@@ -40,7 +40,7 @@ import { registerEnvProbe } from "../lib/tools/env-probe.js";
 import { outputSchema as envProbeSchema } from "../lib/tools/env-probe.js";
 import { registerIocInspect } from "../lib/tools/ioc-inspect.js";
 import { outputSchema as iocInspectSchema } from "../lib/tools/ioc-inspect.js";
-import { outputSchema as flashSchema } from "../lib/tools/flash.js";
+import { flashReportForHost, formatFlashReport, outputSchema as flashSchema } from "../lib/tools/flash.js";
 import { outputSchema as generateSchema } from "../lib/tools/generate.js";
 import { registerProjectCreate } from "../lib/tools/project-create.js";
 import { outputSchema as projectCreateSchema } from "../lib/tools/project-create.js";
@@ -140,15 +140,20 @@ test("stm32_build 失败报告符合 output schema（不出现 null / 未声明�
 
 test("stm32_flash 失败报告含 args 且符合 output schema", () => {
   return runFlash(forbiddenSubprocess, { projectDir: MISSING_DIR, timeoutMs: 5000 }).then((report) => {
-    reportProblems("stm32_flash", flashSchema, { message: report.message, report });
+    // 早退路径（找不到 .elf）不是探针故障：引擎给 probeError=null，工具层摘掉再交宿主。
+    assert.equal(report.probeError, null);
+    const wire = flashReportForHost(report);
+    assert.equal("probeError" in wire, false, "null 不许进宿主报告（schema 不吃 null）");
+    reportProblems("stm32_flash", flashSchema, { message: report.message, report: wire });
     assert.deepEqual(report.args, []);
     assert.equal(report.ok, false);
   });
 });
 
-test("stm32_flash 失败报告带 errorCode 时仍符合 output schema（2d 回归）", async () => {
-  // 本机 smoke 里踩到的真缺陷：reportSchema 漏声明 errorCode（additionalProperties:false），
-  // 成功路径 errorCode 缺省所以测不出来；一旦失败带码，宿主直接判「工具返回了非法输出」。
+test("stm32_flash 失败报告带 probeError 时仍符合 output schema（B2 回归）", async () => {
+  // 2d 踩过的真缺陷：reportSchema 漏声明错误字段（additionalProperties:false），
+  // 成功路径字段缺省所以测不出来；一旦失败带上它，宿主直接判「工具返回了非法输出」。
+  // B2 把那个枚举换成 probeError 对象，这条用例守着同样的坑。
   const failLog = [
     "Open On-Chip Debugger 0.12.0",
     "Error: unable to find a matching CMSIS-DAP device",
@@ -166,32 +171,56 @@ test("stm32_flash 失败报告带 errorCode 时仍符合 output schema（2d 回�
     }),
   };
   const report = await runFlash(failingSubprocess, { projectDir: FIXTURE_PROJECT, timeoutMs: 5000 });
-  reportProblems("stm32_flash", flashSchema, { message: report.message, report });
+  const wire = flashReportForHost(report);
+  reportProblems("stm32_flash", flashSchema, { message: report.message, report: wire });
   assert.equal(report.ok, false);
-  assert.equal(report.errorCode, "no-probe", "拿不到探针时要归到 no-probe：" + JSON.stringify(report.errors));
+  assert.equal(report.probeError?.kind, "no-probe", "拿不到探针时要归到 no-probe：" + JSON.stringify(report.errors));
+  assert.equal(report.probeError?.retryable, true);
+  assert.ok((report.probeError?.evidence.length ?? 0) > 0, "evidence 要留下原始日志行");
+  assert.ok(wire.probeError !== undefined, "失败报告必须把 probeError 交给宿主");
+  assert.match(formatFlashReport(report).join("\n"), /错误：no-probe — /u);
 });
 
 test("stm32_debug_run 失败报告符合 output schema", () => {
   return runDebugRun(forbiddenSubprocess, { projectDir: MISSING_DIR, timeoutMs: 5000 }).then((report) => {
-    reportProblems("stm32_debug_run", debugSchema, { message: report.message, report });
+    // 早退（找不到 .elf）时 probeError 为 null，交给宿主前要摘掉。
+    assert.equal(report.probeError, null);
+    const wire = debugReportForHost(report);
+    assert.equal("probeError" in wire, false);
+    reportProblems("stm32_debug_run", debugSchema, { message: report.message, report: wire });
     assert.equal(report.ok, false);
   });
 });
 
-test("stm32_debug_run 失败报告带 errorCode 时符合 output schema（F2 回归）", () => {
-  // debug_run 失败会带 errorCode（与 flash 同一枚举）。schema 若没声明它，
+test("stm32_debug_run 失败报告带 probeError 时符合 output schema（B2 回归）", () => {
+  // debug_run 失败会带 probeError（与 flash 同一份分类）。schema 若没声明它，
   // 宿主按 additionalProperties:false 会把整条输出判成非法——副作用已发生，调用却报错。
+  const probeError = {
+    kind: "no-probe",
+    cause: "openocd 找不到 CMSIS-DAP 探针（没插好 / 被占用 / 本机没认到 USB 设备）",
+    hint: "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试），必要时换一根数据线再试。",
+    evidence: ["Error: unable to find a matching CMSIS-DAP device"],
+    retryable: true,
+  };
   const report = {
     ok: false, projectDir: FIXTURE_PROJECT, elfPath: "", port: 3333, breakAt: "main",
     hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
     gdbCommand: "", gdbOutput: "",
     openOcdLogTail: "Error: unable to find a matching CMSIS-DAP device",
-    durationMs: 12, errorCode: "no-probe",
-    errors: ["openocd 起不来（errorCode=no-probe）：Error: unable to find a matching CMSIS-DAP device"],
-    message: "没调试：openocd 起不来（no-probe）", notes: [],
+    durationMs: 12, probeError,
+    // B4：报告必须带断点预算三元组（additionalProperties:false 且进 required）。
+    breakpoints: { used: 0, limit: 6, remaining: 6 },
+    watchpoints: { used: 0, limit: 4, remaining: 4 },
+    errors: ["openocd 起不来：Error: unable to find a matching CMSIS-DAP device"],
+    message: "没调试：openocd 起不来", notes: [],
   };
   reportProblems("stm32_debug_run", debugSchema, { message: report.message, report });
-  assert.match(formatDebugReport(report).join("\n"), /错误码：no-probe/u);
+  assert.match(formatDebugReport(report).join("\n"), /错误：no-probe — /u);
+
+  // 成功路径：probeError 是 null，宿主的报告里必须没有这个键（schema 不吃 null）。
+  const wire = debugReportForHost({ ...report, ok: true, probeError: null });
+  assert.equal("probeError" in wire, false);
+  reportProblems("stm32_debug_run(成功)", debugSchema, { message: report.message, report: wire });
 });
 
 test("stm32_regs_read 参数错误报告符合 output schema（不 spawn）", () => {

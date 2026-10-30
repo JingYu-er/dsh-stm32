@@ -13,6 +13,8 @@ import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.j
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { usbDiagnosis } from "./doctor.js";
+import { classifyProbeFailure, probeMissingLines, usbNoteFor } from "./probe-error.js";
+import type { ProbeError } from "./probe-error.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
@@ -58,8 +60,8 @@ export interface FlashReport {
   exitCode?: number;
   programmed: boolean;
   verified: boolean;
-  /** 结构化错误码（2d）：模型按码决定重试还是问人。成功时省略（空串）。 */
-  errorCode?: FlashErrorCode;
+  /** 结构化探针错误（B2）：失败给 kind/cause/hint/evidence/retryable，成功时是 null。 */
+  probeError: ProbeError | null;
   errors: string[];
   message: string;
   logTail: string;
@@ -219,41 +221,13 @@ export interface FlashLogVerdict {
   errors: string[];
   /** 成功路径上照样会出现的 Error: 行（DAP / ACK 噪音），只当信息。 */
   noise: string[];
-  /**
-   * 结构化错误码（2d）：模型按码决定重试还是问人，不用解析日志原文。
-   * ""＝成功或无明确归类；unknown＝有失败但特征都不命中。
-   */
-  errorCode: FlashErrorCode;
 }
 
-export type FlashErrorCode =
-  | ""
-  | "no-probe"        // 找不到探针（没插 / 被 openocd 占用 / 机器没有 USB）
-  | "probe-busy"      // 探针被别的进程攥着
-  | "swd-locked"      // 芯片侧 SWD 连不上（固件关了调试口 / AP 锁）
-  | "flash-protected" // 写保护 / 读保护挡住烧写
-  | "no-power"        // 目标没供电
-  | "target-mismatch" // 连上的不是这颗芯片（id 不符）
-  | "unknown";
-
-/** 按日志行特征归码（2d）：一行命中即返回，多类并存时按先见者优先。 */
-export function errorCodeOfLines(lines: readonly string[]): FlashErrorCode {
-  for (const raw of lines) {
-    const line = raw.toLowerCase();
-    if (/unable to find a matching cmsis-dap device|no device found/.test(line)) return "no-probe";
-    if (/adapter speed could not be limited|target is openocd and must be halted/.test(line)) return "probe-busy";
-    // 真板子取证（2026-10-28）：两个 openocd 同时抓同一个 CMSIS-DAP 时，openocd 不会报"忙"，
-    // 而是两边交替收发导致 DAP 事务错位——满屏 transfer count mismatch / command mismatch。
-    if (/cmsis-dap (transfer count mismatch|command mismatch)|cmsis-dap command cmd_\w+ failed|libusb_error_busy/.test(line)) return "probe-busy";
-    if (/error connecting dp|cannot read idr|ap lock|sticky error/.test(line)) return "swd-locked";
-    if (/flash programming|write protected|read protected|memory protected/.test(line)) return "flash-protected";
-    if (/target voltage may be too low|no power/.test(line)) return "no-power";
-    if (/device id|cannot identify|unexpected idcode/.test(line)) return "target-mismatch";
-  }
-  return "unknown";
-}
-
-/** 认 openocd 的 ** Programming Finished ** / ** Verified OK ** 与 Error: 行。 */
+/**
+ * 认 openocd 的 ** Programming Finished ** / ** Verified OK ** 与 Error: 行。
+ * 归类不在这里做：失败原因要连退出码/超时/启动失败一起看，统一走 probe-error.ts 的
+ * classifyProbeFailure（B2 之后只有这一个分类入口，避免两份规则漂移）。
+ */
 export function parseFlashLog(text: string): FlashLogVerdict {
   const programmed = /\*\*\s*Programming Finished\s*\*\*/u.test(text);
   const verified = /\*\*\s*Verified OK\s*\*\*/u.test(text);
@@ -278,24 +252,7 @@ export function parseFlashLog(text: string): FlashLogVerdict {
     if (succeeded) noise.push(line);
     else errors.push(line);
   }
-  const flat = [...errors, ...noise];
-  const errorCode: FlashErrorCode = succeeded ? "" : errorCodeOfLines(flat.length === 0 ? [text] : flat);
-  return { programmed, verified, errors, noise, errorCode };
-}
-
-export const HINT_DP = "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
-export const HINT_PROBE = "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试）。";
-export const HINT_BUSY = "探针被别的进程同时访问（两个 openocd 抢同一个 CMSIS-DAP 时不会报错，而是满屏 transfer count mismatch）：先关掉调试会话或另一个 openocd，再烧一次。";
-
-/** openocd 报"找不到设备"的那几行错误行（2a 的判定基准，纯函数便于单测）。 */
-export function probeMissingLines(errors: readonly string[]): string[] {
-  return errors.filter((line) => /CMSIS-DAP device|no device found/iu.test(line));
-}
-
-/** USB 形态诊断的结论该以什么 note 呈现（unknown 静默：诊断失败不能把失败报告搞得更吵）。 */
-export function usbNoteFor(kind: string, detail: string): string | null {
-  if (kind === "unknown") return null;
-  return "USB 形态：" + detail;
+  return { programmed, verified, errors, noise };
 }
 
 export async function runFlash(subprocess: SubprocessService, request: FlashRequest): Promise<FlashReport> {
@@ -309,6 +266,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     return {
       ok: false, projectDir, elfPath: "", elfSize: 0, command: "", args: [], configs: [],
       durationMs: Date.now() - startedAt, programmed: false, verified: false,
+      probeError: null,
       errors: [elfResolved.note], message: "没烧：找不到要烧的 .elf", logTail: "", notes,
     };
   }
@@ -325,6 +283,8 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     return {
       ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
       durationMs: Date.now() - startedAt, programmed: false, verified: false,
+      // 守卫拒绝不是探针故障：这次连 openocd 都没起，probeError 保持 null。
+      probeError: null,
       errors: guard.errors, message: "没烧：.ioc 里没启用 Serial Wire（SWD 会被关掉）",
       logTail: "", notes: [...notes, ...guard.notes], guard: "no-debug",
     };
@@ -337,6 +297,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     return {
       ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
       durationMs: Date.now() - startedAt, programmed: false, verified: false,
+      probeError: null,
       errors: ["找不到 openocd"],
       message:
         "没烧：找不到 openocd（msys64 里 pacman -S mingw-w64-ucrt-x86_64-openocd）；查过 " +
@@ -388,10 +349,23 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
         (verdict.noise[0] ?? "") + "）",
     );
   }
-  if (errors.some((line) => /Error connecting DP/u.test(line))) notes.push(HINT_DP);
-  const probeMissing = probeMissingLines(errors);
-  if (probeMissing.length > 0) {
-    notes.push(HINT_PROBE);
+  const ok = outcome.exitCode === 0 && outcome.spawnError === null && !outcome.timedOut && verdict.programmed && errors.length === 0;
+  if (!ok && verdict.programmed && !verdict.verified) notes.push("写入成功但校验没过，建议重试或降低 adapter speed");
+  if (ok) notes.push("产物：" + basename(elfPath) + "（" + String(elfSize) + " B）已写入并复位运行，探针已释放");
+
+  // B2：失败时只归一次类。模型按 kind 分支、按 hint 动手，不用自己解析中文 message。
+  // unknown 不往 notes 里推 hint：没有依据的"下一步"只会盖住真正的根因。
+  const probeError: ProbeError | null = ok
+    ? null
+    : classifyProbeFailure({
+      lines: [...errors, ...verdict.noise],
+      exitCode: outcome.exitCode,
+      stage: "flash",
+      timedOut: outcome.timedOut,
+      spawnError: outcome.spawnError,
+    });
+  if (probeError !== null && probeError.kind !== "unknown") notes.push(probeError.hint);
+  if (probeError !== null && probeError.kind === "no-probe" && probeMissingLines(errors).length > 0) {
     // 2a：找不到设备时顺手做一次 USB 形态诊断——"没插"与"这台机器根本没 USB"是两种答案。
     // 诊断失败静默（unknown 不进 notes），绝不能让诊断把失败报告搞得更吵。
     const usb = await usbDiagnosis(subprocess, request.signal);
@@ -399,26 +373,16 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     if (extra !== null) notes.push(extra);
   }
 
-  const ok = outcome.exitCode === 0 && outcome.spawnError === null && !outcome.timedOut && verdict.programmed && errors.length === 0;
-  if (!ok && verdict.programmed && !verdict.verified) notes.push("写入成功但校验没过，建议重试或降低 adapter speed");
-  if (ok) notes.push("产物：" + basename(elfPath) + "（" + String(elfSize) + " B）已写入并复位运行，探针已释放");
-
   const message = ok
     ? "烧录成功（" + ((Date.now() - startedAt) / 1000).toFixed(1) + " s" + (verdict.verified ? "，已校验" : "") + "）"
     : "烧录失败：" + (errors[0] ?? "openocd 退出码 " + String(outcome.exitCode));
-
-  // 2d：errorCode 供模型分流（重试 / 换线 / 停会话 / 直接问人）。
-  let errorCode: FlashErrorCode = verdict.errorCode;
-  if (!ok && (outcome.spawnError !== null || outcome.timedOut)) errorCode = "unknown";
-  if (!ok && errorCode === "swd-locked" && errors.some((line) => /Error connecting DP/u.test(line))) errorCode = "swd-locked";
-  if (!ok && errorCode === "probe-busy") notes.push(HINT_BUSY);
 
   return {
     ok, projectDir, elfPath, elfSize, command, args, configs,
     durationMs: Date.now() - startedAt,
     ...(outcome.exitCode === null ? {} : { exitCode: outcome.exitCode }),
     programmed: verdict.programmed, verified: verdict.verified,
-    ...(errorCode === "" ? {} : { errorCode }),
+    probeError,
     errors, message, logTail: log.split(/\r?\n/u).slice(-25).join("\n"), notes,
   };
 }

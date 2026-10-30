@@ -15,19 +15,11 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
 import { usbDiagnosis } from "./doctor.js";
-import {
-  HINT_BUSY,
-  HINT_DP,
-  HINT_PROBE,
-  defaultConfigs,
-  errorCodeOfLines,
-  findProjectConfig,
-  probeMissingLines,
-  quoteForDisplay,
-  toOpenOcdPath,
-  usbNoteFor,
-} from "./flash.js";
-import type { FlashErrorCode } from "./flash.js";
+import { defaultConfigs, findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
+import { collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
+import type { BreakpointQuota } from "./breakpoints.js";
+import { classifyProbeFailure, firstProblemLine, probeMissingLines, usbNoteFor } from "./probe-error.js";
+import type { ProbeError } from "./probe-error.js";
 import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 
@@ -39,6 +31,8 @@ export interface DebugRunRequest {
   breakAt?: string;
   /** gdb 附加命令（在 break 之后、continue 之前执行）。 */
   preCommands?: string[];
+  /** B4：额外断点（"main" / "watch:g_count" / "break:*0x08000000"），与 breakAt、preCommands 一起算预算。 */
+  breakpoints?: string[];
   /** gdb 收尾命令（默认 monitor reset run + detach）。 */
   postCommands?: string[];
   port?: number;
@@ -61,14 +55,18 @@ export interface RegisterValue {
 
 export interface DebugRunReport {
   ok: boolean;
-  /** 结构化错误码（F2）：与 stm32_flash 同一枚举，成功或无关时省略。 */
-  errorCode?: FlashErrorCode;
+  /** 结构化探针错误（B2）：与 stm32_flash 共用一份分类，成功时是 null。 */
+  probeError: ProbeError | null;
   projectDir: string;
   elfPath: string;
   port: number;
   breakAt: string;
   hitBreakpoint: boolean;
   location: string;
+  /** B4：硬件断点预算（limit 来自芯片事实或 F1 默认 6）。 */
+  breakpoints: BreakpointQuota;
+  /** B4：数据观察点预算（F1 默认 4）。 */
+  watchpoints: BreakpointQuota;
   registers: RegisterValue[];
   backtrace: string[];
   locals: string[];
@@ -202,37 +200,50 @@ function keyLogTail(lines: readonly string[], maxLines: number): string {
   return [...kept].sort((left, right) => left - right).map((index) => lines[index] as string).join("\n");
 }
 
-/** errorCode → 一句给人看的下一步。 */
-function debugHintFor(code: FlashErrorCode): string | null {
-  if (code === "no-probe") return HINT_PROBE;
-  if (code === "probe-busy") return HINT_BUSY;
-  if (code === "swd-locked") return HINT_DP;
-  if (code === "no-power") return "目标板可能没供电：检查 3V3/GND 与 BOOT 跳线。";
-  return null;
-}
-
-/** 日志里第一条真正说明问题的行（给 message 用，避免只报"起不来"）。 */
-function firstProblemLine(lines: readonly string[]): string {
-  const hit = lines.find((line) => /^Error|unable to find|no device found|couldn't bind|cannot open|invalid/i.test(line));
-  return (hit ?? lines[lines.length - 1] ?? "").trim();
-}
-
 export async function runDebugRun(subprocess: SubprocessService, request: DebugRunRequest): Promise<DebugRunReport> {
   const projectDir = resolve(request.projectDir);
   const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
   const startedAt = Date.now();
   const notes: string[] = [];
   const errors: string[] = [];
+  // B4：断点预算先算清楚（纯计算 + 读 .ioc/chips.json，不碰探针），下面所有报告共用同一份配额。
+  const budgetInfo = resolveBreakpointBudget(projectDir);
+  const collected = collectBreakpointRequests({
+    ...(request.breakAt === undefined ? {} : { breakAt: request.breakAt }),
+    ...(request.breakpoints === undefined ? {} : { breakpoints: request.breakpoints }),
+    ...(request.preCommands === undefined ? {} : { preCommands: request.preCommands }),
+  });
+  const plan = planBreakpoints(collected.requested, budgetInfo.budget);
   const empty: DebugRunReport = {
     ok: false, projectDir, elfPath: "", port: 0, breakAt: request.breakAt ?? "main",
     hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
-    gdbCommand: "", gdbOutput: "", openOcdLogTail: "", durationMs: 0, errors, message: "", notes,
+    gdbCommand: "", gdbOutput: "", openOcdLogTail: "", durationMs: 0,
+    breakpoints: quotaOf(plan.used.code, plan.budget.code),
+    watchpoints: quotaOf(plan.used.data, plan.budget.data),
+    // 还没走到探针那一步（找不到 .elf / 缺工具链）就不算探针故障。
+    probeError: null,
+    errors, message: "", notes,
   };
 
   const elfPath = resolveElfPath(projectDir, request);
   if (elfPath === null) {
     errors.push("找不到 .elf（先跑 stm32_build）");
     return { ...empty, message: "没调试：找不到 .elf", durationMs: Date.now() - startedAt };
+  }
+  // B4：超预算就到此为止——不 spawn openocd（探针不动），也不让 gdb 报一串
+  // "Cannot insert breakpoint" 再把整次调试带崩。文案直接给"超了几个"和"删哪个/换什么"。
+  if (!plan.ok) {
+    errors.push("断点超预算：" + plan.detail);
+    notes.push(...collected.notes);
+    notes.push(budgetInfo.note);
+    notes.push(plan.suggestion);
+    return {
+      ...empty,
+      elfPath,
+      message: "没调试：断点超预算（硬件断点 " + String(plan.used.code) + "/" + String(plan.budget.code)
+        + "，观察点 " + String(plan.used.data) + "/" + String(plan.budget.data) + "）",
+      durationMs: Date.now() - startedAt,
+    };
   }
   const selectionNote = elfSelectionNote(dirname(elfPath));
   if (selectionNote !== "") notes.push(selectionNote);
@@ -278,27 +289,30 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
       // F2：旧版只回"openocd 起不来"+15 行尾巴，真正的 adapter init 失败常被挤掉。
       // 现在先归类（与 flash 同一套规则），再把有信息量的行留下，并顺手做一次 USB 形态诊断。
       const lines = listening.text.split(/\r?\n/u).filter((line) => line.trim() !== "");
-      const errorCode = errorCodeOfLines(lines);
-      const hint = debugHintFor(errorCode);
-      if (hint !== null) notes.push(hint);
-      if (probeMissingLines(lines).length > 0) {
+      // 此时 openocd 还没结算，退出码未知（给 null）；归类规则与 flash 完全同一份。
+      const probeError = classifyProbeFailure({ lines, exitCode: null, stage: "debug" });
+      if (probeError.kind !== "unknown") notes.push(probeError.hint);
+      if (probeError.kind === "no-probe" && probeMissingLines(lines).length > 0) {
         const usb = await usbDiagnosis(subprocess, request.signal);
         const extra = usbNoteFor(usb.kind, usb.detail);
         if (extra !== null) notes.push(extra);
       }
       const problem = firstProblemLine(lines);
-      errors.push(
-        "openocd 起不来（errorCode=" + (errorCode === "" ? "unknown" : errorCode) + "）：" +
-          (problem === "" ? "15 s 内没开始监听 " + String(port) : problem),
-      );
+      errors.push("openocd 起不来：" + (problem === "" ? "15 s 内没开始监听 " + String(port) : problem));
       return {
-        ...empty, elfPath, port, openOcdLogTail: keyLogTail(lines, 40), errorCode,
-        message: "没调试：openocd 起不来" + (errorCode === "" ? "" : "（" + errorCode + "）"),
+        ...empty, elfPath, port, openOcdLogTail: keyLogTail(lines, 40), probeError,
+        message: "没调试：openocd 起不来",
         durationMs: Date.now() - startedAt,
       };
     }
 
     const breakAt = request.breakAt ?? "main";
+    // B4：显式的额外断点（breakAt 已经单独处理；这里只补 breakpoints 参数里的）。
+    const explicit = collectBreakpointRequests({
+      ...(request.breakpoints === undefined ? {} : { breakpoints: request.breakpoints }),
+    }).requested;
+    // breakAt=none 但有额外断点时也要 continue，否则那些断点永远不会命中。
+    const shouldContinue = (breakAt !== "none" && breakAt !== "") || explicit.length > 0;
     const gdbArgs: string[] = [gdb, "-q", "-batch", "-nx"];
     const ex = (command: string): void => {
       gdbArgs.push("-ex", command);
@@ -310,15 +324,16 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     ex("target extended-remote 127.0.0.1:" + String(port));
     ex("monitor reset halt");
     if (breakAt !== "none" && breakAt !== "") ex("break " + breakAt);
+    for (const bp of explicit) ex((bp.kind === "data" ? "watch " : "break ") + bp.location);
     for (const command of request.preCommands ?? []) ex(command);
-    if (breakAt !== "none" && breakAt !== "") ex("continue");
+    if (shouldContinue) ex("continue");
     ex("info registers pc sp lr xpsr");
     ex("bt");
     ex("info locals");
     for (const command of request.postCommands ?? ["monitor reset run", "detach"]) ex(command);
 
     const gdbCommand = gdbArgs.map(quoteForDisplay).join(" ");
-    request.onProgress?.("gdb：" + breakAt + (breakAt === "none" ? "" : " 断点"));
+    request.onProgress?.("gdb：" + breakAt + (shouldContinue ? " 断点" : ""));
     const gdbOutcome = await runStreaming(subprocess, {
       argv: gdbArgs,
       cwd: projectDir,
@@ -342,19 +357,31 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
       && !gdbOutcome.timedOut
       && gdbOutcome.exitCode === 0
       && probe.errors.length === 0
-      && (breakAt === "none" || probe.hitBreakpoint);
+      && (!shouldContinue || probe.hitBreakpoint);
     if (ok) notes.push("已在 " + (probe.location === "" ? breakAt : probe.location) + " 停住并抓过快照；收尾是 monitor reset run + detach，芯片现在自由运行，探针已释放");
     if (!ok && probe.hitBreakpoint) notes.push("命中了断点，但收尾阶段有问题");
-    if (breakAt !== "none" && !probe.hitBreakpoint && errors.length === 0) {
-      errors.push("没有停在 " + breakAt + "：可能是复位后没跑到这里，或符号对不上（.elf 与板上的固件不一致）");
+    if (shouldContinue && !probe.hitBreakpoint && errors.length === 0) {
+      const where = breakAt !== "none" && breakAt !== "" ? breakAt : "这 " + String(explicit.length) + " 个断点";
+      errors.push("没有停在 " + where + "：可能是复位后没跑到这里，或符号对不上（.elf 与板上的固件不一致）");
     }
-    // F2：失败时给结构化错误码 + 可执行提示（成功时留空，报告不带噪音）。
-    let errorCode: FlashErrorCode = "";
+    // B4：只要这次真设了断点，就把预算和来源写进 notes（6/4 是芯片事实，不是插件随手定的）。
+    if (collected.requested.length > 0) {
+      notes.push(...collected.notes);
+      notes.push("断点预算：" + String(plan.used.code) + "/" + String(plan.budget.code) + " 个硬件断点、"
+        + String(plan.used.data) + "/" + String(plan.budget.data) + " 个观察点（" + budgetInfo.note + "）");
+    }
+    // B2：失败时只归一次类（成功时 probeError 是 null，报告里不带噪音）。
+    let probeError: ProbeError | null = null;
     if (!ok) {
-      errorCode = errorCodeOfLines(allLines);
-      const hint = debugHintFor(errorCode);
-      if (hint !== null) notes.push(hint);
-      if (errorCode === "no-probe" && probeMissingLines(allLines).length > 0) {
+      probeError = classifyProbeFailure({
+        lines: allLines,
+        exitCode: gdbOutcome.exitCode,
+        stage: "debug",
+        timedOut: gdbOutcome.timedOut,
+        spawnError: gdbOutcome.spawnError,
+      });
+      if (probeError.kind !== "unknown") notes.push(probeError.hint);
+      if (probeError.kind === "no-probe" && probeMissingLines(allLines).length > 0) {
         const usb = await usbDiagnosis(subprocess, request.signal);
         const extra = usbNoteFor(usb.kind, usb.detail);
         if (extra !== null) notes.push(extra);
@@ -375,7 +402,9 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
       gdbCommand,
       gdbOutput: gdbText,
       openOcdLogTail: keyLogTail(allLines, 40),
-      ...(errorCode === "" ? {} : { errorCode }),
+      breakpoints: quotaOf(plan.used.code, plan.budget.code),
+      watchpoints: quotaOf(plan.used.data, plan.budget.data),
+      probeError,
       durationMs: Date.now() - startedAt,
       errors,
       message: ok

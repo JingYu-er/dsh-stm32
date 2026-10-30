@@ -9,7 +9,9 @@
  * 探针一定是空闲的。build / flash / generate 动手前也会先让会话让出探针。
  */
 
+import { F1_BREAKPOINT_BUDGET, quotaOf } from "../engine/breakpoints.js";
 import { debugSessions } from "../engine/debug-session.js";
+
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { EvalReport, SessionReport } from "../engine/debug-session.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
@@ -21,6 +23,18 @@ export const DEBUG_SESSION_TOOL = "stm32_debug_session";
 export const DEBUG_EVAL_TOOL = "stm32_debug_eval";
 export const DEBUG_STOP_TOOL = "stm32_debug_stop";
 
+/** 断点预算三元组（B4）：与 stm32_debug_run 的报告同一个形状。 */
+const quotaSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    used: { type: "number" },
+    limit: { type: "number" },
+    remaining: { type: "number" },
+  },
+  required: ["used", "limit", "remaining"],
+};
+
 export const sessionSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -29,18 +43,23 @@ export const sessionSchema: JsonSchema = {
     active: { type: "boolean" },
     sessionId: { type: "string" },
     port: { type: "number" },
+    tclPort: { type: "number" },
     projectDir: { type: "string" },
+    configFile: { type: "string" },
     elfPath: { type: "string" },
     startedAt: { type: "number" },
     idleTtlMs: { type: "number" },
     hardTtlMs: { type: "number" },
     remainingMs: { type: "number" },
+    // B4：这次会话登记的断点数量与芯片上限（会话不跨 gdb 进程保存断点，但预算先校验）。
+    breakpoints: quotaSchema,
+    watchpoints: quotaSchema,
     errors: { type: "array", items: { type: "string" } },
     message: { type: "string" },
   },
   required: [
-    "ok", "active", "sessionId", "port", "projectDir", "elfPath", "startedAt",
-    "idleTtlMs", "hardTtlMs", "remainingMs", "errors", "message",
+    "ok", "active", "sessionId", "port", "tclPort", "projectDir", "configFile", "elfPath", "startedAt",
+    "idleTtlMs", "hardTtlMs", "remainingMs", "breakpoints", "watchpoints", "errors", "message",
   ],
 };
 
@@ -101,6 +120,8 @@ interface SessionArgs {
   idleTtlMs?: number;
   hardTtlMs?: number;
   reset?: "none" | "halt" | "run";
+  /** B4：这次会话打算用的断点（"main" / "watch:g_count"），起会话之前先对预算。 */
+  breakpoints?: string[];
   binDirs?: string[];
   envCheck?: string;
 }
@@ -116,7 +137,10 @@ interface EvalArgs {
 function describeSession(report: SessionReport): string[] {
   const lines: string[] = [report.message];
   if (report.active) {
-    lines.push("会话 " + report.sessionId + "：端口 " + String(report.port) + "，剩余租约 " + String(Math.ceil(report.remainingMs / 1000)) + " s（空闲 " + String(Math.round(report.idleTtlMs / 1000)) + " s / 总上限 " + String(Math.round(report.hardTtlMs / 1000)) + " s）");
+    const tclNote = report.tclPort > 0
+      ? "（Tcl " + String(report.tclPort) + "，regs_read 走快路径）"
+      : "（没有 Tcl 口，regs_read 走 gdb）";
+    lines.push("会话 " + report.sessionId + "：端口 " + String(report.port) + tclNote + "，剩余租约 " + String(Math.ceil(report.remainingMs / 1000)) + " s（空闲 " + String(Math.round(report.idleTtlMs / 1000)) + " s / 总上限 " + String(Math.round(report.hardTtlMs / 1000)) + " s）");
     if (report.elfPath !== "") lines.push("符号：" + report.elfPath);
     lines.push("→ 用 stm32_debug_eval 执行 gdb 命令；用完 stm32_debug_stop 立刻还探针（turn 结束也会自动关）");
   }
@@ -131,10 +155,17 @@ function describeSession(report: SessionReport): string[] {
  */
 function blockedSession(projectDir: string, gate: GateResult): SessionReport {
   return {
-    ok: false, active: false, sessionId: "", port: 0, projectDir, elfPath: "",
+    ok: false, active: false, sessionId: "", port: 0, tclPort: 0, projectDir, configFile: "", elfPath: "",
     startedAt: 0, idleTtlMs: 0, hardTtlMs: 0, remainingMs: 0,
+    breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
+    watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
     errors: gateReportNotes(gate).slice(1), message: gate.message,
   };
+}
+
+/** eval 没跑起来（多半是起会话失败）时的干净报告：字段一个不少，宿主 schema 才吃。 */
+function failEvalReport(message: string, errors: string[]): EvalReport {
+  return { ok: false, output: "", command: "", durationMs: 0, remainingMs: debugSessions.status().remainingMs, errors, message };
 }
 
 export function registerDebugSession(ctx: DshContext): void {
@@ -154,6 +185,7 @@ export function registerDebugSession(ctx: DshContext): void {
         idleTtlMs: { type: "number", description: "空闲超时毫秒数，默认 90000。" },
         hardTtlMs: { type: "number", description: "总时长上限毫秒数，默认 600000。" },
         reset: { type: "string", enum: ["none", "halt", "run"], description: "起会话时对目标做什么，默认 none（不动芯片）。" },
+        breakpoints: { type: "array", items: { type: "string" }, description: "这次会话打算用的断点（\"main\"、\"watch:g_count\"）：起会话之前先按芯片预算校验，F1 上限 6 个硬件断点 / 4 个观察点，超了不占探针直接失败。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选。" },
         envCheck: ENV_CHECK_SCHEMA,
       },
@@ -192,6 +224,7 @@ export function registerDebugSession(ctx: DshContext): void {
         ...(args.idleTtlMs === undefined ? {} : { idleTtlMs: args.idleTtlMs }),
         ...(args.hardTtlMs === undefined ? {} : { hardTtlMs: args.hardTtlMs }),
         ...(args.reset === undefined ? {} : { reset: args.reset }),
+        ...(args.breakpoints === undefined ? {} : { breakpoints: args.breakpoints }),
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         // A9：记下是谁开的会话，turn/end 只关自己的那个。
         ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
@@ -208,7 +241,7 @@ export function registerDebugSession(ctx: DshContext): void {
   ctx.tools.register({
     name: DEBUG_EVAL_TOOL,
     description:
-      "在已开启的调试会话里执行 gdb 命令（例如 \"print g_led_blink_count\"、\"info registers pc\"、\"bt\"、\"x/4xb 0x20000000\"）。每次临时起一个 gdb -batch：连上 → monitor halt → 执行 → monitor resume → detach，跑完目标继续运行、不在插件里留 gdb 进程。",
+      "在调试会话里执行 gdb 命令（例如 \"print g_led_blink_count\"、\"info registers pc\"、\"bt\"、\"x/4xb 0x20000000\"）。B3 起没有会话时会先起一个（空闲 90 s 自动关、turn 结束也关）并复用它的 gdb server，不重复起 openocd；每次仍临时起一个 gdb -batch：连上 → monitor halt → 执行 → monitor resume → detach，跑完目标继续运行、不在插件进程里留 gdb 进程。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -233,6 +266,13 @@ export function registerDebugSession(ctx: DshContext): void {
     async execute(rawArgs: EvalArgs | undefined, exec: ToolExec) {
       // 同 A31：无参数调用兜成 {}。没带 commands/expression 时引擎会给出"没执行"的报告，不是崩溃。
       const args = rawArgs ?? {};
+      // B3：eval 只复用会话里那个 gdb server，不另起 openocd（会话是唯一握着探针的进程）。
+      // 没有会话时不偷偷起一个：探针是共享资源，起会话要显式（stm32_debug_session 或 stm32_regs_read）。
+      const active = debugSessions.status();
+      if (!active.active) {
+        const message = "没有会话：先 stm32_debug_session 开一个（或用 stm32_debug_run 一次性跑）";
+        return { message, report: failEvalReport(message, ["没有调试会话（eval 只复用会话里的 gdb server，不自己起 openocd）"]) };
+      }
       const report = await debugSessions.eval({
         ...(args.commands === undefined ? {} : { commands: args.commands }),
         ...(args.expression === undefined ? {} : { expression: args.expression }),

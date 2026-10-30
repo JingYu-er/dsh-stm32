@@ -7,9 +7,11 @@
  */
 
 import { runFlash } from "../engine/flash.js";
+import { PROBE_ERROR_SCHEMA, formatProbeError } from "../engine/probe-error.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { FlashReport } from "../engine/flash.js";
+import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
@@ -36,7 +38,8 @@ const reportSchema: JsonSchema = {
     logTail: { type: "string" },
     notes: { type: "array", items: { type: "string" } },
     guard: { type: "string" },
-    errorCode: { type: "string", enum: ["", "no-probe", "probe-busy", "swd-locked", "flash-protected", "no-power", "target-mismatch", "unknown"] },
+    // B2：结构化探针错误（旧错误码字段已删除，不做兼容别名）。成功路径不出现该字段。
+    probeError: PROBE_ERROR_SCHEMA,
   },
   required: ["ok", "projectDir", "elfPath", "elfSize", "command", "args", "durationMs", "programmed", "verified", "errors", "message", "logTail", "notes"],
 };
@@ -71,19 +74,32 @@ interface FlashArgs {
   envCheck?: string;
 }
 
-interface ToolValue {
-  message: string;
-  report: FlashReport;
+/**
+ * 交给宿主看的报告：probeError(null) 直接摘掉。
+ * 引擎侧保留 ProbeError | null（空值语义清楚），但宿主 schema 不接受 null，
+ * 声明成 object 的字段一旦是 null 会被整个判成"非法输出"。
+ */
+export type FlashReportForHost = Omit<FlashReport, "probeError"> & { probeError?: ProbeError };
+
+export function flashReportForHost(report: FlashReport): FlashReportForHost {
+  const { probeError, ...rest } = report;
+  return probeError === null ? rest : { ...rest, probeError };
 }
 
-export function formatFlashReport(report: FlashReport): string[] {
+interface ToolValue {
+  message: string;
+  report: FlashReportForHost;
+}
+
+export function formatFlashReport(report: FlashReport | FlashReportForHost): string[] {
   const lines: string[] = [];
   lines.push((report.ok ? "烧录成功" : "烧录失败") + "：" + report.message);
   if (report.elfPath !== "") lines.push("固件：" + report.elfPath + "（" + String(report.elfSize) + " B）");
   if (report.configs.length > 0) lines.push("配置：" + report.configs.join(" + "));
   if (report.command !== "") lines.push("命令：" + report.command);
   lines.push("写入=" + (report.programmed ? "是" : "否") + "，校验=" + (report.verified ? "是" : "否"));
-  if (report.errorCode !== undefined && report.errorCode !== "") lines.push("错误码：[" + report.errorCode + "]");
+  const probeError = report.probeError ?? null;
+  if (probeError !== null) lines.push(formatProbeError(probeError));
   for (const note of report.notes) lines.push("· " + note);
   for (const error of report.errors.slice(0, 10)) lines.push("! " + error);
   if (!report.ok && report.logTail !== "") {
@@ -130,7 +146,7 @@ export function registerFlash(ctx: DshContext): void {
       const subprocess = ctx.get<SubprocessService>("subprocess");
       if (subprocess === undefined) {
         const report = emptyReport("宿主缺少 subprocess 服务，无法烧录");
-        return { message: report.message, report };
+        return { message: report.message, report: flashReportForHost(report) };
       }
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       // 门禁：烧录只需要 openocd。缺件且 envCheck=block 时连 openocd 都不起，
@@ -143,7 +159,7 @@ export function registerFlash(ctx: DshContext): void {
       });
       if (!gate.ok && gate.mode === "block") {
         const blocked = blockedReport(resolution.projectDir, gate);
-        return { message: blocked.message, report: blocked };
+        return { message: blocked.message, report: flashReportForHost(blocked) };
       }
       // 探针只有一块：门禁通过后才让调试会话让出来（B16：缺件时不该把别人的探针收走）。
       const released = await releaseProbeFor("stm32_flash");
@@ -162,7 +178,7 @@ export function registerFlash(ctx: DshContext): void {
       if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
       if (resolution.note !== null) report.notes.push(resolution.note);
-      return { message: report.message, report };
+      return { message: report.message, report: flashReportForHost(report) };
     },
   });
 }
@@ -172,6 +188,7 @@ function blockedReport(projectDir: string, gate: GateResult): FlashReport {
   return {
     ok: false, projectDir, elfPath: "", elfSize: 0, command: "", args: [], configs: [],
     durationMs: 0, programmed: false, verified: false,
+    probeError: null,
     errors: [], message: gate.message, logTail: "", notes: gateReportNotes(gate),
   };
 }
@@ -180,6 +197,7 @@ function emptyReport(message: string): FlashReport {
   return {
     ok: false, projectDir: "", elfPath: "", elfSize: 0, command: "", args: [], configs: [],
     durationMs: 0, programmed: false, verified: false,
+    probeError: null,
     errors: [message], message, logTail: "", notes: [],
   };
 }

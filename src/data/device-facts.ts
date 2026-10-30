@@ -47,6 +47,13 @@ export interface DeviceFactsChip {
   readonly deviceHeader: string;
   /** 资源包里随包发布的链接脚本名（没有则为空串）。 */
   readonly linkerScript: string;
+  /**
+   * 可选：硬件断点数量（FPB 代码比较器）。资源仓库以后按型号补值即可，插件不用改；
+   * 没写就按 F1 默认 6 算（见 engine/breakpoints.ts）。
+   */
+  readonly breakpoints?: number;
+  /** 可选：数据观察点数量（DWT 数据比较器）；没写就按 F1 默认 4 算。 */
+  readonly watchpoints?: number;
 }
 
 /** 一次性读完的整份设备事实。 */
@@ -106,6 +113,9 @@ function chipFrom(value: unknown): DeviceFactsChip | null {
   const pinCount = countOf(value["pinCount"]);
   const flashBytes = countOf(value["flashBytes"]);
   const ramBytes = countOf(value["ramBytes"]);
+  // B4：断点预算（可选字段，chips.json 没写就是没有，调用方回退 F1 默认）。
+  const breakpoints = countOf(value["breakpoints"]);
+  const watchpoints = countOf(value["watchpoints"]);
   if (cpn === "" || line === "" || group === "" || startup === "" || deviceDefine === "" || deviceHeader === "") return null;
   if (pinCount === null || flashBytes === null || ramBytes === null) return null;
   return {
@@ -122,6 +132,8 @@ function chipFrom(value: unknown): DeviceFactsChip | null {
     deviceDefine,
     deviceHeader,
     linkerScript: textOf(value["linkerScript"]),
+    ...(breakpoints === null || breakpoints <= 0 ? {} : { breakpoints: Math.trunc(breakpoints) }),
+    ...(watchpoints === null || watchpoints <= 0 ? {} : { watchpoints: Math.trunc(watchpoints) }),
   };
 }
 

@@ -16,6 +16,8 @@ import { existsSync } from "node:fs";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
+import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
+import type { BreakpointQuota } from "./breakpoints.js";
 import { pickPort, resolveElfPath } from "./debug.js";
 import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
@@ -35,6 +37,11 @@ export interface SessionStartRequest {
   hardTtlMs?: number;
   /** 起会话时对目标做什么：none=不动、halt=复位并停住、run=复位并运行。 */
   reset?: "none" | "halt" | "run";
+  /**
+   * B4：这次会话打算用的断点（"main" / "watch:g_count"）。
+   * 会话本身不跨 gdb 进程保存断点，但预算要在起会话之前校验——超限直接不占探针。
+   */
+  breakpoints?: string[];
   binDirs?: string[];
   /** 起会话的调用方标识（工具层传 exec.agent?.id）：turn 结束时只关自己的会话（审计 A9）。 */
   owner?: string;
@@ -46,12 +53,20 @@ export interface SessionReport {
   active: boolean;
   sessionId: string;
   port: number;
+  /** openocd 的 Tcl RPC 端口（读寄存器快路径走它；老版本 openocd 没打印就是 0）。 */
+  tclPort: number;
   projectDir: string;
+  /** 起会话时用的 openocd 配置（找不到就是空串）：工具层要如实回报，别让用户以为读了别的配置。 */
+  configFile: string;
   elfPath: string;
   startedAt: number;
   idleTtlMs: number;
   hardTtlMs: number;
   remainingMs: number;
+  /** B4：硬件断点预算（本会话登记的数量 / 芯片上限 / 还能加几个）。 */
+  breakpoints: BreakpointQuota;
+  /** B4：数据观察点预算。 */
+  watchpoints: BreakpointQuota;
   errors: string[];
   message: string;
 }
@@ -107,6 +122,10 @@ interface InternalSession {
   projectDir: string;
   elfPath: string;
   port: number;
+  /** openocd 的 Tcl RPC 端口（从启动日志里解析；0＝没解析到，快路径回退 gdb）。 */
+  tclPort: number;
+  /** 起会话时用的 openocd 配置（空串＝回退默认 interface/target）。 */
+  configFile: string;
   handle: ProcessHandle;
   startedAt: number;
   lastUsedAt: number;
@@ -117,11 +136,22 @@ interface InternalSession {
   binDirs: string[];
   /** 起会话的调用方（空串=不知道）：turn/end 只关自己开的那个（审计 A9）。 */
   owner: string;
+  /** B4：起会话时按预算登记的断点数量（状态查询要如实回报）。 */
+  breakpoints: BreakpointQuota;
+  watchpoints: BreakpointQuota;
 }
 
 const DEFAULT_IDLE_TTL_MS = 90_000;
 const DEFAULT_HARD_TTL_MS = 10 * 60_000;
 const SWEEP_MS = 5_000;
+/**
+ * 等 tcl 端口那行日志的宽限期。
+ *
+ * openocd 的三行 "Listening on port N for <svc> connections" 是分别打印的，而 waitForListening
+ * 一见到第一行就返回；多等 120 ms 再把 collected 缓冲从头读一遍，才不会把 tcl 端口读丢
+ * （读丢只是慢一点：快路径会回退到 gdb）。
+ */
+const TCL_PORT_SETTLE_MS = 120;
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
@@ -180,10 +210,33 @@ export function parseMarkedWords(output: string, addresses: readonly string[]): 
   return { pc, values };
 }
 
+/**
+ * 从 openocd 启动日志里解析各服务的监听端口。
+ *
+ * openocd 0.12 会打印三行独立的 "Listening on port N for <svc> connections"（tcl / telnet / gdb）。
+ * B3 的读寄存器快路径只要 tcl 那个：走它的 RPC 口 halt → mdw → resume，一次连接几毫秒。
+ * 解析不到就是 0，调用方回退到 gdb（慢一点但能用），不把整个工具搞挂。
+ */
+export function parseListeningPorts(text: string): { gdb: number; tcl: number; telnet: number } {
+  const ports = { gdb: 0, tcl: 0, telnet: 0 };
+  for (const match of text.matchAll(/listening on port (\d+) for ([a-z]+) connections/giu)) {
+    const port = Number(match[1]);
+    const service = (match[2] ?? "").toLowerCase();
+    if (!Number.isFinite(port) || port <= 0) continue;
+    if (service === "gdb") ports.gdb = ports.gdb === 0 ? port : ports.gdb;
+    else if (service === "tcl") ports.tcl = ports.tcl === 0 ? port : ports.tcl;
+    else if (service === "telnet") ports.telnet = ports.telnet === 0 ? port : ports.telnet;
+  }
+  return ports;
+}
+
 function emptyReport(errors: string[], message: string): SessionReport {
   return {
-    ok: false, active: false, sessionId: "", port: 0, projectDir: "", elfPath: "",
-    startedAt: 0, idleTtlMs: DEFAULT_IDLE_TTL_MS, hardTtlMs: DEFAULT_HARD_TTL_MS, remainingMs: 0, errors, message,
+    ok: false, active: false, sessionId: "", port: 0, tclPort: 0, projectDir: "", configFile: "", elfPath: "",
+    startedAt: 0, idleTtlMs: DEFAULT_IDLE_TTL_MS, hardTtlMs: DEFAULT_HARD_TTL_MS, remainingMs: 0,
+    breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
+    watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
+    errors, message,
   };
 }
 
@@ -207,13 +260,27 @@ export class DebugSessionManager {
     return this.current !== null;
   }
 
+  /**
+   * 续租：会话刚被用过一次（B3 的 regs 快路径每读一次都算"用过"）。
+   * 返回是否真的有会话被续租。
+   */
+  touch(): boolean {
+    const session = this.current;
+    if (session === null) return false;
+    session.lastUsedAt = this.now();
+    return true;
+  }
+
   status(): SessionReport {
     const session = this.current;
     if (session === null) return emptyReport([], "没有调试会话（探针空闲）");
     return {
-      ok: true, active: true, sessionId: session.id, port: session.port, projectDir: session.projectDir,
+      ok: true, active: true, sessionId: session.id, port: session.port, tclPort: session.tclPort,
+      projectDir: session.projectDir,
+      configFile: session.configFile,
       elfPath: session.elfPath, startedAt: session.startedAt, idleTtlMs: session.idleTtlMs,
-      hardTtlMs: session.hardTtlMs, remainingMs: this.remainingMs(session), errors: [],
+      hardTtlMs: session.hardTtlMs, remainingMs: this.remainingMs(session),
+      breakpoints: session.breakpoints, watchpoints: session.watchpoints, errors: [],
       message: "调试会话进行中（端口 " + String(session.port) + "，剩余 " + String(Math.ceil(this.remainingMs(session) / 1000)) + " s）",
     };
   }
@@ -251,6 +318,25 @@ export class DebugSessionManager {
   async start(request: SessionStartRequest): Promise<SessionReport> {
     const subprocess = this.subprocess;
     if (subprocess === null) return emptyReport(["插件还没拿到 subprocess 服务"], "没开会话：插件未就绪");
+    // B4：断点预算先算（纯计算 + 读 .ioc/chips.json），超限就直接不占探针——
+    // 也别把已有会话关掉：这次申请本来就不会开起来。
+    const budgetInfo = resolveBreakpointBudget(request.projectDir);
+    const collected = collectBreakpointRequests({
+      ...(request.breakpoints === undefined ? {} : { breakpoints: request.breakpoints }),
+    });
+    const plan = planBreakpoints(collected.requested, budgetInfo.budget);
+    if (!plan.ok) {
+      const blocked = emptyReport(
+        ["断点超预算：" + plan.detail, budgetInfo.note, plan.suggestion],
+        "没开会话：断点超预算（硬件断点 " + String(plan.used.code) + "/" + String(plan.budget.code)
+          + "，观察点 " + String(plan.used.data) + "/" + String(plan.budget.data) + "）",
+      );
+      return {
+        ...blocked,
+        breakpoints: quotaOf(plan.used.code, plan.budget.code),
+        watchpoints: quotaOf(plan.used.data, plan.budget.data),
+      };
+    }
     if (this.current !== null) {
       await this.stop("新的会话申请覆盖了旧会话");
     }
@@ -287,6 +373,8 @@ export class DebugSessionManager {
       projectDir,
       elfPath,
       port,
+      tclPort: 0,
+      configFile: projectConfig ?? "",
       handle,
       startedAt: this.now(),
       lastUsedAt: this.now(),
@@ -295,6 +383,8 @@ export class DebugSessionManager {
       logText: "",
       binDirs: config.binDirs,
       owner: request.owner ?? "",
+      breakpoints: quotaOf(plan.used.code, plan.budget.code),
+      watchpoints: quotaOf(plan.used.data, plan.budget.data),
     };
 
     const listening = await waitForListening(handle, 15_000, (text) => {
@@ -311,6 +401,16 @@ export class DebugSessionManager {
       );
     }
 
+    // tcl 那行常排在 gdb 那行之后：等一小会儿把整个 collected 缓冲从头读一遍再解析
+    // （readFrom(0) 对收集式缓冲是随机读，不影响 waitForListening 已经消费掉的偏移）。
+    await sleep(TCL_PORT_SETTLE_MS);
+    const fullText = [
+      listening.text,
+      handle.collected.stdout?.readFrom(0).text ?? "",
+      handle.collected.stderr?.readFrom(0).text ?? "",
+    ].join("\n");
+    session.tclPort = parseListeningPorts(fullText).tcl;
+
     this.current = session;
     this.ensureSweeper();
 
@@ -322,7 +422,15 @@ export class DebugSessionManager {
       }
     }
 
-    return this.status();
+    const ready = this.status();
+    if (collected.requested.length === 0) return ready;
+    // B4：把登记集合、预算来源、以及"断点不在 gdb 进程之间保留"这件事说清楚。
+    return {
+      ...ready,
+      message: ready.message + "\n· 断点预算已校验：登记 " + String(plan.used.code) + "/" + String(plan.budget.code)
+        + " 个硬件断点、观察点 " + String(plan.used.data) + "/" + String(plan.budget.data) + "（" + budgetInfo.note
+        + "）；会话不跨 gdb 进程保存断点，实际停靠用 stm32_debug_eval 的 break <loc>",
+    };
   }
 
   async eval(request: EvalRequest): Promise<EvalReport> {
@@ -358,6 +466,21 @@ export class DebugSessionManager {
     for (const command of request.commands ?? []) if (command.trim() !== "") commands.push(command.trim());
     if (commands.length === 0) {
       return { ok: false, output: "", command: "", durationMs: 0, remainingMs: this.remainingMs(session), errors: ["没有命令"], message: "没执行：commands/expression 都是空的" };
+    }
+    // B4：eval 里的 break/watch 也占硬件比较器（一次 gdb 会话里超了，gdb 只会报
+    // Cannot insert breakpoint），所以同样先对预算。
+    const evalBreakpoints = collectBreakpointRequests({ preCommands: commands });
+    if (evalBreakpoints.requested.length > 0) {
+      const evalBudget = resolveBreakpointBudget(session.projectDir);
+      const evalPlan = planBreakpoints(evalBreakpoints.requested, evalBudget.budget);
+      if (!evalPlan.ok) {
+        return {
+          ok: false, output: "", command: "", durationMs: 0, remainingMs: this.remainingMs(session),
+          errors: ["断点超预算：" + evalPlan.detail, evalBudget.note, evalPlan.suggestion],
+          message: "没执行：断点超预算（硬件断点 " + String(evalPlan.used.code) + "/" + String(evalPlan.budget.code)
+            + "，观察点 " + String(evalPlan.used.data) + "/" + String(evalPlan.budget.data) + "）",
+        };
+      }
     }
 
     const argv: string[] = [gdb, "-q", "-batch", "-nx", "-ex", "set confirm off", "-ex", "set pagination off"];
@@ -498,6 +621,23 @@ export class DebugSessionManager {
     session.handle.terminate();
     await Promise.race([session.handle.waitForExit().catch(() => undefined), sleep(3000)]);
     return { ok: true, stopped: true, message: "会话已关闭（" + reason + "），探针已释放" };
+  }
+
+  /**
+   * 进程退出前的尽力清理（B3 第 4 条）：exit 事件里不能 await，只发终止信号。
+   * 返回是否真的收掉了一个会话。
+   */
+  terminateSync(): boolean {
+    const session = this.current;
+    this.current = null;
+    this.stopSweeper();
+    if (session === null) return false;
+    try {
+      session.handle.terminate();
+    } catch {
+      // 进程可能已经没了；exit 阶段不能抛。
+    }
+    return true;
   }
 
   async closeAll(reason: string): Promise<void> {

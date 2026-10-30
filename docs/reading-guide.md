@@ -27,7 +27,7 @@
 | --- | --- | --- | --- |
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
 | L3 契约层 | src/tools（19 个文件：20 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
-| L2 逻辑层 | src/engine（41 个模块） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
+| L2 逻辑层 | src/engine（45 个 .ts，其中 44 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
 | L1 事实表 | src/data（9 个数据模块） | 设备事实（`device-facts.ts` 从资源包缓存读 chips.json；插件不内置芯片表）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写 | 起进程、写工程文件 |
 
 跨层的只有两样东西：**SubprocessService**（进程能力，从 ctx 一路当参数传到 engine）和 **DshContext**（宿主服务袋）。
@@ -49,7 +49,7 @@ flowchart TD
   IDX --> SKILL["src/skill/stm32-workflow.ts<br/>红线 skill"]
   IDX --> WEB["src/engine/web-routes.ts<br/>6 条 HTTP 路由"]
   IDX --> EVT["turn/end、session/disposed、dispose<br/>把探针还回去"]
-  TOOLS --> ENGINE["src/engine/*<br/>41 个纯逻辑模块"]
+  TOOLS --> ENGINE["src/engine/*<br/>44 个纯逻辑模块"]
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
@@ -184,7 +184,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 三个细节值得记住：
 
-1. **输出 schema 是硬的。** 宿主会拿 `output.schema` 校验 execute 的返回值，report 上任何没声明的字段都会被判「工具返回了非法输出」——这正是 0.1.2 上板时抓到的缺陷（flash 失败带 errorCode，而 schema 漏声明它，于是失败路径直接崩）。改 report 结构必须同步改 schema，test/schema-guard.mjs 就是为这条存在的。
+1. **输出 schema 是硬的。** 宿主会拿 `output.schema` 校验 execute 的返回值，report 上任何没声明的字段都会被判「工具返回了非法输出」——这正是 0.1.2 上板时抓到的缺陷（flash 失败时带一个故障分类字段，而 schema 漏声明它，于是失败路径直接崩；这个字段在 B2 之后叫 `probeError`，见 §5.4）。改 report 结构必须同步改 schema，test/schema-guard.mjs 就是为这条存在的。
 2. **门禁在工具层，不在 engine。** engine 假设工具链就位；`blockedReport` / `emptyReport` 是门禁拦截与早退时造「同形报告」的工厂，保证失败也是合法输出。
 3. **`resolveProjectDir` + `validateToolArgs`（tools/project-dir.ts，120 行）是所有工具的共同入口**：前者把 `projectDir` 参数 / 会话工作目录落成绝对路径，后者按 `RequiredArgSpec` 校验必填参数类型，报错文案统一。
 
@@ -214,9 +214,9 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**route-plan.ts 573 行**是 tools 层里最大的，因为它的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
 
-## 5. engine 层：41 个模块，十个域
+## 5. engine 层：44 个模块，十个域
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 44 个；`src/engine/` 目录里实际有 45 个 `.ts`——`assets.ts`（资源包装配的小件）还没单独成行，读资源包那条链路时直接从 §5.7 与 `src/data/assets` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -242,14 +242,17 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | build.ts（493） | `runBuild(subprocess, request)`：选 preset（`pickConfigurePreset` 优先 Debug）→ `cmake --preset` → `cmake --build` → `findElf`（= `pickElf`：CMakeCache 的 CMAKE_PROJECT_NAME 优先，否则取 mtime 最新的 .elf；`elfCandidates` 列出全部候选，`elfSelectionNote` 在候选多于 1 个时把「选了哪个、其他候选的 mtime」写进 notes）→ 解析内存占用（`parseMemoryUsage`，GNU ld 的 `RAM: 1584 B 20 KB 7.73%` 格式）→ 错误行（`parseBuildErrors`）与警告数（`countWarnings`）→ 按需跑 objcopy 出 hex/bin（`converted`，失败只写 note 不判失败）。辅助导出：`presetDirs`、`detectBuildDir`。 |
 | layout.ts（50） | 生成物的落位约定：`GEN_SRC_DIR = "Src"`、`GEN_INC_DIR = "Inc"`、`PROJECT_SRC_DIR = "Core/Src"`、`PROJECT_INC_DIR = "Core/Inc"`、`mapGeneratedPath(rel)`、`listGeneratedFiles`。CubeMX 无头模式吐在 `.dsh-stm32/gen/Src|Inc`，由这里映射回工程的 Core/。 |
 
-### 5.4 烧录、调试与诊断（5 个，2257 行）
+### 5.4 烧录、调试与诊断（8 个，3160 行）
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| flash.ts（424） | `runFlash`：SWD 守卫（`checkNoDebugGuard`：唯一 .ioc 看 PA13/PA14，没有 .ioc 就看 openocd.cfg 的 transport，找不到依据时给 notes 而不是静默放行）→ `resolveElf` → 找 openocd 配置（`findProjectConfig` 认 openocd.cfg/openocd/…；否则 `defaultConfigs` 用 interface/cmsis-dap.cfg + target/stm32f1x.cfg）→ 拼 `program <elf> verify reset exit`（`buildProgramCommand`）→ 解析日志（`parseFlashLog` 认 ** Programming Finished ** / ** Verified OK **，成功序列里的偶发 Error 行进 noise）→ 失败时分类（`errorCodeOfLines` → no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / unknown）→ 追加 USB 形态提示（`usbNoteFor` / `probeMissingLines`）。`toOpenOcdPath` 只把反斜杠换成正斜杠。`HINT_PROBE` / `HINT_DP` / `HINT_BUSY` 三个提示常量是 export 的，debug.ts 复用同一套文案。 |
-| debug.ts（406） | 一次性调试快照 `runDebugRun`：挑端口（`pickPort`，默认 3333，占用则顺延）→ 起 openocd（`waitForListening` 等 "Listening on port"）→ 起 gdb 跑一串 -ex（file / break / info registers / bt / info locals / monitor reset run / detach）→ `parseGdbOutput` 提取断点命中、寄存器、调用栈、locals → ok 判据看 exitCode + probe.errors + hitBreakpoint（审计 A26）。失败时：`errorCodeOfLines` 归类（与 flash 同一枚举）、`debugHintFor` 给下一步、`probeMissingLines` 命中就跑 `usbDiagnosis`、日志用 `keyLogTail(lines, 40)`（优先留 adapter/Error 行，而不是「最后 15 行」）、`firstProblemLine` 把首条根因塞进 errors。 |
+| flash.ts（424） | `runFlash`：SWD 守卫（`checkNoDebugGuard`：唯一 .ioc 看 PA13/PA14，没有 .ioc 就看 openocd.cfg 的 transport，找不到依据时给 notes 而不是静默放行）→ `resolveElf` → 找 openocd 配置（`findProjectConfig` 认 openocd.cfg/openocd/…；否则 `defaultConfigs` 用 interface/cmsis-dap.cfg + target/stm32f1x.cfg）→ 拼 `program <elf> verify reset exit`（`buildProgramCommand`）→ 解析日志（`parseFlashLog` 只回答 programmed / verified / errors / noise，**不再归类**）→ 失败时只调一次 `classifyProbeFailure`（stage "flash"），产物是 `probeError: ProbeError | null`（成功路径保持 null，由工具层摘掉）→ USB 形态提示（`usbNoteFor` / `probeMissingLines`）。`toOpenOcdPath` 只把反斜杠换成正斜杠。B2 之后分类规则与 hint 常量只在 probe-error.ts 一份，flash 与 debug 不会再各写一套漂移。 |
+| debug.ts（406） | 一次性调试快照 `runDebugRun`：挑端口（`pickPort`，默认 3333，占用则顺延）→ 起 openocd（`waitForListening` 等 "Listening on port"）→ 起 gdb 跑一串 -ex（file / break / info registers / bt / info locals / monitor reset run / detach）→ `parseGdbOutput` 提取断点命中、寄存器、调用栈、locals → ok 判据看 exitCode + probe.errors + hitBreakpoint（审计 A26）。失败时：`classifyProbeFailure` 归类（与 flash 同一个函数、同一组 kind，stage "debug"）→ `probeMissingLines` 命中就跑 `usbDiagnosis`、日志用 `keyLogTail(lines, 40)`（优先留 adapter/Error 行，而不是「最后 15 行」）、`firstProblemLine` 把首条根因塞进 errors、kind 不是 unknown 时把 hint 写进 notes。B4 的断点预算（`resolveBreakpointBudget` / `collectBreakpointRequests` / `planBreakpoints`）也在同一条 execute 里先算完，报告带 `breakpoints` / `watchpoints` 两个 used/limit/remaining 三元组。 |
 | debug-session.ts（516） | 长会话租约。`DebugSessionManager` 管「一个常驻 openocd + 多次短命 gdb -batch eval」，空闲 90 s、总时长 10 min、turn/end 立刻释放；`releaseProbeFor(reason)` 是别的工具（flash/regs/debug_run）动探针前必须调的一步（审计 B16：先释放再门禁）。三个纯函数是好单测点：`normalizeHexAddress`、`parseGdbPrintedHex`、`parseMarkedWords`（按 `echo ===DSH:<tag>===` 分段对齐，修「中间某个地址读失败导致后面值整体前移」）。 |
-| regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。与 debug-session 的区别是「一次性、不复位」，起完就关。 |
+| regs.ts（246） | 读内存映射寄存器。`normalizeAddress`（0x 可省）、`buildRegsScript`（生成 openocd 脚本：init → halt → mdw）、`parseRegsLog` → `runRegsRead`。本身只负责脚本生成与日志解析（`buildRegsScript` / `parseRegsLog`，不复位芯片）；B3 起工具层换成「复用常驻会话 + Tcl RPC 直读」（`ensureSession` + `readWordsViaSession`，RPC 失败回退到会话里的 gdb），没有会话时才起一个并保留 90 s。 |
+| probe-error.ts（257） | 探针故障的**唯一分类入口**（B2）。`ProbeErrorKind` 8 类（no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / timeout / unknown）、运行期枚举 `PROBE_ERROR_KINDS`、`ProbeError{kind,cause,hint,evidence,retryable}`；`classifyProbeFailure({lines,exitCode,stage,timedOut,spawnError})` 的判定顺序是 **MATCHERS 首个命中 → timedOut（timeout） → spawnError → unknown**，所以 MATCHERS 的顺序是敏感的。hint 常量（`HINT_PROBE` / `HINT_BUSY` / `HINT_DP` / `HINT_FLASH_PROTECTED` / `HINT_NO_POWER` / `HINT_TARGET_MISMATCH` / `HINT_TIMEOUT` / `HINT_UNKNOWN`）只此一份；`firstProblemLine` / `probeMissingLines` / `usbNoteFor` 从 flash.ts 迁过来；`formatProbeError` 出「错误：<kind> — <cause>；建议：<hint>」；`PROBE_ERROR_SCHEMA`（additionalProperties:false，五个字段全 required）。不做兼容别名：`errorCode` 字段已删除，flash / debug / session 三条路径共用同一份规则。 |
+| probe-session.ts（365） | 会话复用的快路径（B3）。`sessionInfo` / `touch` / `release(reason)` / `ensureSession(projectDir, opts)` / `withSession` / `readWordsViaSession({addresses})`，以及纯函数 `normalizeWordAddress` / `parseMdwReply` / `parsePcReply` / `tclRoundTrip`。会话的唯一真相仍是 debug-session.ts 的 `debugSessions` 单例——这里不自己存句柄、也不自己算租约；并发靠模块级 starting Promise 去重（同时两次调用只起一个进程）；端口被占直接报 `probe-busy`，不让 openocd 顺延端口去抢探针。读值走 openocd 的 Tcl RPC、一条 TCP 连接（halt → `reg pc` → `mdw`×N → resume，用 0x1a 分帧），tcl 端口没拿到或 RPC 失败就回退到会话里的 gdb 并写 notes。 |
+| breakpoints.ts（281） | 断点预算（B4）。`BreakpointBudget{code,data}`、`F1_BREAKPOINT_BUDGET = {code:6, data:4}`、`quotaOf(used, limit)`（used 夹在 [0,limit]，给出 used/limit/remaining 三元组）、`budgetFromChipFact`、`readIocCpn`、`resolveBreakpointBudget(projectDir)`（.ioc 的 Mcu.CPN → chips.json 里可选的 breakpoints/watchpoints；没 .ioc、chips.json 没这颗、或没写值都回退 F1 6/4 并说明原因）、`parseBreakpointSpec` / `breakpointFromGdbCommand`、`collectBreakpointRequests({breakAt,breakpoints,preCommands})`（preCommands 里的 break / watch 也计数，同 kind+location 去重）、`planBreakpoints` 出 detail + suggestion。超限在 spawn openocd **之前**就失败，不碰探针、也不关已有会话。 |
 | doctor.ts（665） | 体检 + 配套性核对。`runDoctor`：逐组件探测 + 进程残留（`parseTasklistCsv` 认 openocd/gdb）+ 端口占用（`checkPortBusy`）+ .ioc 告警 + USB 形态（`usbDiagnosis` / `diagnoseUsb`：只认行内 ASCII 本体，因为中文系统的 pnputil 字段名是 GBK 乱码）+ elf/构建目录；最后跑 **checkChipConsistency / collectChipConsistency** 的五项一致性：① 型号 ↔ 启动文件名 ② 启动文件 ↔ cmake 设备宏 ③ `.ld` MEMORY 容量 ↔ 芯片实际容量 ④ `.elf` Flash 占用 ↔ Flash 容量 ⑤ .ioc 用到的引脚是否在封装内。配套纯函数 `parseLinkerMemory`（认 20K / 0x5000 / 65536，算式不算）、`deviceDefinesIn`、`elfFlashBytes`（读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 PT_LOAD 的 `p_filesz`）、`findLinkerScript` / `linkerScriptNames`（多个 .ld 时优先非 STM32F103XX_FLASH.ld 的那个）。 |
 
 ### 5.5 生成、编码、.ioc 事务与时钟（10 个，3659 行）
@@ -444,12 +447,12 @@ flowchart TD
   E --> F["openocd -f ... -c program <elf> verify reset exit"]
   F --> G["parseFlashLog：认 Programming Finished / Verified OK<br/>成功序列里的偶发 Error 行进 noise"]
   G --> H{"ok?"}
-  H -->|是| OK["programmed + verified，errorCode 缺省"]
-  H -->|否| I["errorCodeOfLines 分类：no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / unknown"]
+  H -->|是| OK["programmed + verified，probeError 缺省（成功时字段根本不出现）"]
+  H -->|否| I["classifyProbeFailure 分 8 类：no-probe / probe-busy / swd-locked / flash-protected / no-power / target-mismatch / timeout / unknown"]
   I --> J["notes：USB 形态（usbNoteFor）+ probe-busy 专用提示（HINT_BUSY）"]
 ```
 
-真板子取证过的一个细节：两个进程同时访问同一个 CMSIS-DAP 时，日志不是「设备忙」，而是交替出现 CMSIS-DAP command mismatch / transfer count mismatch / Failed to write memory at 0x00000004。所以 errorCodeOfLines 里专门把这几种行归到 probe-busy。
+真板子取证过的一个细节：两个进程同时访问同一个 CMSIS-DAP 时，日志不是「设备忙」，而是交替出现 CMSIS-DAP command mismatch / transfer count mismatch / Failed to write memory at 0x00000004。所以 probe-error.ts 的 MATCHERS 里专门把这几种行归到 probe-busy（`/cmsis-dap (transfer count mismatch|command mismatch)|cmsis-dap command cmd_\w+ failed|libusb_error_busy/`）。
 
 ### 7.6 调试三件套与会话租约
 
@@ -458,7 +461,7 @@ stateDiagram-v2
   [*] --> 空闲
   空闲 --> 启动中: stm32_debug_session(start)
   启动中 --> 活跃: openocd 常驻 + 首次 gdb -batch 连上
-  启动中 --> 空闲: 端口占用 / 探针失败、带 errorCode 提示
+  启动中 --> 空闲: 端口占用 / 探针失败、带 probeError（kind / cause / hint）
   活跃 --> 活跃: stm32_debug_eval、每次新起 gdb -batch：连上 → halt → 命令 → resume → detach
   活跃 --> 空闲: stm32_debug_stop
   活跃 --> 空闲: 空闲 90 s
@@ -470,9 +473,15 @@ stateDiagram-v2
 三条设计理由：
 1. **只有 openocd 常驻**，gdb 每次短命——gdb 崩了不会把会话带死，也避免 gdb 自己攒一堆状态。
 2. **归属（A9）**：turn/end 事件里尽量掏 agent id，只关这条会话自己开的；掏不到就全关（宁可按最短释放，也不攥着探针）。
-3. **别人要用探针先 releaseProbeFor**：flash / regs_read / debug_run 都在自己起 openocd 之前调它，否则就是「两个 openocd 抢一个 CMSIS-DAP」。
+3. **别人要用探针先 releaseProbeFor**：flash / debug_run 在自己起 openocd 之前调它，否则就是「两个 openocd 抢一个 CMSIS-DAP」。**regs_read 是例外（B3 起）**：它反过来复用会话里的那个 openocd，连读时不再一读一起一停。
 
-**debug_run 失败时说什么**（0.1.2 修复）：以前只回一句「openocd 起不来」外加日志最后 15 行，真正的原因（adapter init 失败、探针被占）常被后面的噪声挤掉。现在先按 flash 同一套 `errorCodeOfLines` 归类，再用 `debugHintFor` 给一条可执行提示，`probeMissingLines` 命中时顺手跑 `usbDiagnosis` 分清「没插 / 没认到 / 驱动异常」，日志改用 `keyLogTail` 挑有信息量的行，`firstProblemLine` 把首条根因写进 errors。报告里的 `errorCode` 是**可选字段**（成功时不出现），且必须在 tools/debug.ts 的 reportSchema 里声明——漏声明就会重演 flash 那次「失败路径被判非法输出」。
+B3 的快路径不是「gdb -batch 跑快一点」，而是绕开 gdb：会话里 openocd 的 Tcl RPC 端口（`debug-session.ts` 的 `parseListeningPorts` 从启动日志的 `Listening on` 行取，`TCL_PORT_SETTLE_MS = 120` 后拿完整缓冲再解析一次，存进 `session.tclPort`；`probe-session.ts` 只消费它）上一条 TCP 连接依次发 halt → `reg pc` → `mdw`×N → resume，帧用 0x1a 分隔（`readWordsViaSession`）。假探针实测：旧的一次性路径 1493 ms/次；新路径起会话 790 ms（第一次含启动），之后 10 连读单次 13–18 ms、总计 154 ms，openocd 进程数 1。没有 tcl 端口或 RPC 失败就回退到会话里的 gdb 并把原因写进 notes。**真机计时还欠着**：现插的 WCH-Link（VID_C251&PID_F001）openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed`，换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 0x4001100C 即可复测。
+
+B4 的断点预算在同一条 execute 里先算（`resolveBreakpointBudget` 读 .ioc 的 Mcu.CPN → chips.json 的 breakpoints/watchpoints，缺就按 F1 默认 6 硬件断点 / 4 观察点并说明原因），超限在 spawn openocd **之前**就失败——不占探针、也不关你正开着的会话；报告里 `breakpoints` / `watchpoints` 各是 `{used, limit, remaining}`。
+
+**debug_run 失败时说什么**（0.1.2 修复）：以前只回一句「openocd 起不来」外加日志最后 15 行，真正的原因（adapter init 失败、探针被占）常被后面的噪声挤掉。现在改成和 flash **同一个函数** `classifyProbeFailure`（stage "debug"，同一组 kind）归类，hint 也从 probe-error.ts 那一份来，`probeMissingLines` 命中时顺手跑 `usbDiagnosis` 分清「没插 / 没认到 / 驱动异常」，日志改用 `keyLogTail` 挑有信息量的行，`firstProblemLine` 把首条根因写进 errors，kind 不是 unknown 时把 hint 也塞进 notes。
+
+报告里的 `probeError` 是**结构化对象**（`kind` / `cause` / `hint` / `evidence` / `retryable`），由 `PROBE_ERROR_SCHEMA` 声明（additionalProperties:false、五个字段 required）。注意一个宿主层细节：引擎在成功路径上给的是 `null`，而宿主 schema 不接受 null——所以 tools/flash.ts 与 tools/debug.ts 最后都过一遍 `flashReportForHost` / `debugReportForHost`，把 null 摘掉，让「成功时字段不出现」这件事真的成立。漏这一步就会重演 flash 那次「失败路径被判非法输出」。
 
 ### 7.7 .ioc 事务：plan → 用户确认 → apply / rollback
 
@@ -669,15 +678,15 @@ flowchart LR
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 29 个套件 418 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
+| 单元/契约 | test/*.test.mjs + test/schema-guard.mjs | 34 个套件 497 例（schema-guard 25 例），全部离线：假 subprocess、假 fs、固定夹具。**这是回归的主力** |
 | e2e 脚本 | test/e2e-*.mjs（15 个） | 开发期手动跑的端到端（真 CubeMX / 真 openocd / 真工具链），不进 npm test |
 | 发布形态 | scripts/pack-smoke.mjs（npm run test:pack）+ scripts/pack-size.mjs（npm run test:size） | npm pack → 解包 → 断言 16 个必须文件 → 用解包出来的 lib 真建一个寄存器工程；pack-size 再守包体（tarball ≤1.2 MB、templates/** ≤60 KB、包内禁二进制、必需文件齐全）。CI 上两连跑 |
 
-### 9.2 29 个套件一览（test/run-units.mjs 的 suites 数组顺序）
+### 9.2 34 个套件一览（test/run-units.mjs 的 suites 数组顺序）
 
-build-units、cache-units、stm32f1-units、hal-route-units、clock-units、doctor-chip-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
+build-units、cache-units、cache-gc-units、assets-units、probe-error-units（23 例）、probe-session-units（16 例）、breakpoints-units（17 例）、stm32f1-units、hal-route-units、clock-units、doctor-chip-units、cmake-sources-units、commands-units、doctor-regs-units、engine-units、export-units、firmware-units、flash-units、generate-cache-units、ioc-plan-units、install-units、ioc-units、route-plan-units、scaffold-patch-units、search-roots-units、session-units、text-encoding-units、thirdparty-units、tool-contract-units、toolchain-units、vscode-units、web-api-units、xcube-units、schema-guard。
 
-开发机上 418 例全跑；CI 上是 **416 pass + 2 skipped**（两条用例依赖本机路径）。
+开发机上 497 例全跑；CI 上是 **495 pass + 2 skipped**（两条用例依赖本机路径）。B 阶段一次加了三个套件：`probe-error-units`（23 例，8 类 kind 与判定顺序）、`probe-session-units`（16 例，会话复用与 Tcl 分帧）、`breakpoints-units`（17 例，6/4 预算与超限文案）。
 
 约定：
 - 测试 import ../lib/，所以**改 src 必须先 npm run build**（否则测的是旧代码，最容易自欺的地方）。
@@ -714,7 +723,7 @@ const fake = {
 | 改设置面板 | client/client.js（前端）+ engine/web-api.ts（逻辑）+ web-api-units | 前端不经打包器，语法要保守 |
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |
 | 改 .elf 选择规则 | engine/build.ts 的 `pickElf` / `elfCandidates` / `elfSelectionNote`（flash、debug_run、doctor、export 全都间接用它） | build-units 里要同时断言「工程名优先」和「退化到最新」两条路 |
-| 给工具加错误码 | engine/flash.ts 的 `errorCodeOfLines` 与 `FlashErrorCode`（debug_run 复用同一枚举） | 三个地方同改：engine 归类、reportSchema 声明、schema-guard 用例 |
+| 加 / 改探针错误分类 | engine/probe-error.ts 的 `classifyProbeFailure` 与 `PROBE_ERROR_KINDS`（MATCHERS 顺序敏感；flash / debug / session 三条路径共用同一份） | 三处同改：probe-error 的 MATCHERS 与 hint、tools 层的 `PROBE_ERROR_SCHEMA` 声明、test/probe-error-units 与 schema-guard |
 | 改 cmake 源清单的认法（设备宏、startup、HAL 模块） | engine/cmake-sources.ts 的 `collectCmakeSources` / `halModulesInUse` | 注释掉的 `#define` 与 `#include` 不能算启用；内容没变必须零写入（cmake-sources-units 15 例兜这两条） |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
 
@@ -723,7 +732,7 @@ const fake = {
 1. **只有 F1 在 FIRMWARE_FAMILIES**：其他族要接入必须先核实真实仓库名（stm32g4xx-hal-driver 之类），不能照 F1 改字母。
 2. **generate 是否补发 SetCopyLibrary "copy all"** 仍待定：只靠 .ioc 的 ProjectManager.LibraryCopy=1 不会让 CubeMX 从 setCustomFWPath 的包拷 HAL 源码。
 3. **firmware-install 的 existing 分支 nextStep 文案**偏旧（还停在「直接调 stm32_generate」的说法）。
-4. **四种 errorCode 只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验。
+4. **四类探针故障只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验（`probeError` 的 kind 与专属 hint 已在 test/probe-error-units 覆盖）。
 5. **P2（多芯片 + HAL 外设源文件按需落位）与 P3（gdb MI 常驻）** 未开工。
 6. **docs/diagrams/** 那两张 HTML 图有 2 MB 原始 / 891 KB gz，已经不进 npm 包**（package.json 的 files 从 docs 收窄成 docs/*.md）。这事现在由 `scripts/pack-size.mjs`（npm run test:size）守着：tarball ≤1.2 MB、templates/** ≤60 KB、包内禁 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。实测包体 509.9 KB / 99 个文件。
 7. **CI 上的 test:pack** 只在本机跑过；第一次在 GitHub Actions 上跑还没有记录。
@@ -732,6 +741,7 @@ const fake = {
 10. **裸 `cmake -S . -B build` 会丢工具链文件**：工具链只由 `CMakePresets.json` 注入（`cmake/gcc-arm-none-eabi.cmake`），不走 preset 就得自己给 `-DCMAKE_TOOLCHAIN_FILE`，否则 configure 用宿主 gcc、链接时找不到启动文件。
 11. **别用 .elf 文件大小判「超 Flash」**：带 `-g3` 的 20 KiB 固件，.elf 里有 600 KB 调试信息，按文件大小判会把正经 C8T6 工程误报成超容量。doctor 因此读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`；解析不出 program header 时才退回文件大小并注明是粗算。
 12. **换芯片后别留旧链接脚本名**：`-T` 出现两个 .ld 时链哪个取决于顺序，症状是「编译过、上板跑飞」。hal-chip.pointLinkerFlagAt 会把工具链里的旧名改指新名，doctor 的 ①③ 两项检查也会先报 blocker。
+13. **B3 的真机计时还欠着**：会话复用快路径只有假探针（假 subprocess + 本地假 Tcl 服务端）的数字，真机 10 连读没测成——当时插的是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；同一句在 B3 之前的旧版一次性路径上也复现，所以不是这次改动引入的。**复测方法**：换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
 
 ---
 

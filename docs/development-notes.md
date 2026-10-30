@@ -29,7 +29,7 @@ git clone git@github.com:JingYu-er/dsh-stm32.git        # 或 https://github.com
 cd dsh-stm32
 npm install --no-audit --no-fund                   # 只装 typescript
 npm run build                                       # tsc -> lib/
-npm test                                            # 可选：418 个离线用例（29 个套件）
+npm test                                            # 可选：497 个离线用例（34 个套件）
 ```
 
 然后把 `lib/` 用 `link:` 挂进 dsh 的 profile 并重启 dsh（见下一节）。宿主要求：
@@ -2128,3 +2128,95 @@ skill 的 R2 现在点名「本型号的启动文件 + 本型号的 `.ld`」，R
 - **测试**：新增夹具 `test/fixtures/assets/2026.10.31-1/`（20 颗真实 CPN + `manifest.json` + `install.json`，值从资源包原样抽，测试不联网）；`stm32f1-units` 重写成「事实从哪来 / 缺缓存怎么报」，`doctor-chip-units` 的 builtin 用例改成 `kind: unknown` + 空引脚，`assets-units` 的「内置表兜底」断言全部改口径。`test/run-units.mjs` 未动（captain 统一登记）。
 - **验证**：`npm run build` exit 0；`npm test` → **31 套件 442 pass / 0 fail**；资源包版本 `2026.10.31-1`（`chips.json` 83 颗 = F1 全部 CPN；任务书里的「58 颗」是 CubeMX `db/mcu` 的 XML 分组数，不是 CPN 数）。
 - **偏差备案**：任务书要求 `stm32_generate` / `stm32_ioc_*` 也 `await ensureAssets`，实际只接了 `stm32_ioc_plan`（软提示）；其余不读芯片事实的工具按上面的理由不接，避免把「没网」变成无关工具的硬失败。
+
+## 29. B 阶段：结构化探针错误 + 会话复用快路径 + 断点预算（2026-10-31）
+
+这一批只做三件事，都是「工具已经能用、但在真机上还硌手」的地方：**故障说清楚（B2）**、**连读不要每次重起 openocd（B3）**、**断点别等 openocd 起来才说不够（B4）**。三件都在 engine 层新增一个模块，工具层只负责声明 schema 与渲染。
+
+### 29.1 B2：一套字段取代 errorCode —— 只留 `probeError`
+
+旧形态是一枚枚举 `errorCode`（`no-probe` / `probe-busy` / `swd-locked` / `flash-protected` / `no-power` / `target-mismatch` / `unknown`），只回答「哪一类」，不回答「为什么」和「下一步做什么」。用户看到 `swd-locked` 还是不知道要按住 BOOT0 还是查复位时序。现在换成结构化对象：
+
+```ts
+interface ProbeError {
+  kind: ProbeErrorKind;   // 8 类
+  cause: string;          // 一句话根因（来自真实日志行）
+  hint: string;           // 可执行的下一步，每类都有专属文案
+  evidence: string[];     // 原始日志行，便于复核
+  retryable: boolean;     // 照 hint 处理完再调一次同一个工具，有没有意义
+}
+```
+
+**为什么是「直接替换」而不是加兼容别名**（这是本批唯一的取舍点）：
+
+- 两个字段并存，等于两份规则。flash 与 debug 本来就各有一份分类代码（`errorCodeOfLines` + `debugHintFor`），再加一层旧字段只会让漂移更难发现。
+- 宿主侧 `output.schema` 是硬的（report 上 `additionalProperties: false`）。多留一个字段就要在 schema 里多声明一次、在 `schema-guard` 里多守一次；而 `errorCode` 这种「只有失败时才有」的可选字段已经在 0.1.2 出过一次事故（失败路径被判非法输出）。
+- 本插件的版本号还在 0.1.x、外部消费者为零（README 里就是这么写的），没有「老字段要留着不破坏兼容」的义务。既然要改，就改干净。
+
+具体落点：
+
+- `src/engine/probe-error.ts`（257 行，新）：`ProbeErrorKind` 8 类（多了 `timeout`）、运行期枚举 `PROBE_ERROR_KINDS`、`classifyProbeFailure({lines, exitCode, stage, timedOut, spawnError})` —— 判定顺序是 **MATCHERS 首个命中 → timedOut（timeout） → spawnError（unknown 但带 cause） → unknown**，所以 MATCHERS 数组的**顺序是敏感的**（`no-probe` 必须排在 `probe-busy` 前面，否则 `no device found` 会被 `cmsis-dap command cmd_\w+ failed` 抢走）。hint 常量八条只此一份；`firstProblemLine` / `probeMissingLines` / `usbNoteFor` 从 flash.ts 迁来；`formatProbeError` 出「错误：<kind> — <cause>；建议：<hint>」；`PROBE_ERROR_SCHEMA` 五个字段全 required、`additionalProperties: false`。
+- `retryable` 的判据只有一条：**照 hint 处理完再调一次同一个工具，有没有意义**。因此 `flash-protected`（要解 RDP / 全片擦除）与 `target-mismatch`（芯片型号根本不对）是 `false`，其余六类 `true`。
+- `src/engine/flash.ts` / `src/engine/debug.ts`：字段从 `errorCode` 换成 `probeError: ProbeError | null`。**解析层不再归类**（`parseFlashLog` 只回答 programmed / verified / errors / noise），分类在 `runFlash` / `runDebugRun` 里各调一次 `classifyProbeFailure`，两条路径同一个函数、同一组 kind。
+- `src/tools/flash.ts` / `src/tools/debug.ts`：schema 里 `errorCode` 删除、加 `probeError: PROBE_ERROR_SCHEMA`；卡片行改成「错误：<kind> — <cause>；建议：<hint>」；新增 `flashReportForHost` / `debugReportForHost` —— 引擎在成功路径给的是 `null`，而宿主 schema 不接受 `null`，必须在工具层把 null 摘掉，「成功时字段不出现」才真的成立。
+- 测试：`test/probe-error-units.test.mjs`（23 例）覆盖 8 类 kind、判定顺序、每条 hint、retryable 表；`schema-guard` 里两条 `errorCode` 用例改成 `probeError` 并断言成功路径的 null 被摘掉；`flash-units` 同步到新 API。
+
+**四类真机故障的专属 hint**（本批要求写死的四条）：
+
+| kind | cause 形态 | hint 指向的动作 |
+| --- | --- | --- |
+| `swd-locked` | `Error connecting DP` / `cannot read IDR` / `AP lock` | 按 BOOT0 上电进系统存储器启动、复位时序里先释放 NRST 再连；确认 PA13/PA14 没被固件改成 GPIO |
+| `flash-protected` | `flash programming` / `write protected` / `read protected` | 先 `openocd -c "stm32f1x unlock 0"` 解 RDP，或全片擦除后再烧；只擦扇区不够 |
+| `no-power` | `target voltage may be too low` / `no power` | 查 3V3 / GND、BOOT 跳线、是否只接了 SWD 没共地；量一下目标板电压 |
+| `target-mismatch` | `device id` / `cannot identify` / `unexpected idcode` | 目标芯片与 `target/stm32f1x.cfg` 不符；换对应族的 target cfg，或确认买到的不是国产兼容片 |
+
+这四条的 hint 与 kind 都进了单测，但**只有单测没有真机**（真故障不好造，见 §11 的坑 4）——这也是为什么 hint 写得像「操作清单」而不是一句安慰话。
+
+**历史段落的读法**：本文件 §21（2d）与 §24.2（F2 缺陷）里出现的 `errorCode`、`FlashErrorCode`、`errorCodeOfLines`、`debugHintFor` 都是**当时的字段名与函数名**，原样保留（改历史记录等于篡改当时的验收口径）。从 §29 起，字段只有 `probeError`，函数只有 `classifyProbeFailure`；读旧段落时按这个映射翻译即可。
+
+### 29.2 B3：会话复用快路径 —— 1493 ms → 15 ms
+
+痛点：烧完看寄存器，「连读十次看计数器有没有在翻」是标准动作，而每次 `stm32_regs_read` 都**新起一个 openocd、读完关掉**，一次约 1.5 s（旧的一次性路径实测 1493 ms/次；另一次在 WCH-Link 上量到 7010 ms）。
+
+做法不是「把 gdb 跑快一点」，而是**绕开 gdb**：openocd 启动日志里会打 `Listening on port`（gdb server 与 tcl 两个端口）：`debug-session.ts` 新增 `parseListeningPorts` 解析出 `{gdb, tcl, telnet}`，并在 `TCL_PORT_SETTLE_MS = 120` 之后拿**完整启动缓冲**再解析一次（端口行还没打出来就解析会拿到 0），结果存进 `session.tclPort`。新模块 `src/engine/probe-session.ts`（365 行）只消费这个端口：在**一条 TCP 连接**上依次发 halt → `reg pc` → `mdw`×N → resume，帧用 `0x1a`（`TCL_FRAME`）分隔，帧齐立刻收尾（`readWordsViaSession`）。tcl 端口没拿到、或 RPC 出错，就回退到会话里的 gdb 读，并把「为什么回退」写进 notes。
+
+复用的边界（**只有两个工具复用**）：
+
+- `stm32_regs_read`：`ensureSession` → 有会话就借、没有就起一个并保留到 90 s 空闲租约；报告新增 `reusedSession` 与 `durationMs`；借用已有会话时 `configFile` / `adapterSpeed` 不生效（openocd 是会话里那个），notes 会明说并提示「先 stm32_debug_stop」。
+- `stm32_debug_eval`：本来就连会话端口上的 gdb，不会起第二个 openocd；**没有会话时明确报「没有调试会话」，而不是自己起一个**。
+- `stm32_debug_run`：保持一次性（快照工具，跑完就还探针）。
+- `stm32_flash`：不碰会话（烧录要先独占探针）。
+- 会话的唯一真相仍是 `debug-session.ts` 的 `debugSessions` 单例——`probe-session.ts` 不自己存句柄、不自己算租约；并发靠模块级 starting Promise 去重（同时两次调用只起一个进程）；端口被占**直接报 `probe-busy`**，不让 openocd 顺延端口去抢探针（顺延就是「两个 openocd 抢一个 CMSIS-DAP」的经典翻车姿势）。
+- 释放四条路都通：turn/end（`src/index.ts` 既有 stop）、90 s 空闲（`sweepExpired`）、`stm32_debug_stop`（`debugSessions.stop`）、进程退出（`process.once('exit')` 里 `terminateSync()` 尽力清理）。
+
+数字（假探针实测：假 subprocess + 本地假 Tcl 服务端，量的是新代码路径本身）：旧一次性路径 **1493 ms/次**；新路径起会话 **790 ms**（第一次调用含启动），之后 10 连读单次 **13–18 ms**（`[16,14,15,18,13,15,16,15,16,15]`）、总计 **154 ms**、openocd 进程数 **1**。
+
+**真机计时这一条没达成**，如实记在这里：当时插的探针是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 一 init 就报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；用仓库里 B3 之前的旧版工具跑同一次读，报的也是同一句（那次一次性 openocd 耗 7010 ms）。所以这不是本次改动引入的故障，而是探针/固件不兼容。**复测方法**：换回 CMSIS-DAP 探针，跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
+
+### 29.3 B4：断点预算 6 / 4 —— 在碰探针之前就报
+
+Cortex-M3（F1）的硬件断点靠 FPB 的 6 个比较器、观察点靠 DWT 的 4 个。以前设第 7 个断点，要等 openocd 起来、gdb 跑完 `break` 才报错，白占一次探针（还会把你正开着的调试会话顶掉）。
+
+`src/engine/breakpoints.ts`（281 行，新）把这个上限做成预算：`BreakpointBudget{code, data}`、`F1_BREAKPOINT_BUDGET = {code: 6, data: 4}`、`quotaOf(used, limit)` 给 `{used, limit, remaining}`；预算来源优先 `.ioc` 的 `Mcu.CPN` → 资源包 `chips.json` 里可选的 `breakpoints` / `watchpoints`（只写一个另一个按 F1 补齐），没 `.ioc`、chips.json 没这颗、或没写这两个值都回退 F1 6/4，**并在 note 里明说为什么回退**（不让用户以为芯片就是这么设计的）。
+
+收集端：`breakAt` + `breakpoints` 参数 + `preCommands` 里的 `break` / `tbreak` / `hbreak` / `watch` / `rwatch` / `awatch` 一起算（`collectBreakpointRequests`），同 kind + location 去重。判定端：`planBreakpoints` 给 `detail`（「这次要设 7 个硬件断点 / 0 个观察点，芯片上限是 6/4（多 1 个硬件断点）」）与 `suggestion`（换 `tbreak`、拆成多次、或换芯片）。
+
+落点：`debug_run` 与 `debug_session` 都在 spawn openocd **之前**算预算，超限直接失败——不碰探针、也不关已有会话；报告统一带 `breakpoints` / `watchpoints` 两个三元组，卡片打「断点预算：6/6（还剩 0）；观察点 0/4」；`debug_eval` 里 `commands` 中的 `break` / `watch` 同样过一遍预算。证据：拿真实 C8T6 工程（`demo.ioc` + `build/Debug/demo.elf`，用 forbidden subprocess 保证不碰探针）设 7 个断点，输出「没调试：断点超预算（硬件断点 6/6，观察点 0/4）」+ detail + 建议——**判定发生在碰探针之前**，所以与 §29.2 那个 WCH-Link 故障完全解耦。
+
+### 29.4 文档口径
+
+- `README.md` / `README_EN.md`：错误段落全部改成 `probeError`（`kind` / `cause` / `hint` / `evidence` / `retryable`，8 类），**不再出现 `errorCode`**；烧录行、调试行补了「超断点预算不占探针」与「连读复用会话」；资源包大小从「约 100 KB」改为 **core 约 180 KB**，并在安装一节加了一句「首次使用要联网拉一次资源包，装好之后离线可用」——插件不内置芯片表这件事，用户应该在装的时候就知道，而不是建工程时才撞上。
+- `docs/reading-guide.md`：engine 从 41 个增至 44 个（表里 44 行；目录里实际 45 个 `.ts`，`assets.ts` 一直没单独成行），§5.4 从 5 个 / 2257 行改成 8 个 / 3160 行并补 `probe-error.ts` / `probe-session.ts` / `breakpoints.ts` 三行；§7.5 / §7.6 的流程图与文字改成 `classifyProbeFailure` + `probeError`，并写了 B3 的 Tcl RPC 快路径与 B4 的预算先算、§9.1 / §9.2 改成 34 套件 497 例（CI 495 + 2 skipped）、§10 的「给工具加错误码」那行改成「加 / 改探针错误分类」、§11 补了坑 13（B3 真机计时欠着）。
+
+### 29.5 验证
+
+- `npm run build` → exit 0。
+- `npm test` → **34 套件 497 pass / 0 fail**（CI 上 495 pass + 2 skipped）。本批新登记三个套件：`probe-error-units` 23 例、`probe-session-units` 16 例、`breakpoints-units` 17 例；既有套件无回归（`schema-guard` 25 例、`flash-units` 已迁到新 API）。
+- 真机：B4 的 7 断点判定在真实 C8T6 工程上实测（不碰探针）；B2 的四类故障、B3 的计时**只有单测 / 假件**，原因见 §29.2 与 §11 的坑 4、坑 13。
+
+### 29.6 偏差备案
+
+- **B3 真机计时未达成**：探针侧硬件/固件问题（WCH-Link `CMD_INFO failed`），非代码引入；替代证据是假件实测，复测命令写在 §29.2 与 reading-guide 坑 13。
+- **资源包体积口径**：任务书写「core 约 180 KB」，实际量到 core profile 是 30 个文件 / 242903 字节 ≈ **237 KiB**（大头是 `device/f1/chips.json` 36.1 KiB 与 `memory.json` 34.2 KiB；SVD 那 1.75 MB 属于 `full` profile，不在 core 里）。收尾时已把两份 README 的 180 KB 改成「30 个文件约 237 KiB」，与实测一致。
+- **engine 模块计数**：reading-guide 的表是「逐条列出来的模块数」（41 → 44），不是目录文件数（42 → 45）——`assets.ts` 从来没单独成行，这次没顺手补（避免把文档任务做成改表任务）。
+

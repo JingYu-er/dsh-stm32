@@ -5,10 +5,13 @@
  * 停在 breakAt（默认 main）后抓寄存器/调用栈，收尾 monitor reset run + detach。
  */
 
+import { F1_BREAKPOINT_BUDGET, quotaOf } from "../engine/breakpoints.js";
 import { runDebugRun } from "../engine/debug.js";
+import { PROBE_ERROR_SCHEMA, formatProbeError } from "../engine/probe-error.js";
 import { releaseProbeFor } from "../engine/debug-session.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DebugRunReport } from "../engine/debug.js";
+import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
@@ -25,6 +28,18 @@ const registerSchema: JsonSchema = {
   required: ["name", "value"],
 };
 
+/** 断点预算三元组（B4）：硬件断点与观察点各一条。 */
+const quotaSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    used: { type: "number" },
+    limit: { type: "number" },
+    remaining: { type: "number" },
+  },
+  required: ["used", "limit", "remaining"],
+};
+
 const reportSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -36,23 +51,23 @@ const reportSchema: JsonSchema = {
     breakAt: { type: "string" },
     hitBreakpoint: { type: "boolean" },
     location: { type: "string" },
+    // B4：断点预算（芯片的上限与实际占用），超限时 used 停在上限、remaining=0。
+    breakpoints: quotaSchema,
+    watchpoints: quotaSchema,
     registers: { type: "array", items: registerSchema },
     backtrace: { type: "array", items: { type: "string" } },
     locals: { type: "array", items: { type: "string" } },
     gdbCommand: { type: "string" },
     gdbOutput: { type: "string" },
     openOcdLogTail: { type: "string" },
-    // F2：失败时带结构化错误码（与 stm32_flash 同一套枚举）。可选字段，成功路径不出现。
-    errorCode: {
-      type: "string",
-      enum: ["", "no-probe", "probe-busy", "swd-locked", "flash-protected", "no-power", "target-mismatch", "unknown"],
-    },
+    // B2：失败时带结构化探针错误（与 stm32_flash 同一份分类）。可选对象，成功路径不出现。
+    probeError: PROBE_ERROR_SCHEMA,
     durationMs: { type: "number" },
     errors: { type: "array", items: { type: "string" } },
     message: { type: "string" },
     notes: { type: "array", items: { type: "string" } },
   },
-  required: ["ok", "projectDir", "elfPath", "port", "breakAt", "hitBreakpoint", "location", "registers", "backtrace", "locals", "durationMs", "errors", "message", "notes"],
+  required: ["ok", "projectDir", "elfPath", "port", "breakAt", "hitBreakpoint", "location", "breakpoints", "watchpoints", "registers", "backtrace", "locals", "durationMs", "errors", "message", "notes"],
 };
 
 export const outputSchema: JsonSchema = {
@@ -78,6 +93,8 @@ interface DebugArgs {
   buildDir?: string;
   breakAt?: string;
   preCommands?: string[];
+  /** B4：额外断点（"main" / "watch:g_count"），与 breakAt、preCommands 一起算预算。 */
+  breakpoints?: string[];
   port?: number;
   configFile?: string;
   adapterSpeed?: number;
@@ -86,18 +103,34 @@ interface DebugArgs {
   envCheck?: string;
 }
 
-interface ToolValue {
-  message: string;
-  report: DebugRunReport;
+/**
+ * 交给宿主看的报告：probeError(null) 直接摘掉（宿主 schema 不接受 null，
+ * 声明成 object 的字段为 null 会让整条输出被判成非法）。
+ */
+export type DebugReportForHost = Omit<DebugRunReport, "probeError"> & { probeError?: ProbeError };
+
+export function debugReportForHost(report: DebugRunReport): DebugReportForHost {
+  const { probeError, ...rest } = report;
+  return probeError === null ? rest : { ...rest, probeError };
 }
 
-export function formatDebugReport(report: DebugRunReport): string[] {
+interface ToolValue {
+  message: string;
+  report: DebugReportForHost;
+}
+
+export function formatDebugReport(report: DebugRunReport | DebugReportForHost): string[] {
   const lines: string[] = [];
   lines.push((report.ok ? "调试快照完成" : "调试失败") + "：" + report.message);
   if (report.elfPath !== "") lines.push("固件：" + report.elfPath);
-  if (report.errorCode !== undefined && report.errorCode !== "") lines.push("错误码：" + report.errorCode);
+  const probeError = report.probeError ?? null;
+  if (probeError !== null) lines.push(formatProbeError(probeError));
   if (report.port !== 0) lines.push("端口：" + String(report.port) + "，断点：" + report.breakAt);
   if (report.location !== "") lines.push("位置：" + report.location);
+  if (report.breakpoints.limit > 0) {
+    lines.push("断点预算：" + String(report.breakpoints.used) + "/" + String(report.breakpoints.limit)
+      + "（还剩 " + String(report.breakpoints.remaining) + "）；观察点 " + String(report.watchpoints.used) + "/" + String(report.watchpoints.limit));
+  }
   if (report.registers.length > 0) lines.push("寄存器：" + report.registers.map((item) => item.name + "=" + item.value).join(" "));
   if (report.backtrace.length > 0) {
     lines.push("调用栈：");
@@ -123,6 +156,9 @@ function blockedReport(projectDir: string, gate: GateResult): DebugRunReport {
     ok: false, projectDir, elfPath: "", port: 0, breakAt: "main",
     hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
     gdbCommand: "", gdbOutput: "", openOcdLogTail: "", durationMs: 0,
+    breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
+    watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
+    probeError: null,
     errors: [], message: gate.message, notes: gateReportNotes(gate),
   };
 }
@@ -132,6 +168,9 @@ function emptyReport(message: string): DebugRunReport {
     ok: false, projectDir: "", elfPath: "", port: 0, breakAt: "main",
     hitBreakpoint: false, location: "", registers: [], backtrace: [], locals: [],
     gdbCommand: "", gdbOutput: "", openOcdLogTail: "", durationMs: 0,
+    breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
+    watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
+    probeError: null,
     errors: [message], message, notes: [],
   };
 }
@@ -150,6 +189,7 @@ export function registerDebugRun(ctx: DshContext): void {
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先 Debug）。" },
         breakAt: { type: "string", description: "断点位置，默认 main；none 表示只连上读现状不停。" },
         preCommands: { type: "array", items: { type: "string" }, description: "在 break 之后、continue 之前执行的 gdb 命令。" },
+        breakpoints: { type: "array", items: { type: "string" }, description: "额外断点（和 breakAt、preCommands 一起算硬件断点预算）：\"main\"、\"HAL_Delay\"、\"watch:g_count\"（观察点）。F1 上限 6 个硬件断点 / 4 个观察点，超了会在起 openocd 之前直接失败并说明删哪个。" },
         port: { type: "number", description: "gdb 端口；缺省 3333，占用则顺延。" },
         configFile: { type: "string", description: "openocd 配置文件（相对工程目录）。" },
         adapterSpeed: { type: "number", description: "adapter speed（kHz）。" },
@@ -173,7 +213,7 @@ export function registerDebugRun(ctx: DshContext): void {
       const subprocess = ctx.get<SubprocessService>("subprocess");
       if (subprocess === undefined) {
         const report = emptyReport("宿主缺少 subprocess 服务，无法调试");
-        return { message: report.message, report };
+        return { message: report.message, report: debugReportForHost(report) };
       }
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       // 门禁：调试要 openocd + GDB 两件。缺件且 envCheck=block 时不占探针、不起进程。
@@ -185,7 +225,7 @@ export function registerDebugRun(ctx: DshContext): void {
       });
       if (!gate.ok && gate.mode === "block") {
         const blocked = blockedReport(resolution.projectDir, gate);
-        return { message: blocked.message, report: blocked };
+        return { message: blocked.message, report: debugReportForHost(blocked) };
       }
       // debug_run 自己也要独占探针；缺件退出时不动别人的会话（B16）。
       const released = await releaseProbeFor("stm32_debug_run");
@@ -195,6 +235,7 @@ export function registerDebugRun(ctx: DshContext): void {
         ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
         ...(args.breakAt === undefined ? {} : { breakAt: args.breakAt }),
         ...(args.preCommands === undefined ? {} : { preCommands: args.preCommands }),
+        ...(args.breakpoints === undefined ? {} : { breakpoints: args.breakpoints }),
         ...(args.port === undefined ? {} : { port: args.port }),
         ...(args.configFile === undefined ? {} : { configFile: args.configFile }),
         ...(args.adapterSpeed === undefined ? {} : { adapterSpeed: args.adapterSpeed }),
@@ -205,7 +246,7 @@ export function registerDebugRun(ctx: DshContext): void {
       if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
       if (resolution.note !== null) report.notes.push(resolution.note);
-      return { message: report.message, report };
+      return { message: report.message, report: debugReportForHost(report) };
     },
   });
 }

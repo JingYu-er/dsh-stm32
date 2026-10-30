@@ -40,6 +40,8 @@ export interface RegsSample {
 
 export interface RegsReport {
   ok: boolean;
+  /** B3：这次是不是复用了已有调试会话（一次性 openocd 路径恒 false）。 */
+  reusedSession: boolean;
   projectDir: string;
   configFile: string;
   command: string;
@@ -116,6 +118,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
   const errors: string[] = [];
   const notes: string[] = [];
   const base: Omit<RegsReport, "ok" | "message"> = {
+    reusedSession: false,
     projectDir,
     configFile: "",
     command: "",
@@ -226,6 +229,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
 
   return {
     ok,
+    reusedSession: false,
     projectDir,
     configFile: configs.join(" "),
     command,
