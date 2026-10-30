@@ -10,6 +10,7 @@ import {
   cacheRootInfo,
   checkCacheEntry,
   describeCacheBytes,
+  pruneLegacyEntries,
   readCacheIndex,
   removeCacheEntry,
   resolveCacheEntry,
@@ -119,7 +120,7 @@ export function registerCache(ctx: DshContext): void {
       type: "object",
       additionalProperties: false,
       properties: {
-        action: { type: "string", enum: ["list", "verify", "fetch", "purge"], description: "list（默认）/ verify / fetch / purge" },
+        action: { type: "string", enum: ["list", "verify", "fetch", "gc", "purge"], description: "list（默认）/ verify / fetch / gc（清掉已被新 id 取代的旧条目）/ purge" },
         id: { type: "string", description: "条目 id，例如 cmsis:F1:103xb（purge/verify 用）；也认 cmsis:F1:startup_stm32f103xb、F1:B、STM32F103C8T6 这些写法。" },
         mcu: { type: "string", description: "芯片型号，例如 STM32F103C8T6（fetch 用）。" },
         family: { type: "string", description: "只给族时写这里，例如 F1（fetch 用；按中容量档处理）。" },
@@ -213,9 +214,32 @@ export function registerCache(ctx: DshContext): void {
         };
       }
 
+      if (action === "gc") {
+        const pruned = pruneLegacyEntries(process.env);
+        const after = readCacheIndex(process.env).index;
+        const entries = listEntries(after, false);
+        const parts: string[] = [];
+        if (pruned.removed.length === 0) {
+          parts.push(pruned.kept.length === 0 ? "没有需要清理的旧条目" : "旧条目还被用着（新 id 不存在），保留 " + String(pruned.kept.length) + " 个");
+        } else {
+          parts.push("清掉 " + String(pruned.removed.length) + " 个旧条目（" + describeCacheBytes(pruned.reclaimedBytes) + "）：" + pruned.removed.join("、"));
+        }
+        if (pruned.kept.length > 0 && pruned.removed.length > 0) parts.push("保留 " + String(pruned.kept.length) + " 个仍在用的旧条目");
+        return {
+          action,
+          ok: true,
+          cacheRoot: info.root,
+          indexPath: info.indexPath,
+          origin: info.origin,
+          totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
+          entries,
+          message: parts.join("；") + "。",
+        };
+      }
+
       if (action !== "purge") {
         // 以前这里直接掉进 purge 分支：action 拼错一个字母（或模型传了不认识的值）就等于清空缓存（A8）。
-        return empty("不认识的 action：" + action + "（只有 list / verify / fetch / purge）。什么都没动。");
+        return empty("不认识的 action：" + action + "（只有 list / verify / fetch / gc / purge）。什么都没动。");
       }
 
       // purge

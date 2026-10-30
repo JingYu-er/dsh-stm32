@@ -308,6 +308,52 @@ export function resolveCacheEntry(index: CacheIndex, ref: string): CacheEntry | 
   return null;
 }
 
+/** 0.1 的老 id：cmsis:F1:startup_stm32f103xb（0.2 是 cmsis:F1:103xb）。 */
+const LEGACY_CMSIS_ID = /^cmsis:([A-Za-z0-9]+):startup_(stm32f1\d{2}[0-9a-z]+)$/u;
+
+export interface LegacyPruneResult {
+  /** 删掉的旧 id。 */
+  removed: string[];
+  /** 保留的旧 id（新 id 不存在，删了就得多下一遍）。 */
+  kept: string[];
+  /** 回收的字节数。 */
+  reclaimedBytes: number;
+}
+
+/**
+ * 清掉「已被新 id 取代」的旧缓存条目。
+ *
+ * 为什么要专门做：0.2 把 id 从 cmsis:F1:startup_stm32f103xb 改成 cmsis:F1:103xb，
+ * resolveCacheEntry 靠别名让老条目照样能命中——于是同一份模板可能在磁盘上留两份
+ * （每份 11 个文件、几百 KB）。只有「新 id 真的存在」时才删旧的，否则删了下次还得重下。
+ */
+export function pruneLegacyEntries(env: NodeJS.ProcessEnv = process.env): LegacyPruneResult {
+  const read = readCacheIndex(env);
+  const index = read.index;
+  const removed: string[] = [];
+  const kept: string[] = [];
+  let reclaimedBytes = 0;
+  for (const entry of index.entries) {
+    const match = LEGACY_CMSIS_ID.exec(entry.id);
+    if (match === null) continue;
+    const family = match[1] ?? "";
+    const stem = match[2] ?? "";
+    const line = stem.slice(6, 9);
+    const group = stem.slice(9);
+    const newId = "cmsis:" + family + ":" + line + group;
+    if (findCacheEntry(index, "cmsis", newId) === null) {
+      kept.push(entry.id);
+      continue;
+    }
+    const result = removeCacheEntry(entry.id, env);
+    if (result.removed) {
+      removed.push(entry.id);
+      reclaimedBytes += entry.totalBytes;
+    }
+  }
+  return { removed, kept, reclaimedBytes };
+}
+
 export interface CacheHealth {
   entry: CacheEntry;
   missing: string[];

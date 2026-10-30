@@ -45,6 +45,13 @@ export interface ProjectReport {
   deviceDefine?: string;
   /** HAL 路线：按芯片命名并渲染的链接脚本，例如 STM32F103RCTx_FLASH.ld。 */
   linkerScript?: string;
+  /** 两条路线都有的：ST 器件代号（.ld 与 .ioc 里的名字）与容量。 */
+  deviceId?: string;
+  flashBytes?: number;
+  ramBytes?: number;
+  /** 寄存器路线：clock_init() 算出的 SYSCLK 与摘要。 */
+  sysclkHz?: number;
+  clockSummary?: string;
   /** 寄存器路线 */
   cacheDir?: string;
   cacheHit?: boolean;
@@ -71,6 +78,11 @@ const reportSchema: JsonSchema = {
     startup: { type: "string" },
     deviceDefine: { type: "string" },
     linkerScript: { type: "string" },
+    deviceId: { type: "string" },
+    flashBytes: { type: "number" },
+    ramBytes: { type: "number" },
+    sysclkHz: { type: "number" },
+    clockSummary: { type: "string" },
     cacheDir: { type: "string" },
     cacheHit: { type: "boolean" },
   },
@@ -301,6 +313,13 @@ export function registerProjectCreate(ctx: DshContext): void {
           family: report.family,
           startup: report.startup,
           deviceDefine: report.deviceDefine,
+          // 两条路线的报告字段对齐（HAL 与寄存器都能看到链接脚本、器件代号与容量）。
+          linkerScript: report.linkerScript,
+          deviceId: report.deviceId,
+          flashBytes: report.flashBytes,
+          ramBytes: report.ramBytes,
+          sysclkHz: report.sysclkHz,
+          clockSummary: report.clockSummary,
           cacheDir: report.cacheRoot,
           cacheHit: report.cacheHit,
         };

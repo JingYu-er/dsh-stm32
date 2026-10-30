@@ -101,13 +101,20 @@ test("F1_LINES：每条 line 的档位都能反推回启动文件名，且 F1 �
   assert.deepEqual(f1GroupsFor("999"), []);
 });
 
-test("RAM 未收录时必须给 note 而不是编数字", () => {
+test("RAM 兜底：手写表没有时用 CubeMX db 的容量档值，并注明来源", () => {
   const { chip } = resolveF1Chip("STM32F100C8T6");
   assert.ok(chip);
   assert.equal(chip.group, "xb");
+  assert.equal(chip.ramBytes, 8 * 1024);
+  assert.match(chip.notes.join(" "), /取自 CubeMX db/u);
+});
+
+test("RAM 两边都查不到时必须给 note 而不是编数字（F100xE 只在区间型分组里）", () => {
+  const { chip } = resolveF1Chip("STM32F100CET6");
+  assert.ok(chip);
+  assert.equal(chip.group, "xe");
   assert.equal(chip.ramBytes, null);
-  assert.equal(chip.notes.length, 1);
-  assert.match(chip.notes[0], /RAM 大小未收录/u);
+  assert.match(chip.notes.join(" "), /RAM 大小未收录/u);
 });
 
 test("本机有固件包时：每个解析出的启动文件都真实存在（无固件包则跳过）", (t) => {

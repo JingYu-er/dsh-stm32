@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 const suites = [
   "build-units.test.mjs",
   "cache-units.test.mjs",
+  "cache-gc-units.test.mjs",
   "stm32f1-units.test.mjs",
   "hal-route-units.test.mjs",
   "clock-units.test.mjs",

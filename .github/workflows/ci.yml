@@ -33,3 +33,13 @@ jobs:
       # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许有 png/html 之类资产。
       # 目的不是抠体积，而是拦住「把图片/固件包/板级 .ioc 顺手塞进仓库」这类长期臃肿。
       - run: npm run test:size
+      # 依赖审计：插件对外承诺零运行时依赖（装进 dsh 后不能拖额外的 node_modules）。
+      - name: Check zero runtime dependencies
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($pkg.dependencies) {
+            Write-Host ($pkg.dependencies | ConvertTo-Json)
+            throw "插件必须零运行时依赖：dependencies 必须为空。"
+          }
+          Write-Host "dependencies 为空（devDependencies 仅 typescript 与 @types/node）"
