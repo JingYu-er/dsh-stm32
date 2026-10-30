@@ -14,6 +14,7 @@
 import { registerCommands } from "./commands/register.js";
 import { debugSessions } from "./engine/debug-session.js";
 import { registerStm32Skill } from "./skill/stm32-workflow.js";
+import { registerAssets } from "./tools/assets.js";
 import { registerBuild } from "./tools/build.js";
 import { registerCache } from "./tools/cache.js";
 import { registerCodePatch } from "./tools/code-patch.js";
@@ -79,6 +80,7 @@ export function apply(ctx: DshContext): void {
   registerDebugSession(ctx);
   registerRegsRead(ctx);
   registerRoutePlan(ctx);
+  registerAssets(ctx);
   registerCache(ctx);
   registerDoctor(ctx);
   // 设置面板的宿主 API（浏览器端 lib/client.js 用）。宿主没 webServer 服务时静默跳过。
