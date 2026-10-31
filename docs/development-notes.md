@@ -2230,6 +2230,8 @@ Cortex-M3（F1）的硬件断点靠 FPB 的 6 个比较器、观察点靠 DWT �
 | `probe-busy`（并发） | 两个 openocd 同时抓同一个 CMSIS-DAP | `Error: CMSIS-DAP transfer count mismatch: expected 5, got 1`、`Error: CMSIS-DAP command mismatch. Sent 0x12 received 0x2` | `probe-busy` | 关掉多余的那个 openocd / 调试会话 |
 | `probe-busy`（固件卡住） | 上一次会话被硬 kill 之后（2026-10-31 复现两次） | `Error: CMSIS-DAP command CMD_INFO failed.`（约 6 s 后超时；此时没有任何并发进程，HID 设备状态 `CM_PROB_NONE`） | `probe-busy`，cause 现在写成「探针没有正常响应（被另一个进程同时访问，或探针固件卡住）」，hint 追加「拔下来等 3 秒再插回」 | **物理拔插**探针（软重启设备需要管理员权限，`Disable-PnpDevice` 会失败） |
 | `timeout` | 同一颗卡住的探针上跑 `stm32_rtt start` | `错误：timeout — 读控制块失败：Tcl 往返超时（5000 ms）` | `timeout` | 同上，拔插后重试 |
+| `target-mismatch` | 用 `openocd-f4.cfg`（`target/stm32f4x.cfg`）连 F1 芯片烧录（2026-10-31） | `Warn : Cannot identify target as a STM32 family.`（另有 `Error: Failed to write memory` / `Error: auto_probe failed`） | 修复前 **`unknown`**（分类器只吃 `Error:` 行，这行是 `Warn :`）；改成喂完整日志后 `target-mismatch`，`retryable=false` | 删掉临时 cfg、换回 `target/stm32f1x.cfg` |
+| `swd-locked` | `USER CODE BEGIN 2` 写 `AFIO->MAPR = (AFIO->MAPR & ~(7u << 24)) \| (4u << 24);`，第一次烧录成功、复位后再烧（2026-10-31） | `Error: Error connecting DP: cannot read IDR` | `swd-locked`，`retryable=true`，hint 指向 BOOT0 进系统 bootloader | BOOT0=1 → 复位 → 烧回正常固件 → BOOT0=0 → 复位 |
 
 **根因与修复**：卡死是「会话关闭时直接 kill openocd」造成的——openocd 来不及给探针发断开序列，CMSIS-DAP 固件停在半连接。现在 `src/engine/debug-session.ts` 的 `stop()` 会先经 Tcl 口发 `shutdown`、等 1.2 s 再 terminate（`requestOpenocdShutdown(port, timeoutMs)`）。修完之后连续多轮真机操作未再复现。
 
