@@ -317,7 +317,8 @@ test("startRtt：先 mdw 验控制块，再发 rtt setup / rtt start / rtt serve
     assert.equal(started.size, DEFAULT_RTT_SIZE);
     const commands = tcl.commands();
     assert.deepEqual(commands.slice(0, 3), ["mdw 0x20000000", "mdw 0x20000004", "mdw 0x20000008"]);
-    assert.ok(commands.includes("rtt setup 0x20000000 1024"), commands.join(" | "));
+    // openocd 0.12 的 rtt setup 要三个参数：<address> <size> <ID>，ID 是控制块里的标识字符串。
+    assert.ok(commands.includes('rtt setup 0x20000000 1024 "SEGGER RTT"'), commands.join(" | "));
     assert.ok(commands.includes("rtt start"), commands.join(" | "));
     assert.ok(commands.includes("rtt server start " + String(rtt.port) + " 0"), commands.join(" | "));
     const snapshot = rttStatus();

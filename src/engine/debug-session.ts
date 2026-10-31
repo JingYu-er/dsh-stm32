@@ -12,6 +12,7 @@
  */
 
 import { existsSync } from "node:fs";
+import net from "node:net";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
@@ -618,6 +619,10 @@ export class DebugSessionManager {
     this.current = null;
     this.stopSweeper();
     if (session === null) return { ok: true, stopped: false, message: "本来就没有会话（" + reason + "）" };
+    // 先让 openocd 自己 shutdown：直接 kill 时它来不及给探针发断开命令，
+    // CMSIS-DAP 固件会被留在「半连接」状态，下一次 CMD_INFO 直接超时（实测踩过两次）。
+    await requestOpenocdShutdown(session.tclPort, 800);
+    await Promise.race([session.handle.waitForExit().catch(() => undefined), sleep(1200)]);
     session.handle.terminate();
     await Promise.race([session.handle.waitForExit().catch(() => undefined), sleep(3000)]);
     return { ok: true, stopped: true, message: "会话已关闭（" + reason + "），探针已释放" };
@@ -647,6 +652,28 @@ export class DebugSessionManager {
 
 /** 进程内单例：工具、turn/end 监听、dispose 共用同一个会话。 */
 export const debugSessions = new DebugSessionManager();
+
+/** 通过 Tcl 口让 openocd 自己 shutdown（探针能收到正常的断开序列）。失败就交给 kill 兜底。 */
+function requestOpenocdShutdown(port: number, timeoutMs: number): Promise<void> {
+  if (!Number.isFinite(port) || port <= 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve();
+    };
+    socket.setTimeout(timeoutMs, done);
+    socket.once("connect", () => {
+      socket.write("shutdown\n");
+      setTimeout(done, 150);
+    });
+    socket.once("error", done);
+    socket.once("close", done);
+  });
+}
 
 /** 需要独占探针的动作（build / flash / generate / debug_run）动手前调用。 */
 export async function releaseProbeFor(reason: string): Promise<string | null> {
