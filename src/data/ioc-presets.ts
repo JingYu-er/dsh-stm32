@@ -1,0 +1,176 @@
+/**
+ * L2 数据：`.ioc` 外设预设 —— "启用一个外设"到底要写哪些键。
+ *
+ * 为什么必须做成预设：CubeMX **不是**「读到 USART1.VirtualMode 就建 USART1」。
+ * 它按「某根脚的 Mode + Signal」推导复用模式，再核对 Mcu.IPn 里有这个实例，才生成
+ * MX_xxx_Init。实测（C8T6 + CubeMX 6.15.0 + STM32Cube_FW_F1_V1.8.7）：只写
+ * Mcu.IPn=USART1 + USART1.IPParameters/VirtualMode + PA9.Signal=USART1_TX 时，
+ * CubeMX 静默丢弃整个 USART1（生成结果里没有 MX_USART1_UART_Init，
+ * HAL_UART_MODULE_ENABLED 仍注释）；补上 PA9/PA10 的 .Mode=Asynchronous 之后
+ * 立刻生成成功，真机 USART1->BRR=0x271（115200@72 MHz）实测通过。
+ *
+ * 另一条实测结论：GPIO 脚（Signal=GPIO_Output/Input）**没有** .Mode —— 单模式信号。
+ * 只有多模式外设（USART/TIM/ADC…）才靠 .Mode 区分复用功能。
+ *
+ * 这些键集来自 504 个官方板级 .ioc 的写法 + 本机 CubeMX 实测，不是猜的；
+ * 换族时按同样的规则加一份表即可（`family` 字段是唯一的族相关入口）。
+ */
+
+/** 外设预设里的一根脚。 */
+export interface PeripheralPinRole {
+  /** 角色名（`pins` 覆盖时用）：tx/rx/ch1/in1… */
+  role: string;
+  /** 默认引脚，写"逻辑名"（PA0、PA9），落键前按族别名换成 db 名（PA0-WKUP）。 */
+  defaultPin: string;
+  /** `<pin>.Signal` 的值。共享信号用 CubeMX 的规范化名（`S_TIM2_CH1_ETR`、`ADCx_IN1`）。 */
+  signal: string;
+  /** `<pin>.Mode` 的值；共享信号引脚与单模式引脚留空串（都不写 .Mode）。 */
+  mode: string;
+  /**
+   * 共享信号（定时器 / ADC）：这类引脚在 CubeMX 自己的 .ioc 里**没有 .Mode**，
+   * 靠 `SH.<key>.0=<IP 信号>,<IP 模式>` + `SH.<key>.ConfNb=1` 表达“这根脚做哪个外设的哪个功能”。
+   * 缺了 SH 块时 CubeMX 会把整个外设静默丢掉（2026-10-31 实测：TIM3/ADC1 全部不生成）。
+   */
+  shared?: { key: string; ipSignal: string; ipMode: string };
+}
+
+/** 一个外设预设。 */
+export interface PeripheralPreset {
+  /** 预设名（= Mcu.IPn 里的实例名）：USART1 / TIM2 / ADC1。 */
+  name: string;
+  /** 人话名，报告里用。 */
+  label: string;
+  /** Mcu.IPn 里写的实例名（多数与 name 相同）。 */
+  ip: string;
+  /** 需要占用的引脚。 */
+  pins: PeripheralPinRole[];
+  /** `<ip>.<参数名>` = 值；名字相同的参数会被合并进 `<ip>.IPParameters`。 */
+  parameters: Array<{ name: string; value: string }>;
+  /** 额外的全局键（例如 ADC 的 RCC.ADCPresc）。 */
+  extraEntries?: Array<{ key: string; value: string }>;
+  /** 该预设的注意点，plan 的时候原样报给用户。 */
+  notes?: string[];
+}
+
+/**
+ * 族相关的引脚别名：CubeMX 的 db 引脚名与逻辑名不一致的那些。
+ * db 名在 `db/mcu/<Mcu.Name>.xml` 的 `<Pin Name="…">` 里，例如 F103C8 的 PA0 叫
+ * `PA0-WKUP`、PC13 叫 `PC13-TAMPER-RTC`。写 .ioc 时必须用 db 名，
+ * 否则 CubeMX 找不到这根脚，整段配置被静默丢弃。
+ */
+export const PIN_DB_ALIASES: Record<string, Record<string, string>> = {
+  STM32F1: {
+    PA0: "PA0-WKUP",
+    PC13: "PC13-TAMPER-RTC",
+    PC14: "PC14-OSC32_IN",
+    PC15: "PC15-OSC32_OUT",
+    PD0: "PD0-OSC_IN",
+    PD1: "PD1-OSC_OUT",
+  },
+};
+
+/** 把逻辑引脚名换成 .ioc 里要用的 db 名（族未知时原样返回）。 */
+export function pinDbName(family: string, pin: string): string {
+  const table = PIN_DB_ALIASES[family.trim().toUpperCase()];
+  if (table === undefined) return pin;
+  return table[pin.trim().toUpperCase()] ?? pin;
+}
+
+/** 逻辑引脚名（PA0-WKUP → PA0）：反查用，也用于"这个引脚是否已被占用"的提示。 */
+export function pinLogicalName(family: string, dbName: string): string {
+  const table = PIN_DB_ALIASES[family.trim().toUpperCase()];
+  if (table === undefined) return dbName;
+  for (const [logical, mapped] of Object.entries(table)) {
+    if (mapped === dbName) return logical;
+  }
+  return dbName;
+}
+
+function usart(name: string, tx: string, rx: string): PeripheralPreset {
+  return {
+    name,
+    label: name + " 异步串口",
+    ip: name,
+    pins: [
+      { role: "tx", defaultPin: tx, signal: name + "_TX", mode: "Asynchronous" },
+      { role: "rx", defaultPin: rx, signal: name + "_RX", mode: "Asynchronous" },
+    ],
+    parameters: [{ name: "VirtualMode", value: "VM_ASYNC" }],
+    notes: [name + "：默认 8N1 / 115200（CubeMX 缺省值），要改波特率请用 entries 设 " + name + ".IPParameters 与对应键"],
+  };
+}
+
+function timerPwm(name: string, channel: number, pin: string, dbSignal: string): PeripheralPreset {
+  const mode = "PWM Generation" + String(channel) + " CH" + String(channel);
+  return {
+    name,
+    label: name + " CH" + String(channel) + " PWM 输出",
+    ip: name,
+    pins: [{
+      role: "ch" + String(channel),
+      defaultPin: pin,
+      signal: dbSignal,
+      mode: "",
+      shared: { key: dbSignal, ipSignal: name + "_CH" + String(channel), ipMode: mode },
+    }],
+    parameters: [{ name: "Channel-" + mode, value: "TIM_CHANNEL_" + String(channel) }],
+    notes: [
+      name + " PWM：默认 Prescaler=0 / Period=65535（CubeMX 缺省），" +
+        '要 1 kHz 请配 parameters {"Prescaler":"71","Period":"999"}（72 MHz 定时器时钟）',
+    ],
+  };
+}
+
+/**
+ * F1 的 ADC 预设：一个规则通道（Rank 1）。
+ * `Channel-0#ChannelRegularConversion` 必须与引脚一致（PA1 → ADC_CHANNEL_1），
+ * 换引脚时这两个参数要一起改，所以 pins 覆盖时会上报提醒。
+ */
+function adc(name: string, pin: string, channel: number): PeripheralPreset {
+  return {
+    name,
+    label: name + " 规则通道 IN" + String(channel),
+    ip: name,
+    pins: [{
+      role: "in" + String(channel),
+      defaultPin: pin,
+      signal: "ADCx_IN" + String(channel),
+      mode: "",
+      shared: { key: "ADCx_IN" + String(channel), ipSignal: name + "_IN" + String(channel), ipMode: "IN" + String(channel) },
+    }],
+    parameters: [
+      { name: "Rank-0#ChannelRegularConversion", value: "1" },
+      { name: "Channel-0#ChannelRegularConversion", value: "ADC_CHANNEL_" + String(channel) },
+      { name: "SamplingTime-0#ChannelRegularConversion", value: "ADC_SAMPLETIME_13CYCLES_5" },
+      { name: "master", value: "1" },
+      { name: "NbrOfConversionFlag", value: "1" },
+    ],
+    // F1 的 ADC 时钟上限 14 MHz：RCC 缺省 ADCPRE=÷2 会跑在 36 MHz（超规格）。
+    extraEntries: [{ key: "RCC.ADCPresc", value: "RCC_ADCPCLK2_DIV6" }],
+    notes: ["ADC：已顺带把 RCC.ADCPresc 设成 ÷6（F1 的 ADC 上限 14 MHz，72 MHz÷6=12 MHz）"],
+  };
+}
+
+/** 内置预设表（按名字查）。 */
+export const PERIPHERAL_PRESETS: PeripheralPreset[] = [
+  usart("USART1", "PA9", "PA10"),
+  usart("USART2", "PA2", "PA3"),
+  usart("USART3", "PB10", "PB11"),
+  // PA0 的定时器信号在 db 里与 TIM2_ETR 合并成 S_TIM2_CH1_ETR，必须用这个名字。
+  timerPwm("TIM2", 1, "PA0", "S_TIM2_CH1_ETR"),
+  timerPwm("TIM3", 1, "PA6", "S_TIM3_CH1"),
+  timerPwm("TIM4", 1, "PB6", "S_TIM4_CH1"),
+  adc("ADC1", "PA1", 1),
+  adc("ADC2", "PA1", 1),
+];
+
+/** 按名字找预设（大小写不敏感）。 */
+export function findPeripheralPreset(name: string): PeripheralPreset | null {
+  const wanted = name.trim().toUpperCase();
+  return PERIPHERAL_PRESETS.find((preset) => preset.name.toUpperCase() === wanted) ?? null;
+}
+
+/** 支持的外设名列表（报错时给用户看）。 */
+export function peripheralPresetNames(): string[] {
+  return PERIPHERAL_PRESETS.map((preset) => preset.name);
+}

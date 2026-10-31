@@ -67,20 +67,71 @@ export interface IocSummary {
 
 const JTAG_SIGNALS = new Set(["SYS_JTMS-SWDIO", "SYS_JTCK-SWCLK", "SYS_JTDI", "SYS_JTDO-SWO", "SYS_NJTRST"]);
 
-/** 解码 CubeMX 在值里写的转义（实测只有 ":"）。 */
+/**
+ * 解码 CubeMX 写的转义。实测会出现转义的地方：值里的 ":"（NVIC 的 true\:0\:0…）、
+ * "#"（ADC1.IPParameters=Rank-0\#ChannelRegularConversion）、键里的空格和括号
+ * （"TIM2.Channel-PWM\ Generation1\ CH1"、"PA13\ (JTMS/SWDIO)"）。
+ */
 export function decodeIocValue(raw: string): string {
-  return raw.replace(/\\([:\\])/gu, "$1");
+  return raw.replace(/\\(.)/gu, "$1");
+}
+
+/** 解码键名：键里也会转义（空格、括号、"#"），内存里统一用解码后的形式。 */
+export function decodeIocKey(raw: string): string {
+  return raw.replace(/\\(.)/gu, "$1");
+}
+
+/** 一行逻辑记录：物理行可能因为 Java properties 的续行规则跨多行。 */
+export interface IocLogicalLine {
+  /** 合并续行后的文本（已去掉续行反斜杠与续行的前导空白）。 */
+  line: string;
+  /** 起始物理行下标（0 起）。 */
+  startIndex: number;
+  /** 占用的物理行数（1 = 没有续行）。 */
+  lineCount: number;
+}
+
+/** 行尾有几个连续反斜杠（Java properties：奇数个 = 续行）。 */
+function trailingBackslashes(line: string): number {
+  let count = 0;
+  for (let index = line.length - 1; index >= 0 && line[index] === "\\"; index -= 1) count += 1;
+  return count;
+}
+
+/**
+ * 按 Java properties 的续行规则把物理行合成逻辑行。
+ *
+ * 为什么需要：官方板级 .ioc 里真的出现过被折断的长值（例如
+ * `ProjectManager.functionlistsort=` 的值跨到下一行，形如
+ * `…,6-MX_LPUART1` 单独一行）。按物理行解析会把后半截当垃圾行丢掉。
+ */
+export function iocLogicalLines(text: string): IocLogicalLine[] {
+  const physical = text.split(/\r?\n/u);
+  const result: IocLogicalLine[] = [];
+  let index = 0;
+  while (index < physical.length) {
+    const startIndex = index;
+    let line = physical[index] as string;
+    index += 1;
+    while (trailingBackslashes(line) % 2 === 1 && index < physical.length) {
+      line = line.slice(0, -1) + (physical[index] as string).trimStart();
+      index += 1;
+    }
+    result.push({ line, startIndex, lineCount: index - startIndex });
+  }
+  return result;
 }
 
 /** 把 .ioc 文本拆成有序键值对。注释（# 开头）与空行忽略，重复键后者覆盖前者。 */
 export function parseIocEntries(text: string): Map<string, string> {
   const entries = new Map<string, string>();
-  for (const rawLine of text.split(/\r?\n/u)) {
+  for (const item of iocLogicalLines(text)) {
+    const rawLine = item.line;
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#")) continue;
     const eq = line.indexOf("=");
     if (eq <= 0) continue;
-    entries.set(line.slice(0, eq).trim(), decodeIocValue(line.slice(eq + 1).trim()));
+    entries.set(decodeIocKey(line.slice(0, eq).trim()), decodeIocValue(line.slice(eq + 1).trim()));
   }
   return entries;
 }

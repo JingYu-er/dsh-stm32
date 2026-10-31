@@ -14,7 +14,8 @@ export interface JsonSchema {
   items?: JsonSchema;
   required?: string[];
   enum?: string[];
-  additionalProperties?: boolean;
+  /** true/false，或一个描述"任意键的值长什么样"的 schema（JSON Schema 允许两种写法）。 */
+  additionalProperties?: boolean | JsonSchema;
   default?: unknown;
   minimum?: number;
   maximum?: number;

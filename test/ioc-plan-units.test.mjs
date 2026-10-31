@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { applyIocPlan, planIocChanges, rollbackIoc, sha256Hex } from "../lib/engine/ioc-plan.js";
-import { summarizeIoc } from "../lib/engine/ioc.js";
+import { applyIocPlan, compareIocKeys, inspectIocText, planIocChanges, renderIocText, rollbackIoc, sha256Hex } from "../lib/engine/ioc-plan.js";
+import { parseIocEntries, summarizeIoc } from "../lib/engine/ioc.js";
 
 import { FIXTURE_ASSETS, FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
 
@@ -235,6 +235,259 @@ test("引脚表没变就不重写 Mcu.PinN（serialWire 已就位时一个 Mcu.P
     "引脚表没变化时不该出现任何 Mcu.Pin* 改动（否则会白改字节）",
   );
   assert.ok(keys.includes("ProjectManager.HeapSize"));
+});
+
+
+function candidateText(projectDir, planId) {
+  return readFileSync(join(projectDir, ".dsh-stm32", "plans", planId + ".ioc"), "utf8");
+}
+
+test("peripherals(USART1)：一次写全引脚 Mode+Signal、Mcu.IPn、IPParameters", () => {
+  const { projectDir, iocPath } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "USART1" }] });
+  assert.equal(report.ok, true, report.message);
+  const applied = applyIocPlan({ projectDir, planId: report.planId });
+  assert.equal(applied.ok, true, applied.message);
+  const entries = parseIocEntries(readFileSync(iocPath, "utf8"));
+  // 引脚：Mode 是当初实测缺了就整段被 CubeMX 丢弃的那个键。
+  assert.equal(entries.get("PA9.Mode"), "Asynchronous");
+  assert.equal(entries.get("PA9.Signal"), "USART1_TX");
+  assert.equal(entries.get("PA10.Mode"), "Asynchronous");
+  assert.equal(entries.get("PA10.Signal"), "USART1_RX");
+  assert.equal(entries.get("PA9.Locked"), "true");
+  // IP 列表与计数自洽
+  assert.equal(entries.get("Mcu.IP3"), "USART1");
+  assert.equal(entries.get("Mcu.IPNb"), "4");
+  // 参数与 IPParameters 列表
+  assert.equal(entries.get("USART1.VirtualMode"), "VM_ASYNC");
+  assert.equal(entries.get("USART1.IPParameters"), "VirtualMode");
+  // 引脚进 Mcu.PinN
+  assert.equal(entries.get("Mcu.Pin8"), "PA9");
+  assert.equal(entries.get("Mcu.Pin9"), "PA10");
+  assert.equal(entries.get("Mcu.PinsNb"), "10");
+  // 自己写的东西不该触发"缺 Mode"告警
+  assert.equal(report.warnings.join(" ").includes("没有 .Mode"), false, report.warnings.join(" "));
+});
+
+test("peripherals(TIM2)：PA0 换成 db 名 PA0-WKUP，带空格的子键要转义", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM2", parameters: { Prescaler: "71", Period: "999" } }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("Mcu.Pin8"), "PA0-WKUP", "PA0 在 F1 db 里叫 PA0-WKUP");
+  // 共享信号：引脚不带 .Mode，功能由 SH 块表达（CubeMX 自己的写法）
+  assert.equal(entries.get("PA0-WKUP.Mode"), undefined);
+  assert.equal(entries.get("PA0-WKUP.Signal"), "S_TIM2_CH1_ETR");
+  assert.equal(entries.get("SH.S_TIM2_CH1_ETR.0"), "TIM2_CH1,PWM Generation1 CH1");
+  assert.equal(entries.get("SH.S_TIM2_CH1_ETR.ConfNb"), "1");
+  assert.equal(entries.get("TIM2.Prescaler"), "71");
+  assert.equal(entries.get("TIM2.Period"), "999");
+  assert.equal(
+    entries.get("TIM2.Channel-PWM Generation1 CH1"),
+    "TIM_CHANNEL_1",
+    "键在 .ioc 里是转义的，解析回来必须还原成带空格的名字",
+  );
+  const raw = candidateText(projectDir, report.planId);
+  assert.match(raw, /^TIM2\.Channel-PWM\\ Generation1\\ CH1=TIM_CHANNEL_1$/mu, "键里的空格必须转义成 \\ ");
+  assert.match(raw, /^TIM2\.IPParameters=Channel-PWM Generation1 CH1,Prescaler,Period$/mu, "值里的空格不转义");
+});
+
+test("peripherals(ADC1)：# 要转义，并顺带把 ADC 预分频改成 ÷6", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "ADC1" }] });
+  assert.equal(report.ok, true, report.message);
+  const raw = candidateText(projectDir, report.planId);
+  assert.match(raw, /^ADC1\.Rank-0\\#ChannelRegularConversion=1$/mu, "值里的 # 要写成 \\#（CubeMX 自己的写法）");
+  const entries = parseIocEntries(raw);
+  assert.equal(entries.get("ADC1.Channel-0#ChannelRegularConversion"), "ADC_CHANNEL_1");
+  assert.equal(entries.get("ADC1.SamplingTime-0#ChannelRegularConversion"), "ADC_SAMPLETIME_13CYCLES_5");
+  assert.equal(entries.get("PA1.Mode"), undefined, "共享信号引脚不写 .Mode");
+  assert.equal(entries.get("PA1.Signal"), "ADCx_IN1", "ADC 引脚用共享信号名 ADCx_INn");
+  assert.equal(entries.get("SH.ADCx_IN1.0"), "ADC1_IN1,IN1");
+  assert.equal(entries.get("SH.ADCx_IN1.ConfNb"), "1");
+  // 72 MHz ÷6 = 12 MHz（F1 的 ADC 上限 14 MHz）
+  assert.equal(entries.get("RCC.ADCPresc"), "RCC_ADCPCLK2_DIV6");
+  assert.match(entries.get("RCC.IPParameters") ?? "", /(^|,)ADCPresc(,|$)/u, "RCC.IPParameters 必须合并进 ADCPresc");
+});
+
+test("peripherals：不认识的名字直接报错，并列出内置预设", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "SPI1" }] });
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join(" "), /不认识的外设预设/u);
+  assert.match(report.errors.join(" "), /USART1/u);
+});
+
+test("peripherals：引脚已被别的功能占用时报错，不静默改信号", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "USART1", pins: { tx: "PA13" } }] });
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join(" "), /已经配成 SYS_JTMS-SWDIO/u);
+});
+
+test("自洽校验：外设进了 Mcu.IPn 却没有引脚 .Mode → 警告 CubeMX 会静默丢弃", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    entries: [
+      { key: "Mcu.IP3", value: "USART1" },
+      { key: "Mcu.IPNb", value: "4" },
+      { key: "PA9.Signal", value: "USART1_TX" },
+    ],
+  });
+  assert.equal(report.ok, true, report.message);
+  assert.match(report.warnings.join(" "), /PA9 既没有 \.Mode 也没有 SH\./u);
+  assert.match(report.warnings.join(" "), /静默丢弃/u);
+});
+
+test("自洽校验：共享信号引脚缺 SH 块也要告警（定时器/ADC 的真实坑）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    entries: [
+      { key: "Mcu.IP3", value: "TIM3" },
+      { key: "Mcu.IPNb", value: "4" },
+      { key: "Mcu.Pin8", value: "PA6" },
+      { key: "Mcu.PinsNb", value: "9" },
+      { key: "PA6.Signal", value: "S_TIM3_CH1" },
+      { key: "TIM3.IPParameters", value: "Channel-PWM Generation1 CH1" },
+      { key: "TIM3.Channel-PWM Generation1 CH1", value: "TIM_CHANNEL_1" },
+    ],
+  });
+  assert.equal(report.ok, true, report.message);
+  assert.match(report.warnings.join(" "), /PA6 既没有 \.Mode 也没有 SH\./u);
+});
+
+test("peripherals：共享信号块会追加第二个实例（ADC1 之后再加 ADC2 → ConfNb=2）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "ADC1" }, { name: "ADC2" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("SH.ADCx_IN1.ConfNb"), "2");
+  assert.equal(entries.get("SH.ADCx_IN1.0"), "ADC1_IN1,IN1");
+  assert.equal(entries.get("SH.ADCx_IN1.1"), "ADC2_IN1,IN1");
+  assert.equal(entries.get("Mcu.IP3"), "ADC1");
+  assert.equal(entries.get("Mcu.IP4"), "ADC2");
+});
+
+test("peripherals(TIM3)：预设自己写出的共享信号不该触发告警", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM3" }] });
+  assert.equal(report.ok, true, report.message);
+  assert.equal(report.warnings.join(" ").includes("既没有"), false, report.warnings.join(" "));
+});
+
+test("自洽校验：Mcu.IPNb 与实际 Mcu.IPn 条数不一致 → 警告", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, entries: [{ key: "Mcu.IPNb", value: "9" }] });
+  assert.equal(report.ok, true, report.message);
+  assert.match(report.warnings.join(" "), /Mcu\.IPNb=9 但实际有 3 个/u);
+});
+
+test("renderIocText：新增键按 key 排序插入，不再一律追加到文件末尾", () => {
+  const source = ["Alpha.x=1", "Gamma.z=3", "", "# 注释"].join("\n") + "\n";
+  const rendered = renderIocText(source, [
+    { key: "Beta.y", before: null, after: "2" },
+    { key: "Beta.a", before: null, after: "0" },
+  ]);
+  assert.equal(rendered, ["Alpha.x=1", "Beta.a=0", "Beta.y=2", "Gamma.z=3", "", "# 注释"].join("\n") + "\n");
+});
+
+test("renderIocText：数字按数值排序（Mcu.Pin10 排在 Mcu.Pin2 之后，与 CubeMX 一致）", () => {
+  assert.ok(compareIocKeys("Mcu.Pin2", "Mcu.Pin10") < 0);
+  assert.ok(compareIocKeys("Mcu.IP3", "Mcu.IPNb") < 0);
+  assert.ok(compareIocKeys("ADC1.master", "CAD.formats") < 0, "official .ioc 里 ADC1.* 就在文件最前面");
+  assert.ok(compareIocKeys("VP_SYS_VS_Systick.Mode", "board") < 0);
+  const source = "Mcu.Pin2=PC1\n";
+  const rendered = renderIocText(source, [
+    { key: "Mcu.Pin10", before: null, after: "PC3" },
+    { key: "Mcu.Pin9", before: null, after: "PC2" },
+  ]);
+  assert.equal(rendered, "Mcu.Pin2=PC1\nMcu.Pin9=PC2\nMcu.Pin10=PC3\n");
+});
+
+test("无损：没有任何改动时 renderIocText 必须逐字节还原原文（含 CRLF 与末尾换行有无）", () => {
+  const lfWithNewline = "#c\na=1\nb=2\n";
+  const crlfWithNewline = "#c\r\na=1\r\nb=2\r\n";
+  const lfNoNewline = "#c\na=1\nb=2";
+  const crlfNoNewline = "#c\r\na=1\r\nb=2";
+  for (const text of [lfWithNewline, crlfWithNewline, lfNoNewline, crlfNoNewline]) {
+    assert.equal(renderIocText(text, []), text);
+  }
+});
+
+test("无损：改键时保留 CRLF，也不擅自补末尾换行", () => {
+  const source = "#c\r\na=1\r\nb=2";
+  const rendered = renderIocText(source, [{ key: "b", before: "2", after: "3" }]);
+  assert.equal(rendered, "#c\r\na=1\r\nb=3", "原来没有末尾换行，改完也不能有");
+  const withTail = renderIocText("#c\r\na=1\r\n", [{ key: "a", before: "1", after: "9" }]);
+  assert.equal(withTail, "#c\r\na=9\r\n", "原来有末尾换行就得保留");
+});
+
+test("无损：新增键插在末尾空行之前，末尾空行原样保留", () => {
+  const source = "#c\r\na=1\r\n\r\n";
+  const rendered = renderIocText(source, [{ key: "b", before: null, after: "2" }]);
+  assert.equal(rendered, "#c\r\na=1\r\nb=2\r\n\r\n", "保留末尾空行，新键插在它之前");
+});
+
+test("无损：混合换行（CRLF + LF）时统一成多数派，并在计划阶段告警", () => {
+  const { projectDir, iocPath } = freshProject();
+  const text = readFileSync(iocPath, "utf8").replace(/\r\n/gu, "\n") + "PA5.Signal=X\r\n";
+  writeFileSync(iocPath, text, "utf8");
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA6", label: "led3", signal: "output" }] });
+  assert.equal(report.ok, true, report.message);
+  assert.match(report.warnings.join(" "), /换行不一致/u);
+});
+
+test("编码：非 UTF-8（GBK）直接拒绝，不猜编码", () => {
+  const { projectDir, iocPath } = freshProject();
+  writeFileSync(iocPath, Buffer.from([0x23, 0x63, 0xd6, 0xd0, 0xce, 0xc4, 0x0a]), "binary");
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA5", label: "led2", signal: "output" }] });
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join(" "), /UTF-8/u);
+  assert.match(report.errors.join(" "), /GBK/u);
+});
+
+test("坏行：既不是注释也没有等号 → 告警（CubeMX 会当垃圾行丢掉）", () => {
+  const { projectDir, iocPath } = freshProject();
+  const text = readFileSync(iocPath, "utf8") + "PA5.Signal\n";
+  writeFileSync(iocPath, text, "utf8");
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA6", label: "led3", signal: "output" }] });
+  assert.equal(report.ok, true, report.message);
+  assert.match(report.warnings.join(" "), /既不是 # 注释、也没有/u);
+});
+
+test("重复键：要改的键出现多次 → 拒绝，并说清 CubeMX 只认最后一个", () => {
+  const { projectDir, iocPath } = freshProject();
+  const text = readFileSync(iocPath, "utf8") + "ProjectManager.KeepUserCode=false\nProjectManager.KeepUserCode=false\n";
+  writeFileSync(iocPath, text, "utf8");
+  const report = planIocChanges({ projectDir, entries: [{ key: "ProjectManager.KeepUserCode", value: "true" }] });
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join(" "), /出现了不止一次/u);
+  assert.match(report.errors.join(" "), /KeepUserCode/u);
+});
+
+test("续行：反斜杠结尾的行与下一行拼成一个逻辑行（官方 .ioc 里真有这种折行值）", () => {
+  const text = "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,\\\n   2-MX_GPIO_Init-GPIO-false-HAL-true\n";
+  const entries = parseIocEntries(text);
+  assert.equal(
+    entries.get("ProjectManager.functionlistsort"),
+    "1-SystemClock_Config-RCC-false-HAL-false,2-MX_GPIO_Init-GPIO-false-HAL-true",
+    "续行的前导空白要去掉，值要完整",
+  );
+  const diag = inspectIocText(text);
+  assert.deepEqual(diag.malformedLines, [], "续行不是坏行");
+  assert.equal(diag.multiLineKeys.has("ProjectManager.functionlistsort"), true);
+});
+
+test("续行：要改的键值跨多行时拒绝，并说明会留下续行残骸", () => {
+  const { projectDir, iocPath } = freshProject();
+  const text = readFileSync(iocPath, "utf8").replace(/\r?\n/gu, "\n") +
+    "ProjectManager.functionlistsort=1-A-RCC-false-HAL-false,\\\n   2-B-GPIO-false-HAL-true\n";
+  writeFileSync(iocPath, text, "utf8");
+  const report = planIocChanges({ projectDir, entries: [{ key: "ProjectManager.functionlistsort", value: "x" }] });
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join(" "), /跨了多行/u);
 });
 
 let failed = 0;

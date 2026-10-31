@@ -26,7 +26,8 @@ import {
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { findIocFile, STATE_DIR } from "./generate.js";
-import { parseIocEntries, summarizeIoc } from "./ioc.js";
+import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
+import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
 import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
@@ -43,6 +44,16 @@ export interface PinAddRequest {
   speed?: "low" | "medium" | "high";
 }
 
+/** 启用一个外设：按预设一次写全"引脚 Mode/Signal + Mcu.IPn + IPParameters"。 */
+export interface PeripheralEnableRequest {
+  /** 预设名（= 实例名）：USART1 / TIM2 / ADC1…。 */
+  name: string;
+  /** 覆盖预设的默认引脚，key 是角色名（tx/rx/ch1/in1…），value 是逻辑引脚名（PA2）。 */
+  pins?: Record<string, string>;
+  /** 覆盖预设的默认参数，key 是 <ip>.IPParameters 里的参数名（BaudRate/Prescaler…）。 */
+  parameters?: Record<string, string>;
+}
+
 export interface IocPlanRequest {
   projectDir: string;
   iocPath?: string;
@@ -52,6 +63,11 @@ export interface IocPlanRequest {
   unset?: string[];
   /** 新增 GPIO 引脚。 */
   pins?: PinAddRequest[];
+  /**
+   * 启用外设（预设）。为什么需要这个东西：CubeMX 不认"只写 USART1.VirtualMode"，
+   * 它按引脚的 Mode+Signal 反推复用模式；缺 <pin>.Mode 就静默丢弃整个外设。
+   */
+  peripherals?: PeripheralEnableRequest[];
   /** 确保 Serial Wire 调试口（PA13/PA14），并清掉 No_Debug 遗留。 */
   serialWire?: boolean;
   /**
@@ -129,9 +145,21 @@ export function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** 写回时的转义：CubeMX 在值里把 ":" 和 "\\" 写成 "\\" 前缀。 */
+/**
+ * 写回时的转义。值里要转义 "\\"、":"（NVIC 的 true\:0…）和 "#"
+ * （ADC1.IPParameters=Rank-0\#ChannelRegularConversion 是 CubeMX 自己的写法）。
+ */
 export function encodeIocValue(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/:/gu, "\\:");
+  return value.replace(/\\/gu, "\\\\").replace(/:/gu, "\\:").replace(/#/gu, "\\#");
+}
+
+/**
+ * 键名里的转义。键里出现空格/括号时**必须**转义：.ioc 走 java properties 语义，
+ * 未转义的空格会把键截断，于是 "TIM2.Channel-PWM Generation1 CH1" 变成
+ * "TIM2.Channel-PWM" —— CubeMX 读不到，通道配置静默失效。
+ */
+export function encodeIocKey(key: string): string {
+  return key.replace(/\\/gu, "\\\\").replace(/ /gu, "\\ ").replace(/#/gu, "\\#").replace(/:/gu, "\\:");
 }
 
 function splitLines(text: string): string[] {
@@ -147,53 +175,168 @@ interface LineTable {
   lines: string[];
   /** key → 行下标（可能重复）。 */
   index: Map<string, number[]>;
+  /** 本次原地改写的键数：一个都没改时直接返回原文，保证 round-trip 逐字节相同。 */
+  changedKeys: number;
+}
+
+/**
+ * .ioc 的键排序：CubeMX 自己写盘时是按 key 的字典序（ADC1.* 在最前，board= 在最后），
+ * 但数字要按数值比 —— 字典序会把 Mcu.Pin10 排到 Mcu.Pin2 前面，diff 和人眼都别扭。
+ */
+export function compareIocKeys(left: string, right: string): number {
+  const a = left.split(/(\d+)/u);
+  const b = right.split(/(\d+)/u);
+  const shared = Math.min(a.length, b.length);
+  for (let index = 0; index < shared; index += 1) {
+    const x = a[index] as string;
+    const y = b[index] as string;
+    if (x === y) continue;
+    const nx = /^\d+$/u.test(x) ? Number(x) : null;
+    const ny = /^\d+$/u.test(y) ? Number(y) : null;
+    if (nx !== null && ny !== null) return nx - ny;
+    return x < y ? -1 : 1;
+  }
+  return a.length - b.length;
+}
+
+/** 一行对应的（解码后的）键；注释行、空行、没有 "=" 的垃圾行返回空串。 */
+function lineKey(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed.startsWith("#")) return "";
+  const eq = trimmed.indexOf("=");
+  if (eq <= 0) return "";
+  return decodeIocKey(trimmed.slice(0, eq).trim());
+}
+
+/** .ioc 文本层面的体检结果（都是「CubeMX 会因此丢配置或看错」的真问题，不是风格洁癖）。 */
+export interface IocTextDiagnostics {
+  /** 同一个键出现多次（CubeMX 只有最后一个生效）→ 键 → 次数。 */
+  duplicates: Map<string, number>;
+  /** 既不是注释、也不含 "=" 的行号（1 起；Java properties 的续行不算坏行）。 */
+  malformedLines: number[];
+  /** 值跨了多行的键（续行）——改它会破坏续行结构，计划阶段要拒绝。 */
+  multiLineKeys: Set<string>;
+  /** 文件里既有 CRLF 又有 LF。 */
+  mixedEol: boolean;
+  /** 文件末尾有没有换行（CubeMX 自己写的文件有，手工改坏的常常没有）。 */
+  finalNewline: boolean;
+}
+
+export function inspectIocText(text: string): IocTextDiagnostics {
+  const counts = new Map<string, number>();
+  const malformedLines: number[] = [];
+  const multiLineKeys = new Set<string>();
+  for (const item of iocLogicalLines(text)) {
+    const trimmed = item.line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      malformedLines.push(item.startIndex + 1);
+      continue;
+    }
+    const key = decodeIocKey(trimmed.slice(0, eq).trim());
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (item.lineCount > 1) multiLineKeys.add(key);
+  }
+  const duplicates = new Map<string, number>();
+  for (const [key, count] of counts) if (count > 1) duplicates.set(key, count);
+  return {
+    duplicates,
+    malformedLines,
+    multiLineKeys,
+    mixedEol: text.includes("\r\n") && text.replace(/\r\n/gu, "").includes("\n"),
+    finalNewline: /(\r?\n)$/u.test(text),
+  };
+}
+
+/**
+ * 读 .ioc：只接受 UTF-8（与 CubeMX 一致），别的编码直接报错。
+ *
+ * 为什么不做「猜编码」：CubeMX 写的是 UTF-8；文件被中文编辑器另存成 GBK 时，
+ * 按 UTF-8 解码会得到一堆替换字符，写回去就把整份工程改坏了。
+ * 这里用 fatal 解码器，宁可拒绝也不静默乱码。
+ * BOM 用 ignoreBOM 保留在字符串里，写回时原样往返。
+ */
+export function readIocText(path: string): string {
+  const raw = readFileSync(path);
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  try {
+    return decoder.decode(raw);
+  } catch {
+    throw new Error(
+      "不是合法的 UTF-8：" + path +
+        "（多半是中文编辑器另存成了 GBK/ANSI）。请用 VS Code 以 UTF-8 另存后再改；" +
+        "插件不会替你猜编码，以免把整份 .ioc 写坏",
+    );
+  }
 }
 
 function buildLineTable(text: string): LineTable {
   const lines = splitLines(text);
   const index = new Map<string, number[]>();
   lines.forEach((line, position) => {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) return;
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) return;
-    const key = trimmed.slice(0, eq).trim();
+    const key = lineKey(line);
+    if (key === "") return;
     const list = index.get(key) ?? [];
     list.push(position);
     index.set(key, list);
   });
-  return { lines, index };
+  return { lines, index, changedKeys: 0 };
 }
 
-/** 把变更应用到 .ioc 文本上：已有键原地改、重复键只留第一条、新增键追加到末尾。 */
+/**
+ * 把变更应用到 .ioc 文本上：已有键原地改、重复键只留第一条、新增键按 key 排序插入。
+ *
+ * 为什么是"插入"而不是"追加"：CubeMX 自己写盘时整个文件按 key 排序
+ * （CAD.* → File.Version → GPIO.* → KeepUserPlacement → Mcu.* → MxCube.Version →
+ * MxDb.Version → NVIC.* → 引脚键 → PinOutPanel.* → ProjectManager.* → RCC.* → SH.* →
+ * VP_* → board）。以前新键一律追加到末尾，结果落在 Mcu.IPNb / Mcu.PinsNb 之后，
+ * 谁看 diff 都对不上 CubeMX 的格式，也让人误以为键没写进去。
+ */
 export function renderIocText(text: string, changes: IocPlanChange[]): string {
   const table = buildLineTable(text);
   const removed = new Set<number>();
-  const appended: string[] = [];
+  const added: IocPlanChange[] = [];
   for (const change of changes) {
     const positions = table.index.get(change.key) ?? [];
     if (change.after === null) {
       for (const position of positions) removed.add(position);
       continue;
     }
-    const line = change.key + "=" + encodeIocValue(change.after);
+    const line = encodeIocKey(change.key) + "=" + encodeIocValue(change.after);
     if (positions.length === 0) {
-      appended.push(line);
+      added.push(change);
       continue;
     }
     const first = positions[0] as number;
     table.lines[first] = line;
+    table.changedKeys += 1;
     for (const position of positions.slice(1)) removed.add(position);
   }
+  if (added.length === 0 && removed.size === 0 && table.changedKeys === 0) return text;
   const eol = dominantEol(text);
-  const out: string[] = [];
+  const out: Array<{ key: string; line: string }> = [];
   table.lines.forEach((line, position) => {
-    if (!removed.has(position)) out.push(line);
+    if (!removed.has(position)) out.push({ key: lineKey(line), line });
   });
-  // 去掉末尾的空行，再把新增键接上，最后统一补一个换行。
-  while (out.length > 0 && (out[out.length - 1] as string).trim() === "") out.pop();
-  out.push(...appended);
-  return out.join(eol) + eol;
+  // 新增键按 key 排序插到对应位置；末尾的空行是原文件的（可能是"文件末尾有换行"的表现），
+  // 不能吃掉，新键要插在它们**之前**。
+  let tail = out.length;
+  while (tail > 0 && (out[tail - 1] as { line: string }).line.trim() === "") tail -= 1;
+  added.sort((left, right) => compareIocKeys(left.key, right.key));
+  for (const change of added) {
+    const item = { key: change.key, line: encodeIocKey(change.key) + "=" + encodeIocValue(change.after as string) };
+    let at = -1;
+    for (let index = 0; index < tail; index += 1) {
+      const key = (out[index] as { key: string }).key;
+      if (key !== "" && compareIocKeys(key, change.key) > 0) { at = index; break; }
+    }
+    if (at < 0) at = tail;
+    out.splice(at, 0, item);
+    tail += 1;
+  }
+  // 按行 split 后，文件末尾有换行会多出一个空串，join 回去正好还原原文，所以不再补 eol。
+  return out.map((item) => item.line).join(eol);
 }
 
 export function compareEntries(before: Map<string, string>, after: Map<string, string>): IocPlanChange[] {
@@ -205,7 +348,7 @@ export function compareEntries(before: Map<string, string>, after: Map<string, s
     if (old === next) continue;
     changes.push({ key, before: old, after: next });
   }
-  return changes.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+  return changes.sort((left, right) => compareIocKeys(left.key, right.key));
 }
 
 const LABEL_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -335,6 +478,214 @@ function ensureSerialWire(table: PinTable): void {
   }
 }
 
+/**
+ * 写共享信号块：`SH.<key>.<n>=<IP 信号>,<IP 模式>` + `SH.<key>.ConfNb=<条数>`。
+ *
+ * 2026-10-31 实测（C8T6 + CubeMX 6.15.0）：定时器与 ADC 的引脚在 .ioc 里是共享信号
+ * （`PA0-WKUP.Signal=S_TIM2_CH1_ETR`、`PA1.Signal=ADCx_IN1`），CubeMX 靠
+ * `SH.S_TIM2_CH1_ETR.0=TIM2_CH1,PWM Generation1 CH1` 才能把「这根脚 → TIM2 CH1 PWM」
+ * 这件事还原出来。只写引脚 Signal + <ip>.IPParameters 时，TIM2/TIM3/TIM4/ADC1 全被
+ * 静默丢弃（生成结果里没有 MX_xxx_Init，日志里也没有任何报错）。
+ */
+function enableSharedSignal(
+  table: PinTable,
+  shared: { key: string; ipSignal: string; ipMode: string },
+): void {
+  const prefix = "SH." + shared.key + ".";
+  const value = shared.ipSignal + "," + shared.ipMode;
+  const declared = Number.parseInt(table.entries.get(prefix + "ConfNb") ?? "", 10);
+  const count = Number.isFinite(declared) ? declared : 0;
+  for (let index = 0; index < count; index += 1) {
+    if ((table.entries.get(prefix + String(index)) ?? "").trim() === value) return;
+  }
+  table.entries.set(prefix + String(count), value);
+  table.entries.set(prefix + "ConfNb", String(count + 1));
+}
+
+/**
+ * 启用一个外设预设：占 Mcu.IPn 槽位、写引脚 Mode/Signal/Locked、合并 IPParameters。
+ *
+ * 三条实测约束都写在这里：
+ * - 引脚名必须用 CubeMX db 名（PA0 → PA0-WKUP），否则认不出这根脚；
+ * - 多模式外设的引脚必须带 .Mode，缺了 CubeMX 静默丢弃整个外设；
+ * - Mcu.IPNb 必须与 Mcu.IPn 条数一致，所以这里统一重算，不再"追加了事"。
+ */
+function enablePeripheral(
+  table: PinTable,
+  request: PeripheralEnableRequest,
+  family: string,
+  notes: string[],
+): void {
+  const preset = findPeripheralPreset(request.name);
+  if (preset === null) {
+    table.errors.push(
+      "不认识的外设预设 " + JSON.stringify(request.name) + "；内置：" + peripheralPresetNames().join("、") +
+        "（要配别的请直接用 entries 逐键写，键集可参考官方板级 .ioc）",
+    );
+    return;
+  }
+
+  // Mcu.IPn：占了槽位就把 IPNb 按实际条数重算。
+  const used = new Set<string>();
+  let slots = 0;
+  for (const [key, value] of table.entries) {
+    if (!/^Mcu\.IP\d+$/u.test(key)) continue;
+    slots += 1;
+    used.add(value.trim());
+  }
+  if (!used.has(preset.ip)) {
+    table.entries.set("Mcu.IP" + String(slots), preset.ip);
+    slots += 1;
+  }
+  table.entries.set("Mcu.IPNb", String(slots));
+
+  // 引脚：Mode + Signal + Locked。
+  const overrodePins = request.pins !== undefined && Object.keys(request.pins).length > 0;
+  for (const role of preset.pins) {
+    const logical = (request.pins?.[role.role] ?? role.defaultPin).trim().toUpperCase();
+    if (logical === "") {
+      table.errors.push(preset.name + " 的引脚 " + role.role + " 被指定成空串");
+      continue;
+    }
+    if (!isKnownPin(logical)) {
+      table.errors.push("引脚名 " + logical + " 不是合法的 STM32 GPIO 引脚（形如 PA0..PG15）");
+      continue;
+    }
+    const dbName = pinDbName(family, logical);
+    const existingSignal = (table.entries.get(dbName + ".Signal") ?? "").trim();
+    if (table.order.includes(dbName) && existingSignal !== "" && existingSignal !== role.signal) {
+      table.errors.push(
+        preset.name + " 想用 " + dbName + " 做 " + role.signal + "，但这根脚已经配成 " + existingSignal +
+          "（同一根脚不能同时做两件事，换引脚请传 pins）",
+      );
+      continue;
+    }
+    if (!table.order.includes(dbName)) table.order.push(dbName);
+    table.entries.set(dbName + ".Locked", "true");
+    table.entries.set(dbName + ".Signal", role.signal);
+    if (role.shared === undefined) {
+      if (role.mode !== "") table.entries.set(dbName + ".Mode", role.mode);
+    } else {
+      // 共享信号引脚：CubeMX 自己的 .ioc 里不带 .Mode，功能由 SH 块表达。
+      table.entries.delete(dbName + ".Mode");
+      enableSharedSignal(table, role.shared);
+    }
+  }
+
+  // 参数：写 <ip>.<名字>=值，并把名字合并进 <ip>.IPParameters。
+  const paramsKey = preset.ip + ".IPParameters";
+  const names = (table.entries.get(paramsKey) ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
+  for (const param of preset.parameters) {
+    table.entries.set(preset.ip + "." + param.name, request.parameters?.[param.name] ?? param.value);
+    if (!names.includes(param.name)) names.push(param.name);
+    if (overrodePins && request.parameters?.[param.name] === undefined && param.name.startsWith("Channel-")) {
+      table.warnings.push(
+        preset.name + " 换了引脚，但 " + param.name + " 仍是 " + param.value +
+          "：通道号必须与引脚一致，请一并用 parameters 改",
+      );
+    }
+  }
+  for (const [name, value] of Object.entries(request.parameters ?? {})) {
+    if (names.includes(name)) continue;
+    names.push(name);
+    table.entries.set(preset.ip + "." + name, value);
+  }
+  table.entries.set(paramsKey, names.join(","));
+
+  for (const extra of preset.extraEntries ?? []) {
+    table.entries.set(extra.key, extra.value);
+    if (!extra.key.startsWith("RCC.")) continue;
+    const name = extra.key.slice("RCC.".length);
+    const rccNames = (table.entries.get("RCC.IPParameters") ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
+    if (!rccNames.includes(name)) {
+      rccNames.push(name);
+      table.entries.set("RCC.IPParameters", rccNames.join(","));
+    }
+  }
+
+  notes.push("已启用预设 " + preset.name + "（" + preset.label + "）");
+  for (const note of preset.notes ?? []) notes.push(note);
+}
+
+/**
+ * 自洽校验（都按 CubeMX 的真实推导规则，不是风格洁癖）：
+ * - Mcu.IPNb 必须等于 Mcu.IPn 的条数；
+ * - 外设进了 Mcu.IPn 就得有引脚 .Signal 指向它；
+ * - 多模式外设的引脚还得表达功能：普通外设（USART）用 `.Mode`，共享信号外设（定时器/ADC）
+ *   用 `SH.<pin信号>.<n>=<IP 信号>,<IP 模式>` —— 两者都缺时 CubeMX 静默丢弃整个外设，不报错。
+ */
+function validatePeripheralWiring(entries: Map<string, string>, warnings: string[]): void {
+  let slots = 0;
+  const devices = new Set<string>();
+  for (const [key, value] of entries) {
+    if (!/^Mcu\.IP\d+$/u.test(key)) continue;
+    slots += 1;
+    devices.add(value.trim());
+  }
+  const declared = Number.parseInt(entries.get("Mcu.IPNb") ?? "", 10);
+  if (Number.isFinite(declared) && declared !== slots) {
+    warnings.push("Mcu.IPNb=" + String(declared) + " 但实际有 " + String(slots) + " 个 Mcu.IPn 键（CubeMX 打开时会自己重算）");
+  }
+  const pinsByDevice = new Map<string, string[]>();
+  for (const [key, value] of entries) {
+    if (!key.endsWith(".Signal")) continue;
+    const pin = key.slice(0, key.length - ".Signal".length);
+    for (const device of devicesOfSignal(entries, value.trim())) {
+      const list = pinsByDevice.get(device) ?? [];
+      list.push(pin);
+      pinsByDevice.set(device, list);
+    }
+  }
+  for (const device of devices) {
+    if (device === "" || device === "NVIC" || device === "RCC" || device === "SYS") continue;
+    const pins = pinsByDevice.get(device) ?? [];
+    if (pins.length === 0) {
+      warnings.push(device + " 在 Mcu.IPn 里，但没有引脚的 .Signal 指向它 → CubeMX 会忽略这个外设");
+      continue;
+    }
+    const noMode = pins.filter((pin) => {
+      const signal = (entries.get(pin + ".Signal") ?? "").trim();
+      if (signal.startsWith("GPIO_")) return false;
+      if ((entries.get(pin + ".Mode") ?? "").trim() !== "") return false;
+      // 共享信号（定时器/ADC）本来就不带 .Mode，改由 SH.<signal>.<n>=<IP 信号>,<IP 模式> 表达。
+      return (entries.get("SH." + signal + ".ConfNb") ?? "") === "";
+    });
+    if (noMode.length > 0) {
+      warnings.push(
+        device + " 的引脚 " + noMode.join("、") + " 既没有 .Mode 也没有 SH." + " 共享信号块 → " +
+          "CubeMX 实测会静默丢弃整个外设（用 peripherals 预设，或自己补 <pin>.Mode / SH 块）",
+      );
+    }
+  }
+}
+
+/**
+ * 一根脚的 .Signal 指向哪个外设实例。
+ *
+ * 名字有三种来源：`USART1_TX`（普通外设）、`S_TIM2_CH1_ETR`（定时器共享信号，前缀 S_）、
+ * `ADCx_IN1`（ADC 共享信号，本身不含实例名 —— 实例名在 `SH.ADCx_IN1.0=ADC1_IN1,IN1` 里）。
+ */
+function devicesOfSignal(entries: Map<string, string>, signal: string): string[] {
+  const found = new Set<string>();
+  const add = (name: string): void => {
+    const match = /^([A-Z][A-Z0-9]*)_/u.exec(name);
+    if (match === null) return;
+    const device = match[1] ?? "";
+    if (device === "" || device.endsWith("x")) return;
+    found.add(device);
+  };
+  add(signal);
+  if (signal.startsWith("S_")) add(signal.slice(2));
+  const declared = Number.parseInt(entries.get("SH." + signal + ".ConfNb") ?? "", 10);
+  const count = Number.isFinite(declared) ? declared : 0;
+  for (let index = 0; index < count; index += 1) {
+    const value = (entries.get("SH." + signal + "." + String(index)) ?? "").trim();
+    const target = value.split(",")[0] ?? "";
+    add(target);
+  }
+  return [...found];
+}
+
 function planPaths(projectDir: string, planId: string): { planPath: string; candidatePath: string } {
   const dir = join(projectDir, STATE_DIR, "plans");
   return { planPath: join(dir, planId + ".json"), candidatePath: join(dir, planId + ".ioc") };
@@ -368,11 +719,31 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     return { ...empty, errors: ["找不到 .ioc（工程根目录下必须有且只有一个 *.ioc，或用 iocPath 指定）"], message: "没生成计划：找不到 .ioc" };
   }
 
-  const source = readFileSync(iocPath, "utf8");
+  let source = "";
+  try {
+    source = readIocText(iocPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ...empty, iocPath, errors: [message], message: "没生成计划：" + message };
+  }
   const sourceSha256 = sha256Hex(source);
   const errors: string[] = [];
   const warnings: string[] = [];
   const notes: string[] = [];
+  const diagnostics = inspectIocText(source);
+  if (diagnostics.mixedEol) {
+    warnings.push("这份 .ioc 的换行不一致（既有 CRLF 又有 LF）：写回时会统一成多数的那种（CRLF）");
+  }
+  if (!diagnostics.finalNewline) {
+    notes.push("源文件末尾没有换行：写回时保持原样（CubeMX 自己写的文件是有换行的，手工改出来的常常没有）");
+  }
+  if (diagnostics.malformedLines.length > 0) {
+    warnings.push(
+      "这些行既不是 # 注释、也没有 \"=\"，CubeMX 会当垃圾行丢掉（行号：" +
+        diagnostics.malformedLines.slice(0, 8).join("、") +
+        (diagnostics.malformedLines.length > 8 ? "…" : "") + "）",
+    );
+  }
 
   const before = parseIocEntries(source);
   // 深拷贝成可写 Map（parseIocEntries 返回的就是新 Map，直接改即可）。
@@ -383,6 +754,11 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const originalOrder = [...pinTable.order];
   for (const pin of request.pins ?? []) addPin(pinTable, pin);
   if (request.serialWire === true) ensureSerialWire(pinTable);
+  const family = (after.get("Mcu.Family") ?? "").trim();
+  if (family === "" && (request.peripherals ?? []).length > 0) {
+    warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
+  }
+  for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, family, notes);
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，
   // 不带 .Signal）。按 .Signal 过滤会把它从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*
@@ -432,8 +808,29 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     for (const error of clockPlan.errors) errors.push("时钟：" + error);
   }
 
+  // 外设接线自洽性（IPNb 条数、外设有没有引脚指向、多模式引脚缺不缺 .Mode）。
+  validatePeripheralWiring(after, warnings);
+
+  // 重复键 / 跨行值：CubeMX 只认最后一个键值，而跨行值（Java properties 续行）改第一行会留下续行残骸。
+  const planned = compareEntries(before, after);
+  const multiLine = planned.filter((change) => diagnostics.multiLineKeys.has(change.key));
+  if (multiLine.length > 0) {
+    errors.push(
+      "这些键的值跨了多行（Java properties 的续行）：" + multiLine.map((change) => change.key).join("、") +
+        "。改第一行会留下续行残骸，请先在 CubeMX 里重新保存一次再改",
+    );
+  }
+  const duplicated = planned.filter((change) => diagnostics.duplicates.has(change.key));
+  if (duplicated.length > 0) {
+    errors.push(
+      "这些键在 .ioc 里出现了不止一次（CubeMX 只认最后一个）：" +
+        duplicated.map((change) => change.key + "×" + String(diagnostics.duplicates.get(change.key) ?? 0)).join("、") +
+        "。先在 CubeMX 里重新保存一次把重复键清掉，再来改",
+    );
+  }
+
   // 安全闸：这两条是踩过坑的硬约束，不满足就不给 plan。
-  const candidateText = renderIocText(source, compareEntries(before, after));
+  const candidateText = renderIocText(source, planned);
   const summary = summarizeIoc(candidateText, iocPath);
   if (!summary.debug.serialWire) {
     errors.push(
@@ -448,7 +845,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     return { ...empty, iocPath, sourceSha256, errors, warnings, notes, clockPlan, message: "没生成计划：" + (errors[0] as string) };
   }
 
-  const changes = compareEntries(before, after);
+  const changes = planned;
   if (changes.length === 0) {
     return { ...empty, iocPath, sourceSha256, warnings, notes, clockPlan, message: "没有变化：这些键本来就是这个值" };
   }

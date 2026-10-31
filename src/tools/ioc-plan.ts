@@ -12,7 +12,7 @@
  */
 
 import { planIocChanges } from "../engine/ioc-plan.js";
-import type { IocPlanChange, PinAddRequest } from "../engine/ioc-plan.js";
+import type { IocPlanChange, PeripheralEnableRequest, PinAddRequest } from "../engine/ioc-plan.js";
 import { formatHz } from "../engine/clock-plan.js";
 import type { ClockPlan, ClockPlanRequest } from "../engine/clock-plan.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
@@ -194,6 +194,7 @@ interface IocPlanArgs {
   entries?: { key: string; value: string }[];
   unset?: string[];
   pins?: PinAddRequest[];
+  peripherals?: PeripheralEnableRequest[];
   serialWire?: boolean;
   clock?: ClockPlanRequest;
 }
@@ -289,7 +290,7 @@ export function registerIocPlan(ctx: DshContext): void {
   ctx.tools.register({
     name: IOC_PLAN_TOOL,
     description:
-      "改 STM32CubeMX .ioc 的第一步：只读源文件、算出逐键 diff 与源 SHA-256，返回 planId，不写盘。支持 entries(设键)/unset(删键)/pins(加 GPIO 引脚)/serialWire(补 Serial Wire 调试口)/clock(改时钟：targetHz 就近或 pllMul 定点，自动重算整套 RCC 派生键并给逐外设频率与 UART 波特率误差)。确认 diff 之后必须用 stm32_ioc_apply({planId}) 才真正写入。",
+      "改 STM32CubeMX .ioc 的第一步：只读源文件、算出逐键 diff 与源 SHA-256，返回 planId，不写盘。支持 peripherals(启用外设预设：USART/TIM PWM/ADC，自动写引脚 Mode+Signal 与 IPParameters)/entries(设键)/unset(删键)/pins(加 GPIO 引脚)/serialWire(补 Serial Wire 调试口)/clock(改时钟：targetHz 就近或 pllMul 定点，自动重算整套 RCC 派生键并给逐外设频率与 UART 波特率误差)。确认 diff 之后必须用 stm32_ioc_apply({planId}) 才真正写入。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -321,6 +322,30 @@ export function registerIocPlan(ctx: DshContext): void {
               speed: { type: "string", enum: ["low", "medium", "high"] },
             },
             required: ["pin"],
+          },
+        },
+        peripherals: {
+          type: "array",
+          description:
+            "启用外设（预设键集）：一次写全引脚 Mode/Signal、Mcu.IPn、<ip>.IPParameters。内置：USART1/2/3、TIM2/3/4（CH1 PWM）、ADC1/ADC2（IN1-PA1）。" +
+            "为什么需要：CubeMX 靠引脚 Mode+Signal 推导外设，只写 USART1.VirtualMode 会被静默丢弃。",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string", description: "预设名（= 实例名），如 USART1、TIM2、ADC1。" },
+              pins: {
+                type: "object",
+                description: "覆盖默认引脚，key 是角色名（tx/rx/ch1/in1…），value 是逻辑引脚名（PA2）。",
+                additionalProperties: { type: "string" },
+              },
+              parameters: {
+                type: "object",
+                description: "覆盖默认参数（写进 <ip>.IPParameters），如 {\"Prescaler\":\"71\",\"Period\":\"999\",\"BaudRate\":\"9600\"}。",
+                additionalProperties: { type: "string" },
+              },
+            },
+            required: ["name"],
           },
         },
         serialWire: { type: "boolean", description: "确保 PA13/PA14 是 Serial Wire，并清掉 No_Debug（VP_SYS_VS_ND）残留。" },
@@ -369,6 +394,7 @@ export function registerIocPlan(ctx: DshContext): void {
         ...(args.entries === undefined ? {} : { entries: args.entries }),
         ...(args.unset === undefined ? {} : { unset: args.unset }),
         ...(args.pins === undefined ? {} : { pins: args.pins }),
+        ...(args.peripherals === undefined ? {} : { peripherals: args.peripherals }),
         ...(args.serialWire === undefined ? {} : { serialWire: args.serialWire }),
         ...(args.clock === undefined ? {} : { clock: args.clock }),
       });
