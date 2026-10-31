@@ -51,7 +51,7 @@
 ### 安装（推荐：一条命令）
 
 ```powershell
-dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
+dsh plugin --profile desktop add dsh-stm32
 ```
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。

@@ -50,7 +50,7 @@ Paths are searched as MSYS2 (`C:/msys64/ucrt64/bin`, `C:/msys64/mingw64/bin`) â†
 ### Install (recommended: one command)
 
 ```powershell
-dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
+dsh plugin --profile desktop add dsh-stm32
 ```
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
