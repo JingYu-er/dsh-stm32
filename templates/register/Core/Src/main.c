@@ -27,6 +27,12 @@ __CLOCK_INIT__
  * clock_init() 之后 SystemCoreClock 已经是真实频率，所以不需要手动填数字。 */
 static void delay_ms(uint32_t ms)
 {
+    /* 保存 SysTick 现场：调用方可能已经把它当成 1 ms 时基（TICKINT 打开）。
+     * 早期版本结束时直接写 CTRL = 0，会把那个时基一起掐掉——这里用完原样恢复。 */
+    const uint32_t ctrl_save = SysTick->CTRL;
+    const uint32_t load_save = SysTick->LOAD;
+
+    SysTick->CTRL = 0u;                                             /* 先停，才能安全改 LOAD/VAL */
     SysTick->LOAD = (uint32_t)(SystemCoreClock / 1000u) - 1u;
     SysTick->VAL = 0u;
     SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
@@ -36,7 +42,10 @@ static void delay_ms(uint32_t ms)
         }
     }
 
-    SysTick->CTRL = 0u;
+    SysTick->CTRL = 0u;                                             /* 停掉忙等用的配置 */
+    SysTick->LOAD = load_save;                                      /* 还原现场 */
+    SysTick->VAL = 0u;
+    SysTick->CTRL = ctrl_save;
 }
 
 static void led_init(void)

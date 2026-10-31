@@ -597,6 +597,13 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.match(main, /static void clock_init\(void\)/u);
     assert.match(main, /DSH_SYSCLK_HZ\s+72000000/u);
     assert.match(main, /clock_init\(\);/u, "main() 必须先配时钟再用 SysTick");
+    // delay_ms 不能把调用方的 SysTick 时基掐掉：保存 CTRL/LOAD，忙等后原样恢复。
+    // 这条是 2026-11-01 真机实测发现的：用户自己起了 1 ms SysTick 中断，第一次 delay_ms 就把它关了。
+    assert.match(main, /const uint32_t ctrl_save = SysTick->CTRL;/u);
+    assert.match(main, /const uint32_t load_save = SysTick->LOAD;/u);
+    assert.match(main, /SysTick->CTRL = ctrl_save;/u);
+    assert.match(main, /SysTick->LOAD = load_save;/u);
+    assert.equal(/\n    SysTick->CTRL = 0u;\n\}/u.test(main), false, "delay_ms 结束时不能直接把 CTRL 清 0");
     assert.equal(main.includes("__CLOCK_INIT__"), false);
     assert.equal(main.includes("__MCU_BANNER__"), false);
 
