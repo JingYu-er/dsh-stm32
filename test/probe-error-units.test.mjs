@@ -37,6 +37,20 @@ test("kind=probe-busy：适配器被占用（命令行报锁 + 真机的事务�
   assert.equal(kindOf(["libusb_error_busy"]), "probe-busy");
 });
 
+test("kind=probe-busy：探针固件卡住时只有 CMD_INFO failed（真板子取证，2026-10-31 复现两次）", () => {
+  const error = classifyProbeFailure({
+    lines: ["Error: CMSIS-DAP command CMD_INFO failed."],
+    exitCode: 1,
+    stage: "flash",
+  });
+  assert.equal(error.kind, "probe-busy");
+  // 成因要能同时覆盖「并发访问」与「固件卡住」，hint 必须给拔插这条可执行动作。
+  assert.match(error.cause, /另一个进程|固件卡住/u);
+  assert.match(error.hint, /拔下来/u);
+  assert.equal(error.retryable, true);
+  assert.deepEqual(error.evidence, ["Error: CMSIS-DAP command CMD_INFO failed."]);
+});
+
 test("kind=probe-busy：两个 openocd 抢同一探针时的 transfer/command mismatch（真板子取证）", () => {
   const log = [
     "Error: CMSIS-DAP command CMD_DISCONNECT failed.",

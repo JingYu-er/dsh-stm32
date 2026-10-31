@@ -2220,6 +2220,40 @@ Cortex-M3（F1）的硬件断点靠 FPB 的 6 个比较器、观察点靠 DWT �
 - **资源包体积口径**：任务书写「core 约 180 KB」，实际量到 core profile 是 30 个文件 / 242903 字节 ≈ **237 KiB**（大头是 `device/f1/chips.json` 36.1 KiB 与 `memory.json` 34.2 KiB；SVD 那 1.75 MB 属于 `full` profile，不在 core 里）。收尾时已把两份 README 的 180 KB 改成「30 个文件约 237 KiB」，与实测一致。
 - **engine 模块计数**：reading-guide 的表是「逐条列出来的模块数」（41 → 44），不是目录文件数（42 → 45）——`assets.ts` 从来没单独成行，这次没顺手补（避免把文档任务做成改表任务）。
 
+### 29.7 真机样本（已取证的四类）
+
+这一节只记**真板子上真的发生过**的样本；它们同时是 `MATCHERS` 的回归依据。原始日志逐字保留，判定结果来自 `classifyProbeFailure`。
+
+| kind | 触发动作 | openocd 原始关键行 | 插件判定 | 恢复动作 |
+| --- | --- | --- | --- | --- |
+| `no-probe` | 拔掉探针再烧 | `Error: unable to find a matching CMSIS-DAP device` | `no-probe`，hint 提示检查 USB / 占用 / 换线 | 插回探针 |
+| `probe-busy`（并发） | 两个 openocd 同时抓同一个 CMSIS-DAP | `Error: CMSIS-DAP transfer count mismatch: expected 5, got 1`、`Error: CMSIS-DAP command mismatch. Sent 0x12 received 0x2` | `probe-busy` | 关掉多余的那个 openocd / 调试会话 |
+| `probe-busy`（固件卡住） | 上一次会话被硬 kill 之后（2026-10-31 复现两次） | `Error: CMSIS-DAP command CMD_INFO failed.`（约 6 s 后超时；此时没有任何并发进程，HID 设备状态 `CM_PROB_NONE`） | `probe-busy`，cause 现在写成「探针没有正常响应（被另一个进程同时访问，或探针固件卡住）」，hint 追加「拔下来等 3 秒再插回」 | **物理拔插**探针（软重启设备需要管理员权限，`Disable-PnpDevice` 会失败） |
+| `timeout` | 同一颗卡住的探针上跑 `stm32_rtt start` | `错误：timeout — 读控制块失败：Tcl 往返超时（5000 ms）` | `timeout` | 同上，拔插后重试 |
+
+**根因与修复**：卡死是「会话关闭时直接 kill openocd」造成的——openocd 来不及给探针发断开序列，CMSIS-DAP 固件停在半连接。现在 `src/engine/debug-session.ts` 的 `stop()` 会先经 Tcl 口发 `shutdown`、等 1.2 s 再 terminate（`requestOpenocdShutdown(port, timeoutMs)`）。修完之后连续多轮真机操作未再复现。
+
+### 29.8 四类待实测（需要真实故障，暂无样本）
+
+`swd-locked` / `flash-protected` / `no-power` / `target-mismatch` 目前**只有单测构造的日志行**（`test/probe-error-units.test.mjs`），没有真机样本。风险很具体：真实 openocd 的措辞若落不到 `MATCHERS` 的正则上，就会被判成 `unknown`，hint 也随之失效。
+
+复现方法（**建议都在备用板上做**）：
+
+| kind | 复现动作 | 预期日志 | 恢复 | 风险 |
+| --- | --- | --- | --- | --- |
+| `swd-locked` | 烧一个关掉 SWD 的固件（`.ioc` 的 SYS→Debug 设 Disable，或代码写 `AFIO->MAPR = SWJ_DISABLE`），再 `stm32_flash` | `Error connecting DP: cannot read IDR` / `sticky error` | 按住 BOOT0 上电进系统 bootloader 再连，重烧正常固件 | 中：会暂时失去调试口，可恢复 |
+| `flash-protected` | 用 STM32CubeProgrammer 给 option bytes 开 **WRP**（写保护）后烧录 | `flash programming failed` / `write protected` | 解除 WRP（通常需全片擦除） | 中：**RDP level 2 不可逆，绝对不要碰**；只做 WRP |
+| `no-power` | 只留 SWD 两根线、拔掉 3V3（或把供电降到 2.5 V） | 探针在、目标 ID 读不到；部分固件报 `target voltage may be too low` | 接回 3V3 | 低 |
+| `target-mismatch` | 拿非 F1 的板子（F4/F0）用 `target/stm32f1x.cfg` 去连，或把 target 配成 `stm32f4x` 连 F1 | `unexpected idcode` / `device id = 0x…` 与期望不符 | 换回正确 target 配置 | 低 |
+
+每类实测后要记录的字段（补进 29.7 那张表）：
+
+```markdown
+| kind | 复现动作 | openocd 关键行（逐字 2–3 行） | 插件判定 kind | cause / hint 是否对症 | retryable 是否合理 | 恢复动作 | 日期 | 板子 / 探针 |
+```
+
+判定标准：① `probeError.kind` 与造的故障一致；② `cause` 不是「有失败但分不出原因」；③ 照 hint 做真能恢复；④ `retryable` 符合 §29.1 的判据（`swd-locked`/`no-power` 为 `true`，`flash-protected`/`target-mismatch` 为 `false`）；⑤ 若判成 `unknown`，把原始行贴回来补 `MATCHERS` 正则。
+
 ## 30. C 阶段：RTT 日志（openocd rtt + stm32_rtt + 模板侧控制块）（2026-10-31）
 
 这一批只做一件事：**让固件里的 printf 出现在工具输出里，不接串口、不改接线**。做法不是自己写传输，而是把 openocd 自带的 `rtt` 命令用起来，我们只管三头：**控制块**（固件侧，与 SEGGER 兼容）、**帧语法**（级别 + 时间戳）、**工具面**（`stm32_rtt` 的 start / dump / stop / status）。
