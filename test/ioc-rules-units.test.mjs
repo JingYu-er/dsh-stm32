@@ -136,6 +136,39 @@ test("R8：IPNb / PinsNb 与实际条数不符 → 告警", () => {
   assert.equal(report.warnings.some((item) => item.rule === "R8" && item.message.includes("PinsNb=3")), true);
 });
 
+test("R15：外设参数键的实例不在 Mcu.IPn 里 → 告警（CubeMX 建实例只认 Mcu.IPn）", () => {
+  const report = checkIocRules(entries([
+    ["Mcu.Family", "STM32F1"],
+    ["Mcu.IP0", "USART1"],
+    ["Mcu.IPNb", "1"],
+    ["USART1.IPParameters", "BaudRate"],
+    ["USART1.BaudRate", "115200"],
+    ["USART2.IPParameters", "BaudRate"],
+    ["USART2.BaudRate", "9600"],
+    ["TIM3.Prescaler", "71"],
+  ]));
+  const text = report.warnings.filter((item) => item.rule === "R15").map((item) => item.message).join(" | ");
+  assert.match(text, /USART2/u, "USART2 不在 Mcu.IPn，应告警");
+  assert.match(text, /TIM3/u, "TIM3 不在 Mcu.IPn，应告警");
+  assert.equal(text.includes("USART1"), false, "USART1 在 Mcu.IPn 里，不该告警");
+});
+
+test("R15：Mcu.IPn 齐了就不告警（RCC/NVIC/SH/Dma 这些不是实例名，别误报）", () => {
+  const report = checkIocRules(entries([
+    ["Mcu.Family", "STM32F1"],
+    ["Mcu.IP0", "USART2"],
+    ["Mcu.IP1", "RCC"],
+    ["Mcu.IP2", "NVIC"],
+    ["Mcu.IPNb", "3"],
+    ["USART2.IPParameters", "BaudRate"],
+    ["USART2.BaudRate", "115200"],
+    ["RCC.ADCPresc", "RCC_ADCPCLK2_DIV6"],
+    ["NVIC.USART1_IRQn", "true:0:0:false:false:true:false:false:false"],
+    ["SH.ADCx_IN1.ConfNb", "1"],
+  ]));
+  assert.equal(report.warnings.some((item) => item.rule === "R15"), false, report.warnings.map((w) => w.rule + ":" + w.message).join(" | "));
+});
+
 test("R12：只有 .Mode 没有 .Signal → 告警", () => {
   const report = checkIocRules(entries([["PA6.Mode", "PWM Generation1 CH1"]]));
   assert.equal(report.warnings.some((item) => item.rule === "R12"), true);

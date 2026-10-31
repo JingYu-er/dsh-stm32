@@ -2692,6 +2692,7 @@ D:/app/STM32CubeMX/jre/bin/javap.exe -p -c -classpath <解出的目录> com.st.m
 | R7 | `<IP>.IPParameters` 白名单：任何 `<IP>.<参数>` 没列进去 | 告警 | 实测 `TIM2.Prescaler/Period` 被静默丢弃 |
 | R8 | `Mcu.IPNb` / `Mcu.PinsNb` 与实际条数一致 | 告警 | CubeMX 写盘时自己重算；不一致说明文件被手改 |
 | R12 | 引脚只有 `.Mode` 没有 `.Signal`（伪引脚 `VP_*` 除外，`Dma.*.Mode` 这类多段键不算引脚） | 告警 | 实测缺 `.Signal` 时外设不激活 |
+| R15 | 外设参数键（`USART2.BaudRate`、`TIM3.Prescaler`…）的实例不在 `Mcu.IPn` 里 | 告警 | `ImportParameterContext` 只给「`Mcu.IPn` 建出来的实例」分发参数，没有实例就没有接收方，键被静默丢弃 |
 
 ### 36.1 族相关的那一点点
 
@@ -2749,4 +2750,15 @@ CubeMX 的 db 里同一根脚常带后缀（F103C8 的 `PA0` 是 `PA0-WKUP`、`P
 
 验证：`cubemx-db-units` 6 例、`ioc-plan-units` 34 例（新增 4 例：db 优先、别名表兜底 + 告警、
 `logicalPinName` 反查、<Pin> 标签重复只算一根）。
+
+### 36.6 R15：参数键指向的外设不在 `Mcu.IPn` 里（2026-11-01）
+
+`ImportParameterContext` 是按「`Mcu.IPn` 建出来的实例」分发参数的。所以 `.ioc` 里写了
+`USART2.BaudRate=9600`、`TIM3.Prescaler=71`，但 `Mcu.IPn` 里没有 `USART2`/`TIM3` 时，
+这些键**没有接收方**，CubeMX 会静默丢掉——看起来「我明明写了」，生成出来的代码里却没有。
+
+`checkIpInstanceKeys` 只查首段看起来就是外设实例名的键（`ADC/DAC/TIM/USART/UART/SPI/I2C/CAN/USB/SDIO/ETH/RTC/IWDG/WWDG` + 可选数字），
+`RCC.` / `NVIC.` / `SH.` / `Dma.` / `Mcu.` / `ProjectManager.` 都不当实例名（`Dma.*` 归 R1 管）。
+两级测试：反例（`USART2`/`TIM3` 不在 `Mcu.IPn` → 告警）、正例（齐了不告警，且 `RCC.ADCPresc`/`NVIC.*`/`SH.*` 不误报）；
+`ioc-rules-units` 16 例全绿，全量 618 pass / 0 fail。
 

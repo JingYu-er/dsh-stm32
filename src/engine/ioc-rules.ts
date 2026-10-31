@@ -233,6 +233,42 @@ function checkIpPinCounts(entries: Map<string, string>, report: IocRuleReport): 
 }
 
 /** R12：引脚只有 .Mode 或只有 .Signal —— 外设引脚两种缺一不可（GPIO 脚只有 .Signal 是正常的）。 */
+/** 形如 ADC1 / DAC1 / TIM2 / USART3 / SPI1 / I2C2 / CAN1 / SDIO / RTC / IWDG / WWDG 的外设实例名。 */
+const IP_INSTANCE = /^(?:ADC|DAC|TIM|USART|UART|SPI|I2C|CAN|USB|SDIO|ETH|RTC|IWDG|WWDG)[0-9]*$/u;
+
+/**
+ * R15：外设参数键指向的实例不在 Mcu.IPn 里。
+ *
+ * 证据：CubeMX 的 ImportEngine 先按 Mcu.IPn 建「这次工程里有哪些外设实例」，再按实例名分发参数
+ * （ImportParameterContext）。实例不存在时，挂在它下面的 USART2.BaudRate / TIM3.Prescaler 这类键
+ * 没有接收方，会被静默丢掉——表现是「.ioc 里明明写了，生成出来的代码里没有」。
+ *
+ * 只查「首段看起来就是外设实例名」的键，RCC. / NVIC. / SH. / Dma. / Mcu. / ProjectManager. 这些
+ * 都不是实例名，不参与（Dma.* 由 R1 管）。
+ */
+function checkIpInstanceKeys(entries: Map<string, string>, report: IocRuleReport): void {
+  const instances = new Set<string>();
+  for (const [key, value] of entries) {
+    if (IP_KEY.test(key)) instances.add(value.trim().toUpperCase());
+  }
+  const orphans = new Map<string, string[]>();
+  for (const key of entries.keys()) {
+    const head = key.split(".")[0] ?? "";
+    if (!IP_INSTANCE.test(head)) continue;
+    if (instances.has(head.toUpperCase())) continue;
+    const list = orphans.get(head) ?? [];
+    if (list.length < 4) list.push(key);
+    orphans.set(head, list);
+  }
+  for (const [ip, keys] of orphans) {
+    report.warnings.push({
+      rule: "R15",
+      message: ip + " 有参数键（" + keys.join("、") + "），但 Mcu.IPn 里没有 " + ip +
+        " —— CubeMX 按 Mcu.IPn 建实例，这些键没有接收方，会被静默丢弃",
+    });
+  }
+}
+
 function checkModeSignalPairs(entries: Map<string, string>, report: IocRuleReport): void {
   const pins = new Set<string>();
   for (const key of entries.keys()) {
@@ -262,5 +298,6 @@ export function checkIocRules(entries: Map<string, string>): IocRuleReport {
   checkSharedSignals(entries, report);
   checkIpPinCounts(entries, report);
   checkModeSignalPairs(entries, report);
+  checkIpInstanceKeys(entries, report);
   return report;
 }
