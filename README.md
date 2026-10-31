@@ -10,7 +10,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.2-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.3-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 21 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add github:JingYu-er/dsh-stm32#main
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
 
-装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.2`；重启后 `/stm32-doctor` 有输出。
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.3`；重启后 `/stm32-doctor` 有输出。
 
 > **首次使用要联网拉一次资源包**：插件不内置任何芯片表，设备事实（型号 → 启动文件 / 设备宏 / Flash·RAM 容量）在第一次用到时由 `stm32_assets` 自动装一次（`profile: "core"`，30 个文件约 237 KiB：芯片表 + 内存布局 + `.ioc` 模板 + 链接脚本）。装好之后整条链离线可用，换版本才会再联网。
 
