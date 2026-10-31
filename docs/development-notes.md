@@ -2762,3 +2762,26 @@ CubeMX 的 db 里同一根脚常带后缀（F103C8 的 `PA0` 是 `PA0-WKUP`、`P
 两级测试：反例（`USART2`/`TIM3` 不在 `Mcu.IPn` → 告警）、正例（齐了不告警，且 `RCC.ADCPresc`/`NVIC.*`/`SH.*` 不误报）；
 `ioc-rules-units` 16 例全绿，全量 618 pass / 0 fail。
 
+## 37. gdb MI 常驻会话（P3）（2026-11-01）
+
+**问题**：`stm32_debug_eval` 原来是「每次调用临时起一个 `gdb -batch` → 连上 → 跑几条命令 → detach」，
+断点/变量/栈跨调用全丢，每次重连约 1.5 s。排障时想「先断在 HardFault_Handler，再连读几次栈」根本走不通。
+
+**做法**：新增 `src/engine/gdb-mi.ts`（零依赖、可单测）：
+
+- `parseMiLine` / `parseMiValue` / `parseMiTuple`：MI 记录解析（`^done`/`^error`/`*stopped`/`~"…"`/提示符），
+  支持 tuple 与 `[frame={…},…]` 结果列表；`decodeMiString` 处理 MI 的 C 转义。
+- `MiSession`：`--interpreter=mi2` 常驻进程，带 token 的请求队列；`~"…"` 控制台流挂到当前请求上
+  （否则 `print` 的输出找不到归属）；`*stopped` 单独记录；`console`/`evaluate`/`continueTarget`/
+  `interrupt`/`stackFrames`/`stop`。
+- 握手不依赖 `(gdb)` 提示符：MI 下它不带换行，按行读会永远卡住，所以用 `-gdb-set confirm off` 的 `^done` 当握手。
+- `debug-session.ts`：`InternalSession.mi` 懒启动；`eval` 优先走 MI（命令里 `continue` 走 `-exec-continue`，
+  默认结尾 `monitor resume`），连不上就静默退回 `gdb -batch` 老路径；`stop()`/`terminateSync()` 先收 MI 再关 openocd。
+
+**实测**（_rich_hal + CMSIS-DAP，gdb-multiarch）：连接 715 ms，之后单条命令：`evaluate $pc` 22 ms、
+`stackFrames` 70 ms（3 帧：HardFault_Handler@88 ← signal handler ← main@246）、`console info registers` 25 ms。
+
+**测试**：`test/gdb-mi-units.test.mjs` 7 例（解析 + FakeChild 假进程的排队/控制台归属/*stopped/超时不挂死）；
+全量 `node test/run-units.mjs` → 625 pass / 0 fail。
+
+

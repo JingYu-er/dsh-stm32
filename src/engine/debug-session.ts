@@ -20,6 +20,7 @@ import type { ProcessHandle, SubprocessService } from "../types.js";
 import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
 import { pickPort, resolveElfPath } from "./debug.js";
+import { MiSession } from "./gdb-mi.js";
 import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
@@ -140,6 +141,11 @@ interface InternalSession {
   /** B4：起会话时按预算登记的断点数量（状态查询要如实回报）。 */
   breakpoints: BreakpointQuota;
   watchpoints: BreakpointQuota;
+  /**
+   * P3：常驻的 gdb MI 会话。有它时 eval 走 MI（断点/变量/栈跨调用保留），没有就退回
+   * 每次 gdb -batch 的老路径。懒启动：第一次 eval 才连，连不上不影响会话本身。
+   */
+  mi: MiSession | null;
 }
 
 const DEFAULT_IDLE_TTL_MS = 90_000;
@@ -386,6 +392,7 @@ export class DebugSessionManager {
       owner: request.owner ?? "",
       breakpoints: quotaOf(plan.used.code, plan.budget.code),
       watchpoints: quotaOf(plan.used.data, plan.budget.data),
+      mi: null,
     };
 
     const listening = await waitForListening(handle, 15_000, (text) => {
@@ -484,6 +491,51 @@ export class DebugSessionManager {
       }
     }
 
+    // P3：优先走常驻 MI 会话（断点/变量/栈跨调用保留，也不再每次重连）。
+    // 连不上（比如 VS Code 正连着同一个 gdb server）就安静退回 -batch 老路径。
+    const mi = await this.ensureMi(session, gdb, request.timeoutMs ?? 30_000);
+    if (mi !== null) {
+      const miStartedAt = this.now();
+      const lines: string[] = [];
+      const miErrors: string[] = [];
+      let commandLine = "";
+      try {
+        for (const command of commands) {
+          const normalized = command.trim();
+          commandLine = (commandLine === "" ? "" : commandLine + " ;; ") + normalized;
+          if (/^(?:c|cont|continue)$/u.test(normalized)) {
+            await mi.continueTarget(request.timeoutMs ?? 30_000);
+            lines.push("continue：目标已继续运行（要停下就在下次 eval 里先发 monitor halt，或让断点命中）");
+            continue;
+          }
+          const result = await mi.console(normalized, request.timeoutMs ?? 30_000);
+          const text = result.text.trimEnd();
+          if (text !== "") lines.push(text);
+          if (result.record.class === "error") {
+            miErrors.push("命令失败：" + normalized + "：" + String(result.record.data["msg"] ?? ""));
+          }
+        }
+        if (request.keepHalted !== true) await mi.console("monitor resume", request.timeoutMs ?? 30_000);
+      } catch (error) {
+        miErrors.push("MI 会话出错：" + (error instanceof Error ? error.message : String(error)));
+      }
+      session.lastUsedAt = this.now();
+      const miStillActive = this.current === session;
+      if (!miStillActive) miErrors.push("会话在本次 eval 期间已关闭");
+      const miOutput = lines.join("\n").trim();
+      return {
+        ok: miErrors.length === 0,
+        output: miOutput,
+        command: "gdb --interpreter=mi2（常驻）: " + commandLine,
+        durationMs: this.now() - miStartedAt,
+        remainingMs: miStillActive ? this.remainingMs(session) : 0,
+        errors: miErrors,
+        message: miErrors.length === 0
+          ? "执行完成（MI 常驻，" + String(this.now() - miStartedAt) + " ms）"
+          : "执行有问题：" + (miErrors[0] as string),
+      };
+    }
+
     const argv: string[] = [gdb, "-q", "-batch", "-nx", "-ex", "set confirm off", "-ex", "set pagination off"];
     if (session.elfPath !== "" && existsSync(session.elfPath)) argv.push("-ex", "file " + toOpenOcdPath(session.elfPath));
     argv.push("-ex", "target extended-remote 127.0.0.1:" + String(session.port), "-ex", "monitor halt");
@@ -516,6 +568,28 @@ export class DebugSessionManager {
       errors,
       message: errors.length === 0 ? "执行完成（" + String(this.now() - startedAt) + " ms）" : "执行有问题：" + (errors[0] as string),
     };
+  }
+
+  /**
+   * P3：按需起一个常驻 gdb MI 会话（连的是本会话 openocd 的 gdb server）。
+   * 失败返回 null —— 调用方退回每次 gdb -batch 的老路径，本次 eval 照样能用。
+   */
+  private async ensureMi(session: InternalSession, gdb: string, timeoutMs: number): Promise<MiSession | null> {
+    if (session.mi !== null && session.mi.alive) return session.mi;
+    session.mi = null;
+    try {
+      const mi = await MiSession.start({
+        gdb,
+        port: session.port,
+        ...(session.elfPath === "" ? {} : { elfPath: session.elfPath }),
+        cwd: session.projectDir,
+        timeoutMs: Math.max(3000, Math.min(timeoutMs, 30_000)),
+      });
+      session.mi = mi;
+      return mi;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -621,6 +695,11 @@ export class DebugSessionManager {
     if (session === null) return { ok: true, stopped: false, message: "本来就没有会话（" + reason + "）" };
     // 先让 openocd 自己 shutdown：直接 kill 时它来不及给探针发断开命令，
     // CMSIS-DAP 固件会被留在「半连接」状态，下一次 CMD_INFO 直接超时（实测踩过两次）。
+    // P3：先收掉常驻 gdb（它握着 gdb server 端口），再让 openocd shutdown。
+    if (session.mi !== null) {
+      await session.mi.stop().catch(() => undefined);
+      session.mi = null;
+    }
     await requestOpenocdShutdown(session.tclPort, 800);
     await Promise.race([session.handle.waitForExit().catch(() => undefined), sleep(1200)]);
     session.handle.terminate();
@@ -637,6 +716,11 @@ export class DebugSessionManager {
     this.current = null;
     this.stopSweeper();
     if (session === null) return false;
+    if (session.mi !== null) {
+      // exit 阶段不能 await：尽力发退出命令，随后连同 openocd 一起终止。
+      void session.mi.stop(500).catch(() => undefined);
+      session.mi = null;
+    }
     try {
       session.handle.terminate();
     } catch {
