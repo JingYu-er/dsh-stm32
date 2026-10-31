@@ -2520,4 +2520,114 @@ engine 的 `src/engine/regs.ts` **一行没动**：它仍旧只负责「生成 o
 - **用例数口径**：D2 的交付报告里写「追加 12 个用例（文件 39 例）」，实测文件是 39 例 = 26 + 13；文档按 **39** 记。
 - **SVD 事实表体积**：六条线 1.71 MiB，`full` 档 128 个文件；`core` 仍是 30 个文件 / 237 KiB。与 §29.6 那笔「core 不在 180 KB」的账一致，没有新的口径变化。
 
+## 32. 外设预设：CubeMX 到底靠什么把 `.ioc` 里的外设“认”出来（2026-10-31）
+
+背景：用户要求把「启用一个外设」做成 `stm32_ioc_plan` 的预设（`peripherals`），键集不能靠猜。这一节记录实测过程与最终结论——**三条独立的坑，缺任何一条，CubeMX 都会静默丢弃整个外设，日志里一个错都不报**。
+
+### 32.1 三条坑（都已用 CubeMX 6.15.0 + DB.6.0.150 + STM32Cube_FW_F1_V1.8.7 复现并修好）
+
+1. **引脚必须列进 `Mcu.PinN`**。只写 `PA5.Signal=…` 而 `Mcu.PinN` 里没有 PA5，这根脚的配置根本不会被应用（SPI1 只列 PA6 时 PA5/PA7 被忽略，整个 SPI1 不激活；补齐三根脚后立刻生成 `MX_SPI1_Init`）。`Mcu.PinsNb` 要与实际条数一致。
+2. **普通外设（USART）靠 `<pin>.Mode`**：`PA9.Mode=Asynchronous` + `PA9.Signal=USART1_TX` + `USART1.VirtualMode=VM_ASYNC`。缺 `.Mode` 时 USART1 被丢弃。
+3. **共享信号外设（定时器 / ADC）靠 `SH.<信号>.n=<IP 信号>,<IP 模式>`**，而且这类引脚**不能**写 `.Mode`：
+   - 定时器：`PA0-WKUP.Signal=S_TIM2_CH1_ETR`（PA0 的定时器信号与 TIM2_ETR 合并，必须用合并名）、`PA6.Signal=S_TIM3_CH1`、`PB6.Signal=S_TIM4_CH1`，配 `SH.S_TIM3_CH1.0=TIM3_CH1,PWM Generation1 CH1` + `SH.S_TIM3_CH1.ConfNb=1`。
+   - ADC：`PA1.Signal=ADCx_IN1`（共享名，不是 `ADC1_IN1`），配 `SH.ADCx_IN1.0=ADC1_IN1,IN1` + `SH.ADCx_IN1.ConfNb=1`。
+   - 交叉验证：官方板级 `B47_Nucleo_NUCLEO-L4R5ZI-P_STM32L4R5ZI_Board_AllConfig.ioc` 里就是这套写法（`SH.S_TIM2_CH1.0=TIM2_CH1,PWM Generation1 CH1`），它能被 `config load` 往返后保住 `Mcu.IP16=TIM2` —— 说明**文本导入本来能处理定时器，是我们缺 SH 块**。
+
+顺带记两条**不是**原因的东西（都试过，别再试）：`Mcu.IPn` / `Mcu.IPNb` 写什么都没用（CubeMX 按引脚自己重建）；把 IP 键按字母序重排、把 IP 键放到引脚键之前、把 `ProjectManager.ProjectFileName` 改成实际文件名，全都没用（`-q config load` 永远走 `ImportTextPane` 文本导入路径）。
+
+### 32.2 白嫖一个 oracle：`config save`
+
+CubeMX 的 `-q` 脚本里可以用 **`config save <路径>`**（日志 `UtilMem:75 - End SaveConfig()`）。它**写到被 `config load` 的那份文件、忽略给定路径**，约 25–40 s、不生成代码 —— 于是每轮试探从「生成代码 3–4 分钟 + 翻 main.c」缩成「load+save 40 s + 看它自己写回来的键」。上面三条坑基本就是这么一条条试出来的。
+
+调用方式（PowerShell 里踩过的坑）：`jre\bin\java.exe` 与 `STM32CubeMX.exe` 直接调，**不要**传 `-Dfile.encoding=UTF-8`（会被 pwsh 拆成 `/encoding=UTF-8` → `ClassNotFoundException`）；日志用 `cmd /c xxx.bat > log 2>&1` 重定向（pwsh 的 `*>` 会写成 UTF-16，read 工具读不了）。脚本命令集合可用 `help` 查（`config load/save`、`project setCustomFWPath`、`generate all_code_in_main`、`generate code <目录>`、`script <file>`…）。
+
+### 32.3 代码落点
+
+- `src/data/ioc-presets.ts`：`PeripheralPinRole` 加 `shared?: { key, ipSignal, ipMode }`；`timerPwm()` / `adc()` 改成产 `signal`（`S_TIM2_CH1_ETR` / `ADCx_IN1`）+ `mode: ""` + `shared`；TIM2/3/4 的 db 信号名逐条写明。
+- `src/engine/ioc-plan.ts`：新增 `enableSharedSignal()`（写 `SH.<key>.<n>` 并维护 `ConfNb`，同样的值幂等）；`enablePeripheral()` 对共享信号引脚**删掉 `.Mode`** 再写 SH 块；`validatePeripheralWiring()` 新增 `devicesOfSignal()`（识别 `USART1_TX`、`S_` 前缀、以及 `SH.…` 值里逗号前的 IP 信号），「缺功能表达」的告警改成「既没有 `.Mode` 也没有 SH 块」。
+- `test/ioc-plan-units.test.mjs`：TIM2/ADC1 的断言改成 `Signal=S_TIM2_CH1_ETR` / `ADCx_IN1` + `SH.*`；新增「共享信号缺 SH 块要告警」「ADC1 后再加 ADC2 时 `ConfNb=2` 且 `.1=ADC2_IN1,IN1`」「预设自己写出的 SH 不触发告警」三例。
+
+### 32.4 验证
+
+- `npm run build` → exit 0；`npm test` → **577 pass / 0 fail（36 套件）**（原 573 + 新 4 例）。
+- 探针工程 `_ioc_probe`（C8T6）：`peripherals=[USART1, TIM2(Prescaler=71,Period=999), ADC1]` 一次写成 38 个键 → `stm32_generate` 成功，`Core/Src/main.c` 里 `MX_USART1_UART_Init` / `MX_TIM2_Init` / `MX_ADC1_Init` 各 3 处，`stm32f1xx_hal_conf.h` 的 UART/TIM/ADC 三个 MODULE_ENABLED 全由 CubeMX 自己打开，cmake 源清单新增 `stm32f1xx_hal_tim.c`、`stm32f1xx_hal_adc.c` 等 4 个。
+- 另跑过两次单外设实验：TIM3(PA6) + ADC1(PA1) + USART1 同时激活；TIM2(PA0-WKUP) 单独激活（`MX_TIM2_Init-TIM2`）。
+
+### 32.5 偏差备案
+
+- **F1 官方 .ioc 里没有定时器样例**：CubeMX 安装目录 `db/plugins/boardmanager/boards`（递归）里含 `TIM2.IPParameters` 的 44 份文件中没有一份是 F1（L4 7 / F7 6 / MP1 8 …）；F1 的 12 份板级 `.ioc` 一个定时器都没有。所以 TIM/ADC 的键集**只能拿 CubeMX 当 oracle 实测**，不是抄来的。
+- **`RCC.ADCFreqValue` 是脏键**：脚手架模板里写的是 `36000000`，对 F1 非法（ADC ≤ 14 MHz，CubeMX 会报 `Parameter (ADCFreqValue) has invalid value`）。用 ADC 预设时要么把它设成 `12000000`、要么干脆别写；`RCC.ADCPresc=RCC_ADCPCLK2_DIV6` 由预设补上。
+- **工具层要重启**：`lib/` 改完后宿主 dsh 进程仍用启动时加载的旧模块（`stm32_ioc_plan` 的 JSON Schema 会把 `peripherals` 剥掉，返回“没有变化”）。验证新引擎要么重启 dsh，要么像本次一样用 node 直接 import `lib/engine/ioc-plan.js`。
+
+## 33. `.ioc` 是正确的 INI 文本：无损写回的规则与实测（2026-10-31）
+
+前提纠正：`.ioc` **不是 XML**，是 Java-properties 风格的纯文本键值文件——首行 `#MicroXplorer Configuration settings - do not modify`，正文是 `Mcu.IP3=USART1`、`PA9.Mode=Asynchronous` 这种 `key=value`。因此「XML 结构损坏 / 属性引号 / 冲突标记」都不是风险；真实风险只有三个：**编码与换行、键集完整度、版本迁移**。这一节写的是第一条（写回字节级正确性）落地的规则与实测数据。
+
+### 33.1 四条规则（照抄 `Wafleem/stm32cubemx_mcp` 的做法，并用官方 504 份 `.ioc` 验证）
+
+1. **换行风格与末尾换行必须原样保留**。读时检测「含 CRLF 就用 CRLF」，写时用同一个分隔符 join；源文件末尾有没有换行也照原样——不做「统一加一个 `\n`」这种看起来很整洁、实际改了字节的事。
+2. **没改动就逐字节返回原文**。`renderIocText(text, [])` 直接 `return text`，这是最便宜的 round-trip 不变量，也是发现「顺手整理格式」类回归的第一道闸。
+3. **只接受 UTF-8**。用 `new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })` 解码，失败就报错让人另存为 UTF-8；不猜 GBK/ANSI（猜错一次会把整份工程写坏）。`ignoreBOM` 让 BOM 留在字符串里自然往返。
+4. **重复键与跨行值不碰**。同一个键出现多次时 CubeMX 只认最后一个，改它等于在打两份不一致的补丁；值里有 Java-properties 续行（行尾奇数个反斜杠）时改第一行会留下续行残骸。两种情况都在计划阶段直接拒绝，并提示「先在 CubeMX 里重新保存一次」。
+
+补充：坏行（既不是 `#` 注释、也没有 `=`）与混合换行（既有 CRLF 又有 LF）给**告警**而不是报错——官方文件里真的存在，不该让用户因为别人的文件风格写不成自己的配置。
+
+### 33.2 官方 504 份 `.ioc` 的实测数据（`D:/app/STM32CubeMX/db/plugins/boardmanager/boards`，递归 depth≤4）
+
+- **504/504 逐字节 round-trip 相同**（读进来再 `renderIocText(text, [])` 写出去，`===` 原文）。
+- 换行：**CRLF 497 / LF 7** —— CubeMX 在 Windows 上写 CRLF，我们旧代码强加 LF 是真实偏差（改前会无谓改动 497 个文件的字节）。
+- 末尾换行：**26 份文件末尾没有换行**，其余有 —— 两种形态都真实存在，必须原样保留。
+- 重复键：**2 份**（`PL1_Nucleo_NUCLEO-WL33CC1_STM32WL33CCV6TR_Board.ioc` 的 `Mcu.Pin5=PA11` 连续两行；`M12_Discovery_STM32MP135F-DK_STM32MP135FAF_BareMetalEnabled_Board.ioc` 的 `Mcu.ContextProject=Bare Metal Enabled` 两行）。
+- 折行值（续行）：**3 份**（`K05_Connectivity_Expansion_B-WBA6M-WPAN_STM32WBA6MOIH6_Board.ioc:73`、其 `_AllConfig.ioc:137`、其 `_TrustZoneEnabled_Board_AllConfig.ioc:218`），都是 `ProjectManager.functionlistsort=` 的值被折断，续行形如 `MX_I2C1_Init-I2C1-false-HAL-true,5-MX_I2C3_Init-…`。→ 解析必须支持 Java-properties 续行，否则会把这行当垃圾丢掉、把 `functionlistsort` 截断。
+
+### 33.3 代码落点
+
+- `src/engine/ioc.ts`：新增 `iocLogicalLines(text): IocLogicalLine[]`（`{ line, startIndex, lineCount }`，按「行尾奇数个反斜杠 = 续行」拼接，续行前导空白 `trimStart()`）；`parseIocEntries()` 改为遍历逻辑行，键值仍走 `decodeIocKey`/`decodeIocValue`。
+- `src/engine/ioc-plan.ts`：`renderIocText()` 无改动直通、新键插在末尾空行之前、`join(eol)` 不再补 eol；新增 `inspectIocText()`（`duplicates` / `malformedLines` / `multiLineKeys` / `mixedEol` / `finalNewline`）与 `readIocText()`（fatal UTF-8 + 保留 BOM）；`planIocChanges()` 接上四条告警/两条硬闸（重复键、跨行值），并把 `planned` 复用给渲染与变更统计。
+- `test/ioc-plan-units.test.mjs`：32 例（新增 9 例：无改动逐字节还原 4 种换行/末尾组合、改键保留 CRLF 且不补末尾换行、新键不吞末尾空行、混合换行告警、GBK 拒绝、坏行告警、重复键拒绝、续行解析、续行拒绝修改）。
+
+### 33.4 验证
+
+- `npm run build` → exit 0。
+- `npm test` → **586 pass / 0 fail（36 套件）**。
+- 官方 504 份 `.ioc`：round-trip 504/504 相同（见 33.2）。
+- 探针工程 `_ioc_probe`（C8T6）：`peripherals=[USART1, TIM2, ADC1]` 写入后 `stm32_generate` 成功，`MX_USART1_UART_Init`/`MX_TIM2_Init`/`MX_ADC1_Init` 各 3 处（详见 §32.4）。
+
+### 33.5 对模板的意义
+
+- 模板里不该出现「重排整个文件」的写法；只允许**逐键写入/替换**，其余行原样保留（现在是这么做的：`buildLineTable` 只改命中的行，新增键按 key 排序插入）。
+- 新建工程时 `.ioc` 由 CubeMX 骨架给出（`stm32_project_create` 走的是我们的脚手板模板），我们只改键、不重写文件——所以「模板要不要改」结论是**不用改**：模板提供基线键集，写入走无损通道。
+
+## 34. 诊断工具：`stm32_ioc_verify`（让 CubeMX 自己说它认了什么）（2026-10-31）
+
+### 34.1 为什么要做成工具，而不是只写文档
+
+§32 的三条坑（引脚没进 `Mcu.PinN`、普通外设缺 `<pin>.Mode`、定时器/ADC 缺 `SH.*` 共享信号块）是在本机用 `config save` 一轮轮试出来的。但用户机器上跑的是插件，出问题的现场没有我：只把方法写成文档，等于要求 agent 每次重新发明一遍流程。所以拆成两半：
+
+- **确定性部分进工具**：`stm32_ioc_verify` 把 .ioc 复制到 `.dsh-stm32/verify/<stamp>/`，用无头脚本 `config load` + `config save` 让 CubeMX 写回「它理解的结果」，再 diff 出结构化结论（丢了哪些外设、信号被改成什么、补了哪些 `SH` 块、计划生成哪些 `MX_*_Init`、缺什么的提示）。约 25–40 s，不生成代码，**不动工程里的 .ioc**。
+- **判断经验进 skill**：`src/skill/stm32-workflow.ts` 新增「六、外设写了却没生效？先让它自己说（oracle 诊断）」——症状、怎么读 `droppedPeripherals`/`plannedFunctions`/`signalRewrites`/`sharedSignals`/`hints`、三条已知原因的修法，以及「别手改 .ioc / 别把副本覆盖回去 / 别并发跑 CubeMX」的禁令。
+
+### 34.2 工具输出怎么读
+
+- `droppedPeripherals`：我们写了、CubeMX 没认的外设（`before` 的 `Mcu.IPn` 有、`after` 没有）。
+- `plannedFunctions`：`after` 的 `ProjectManager.functionlistsort` 里的 `MX_*` —— 等于**不生成代码就预览会生成哪些初始化函数**，最快的判据。
+- `signalRewrites`：引脚 `.Signal` 被规范化（`TIM2_CH1` → `S_TIM2_CH1_ETR`、`ADC1_IN1` → `ADCx_IN1`），提示规范名写错了。
+- `sharedSignals`：`after` 里的 `SH.<信号>.<n>=<IP 信号>,<IP 模式>`；缺块时它就是标准答案。
+- `removedKeys` / `addedKeys`：被删与被补的键（各截 60 条）。
+- `hints`：按「没有引脚指向 / 引脚没进 `Mcu.PinN` / 缺功能表达」三类给出的具体修法。
+
+### 34.3 代码落点
+
+- `src/engine/ioc-verify.ts`：纯函数 `diffIocForVerify(beforeText, afterText)`（可离线单测）+ `runIocVerify(subprocess, request)`（复用 `generate.ts` 的 `acquireLock`/`cubeMxLaunch` 单飞锁与启动器、`subprocess-runner.runStreaming`）。
+- `src/tools/ioc-verify.ts`：注册 `stm32_ioc_verify`（`projectDir` / `iocPath` / `timeoutMs`，默认 180 s，`isConcurrencySafe: false`）。
+- `src/index.ts`：`registerIocVerify(ctx)`。
+- `test/ioc-verify-units.test.mjs`：6 例（`plannedFunctionOf`、被丢外设 + 信号改写 + SH 块 + 计划函数、缺功能表达提示、引脚未列进 `Mcu.PinN` 提示、完全没有引脚指向的提示、两边相同则零告警），已加入 `test/run-units.mjs`。
+
+### 34.4 验证与边界
+
+- `npm run build` → exit 0；`npm test` → **592 pass / 0 fail（37 套件）**。
+- `runIocVerify` 需要真 CubeMX，单测只覆盖纯函数 `diffIocForVerify`；端到端证据仍是 §32.4 那三次（TIM3+ADC1+USART1、TIM2/PA0、探针工程 38 键）。
+- 工具只回答「CubeMX 认了什么」，**不会替你修**：被丢的键是真被删了，副本覆盖回工程等于删配置。
+
+
 

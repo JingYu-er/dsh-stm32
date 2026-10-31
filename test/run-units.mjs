@@ -32,6 +32,7 @@ const suites = [
   "flash-units.test.mjs",
   "generate-cache-units.test.mjs",
   "ioc-plan-units.test.mjs",
+  "ioc-verify-units.test.mjs",
   "install-units.test.mjs",
   "ioc-units.test.mjs",
   "route-plan-units.test.mjs",

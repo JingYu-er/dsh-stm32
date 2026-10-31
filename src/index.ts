@@ -30,6 +30,7 @@ import { registerGenerate } from "./tools/generate.js";
 import { registerIocApply } from "./tools/ioc-apply.js";
 import { registerIocInspect } from "./tools/ioc-inspect.js";
 import { registerIocPlan } from "./tools/ioc-plan.js";
+import { registerIocVerify } from "./tools/ioc-verify.js";
 import { registerProjectCreate } from "./tools/project-create.js";
 import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
@@ -76,6 +77,7 @@ export function apply(ctx: DshContext): void {
   registerIocInspect(ctx);
   registerIocPlan(ctx);
   registerIocApply(ctx);
+  registerIocVerify(ctx);
   registerBuild(ctx);
   registerFlash(ctx);
   registerDebugRun(ctx);

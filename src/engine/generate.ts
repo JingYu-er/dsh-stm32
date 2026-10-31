@@ -213,7 +213,7 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-function acquireLock(projectDir: string, purpose: string): { release: () => void; note?: string } | { error: string } {
+export function acquireLock(projectDir: string, purpose: string): { release: () => void; note?: string } | { error: string } {
   const dir = join(projectDir, STATE_DIR);
   mkdirSync(dir, { recursive: true });
   const lockPath = join(dir, "lock.json");
@@ -265,7 +265,7 @@ function acquireLock(projectDir: string, purpose: string): { release: () => void
   };
 }
 
-function cubeMxLaunch(cubeMxRoots: string[]): { java: string; jar: string } | null {
+export function cubeMxLaunch(cubeMxRoots: string[]): { java: string; jar: string } | null {
   for (const root of cubeMxRoots) {
     const java = root + "/jre/bin/java.exe";
     const jar = root + "/STM32CubeMX.exe";
