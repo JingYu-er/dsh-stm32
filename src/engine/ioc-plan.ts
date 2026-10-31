@@ -27,6 +27,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
+import { checkIocRules } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
@@ -637,7 +638,8 @@ function validatePeripheralWiring(entries: Map<string, string>, warnings: string
     }
   }
   for (const device of devices) {
-    if (device === "" || device === "NVIC" || device === "RCC" || device === "SYS") continue;
+    // 伪外设：没有自己的引脚（DMA/NVIC/RCC/SYS 以及 Cortex 内核项），不按「必须有引脚」校验。
+    if (device === "" || device === "NVIC" || device === "RCC" || device === "SYS" || device === "DMA") continue;
     const pins = pinsByDevice.get(device) ?? [];
     if (pins.length === 0) {
       warnings.push(device + " 在 Mcu.IPn 里，但没有引脚的 .Signal 指向它 → CubeMX 会忽略这个外设");
@@ -810,6 +812,12 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
 
   // 外设接线自洽性（IPNb 条数、外设有没有引脚指向、多模式引脚缺不缺 .Mode）。
   validatePeripheralWiring(after, warnings);
+
+  // 从 CubeMX 字节码还原出来的离线规则（docs §35）：IPParameters 白名单、DMA 需要 Mcu.IP=DMA、
+  // ADC Rank 一致性、NVIC 值 9 段、F1 的 ADC 时钟上限。
+  const ruleReport = checkIocRules(after);
+  for (const issue of ruleReport.errors) errors.push("[" + issue.rule + "] " + issue.message);
+  for (const issue of ruleReport.warnings) warnings.push("[" + issue.rule + "] " + issue.message);
 
   // 重复键 / 跨行值：CubeMX 只认最后一个键值，而跨行值（Java properties 续行）改第一行会留下续行残骸。
   const planned = compareEntries(before, after);

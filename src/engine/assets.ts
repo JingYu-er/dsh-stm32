@@ -143,7 +143,7 @@ export interface AssetsManifest {
   name: string;
   version: string;
   schema: number;
-  /** profile → glob 列表（core = device/ioc/ld，full = core + chipdb/diagrams）。 */
+  /** profile → glob 列表（core = device/ioc/ld；full = core + startup/headers/diagrams，SVD 也在 full）。 */
   profiles: Record<string, string[]>;
   files: AssetsManifestFile[];
   skipped: string[];

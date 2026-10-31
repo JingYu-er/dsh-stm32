@@ -171,7 +171,7 @@ export function deriveChipPinTable(input: {
     pins: [],
     notes: [
       "引脚表：没有本机 CubeMX db（" + why + "），引脚存在性不校验（isKnownPin 只查引脚名是否合法）；" +
-        "插件不内置引脚表，需要逐脚校验请装 CubeMX 或用 stm32_assets 的 chipdb",
+        "插件不内置引脚表（资源包里也不再有 db 副本），需要逐脚校验就装 CubeMX —— 插件直接读它的 db/mcu",
     ],
   };
 }

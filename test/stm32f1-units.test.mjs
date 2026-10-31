@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveF1Chip, f1GroupsFor } from "../lib/data/stm32f1.js";
-import { DeviceFactError, deviceFactsSource, findChipFact, loadDeviceFacts, requireChipFact } from "../lib/data/device-facts.js";
+import { DeviceFactError, deviceFactsSource, findChipFact, loadDeviceFacts, parseDeviceFacts, requireChipFact } from "../lib/data/device-facts.js";
 
 import { FIXTURE_ASSETS } from "./fixtures.mjs";
 
@@ -239,4 +239,51 @@ test("本机有固件包时：每个解析出的启动文件都真实存在（�
       assert.ok(existsSync(headerPath), "上游没有这个设备头：" + chip.deviceHeader);
     }
   }
+});
+test("chips.json 精简成 9 个字段：启动文件/设备宏/设备头/链接脚本由 namingFrom 现算", () => {
+  // 资源包 v2026.11 起 chips.json 只留 db 与固件包能算出来的字段，
+  // 这四样名字必须现算出来——否则新插件读新资源包会一条芯片都认不出。
+  const slim = JSON.stringify({
+    chips: [
+      {
+        cpn: "STM32F103C8T6",
+        line: "103",
+        group: "xb",
+        packageName: "LQFP48",
+        pinCount: 48,
+        flashBytes: 65536,
+        ramBytes: 20480,
+        deviceId: "STM32F103C8Tx",
+        mcuName: "STM32F103C(8-B)Tx",
+      },
+    ],
+  });
+  const facts = parseDeviceFacts(slim, "slim-chips.json", "2026.11.1-1");
+  assert.equal(facts.ok, true, facts.error);
+  const chip = facts.byCpn.get("STM32F103C8T6");
+  assert.ok(chip);
+  assert.equal(chip.startup, "startup_stm32f103xb.s");
+  assert.equal(chip.deviceDefine, "STM32F103xB");
+  assert.equal(chip.deviceHeader, "stm32f103xb.h");
+  assert.equal(chip.linkerScript, "STM32F103C8Tx_FLASH.ld");
+});
+
+test("chips.json 的 group 不合法时：不编名字，这条记录整条丢掉", () => {
+  const bad = JSON.stringify({
+    chips: [
+      {
+        cpn: "STM32F103C8T6",
+        line: "103",
+        group: "garbage",
+        packageName: "LQFP48",
+        pinCount: 48,
+        flashBytes: 65536,
+        ramBytes: 20480,
+        deviceId: "STM32F103C8Tx",
+        mcuName: "STM32F103C(8-B)Tx",
+      },
+    ],
+  });
+  const facts = parseDeviceFacts(bad, "bad-chips.json", "v");
+  assert.equal(facts.chips.length, 0, "group 认不出时不能给出 startup/设备宏（那会编出一份错名字）");
 });

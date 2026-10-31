@@ -98,18 +98,51 @@ function countOf(value: unknown): number | null {
 }
 
 /**
+ * 只给 line + group 时按上游命名规则补出三样名字（启动文件 / 设备宏 / 设备头）+ 链接脚本名。
+ *
+ * 规则不是猜的：group（x6/xb/xe/xg/xc…）本来就是从固件包
+ *   Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f1<line><group>.s
+ *   Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1<line><group>.h
+ * 的文件名反推出来的，group 合法时名字唯一。
+ *
+ * 资源包 v2026.11.x 起 chips.json 只留 db/mcu 能算出来的 9 个字段
+ * （cpn/line/group/packageName/pinCount/flashBytes/ramBytes/deviceId/mcuName），这三样由这里现补；
+ * 老版本资源包（v2026.10.31-1 及更早）自带显式字段，优先用包里的 —— 新插件读老缓存照样能用。
+ */
+function namingFrom(line: string, group: string, deviceId: string): {
+  readonly startup: string;
+  readonly deviceDefine: string;
+  readonly deviceHeader: string;
+  readonly linkerScript: string;
+} {
+  if (!/^\d{3}$/u.test(line) || !/^x[0-9a-z]{1,2}$/u.test(group)) {
+    return { startup: "", deviceDefine: "", deviceHeader: "", linkerScript: "" };
+  }
+  // line 里已经含 "STM32F1" 的那个 1（"103"），所以前缀只写到 "STM32F" / "startup_stm32f"。
+  return {
+    startup: "startup_stm32f" + line + group + ".s",
+    deviceDefine: "STM32F" + line + "x" + group.slice(1).toUpperCase(),
+    deviceHeader: "stm32f" + line + group + ".h",
+    linkerScript: deviceId === "" ? "" : deviceId + "_FLASH.ld",
+  };
+}
+
+/**
  * 一条 chips.json 记录 → DeviceFactsChip。
- * 关键字段（cpn / line / group / 启动文件 / 设备宏 / 设备头 / Flash / RAM / 引脚数）缺一个就丢掉：
+ * 关键字段（cpn / line / group / Flash / RAM / 引脚数）缺一个就丢掉：
  * 半条事实比没有事实更危险——它会算出错误的链接脚本内存布局。
+ * 启动文件 / 设备宏 / 设备头 缺失时按 line + group 现算（见 namingFrom）。
  */
 function chipFrom(value: unknown): DeviceFactsChip | null {
   if (!isRecord(value)) return null;
   const cpn = textOf(value["cpn"]).toUpperCase();
   const line = textOf(value["line"]);
   const group = textOf(value["group"]).toLowerCase();
-  const startup = textOf(value["startup"]);
-  const deviceDefine = textOf(value["deviceDefine"]);
-  const deviceHeader = textOf(value["deviceHeader"]);
+  const deviceId = textOf(value["deviceId"]);
+  const derived = namingFrom(line, group, deviceId);
+  const startup = textOf(value["startup"]) || derived.startup;
+  const deviceDefine = textOf(value["deviceDefine"]) || derived.deviceDefine;
+  const deviceHeader = textOf(value["deviceHeader"]) || derived.deviceHeader;
   const pinCount = countOf(value["pinCount"]);
   const flashBytes = countOf(value["flashBytes"]);
   const ramBytes = countOf(value["ramBytes"]);
@@ -126,12 +159,12 @@ function chipFrom(value: unknown): DeviceFactsChip | null {
     pinCount,
     flashBytes,
     ramBytes,
-    deviceId: textOf(value["deviceId"]),
+    deviceId,
     mcuName: textOf(value["mcuName"]),
     startup,
     deviceDefine,
     deviceHeader,
-    linkerScript: textOf(value["linkerScript"]),
+    linkerScript: textOf(value["linkerScript"]) || derived.linkerScript,
     ...(breakpoints === null || breakpoints <= 0 ? {} : { breakpoints: Math.trunc(breakpoints) }),
     ...(watchpoints === null || watchpoints <= 0 ? {} : { watchpoints: Math.trunc(watchpoints) }),
   };

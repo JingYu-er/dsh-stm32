@@ -2217,7 +2217,7 @@ Cortex-M3（F1）的硬件断点靠 FPB 的 6 个比较器、观察点靠 DWT �
 ### 29.6 偏差备案
 
 - **B3 真机计时未达成**：探针侧硬件/固件问题（WCH-Link `CMD_INFO failed`），非代码引入；替代证据是假件实测，复测命令写在 §29.2 与 reading-guide 坑 13。
-- **资源包体积口径**：任务书写「core 约 180 KB」，实际量到 core profile 是 30 个文件 / 242903 字节 ≈ **237 KiB**（大头是 `device/f1/chips.json` 36.1 KiB 与 `memory.json` 34.2 KiB；SVD 那 1.75 MB 属于 `full` profile，不在 core 里）。收尾时已把两份 README 的 180 KB 改成「30 个文件约 237 KiB」，与实测一致。
+- **资源包体积口径**：任务书写「core 约 180 KB」，当时量到 core profile 是 30 个文件 / 242903 字节 ≈ **237 KiB**（大头是 `device/f1/chips.json` 36.1 KiB 与 `memory.json` 34.2 KiB）。2026-10-31 用户要求「缓存仓库中重复的删掉」后：`chipdb/`（58 个 XML，与 CubeMX 安装目录的 `db/mcu` 重复）与 `device/f1/memory.json`（每条都是 chips.json 的 flashBytes/ramBytes 派生）删除；chips.json 只留 db 与固件包能算出来的 9 个字段（startup/deviceDefine/deviceHeader/linkerScript 由插件 `namingFrom` 现算）→ core **29 个文件 / 201716 字节 ≈ 197 KiB**（chips.json 30.8 KiB），full 69 个文件（SVD 1.75 MB 仍在 full 里）。两份 README 已同步成这两个数。
 - **engine 模块计数**：reading-guide 的表是「逐条列出来的模块数」（41 → 44），不是目录文件数（42 → 45）——`assets.ts` 从来没单独成行，这次没顺手补（避免把文档任务做成改表任务）。
 
 ### 29.7 真机样本（已取证的四类）
@@ -2628,6 +2628,102 @@ CubeMX 的 `-q` 脚本里可以用 **`config save <路径>`**（日志 `UtilMem:
 - `npm run build` → exit 0；`npm test` → **592 pass / 0 fail（37 套件）**。
 - `runIocVerify` 需要真 CubeMX，单测只覆盖纯函数 `diffIocForVerify`；端到端证据仍是 §32.4 那三次（TIM3+ADC1+USART1、TIM2/PA0、探针工程 38 键）。
 - 工具只回答「CubeMX 认了什么」，**不会替你修**：被丢的键是真被删了，副本覆盖回工程等于删配置。
+
+## 35. 把 CubeMX 读 `.ioc` 的规则“照搬”进插件（反汇编 `com.st.microxplorer.importproject`）（2026-11-01）
+
+### 35.1 逻辑在哪：jar 里，不在文档里
+
+`D:\app\STM32CubeMX\STM32CubeMX.exe` 其实是 **227 MB 的 jar**。用 msys64 的 `unzip` 列表/解包，用 CubeMX 自带的 `jre\bin\javap.exe` 反汇编：
+
+```text
+D:/app/Git/usr/bin/unzip.exe -l "D:/app/STM32CubeMX/STM32CubeMX.exe" | Select-String microxplorer/importproject
+D:/app/Git/usr/bin/unzip.exe -o "D:/app/STM32CubeMX/STM32CubeMX.exe" "com/st/microxplorer/importproject/*.class"
+D:/app/STM32CubeMX/jre/bin/javap.exe -p -c -classpath <解出的目录> com.st.microxplorer.importproject.ImportEngine
+```
+
+关键类（已解出 23 个，放在 `demo/_cubemx_class`）：
+
+| 类 | 作用 |
+| --- | --- |
+| `ImportEngine`（抽象） | 总流程：`tryImport` → 引脚/模式分析 → IP 列表分析 → 参数导入 → 诊断 |
+| `CompleteImport` | `importConfigAnalysis` / `pinoutAnalysis` / `ipListAnalysis` / `importMode` / `importIpConfig` / `makeDiagnostic` |
+| `ImportParameterContext` | 按 IP 名分发：**ADC / DAC / RCC / DMA / NVIC** |
+| `ImportADCParameter` | `addRegularConversionRank(int, String)`、`setParamValueWithId(...)`、`getEnableChannel()` |
+| `ImportDMAParameter` | 读 `Dma.RequestsNb`（默认 `0`）、按 `:` 切子字段、认 `MEMTOMEM`、`equivalentIpNames`、`isLastCharDigit` |
+| `ImportNVICParameter` | 走 `NVICService.loadPriorityGroupConfig(Properties)`、`getVectorsWithoutIp()`，键必须含 `_IRQn` |
+| `ImportRCCParameter` | 参数解析：`integer`、`0x`/`0X` 前缀再 `substring` |
+| `NvicVector` | 每条中断的字段顺序：`Enable`、`preemptionPriority`、`subPriority`、`configurablePriority`、`systemHandler`、`irqHandlerGenerated`、`enableCodeNeeded` … |
+
+### 35.2 已固化成离线规则（`src/engine/ioc-rules.ts`，`stm32_ioc_plan` 每次都会跑）
+
+| 规则 | 判据 | 为什么（证据） |
+| --- | --- | --- |
+| **R1** | 有 `Dma.*` 但 `Mcu.IPn` 里没有 `DMA` → **报错** | 实测：缺这一项时 CubeMX 把整组 `Dma.ADC1.0.*` 丢弃 |
+| **R2** | `Rank-<id>`/`Channel-<id>`/`SamplingTime-<id>` 要同 id；`NbrOfConversion` 与 Rank 组数一致；Rank 值 1..N 连续 | `ImportADCParameter.addRegularConversionRank` 按 rank 序号建通道 |
+| **R3** | `NVIC.<x>_IRQn` 的值必须是冒号分隔 9 段，首段 true/false | `NvicVector` 字段顺序 |
+| **R5** | F1 的 `RCC.ADCPresc` 必须是 `RCC_ADCPCLK2_DIV6`（12 MHz ≤ 14 MHz） | 实测生成代码写成 `RCC_ADCPCLK2_DIV2`（36 MHz） |
+| **R7** | `<IP>.IPParameters` 是白名单：任何 `<IP>.<参数>` 没列进去 → 告警 | 实测 `TIM2.Prescaler/Period` 因未列进白名单被静默丢弃 |
+
+已被 `stm32_ioc_plan` 其它校验覆盖、不重复：`Mcu.IPNb` 与实际条数一致；外设必须有引脚 `.Signal` 指向；普通外设要 `<pin>.Mode`、定时器/ADC 要 `SH.<信号>.<n>=<IP 信号>,<IP 模式>`。
+
+### 35.3 还没照搬、下一步要做的
+
+- `ImportEngine.tryImport` 的**键分发顺序**（先引脚还是先 IP、`SH.*` 何时生效）——把 `-c` 里 `Properties.getProperty` 的调用点按顺序列出来即可。
+- `CompleteImport.pinoutAnalysis` 的**引脚-模式匹配**规则（如何把 `PA8.Signal=GPXTI8` + `SH.GPXTI8.0=GPIO_EXTI8` 合成 EXTI 配置）。
+- `ImportRCCParameter` 到底读哪个键设 ADC 预分频（`RCC.ADCPresc` 在我们这里没生效，怀疑它读派生频率而非预分频名）。
+
+### 35.4 验证
+
+- `npm run build` exit 0；`npm test` → **600 pass / 0 fail（38 套件）**，新增 `test/ioc-rules-units.test.mjs` 8 例（R1/R2/R3/R5/R7 正反例）。
+- 这些规则是**离线**的（毫秒级），与 `stm32_ioc_verify`（25–40 s 跑 CubeMX）互补：先离线挡住“必被丢”的写法，再用 oracle 复核实际理解。
+
+## 36. 通用 .ioc 规则清单（族无关，来自 CubeMX 字节码 + 实测）（2026-11-01）
+
+目标（用户 m01855）：不只为当前程序服务——把 CubeMX 读 `.ioc` 时会用的规则尽量搬全，换族、换外设都能用。下表全部已在 `src/engine/ioc-rules.ts` 实现，`stm32_ioc_plan` 每次自动跑，告警带 `[Rn]` 前缀。
+
+| 规则 | 判据 | 级别 | 来源 |
+| --- | --- | --- | --- |
+| R1 | 有 `Dma.*` 但 `Mcu.IPn` 里没有 `DMA` | 错误 | `ImportParameterContext`（DMA 是伪 IP）+ 实测丢整组 |
+| R2 | ADC 的 `Rank-<id>`/`Channel-<id>`/`SamplingTime-<id>` 要同 id；`NbrOfConversion` 与 Rank 组数一致；Rank 值 1..N 连续；Rank 有 Channel 配对 | 告警 | `ImportADCParameter.addRegularConversionRank(int,String)`、`setParamValueWithId` |
+| R3 | `NVIC.<x>_IRQn` 值必须冒号分隔 9 段且首段 true/false | 告警 | `NvicVector` 字段序 |
+| R4 | `<pin>.<后缀>` 的引脚必须出现在 `Mcu.PinN` 里 | 告警 | `ImportEngine` 只按引脚表建模型 + 实测（只写 `PA5.Signal` 不列进表 → 不应用） |
+| R5 | F1 的 `RCC.ADCPresc` 必须 `RCC_ADCPCLK2_DIV6`（12 MHz ≤ 14 MHz） | 告警 | 实测生成的 `AdcClockSelection` 曾是 `DIV2` |
+| R6 | `SH.<信号>.ConfNb` 必须等于 `SH.<信号>.<n>` 条数；值形如 `<IP 信号>,<IP 模式>`，EXTI 例外 `GPIO_EXTIn` | 告警 | `ImportEngine` 对 `SH.*` 的处理 + 实测 |
+| R7 | `<IP>.IPParameters` 白名单：任何 `<IP>.<参数>` 没列进去 | 告警 | 实测 `TIM2.Prescaler/Period` 被静默丢弃 |
+| R8 | `Mcu.IPNb` / `Mcu.PinsNb` 与实际条数一致 | 告警 | CubeMX 写盘时自己重算；不一致说明文件被手改 |
+| R12 | 引脚只有 `.Mode` 没有 `.Signal`（伪引脚 `VP_*` 除外，`Dma.*.Mode` 这类多段键不算引脚） | 告警 | 实测缺 `.Signal` 时外设不激活 |
+
+### 36.1 族相关的那一点点
+
+规则本身族无关，只有两处需要按族给表：
+
+- **ADC 时钟上限**：F1 = 14 MHz（已实现）；其它族未实测，不给结论，避免编数字。要加就加在 `checkAdcClock` 的表里。
+- **伪外设集合**：`NVIC`、`RCC`、`SYS`、`DMA`、`USB`/`USB_OTG_*`、`CORTEX_M0..M7`、`FREERTOS` —— 它们出现在 `Mcu.IPn` 但没有自己的引脚，不参与「必须有引脚指向」的校验（`PSEUDO_IPS`）。
+
+### 36.2 已提取的词表（`com.st.microxplorer.importproject`，供以后查）
+
+`_IRQn`、`NO_PIN`、`__NULL`、`_Cube`、`_FS`、`_HS`、`_HIGH`、`_VERY_HIGH`、`ADC_CHANNEL_`（以及 `ADC_CHANNEL_TEMPSENSOR/VBAT/VLCD/VREFINT`）、`ADC_SCAN_DIRECTION_FORWARD/BACKWARD`、`DAC_OUT2`、`Dma.RequestsNb`、`Enable_Timer`、`GPIO_Analog`、`GPIO_Speed`、`HDMI_CEC`、`No_Debug`、`USB_Device`、`USB_HOST`；无点的：`ADC`、`DAC`、`RCC`、`DMA`、`NVIC`、`GPIO`、`TIM`、`SYS`、`master`、`Rank`、`Channel`、`NbrOfConversion`、`NbrOfConversionFlag`、`ScanConvMode`、`ClockSpeed`、`MEMTOMEM`、`Import Mode OK`、`Import Mode Error`、`try to import 2 different configuration in the same IP`。
+
+命令（换机器/换 CubeMX 版本时重跑）：
+
+```text
+D:/app/Git/usr/bin/unzip.exe -l "D:/app/STM32CubeMX/STM32CubeMX.exe" | Select-String microxplorer/importproject
+D:/app/Git/usr/bin/unzip.exe -o "D:/app/STM32CubeMX/STM32CubeMX.exe" "com/st/microxplorer/importproject/*.class" "com/st/microxplorer/mcu/NvicVector*.class"
+D:/app/STM32CubeMX/jre/bin/javap.exe -p -c -classpath <解出目录> com.st.microxplorer.importproject.ImportEngine
+```
+
+### 36.3 还没搬的三处（按价值排序）
+
+1. `ImportEngine.tryImport` 的**键分发顺序**（先引脚还是先 IP、`SH.*` 何时生效）——决定我们写文件的顺序是否会踩坑。
+2. `CompleteImport.pinoutAnalysis` 的**引脚-模式合成**（`PA8.Signal=GPXTI8` + `SH.GPXTI8.0=GPIO_EXTI8` → EXTI 配置）。
+3. `ImportRCCParameter` 里设 ADC 预分频的真实键名（我们现在靠 `RCC.IPParameters` 白名单 + `RCC.ADCPresc` 已能生效，但要确认没有更稳的写法）。
+
+### 36.4 验证
+
+- `npm run build` exit 0；`npm test` → **606 pass / 0 fail（38 套件）**，`ioc-rules-units` 14 例（R1/R2/R3/R4/R5/R6/R8/R12 正反例）。
+- 对真实工程 `demo/_rich_hal/richhal.ioc` 跑一遍：**0 error / 0 warning**（修掉 `RCC.IPParameters` 缺 `ADCPresc` 之后）。
+
+
 
 
 

@@ -403,7 +403,7 @@ GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的�
 | --- | --- | --- |
 | 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 99 个文件 / 525.7 KB，解包 1538.3 KB；其中 `templates/**` 38.5 KB |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
-| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（chips.json / memory.json / .ioc 模板 / .ld / SVD，core 30 个文件约 237 KiB、full 128 个文件——SVD 在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（`device/f1/chips.json` 9 个字段 + .ioc 模板 + .ld + SVD，core 29 个文件约 197 KiB、full 69 个文件——SVD / startup / headers 都在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
 
 护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` ≤ 60 KB、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。

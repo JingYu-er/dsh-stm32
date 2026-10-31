@@ -41,7 +41,7 @@ export const ASSETS_TOOL = "stm32_assets";
  * "没有资源包也能建工程"——内置表已经删了，装不上就真的没有芯片事实。
  */
 const NO_BUILTIN_FALLBACK =
-  "插件不再内置芯片表：设备事实（chips.json / memory.json / svd）只从资源包缓存读，" +
+  "插件不再内置芯片表：设备事实（chips.json / svd）只从资源包缓存读，" +
   "第一次用必须联网装一次（action=refresh）。现在没装成，建工程 / 体检 / 寄存器版模板都会明说" +
   "「先跑 stm32_assets refresh，或检查网络」，不会退回内置表（已经删了）。";
 
@@ -182,7 +182,7 @@ export function registerAssets(ctx: DshContext, options: AssetsToolOptions = {})
   ctx.tools.register({
     name: ASSETS_TOOL,
     description:
-      "按需下载资源包 dsh-stm32-assets（device 事实层 device/f1/chips.json·memory.json·svd/<line>.json、ioc 模板、链接脚本；profile=full 另含 chipdb/diagrams）到本地 ~/.dsh-stm32/assets/<version>/（DSH_STM32_ASSETS 可覆盖），逐文件按 manifest 的 sha256 校验，装好之后离线复用。action=list 看本地版本/文件/占用；refresh 拉 manifest 并按 profile 安装（默认 core，源顺序 GitHub → jsDelivr → GitCode 自动回退，报告里写明实际走的源）；verify 逐个 sha256 复核；prune 只留当前与上一版。下载失败不抛错：ok=false + 人话原因，并告诉你先跑 refresh 或检查网络——插件不再内置芯片表，设备事实（含建工程要的型号/启动文件/容量）只从这份缓存读，第一次用要联网装一次。",
+      "按需下载资源包 dsh-stm32-assets（device 事实层 device/f1/chips.json·svd/<line>.json、ioc 模板、链接脚本；profile=full 另含 SVD 之外的 startup/headers 与 diagrams）到本地 ~/.dsh-stm32/assets/<version>/（DSH_STM32_ASSETS 可覆盖），逐文件按 manifest 的 sha256 校验，装好之后离线复用。action=list 看本地版本/文件/占用；refresh 拉 manifest 并按 profile 安装（默认 core，源顺序 GitHub → jsDelivr → GitCode 自动回退，报告里写明实际走的源）；verify 逐个 sha256 复核；prune 只留当前与上一版。下载失败不抛错：ok=false + 人话原因，并告诉你先跑 refresh 或检查网络——插件不再内置芯片表，设备事实（含建工程要的型号/启动文件/容量）只从这份缓存读，第一次用要联网装一次。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -195,7 +195,7 @@ export function registerAssets(ctx: DshContext, options: AssetsToolOptions = {})
         profile: {
           type: "string",
           enum: ["core", "full"],
-          description: "core（默认：device/ + ioc/ + ld/，建工程够用）/ full（再加 chipdb/ + diagrams/）。",
+          description: "core（默认：device/ + ioc/ + ld/，建工程够用）/ full（再加 startup/ + headers/ + svd/ + diagrams/）。",
         },
         source: {
           type: "string",
