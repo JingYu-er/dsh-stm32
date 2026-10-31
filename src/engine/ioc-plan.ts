@@ -29,6 +29,9 @@ import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
 import { checkIocRules } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
+import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
+import type { CubemxMcuFacts } from "./cubemx-db.js";
+import { resolveSearchConfig } from "../data/search-roots.js";
 import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
 import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
@@ -511,10 +514,70 @@ function enableSharedSignal(
  * - 多模式外设的引脚必须带 .Mode，缺了 CubeMX 静默丢弃整个外设；
  * - Mcu.IPNb 必须与 Mcu.IPn 条数一致，所以这里统一重算，不再"追加了事"。
  */
+/**
+ * R16：逻辑引脚名 → 要写进 .ioc 的引脚名。
+ *
+ * 首选本机 CubeMX 的 db/mcu/<Mcu.Name>.xml：同一根脚在 db 里常常带后缀（PA0 是 PA0-WKUP、
+ * PC13 是 PC13-TAMPER-RTC、PC14/PC15 是 PC14-OSC32_IN/PC15-OSC32_OUT、PD0/PD1 是 PD0-OSC_IN/PD1-OSC_OUT），
+ * 名字写错 CubeMX 认不到这根脚，整段外设配置会被静默丢弃。
+ *
+ * db 不可用时（没装 CubeMX / db 里没有这颗 / 该版本里没这根脚）才退回 ioc-presets 的 PIN_DB_ALIASES：
+ * 那张表只收 F1 的 6 根脚，CubeMX 换版本就可能漂，所以只是离线兜底，且会在 warnings 里说清楚。
+ */
+export interface PinNameResolver {
+  /** 逻辑名（PA0）→ 写进 .ioc 的名字（PA0-WKUP）。 */
+  resolve(logical: string): string;
+  /** 这次用的哪个来源（进 notes）。 */
+  describe(): string;
+  /** 用了内置别名表时的提醒（db 可用时为空串）。 */
+  warning(): string;
+}
+
+export function createPinNameResolver(options: {
+  /** .ioc 里的 Mcu.Name，例如 STM32F103C(8-B)Tx。 */
+  mcuName: string;
+  /** Mcu.Family（只用于兜底别名表）。 */
+  family: string;
+  cubeMxRoots?: readonly string[];
+  env?: Record<string, string | undefined>;
+}): PinNameResolver {
+  const roots =
+    options.cubeMxRoots !== undefined
+      ? [...options.cubeMxRoots]
+      : resolveSearchConfig(options.env ?? process.env, {}).cubeMxRoots;
+  const mcuName = options.mcuName.trim();
+  let facts: CubemxMcuFacts | null = null;
+  let dbVersion = "";
+  if (mcuName !== "") {
+    const db = locateCubemxDb(roots);
+    if (db !== null) {
+      facts = readMcuFacts(db, mcuName);
+      if (facts !== null) dbVersion = db.version;
+    }
+  }
+  const hit = facts;
+  if (hit !== null) {
+    return {
+      resolve: (logical) => resolveDbPinName(hit, logical) ?? logical,
+      describe: () => "引脚名按本机 CubeMX db 解析（" + hit.name + "，" + dbVersion + "）",
+      warning: () => "",
+    };
+  }
+  return {
+    resolve: (logical) => pinDbName(options.family, logical),
+    describe: () =>
+      "引脚名按内置别名表解析（本机没有可用的 CubeMX db：Mcu.Name=" + (mcuName === "" ? "（空）" : mcuName) + "）",
+    warning: () =>
+      "没找到 CubeMX 的 db/mcu/" + (mcuName === "" ? "<Mcu.Name>" : mcuName) + ".xml（找过 " +
+      (roots.length === 0 ? "（无候选目录）" : roots.join("、")) +
+      "），引脚名退回内置别名表：只覆盖 F1 的 6 根带后缀的脚，db 里换过名的话会写错脚",
+  };
+}
+
 function enablePeripheral(
   table: PinTable,
   request: PeripheralEnableRequest,
-  family: string,
+  pinNames: PinNameResolver,
   notes: string[],
 ): void {
   const preset = findPeripheralPreset(request.name);
@@ -552,7 +615,7 @@ function enablePeripheral(
       table.errors.push("引脚名 " + logical + " 不是合法的 STM32 GPIO 引脚（形如 PA0..PG15）");
       continue;
     }
-    const dbName = pinDbName(family, logical);
+    const dbName = pinNames.resolve(logical);
     const existingSignal = (table.entries.get(dbName + ".Signal") ?? "").trim();
     if (table.order.includes(dbName) && existingSignal !== "" && existingSignal !== role.signal) {
       table.errors.push(
@@ -760,7 +823,13 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (family === "" && (request.peripherals ?? []).length > 0) {
     warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
   }
-  for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, family, notes);
+  const pinNames = createPinNameResolver({ mcuName: (after.get("Mcu.Name") ?? "").trim(), family });
+  if ((request.peripherals ?? []).length > 0) {
+    notes.push(pinNames.describe());
+    const pinWarning = pinNames.warning();
+    if (pinWarning !== "") warnings.push(pinWarning);
+  }
+  for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, pinNames, notes);
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，
   // 不带 .Signal）。按 .Signal 过滤会把它从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*

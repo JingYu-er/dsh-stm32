@@ -157,6 +157,11 @@ export function resolveDbPinName(facts: CubemxMcuFacts, logical: string): string
   return null;
 }
 
+/** 反查：db 引脚名 → 逻辑名（PA0-WKUP → PA0、PC13-TAMPER-RTC → PC13）。 */
+export function logicalPinName(dbName: string): string {
+  return dbName.split("-")[0] ?? dbName;
+}
+
 /** 该芯片是否有这个 IP 实例（TIM3、ADC1…）。 */
 export function hasIpInstance(facts: CubemxMcuFacts, instanceName: string): boolean {
   return facts.ips.has(instanceName.trim().toUpperCase());

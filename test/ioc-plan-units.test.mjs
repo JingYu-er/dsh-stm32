@@ -14,6 +14,34 @@ process.env.DSH_STM32_ASSETS = FIXTURE_ASSETS;
 const DEMO_IOC = join(FIXTURE_PROJECT, "demo.ioc");
 const TMP = e2eWorkDir("ioc-test");
 
+function writeFakeCubeMxDb(root, mcuName, pins) {
+  mkdirSync(join(root, "db", "mcu"), { recursive: true });
+  const packageXml = '<PackDescription Release="DB.6.0.150"/>' + "\n";
+  writeFileSync(join(root, "db", "package.xml"), packageXml, "utf8");
+  const body = pins
+    .map((pin, index) =>
+      '  <Pin Name="' + pin + '" Position="' + String(index + 1) + '" Type="I/O">' +
+        '\n    <Signal Name="GPIO"/>\n  </Pin>',
+    )
+    .join("\n");
+  const mcuXml = '<Mcu Family="STM32F1" Package="LQFP48" RefName="' + mcuName + '">' + "\n" + body + "\n</Mcu>\n";
+  writeFileSync(join(root, "db", "mcu", mcuName + ".xml"), mcuXml, "utf8");
+}
+/** 临时切环境变量跑 fn，跑完还原（这些开关是全局的，不能漏）。 */
+function withEnv(pairs, fn) {
+  const saved = {};
+  for (const [key, value] of Object.entries(pairs)) {
+    saved[key] = process.env[key];
+    if (value === null) delete process.env[key]; else process.env[key] = value;
+  }
+  try { return fn(); }
+  finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+}
+
 const cases = [];
 function test(name, fn) {
   cases.push({ name, fn });
@@ -488,6 +516,38 @@ test("续行：要改的键值跨多行时拒绝，并说明会留下续行残�
   const report = planIocChanges({ projectDir, entries: [{ key: "ProjectManager.functionlistsort", value: "x" }] });
   assert.equal(report.ok, false);
   assert.match(report.errors.join(" "), /跨了多行/u);
+});
+
+test("引脚名查询化：有 CubeMX db 时按 db 解析（db 里带后缀的脚不再靠内置别名表）", () => {
+  const { projectDir } = freshProject();
+  const dbRoot = join(TMP, "fake-cubemx");
+  // db 里 PA2 故意叫 PA2-ALT：内置别名表里没有这条，只有真读 db 才会写对。
+  writeFakeCubeMxDb(dbRoot, "STM32F103C(8-B)Tx", ["PA2-ALT", "PA3"]);
+  const report = withEnv(
+    { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir, peripherals: [{ name: "USART2" }] }),
+  );
+  assert.equal(report.ok, true, report.message);
+  assert.equal(report.changes.find((change) => change.key === "PA2-ALT.Signal")?.after, "USART2_TX");
+  assert.equal(report.changes.some((change) => change.key === "PA2.Signal"), false, "不该再写逻辑名 PA2");
+  assert.match(report.notes.join(" "), /按本机 CubeMX db 解析/u);
+});
+
+test("引脚名查询化：没有 CubeMX db 时退回内置别名表，并在 warnings 里说清楚", () => {
+  const { projectDir } = freshProject();
+  const emptyRoot = join(TMP, "no-cubemx");
+  mkdirSync(emptyRoot, { recursive: true });
+  const report = withEnv(
+    { STM32_CUBEMX_ROOT: emptyRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir, peripherals: [{ name: "TIM2" }] }),
+  );
+  assert.equal(report.ok, true, report.message);
+  // TIM2 CH1 走共享信号（S_TIM2_CH1_ETR），关键是引脚名仍要是 db 名 PA0-WKUP。
+  assert.match(String(report.changes.find((change) => change.key === "PA0-WKUP.Signal")?.after), /TIM2_CH1/u);
+  assert.match(report.notes.join(" "), /内置别名表/u);
+  const warning = report.warnings.find((item) => /内置别名表/u.test(item));
+  assert.ok(warning, "缺 db 必须在 warnings 里说明只覆盖 6 根脚");
+  assert.match(warning, /6 根/u);
 });
 
 let failed = 0;

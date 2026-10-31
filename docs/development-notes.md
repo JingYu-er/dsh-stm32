@@ -2727,3 +2727,26 @@ D:/app/STM32CubeMX/jre/bin/javap.exe -p -c -classpath <解出目录> com.st.micr
 
 
 
+### 36.5 R16：引脚名不再靠内置别名表（2026-11-01）
+
+CubeMX 的 db 里同一根脚常带后缀（F103C8 的 `PA0` 是 `PA0-WKUP`、`PC13` 是 `PC13-TAMPER-RTC`、
+`PC14/PC15` 是 `PC14-OSC32_IN/PC15-OSC32_OUT`、`PD0/PD1` 是 `PD0-OSC_IN/PD1-OSC_OUT`）。
+名字写错 CubeMX 认不到这根脚，整段外设配置会被静默丢弃，所以 `stm32_ioc_plan` 写 `<pin>.Signal` 前必须拿到 db 名。
+
+现在走两条路（`src/engine/ioc-plan.ts` 的 `createPinNameResolver`）：
+
+| 条件 | 引脚名来源 | 报告里怎么体现 |
+| --- | --- | --- |
+| 本机有 CubeMX 且 `db/mcu/<Mcu.Name>.xml` 存在 | `readMcuFacts` + `resolveDbPinName`（精确 → 去 `-XXX` 后缀） | notes 写「引脚名按本机 CubeMX db 解析（<Mcu.Name>，<DB 版本>）」 |
+| 没装 CubeMX / db 里没有这颗 | `ioc-presets.ts` 的 `PIN_DB_ALIASES`（离线兜底，只覆盖 F1 6 根脚） | warnings 明确说「只覆盖 F1 的 6 根带后缀的脚，db 里换过名的话会写错脚」 |
+
+搜索范围来自 `resolveSearchConfig(process.env, {})`：`STM32_CUBEMX_ROOT` 指目录、`STM32_NO_DISCOVER=1` 关自动发现、
+`DSH_STM32_NO_CONFIG=1` 不读本机配置（单测就是这么把 db 钉死的）。
+
+**顺带纠正一个数错**：`STM32F103C(8-B)Tx.xml` 里有 **48 个 `<Pin>` 标签，但只有 44 个不同名字**——
+`VSS`/`VDD` 各出现 3 次（电源脚在 db 里按球位重复），`parseMcuXml` 早就全部解析到了。
+所以「引脚解析 44→48」不是缺陷；测试里钉了一条：解析结果必须覆盖所有不同的 `<Pin Name>`。
+
+验证：`cubemx-db-units` 6 例、`ioc-plan-units` 34 例（新增 4 例：db 优先、别名表兜底 + 告警、
+`logicalPinName` 反查、<Pin> 标签重复只算一根）。
+

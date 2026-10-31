@@ -1,7 +1,7 @@
 // CubeMX db 查询层单测：node test/cubemx-db-units.test.mjs
 import assert from "node:assert/strict";
 
-import { hasIpInstance, ipModesPath, locateCubemxDb, parseMcuXml, readIpModeNames, readMcuFacts, resolveDbPinName } from "../lib/engine/cubemx-db.js";
+import { hasIpInstance, ipModesPath, locateCubemxDb, logicalPinName, parseMcuXml, readIpModeNames, readMcuFacts, resolveDbPinName } from "../lib/engine/cubemx-db.js";
 
 const cases = [];
 function test(name, fn) { cases.push({ name, fn }); }
@@ -61,6 +61,32 @@ test("真实 db：定位、读芯片事实、读 IP 模式名（本机没装 Cub
   assert.equal(modes.includes("Encoder_Interface"), true);
   assert.equal(ipModesPath(db, facts, "TIM3") === null, false);
   console.log("  db=" + db.version + " pins=" + facts.pins.size + " ips=" + facts.ips.size + " TIM3modes=" + modes.length);
+});
+
+test("logicalPinName：db 名去掉 -XXX 后缀（反查用）", () => {
+  assert.equal(logicalPinName("PA0-WKUP"), "PA0");
+  assert.equal(logicalPinName("PC13-TAMPER-RTC"), "PC13");
+  assert.equal(logicalPinName("PA8"), "PA8");
+});
+
+test("所有不同的 <Pin Name> 都会被解析（同一个名字出现多次只算一根）", () => {
+  // 真实 db 里 LQFP48 的 MCU XML 有 48 个 <Pin> 标签，但只有 44 个不同名字：
+  // VSS / VDD 各出现 3 次。所以「44 个引脚」是对的，别拿标签数当引脚数。
+  const text = [
+    "<Mcu Family=\"STM32F1\" Package=\"LQFP48\" RefName=\"STM32F103C(8-B)Tx\">",
+    "  <Pin Name=\"VDD\" Position=\"1\" Type=\"Power\"/>",
+    "  <Pin Name=\"VSS\" Position=\"2\" Type=\"Power\"/>",
+    "  <Pin Name=\"VSS\" Position=\"3\" Type=\"Power\"/>",
+    "  <Pin Name=\"VDD\" Position=\"4\" Type=\"Power\"/>",
+    "  <Pin Name=\"PA0-WKUP\" Position=\"5\" Type=\"I/O\">",
+    "    <Signal Name=\"GPIO\" IOModes=\"Input,Output\"/>",
+    "  </Pin>",
+    "  <Pin Name=\"PA1\" Position=\"6\" Type=\"I/O\"><Signal Name=\"GPIO\"/></Pin>",
+    "</Mcu>",
+  ].join("\n");
+  const facts = parseMcuXml(text);
+  assert.equal(facts.pins.size, 4, "VDD/VSS 各两份标签只应算两根");
+  for (const name of ["VDD", "VSS", "PA0-WKUP", "PA1"]) assert.equal(facts.pins.has(name), true, name + " 应该被解析出来");
 });
 
 let failed = 0;

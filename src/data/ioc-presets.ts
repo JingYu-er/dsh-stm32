@@ -53,10 +53,13 @@ export interface PeripheralPreset {
 }
 
 /**
- * 族相关的引脚别名：CubeMX 的 db 引脚名与逻辑名不一致的那些。
- * db 名在 `db/mcu/<Mcu.Name>.xml` 的 `<Pin Name="…">` 里，例如 F103C8 的 PA0 叫
- * `PA0-WKUP`、PC13 叫 `PC13-TAMPER-RTC`。写 .ioc 时必须用 db 名，
- * 否则 CubeMX 找不到这根脚，整段配置被静默丢弃。
+ * 族相关的引脚别名：**离线兜底表**，只在读不到 CubeMX db 时用。
+ *
+ * 正常路径是 src/engine/ioc-plan.ts 的 createPinNameResolver：它按 .ioc 里的 Mcu.Name 去本机
+ * CubeMX 的 `db/mcu/<Mcu.Name>.xml` 查真实引脚名（R16），db 里叫什么就写什么。
+ * 这张表只收 F1 的 6 根带后缀的脚（PA0→PA0-WKUP、PC13→PC13-TAMPER-RTC、PC14/PC15、PD0/PD1），
+ * 没装 CubeMX 或 db 里没有这颗时才会用到；CubeMX 换版本后 db 名可能变，那时这里就会写错脚，
+ * 所以缺 db 时 ioc-plan 会在 warnings 里明确提醒。
  */
 export const PIN_DB_ALIASES: Record<string, Record<string, string>> = {
   STM32F1: {
