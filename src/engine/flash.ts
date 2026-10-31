@@ -358,7 +358,13 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   const probeError: ProbeError | null = ok
     ? null
     : classifyProbeFailure({
-      lines: [...errors, ...verdict.noise],
+      // 分类要看**完整日志**，不能只看解析出的 Error 行：target 不匹配这类故障，
+      // openocd 只打一行 `Warn : Cannot identify target as a STM32 family.`（2026-10-31 实测，
+      // 只看 errors 时就落到 unknown）。errors 里还有我们自己合成的行（spawn 失败/超时），排在后面。
+      lines: [
+        ...log.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line !== ""),
+        ...errors,
+      ],
       exitCode: outcome.exitCode,
       stage: "flash",
       timedOut: outcome.timedOut,

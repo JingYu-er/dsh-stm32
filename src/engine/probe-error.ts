@@ -161,7 +161,9 @@ const MATCHERS: readonly Matcher[] = [
   {
     kind: "target-mismatch",
     cause: "连上的芯片 ID 与 target 配置（stm32f1x）不一致",
-    re: /device id|cannot identify|unexpected idcode/u,
+    // 不要用 `device id` 这种宽词：openocd 正常烧录时也会打 `Info : device id = 0x20036410`，
+    // 一命中就会把成功路径误判成型号不符。只认真正的失败措辞（2026-10-31 实测）。
+    re: /cannot identify target|unexpected idcode|unknown device|doesn't match the target/u,
   },
 ];
 

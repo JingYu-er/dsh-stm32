@@ -82,6 +82,30 @@ test("kind=target-mismatch：device id 对不上", () => {
   assert.equal(kindOf(["Error: cannot identify target"]), "target-mismatch");
 });
 
+test("kind=target-mismatch：真机样本只有一行 Warn（2026-10-31，F4 target 连 F1 芯片）", () => {
+  const error = classifyProbeFailure({
+    lines: [
+      "Info : device id = 0x20036410",
+      "Warn : Cannot identify target as a STM32 family.",
+      "Error: Failed to write memory at 0x40023808",
+    ],
+    exitCode: 1,
+    stage: "flash",
+  });
+  assert.equal(error.kind, "target-mismatch");
+  assert.deepEqual(error.evidence, ["Warn : Cannot identify target as a STM32 family."]);
+  assert.equal(error.retryable, false);
+});
+
+test("正常烧录里的 Info : device id 不能被当成 target-mismatch", () => {
+  const error = classifyProbeFailure({
+    lines: ["Info : device id = 0x20036410", "** Programming Finished **"],
+    exitCode: 1,
+    stage: "flash",
+  });
+  assert.notEqual(error.kind, "target-mismatch");
+});
+
 test("kind=timeout：调用方判定的超时（日志里没有别的特征）", () => {
   const error = classifyProbeFailure({ lines: ["Info : Started by GNU MCU Eclipse"], stage: "flash", timedOut: true });
   assert.equal(error.kind, "timeout");
