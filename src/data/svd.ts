@@ -76,6 +76,12 @@ export interface SvdFlatRegister {
   readonly register: SvdRegister;
 }
 
+/** SVD 里的一个中断（name + value）。 */
+export interface SvdInterrupt {
+  readonly name: string;
+  readonly value: number;
+}
+
 /** 一份读进来的 SVD。ok 恒为真（失败走 SvdFailure），所以没有 ok 字段。 */
 export interface SvdDevice {
   /** 三位 line，例如 "103"。 */
@@ -97,6 +103,10 @@ export interface SvdDevice {
   readonly byName: ReadonlyMap<string, SvdPeripheral>;
   /** 外设名清单（报错文案用）。 */
   readonly peripheralNames: readonly string[];
+  /** SVD 里的中断表（R20 用）；资源包没带 interrupts 字段时是空数组。 */
+  readonly interrupts: readonly SvdInterrupt[];
+  /** 中断名集合（NVIC 名校验用）。 */
+  readonly interruptNames: ReadonlySet<string>;
   /** 所有寄存器按绝对地址升序摊平（同一个地址可能有多条别名寄存器）。 */
   readonly flat: readonly SvdFlatRegister[];
   /** 绝对地址 → 第一个命中的寄存器。 */
@@ -474,6 +484,19 @@ export function parseSvd(text: string, filePath = "", version = "", expectedLine
     return "";
   })();
 
+  // 中断表：资源包新版才带（2026-11-01 起）。老包没有这个字段 → 空表，R20 自动跳过。
+  const interrupts: SvdInterrupt[] = [];
+  const rawInterrupts = parsed["interrupts"];
+  if (Array.isArray(rawInterrupts)) {
+    for (const raw of rawInterrupts) {
+      if (!isRecord(raw)) continue;
+      const name = textOf(raw["name"]);
+      const value = parseSvdNumber(raw["value"]);
+      if (name === "" || value === null) continue;
+      interrupts.push({ name, value });
+    }
+  }
+
   return {
     device: {
       line,
@@ -487,6 +510,8 @@ export function parseSvd(text: string, filePath = "", version = "", expectedLine
       peripherals,
       byName,
       peripheralNames: peripherals.map((peripheral) => peripheral.name),
+      interrupts,
+      interruptNames: new Set(interrupts.map((item) => item.name)),
       flat,
       byAddress,
     },

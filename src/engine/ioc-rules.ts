@@ -27,6 +27,8 @@ export interface IocRuleIssue {
 export interface IocRuleContext {
   db?: CubemxDb | null;
   facts?: CubemxMcuFacts | null;
+  /** SVD 里的中断名集合（R20 用）；没有资源包/老包时不给，R20 自动跳过。 */
+  interrupts?: ReadonlySet<string> | null;
 }
 
 export interface IocRuleReport {
@@ -447,6 +449,20 @@ function checkClockCeiling(entries: Map<string, string>, facts: CubemxMcuFacts, 
   });
 }
 
+export function checkNvicNames(entries: Map<string, string>, interrupts: ReadonlySet<string>, report: IocRuleReport): void {
+  for (const key of entries.keys()) {
+    const match = /^NVIC[.](.+_IRQn)$/u.exec(key);
+    if (match === null) continue;
+    const full = match[1] as string;
+    const name = full.replace(/_IRQn$/u, "");
+    if (interrupts.has(name)) continue;
+    report.warnings.push({
+      rule: "R20",
+      message: "NVIC." + full + " 的中断名 " + name + " 不在 SVD 的中断表里：CubeMX 会忽略这条，生成代码里不会有对应的 NVIC 使能",
+    });
+  }
+}
+
 /** 对外入口：跑一遍全部离线规则。 */
 export function checkIocRules(entries: Map<string, string>, context: IocRuleContext = {}): IocRuleReport {
   const report: IocRuleReport = { errors: [], warnings: [] };
@@ -468,6 +484,10 @@ export function checkIocRules(entries: Map<string, string>, context: IocRuleCont
     checkPinModes(entries, facts, context.db ?? null, report);
     checkPinConflicts(entries, facts, report);
     checkClockCeiling(entries, facts, report);
+  }
+  const interrupts = context.interrupts ?? null;
+  if (interrupts !== null) {
+    checkNvicNames(entries, interrupts, report);
   }
   return report;
 }

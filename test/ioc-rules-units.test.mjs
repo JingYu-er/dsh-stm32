@@ -315,6 +315,19 @@ test("R18：没有 SYSCLKFreq_VALUE 或缺 db 时不判", () => {
   assert.equal(checkIocRules(entries([["Mcu.Family", "STM32F1"]]), { facts: dbFacts }).errors.some((i) => i.rule === "R18"), false);
   assert.equal(checkIocRules(entries([["RCC.SYSCLKFreq_VALUE", "96000000"]])).errors.some((i) => i.rule === "R18"), false);
 });
+
+test("R20：NVIC 的中断名必须在 SVD 中断表里；没给中断表就不判", () => {
+  const interrupts = new Set(["TIM2", "TIM3", "USART1"]);
+  const bad = checkIocRules(entries([["NVIC.TIM9_IRQn", "true:0:0:false:false:true:false:false:false"]]), { interrupts });
+  const r20 = bad.warnings.filter((item) => item.rule === "R20");
+  assert.equal(r20.length, 1);
+  assert.match(r20[0].message, /TIM9/u);
+  const good = checkIocRules(entries([["NVIC.TIM2_IRQn", "true:0:0:false:false:true:false:false:false"]]), { interrupts });
+  assert.equal(good.warnings.some((item) => item.rule === "R20"), false);
+  const noSvd = checkIocRules(entries([["NVIC.TIM9_IRQn", "true:0:0:false:false:true:false:false:false"]]));
+  assert.equal(noSvd.warnings.some((item) => item.rule === "R20"), false);
+});
+
 let failed = 0;
 for (const item of cases) {
   try { item.fn(); console.log("ok   " + item.name); }

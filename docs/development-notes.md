@@ -3532,6 +3532,21 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 
 **注意**：单路 ADC 还是老预设（`ADC1`），多路用新写法——`findPeripheralPreset` 只命中第一个，别造同名第二条。
 
+## 54. P4'-上半：SVD 中断表 + R20（2026-11-01）
+
+发现：本项目的「SVD」不是 ARM 的 `.svd` XML，而是资源包里我们自己的 JSON（`parseSvd()` 读 JSON）。原来只有外设/寄存器/位域——没有中断表，R20 无从下手。
+
+**插件侧（本次）**
+
+- `src/data/svd.ts`：新增 `export interface SvdInterrupt { name; value }`；`SvdDevice` 加 `interrupts` 与 `interruptNames`；
+  `parseSvd()` 在构造 `device` 前解析 `parsed["interrupts"]`（非数组/条目不合法就跳过，老资源包没有这个字段→空表）。
+- `src/engine/ioc-rules.ts`：`IocRuleContext` 加 `interrupts?: ReadonlySet<string>`；新增 `checkNvicNames()`（R20，告警）：
+  `NVIC.<NAME>_IRQn` 的 NAME 不在中断表里就提示「CubeMX 会忽略这条，生成代码里不会有对应 NVIC 使能」。没有中断表时整条跳过。
+- 测试：`ioc-rules-units` +1（坏名字报 R20、好名字不报、没给中断表不判）；全量 **673 pass / 0 fail**。
+
+**还没做**：① `ioc-plan.ts` 把 SVD 中断名传进 `checkIocRules`（要先把 `Mcu.CPN` 的 STM32F103C8T6 换成 SVD 的 line "103"）；
+② 资源包 `dsh-stm32-assets` 的生成器要写 `interrupts` 字段；③ C6（`entries` 写的标量键自动补进 `<IP>.IPParameters`）。
+
 ## 53. P3'-C3：DMA 预设 `DMA:ADC1`（2026-11-01）
 
 `Dma.*` 的键名是 `Dma.<外设>.<n>.<字段>`，跟预设的 `<ip>.<参数>` 规则对不上，所以给预设加了 `rawEntries`：
