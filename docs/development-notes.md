@@ -3400,6 +3400,38 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 
 **教训**：① 规则吃 db 之前先想清楚「哪些是 CubeMX 自己的写法」——`.ioc` 的 Signal 是**渲染后的名字**，不是 db 里的原名；
 ② 每条 db 规则都要有「db 不在就不判」的开关，否则 CI/无 CubeMX 的机器会集体误报。
+
+## 48. P2'：主频上限按 db 判（R18）+ 报告带 db 指纹（2026-11-01）
+
+### 48.1 R18
+
+`RCC.SYSCLKFreq_VALUE`（.ioc 里就是 Hz 数值，`src/engine/ioc.ts:203` 也是这么读的）不得超过 db 的
+`<Frequency>`：C8T6 = 72 MHz。恰好等于上限合法（这就是正常配置）。
+
+- 上限**只认 db**，不写死 72：换到 F4/F0 时同一个规则照样成立；
+- 没有 db、或 .ioc 里没有 `RCC.SYSCLKFreq_VALUE`（手工精简过的文件）时不判；
+- APB1 的 36 MHz 与 ADC 的 14 MHz 属于「派生上限」：ADC 由 R5 管，APB1 暂不在这里判
+  （族间上限不同，写死会误报，等有 db 里的总线信息再说）。
+
+实机（真 db）：把 `RCC.SYSCLKFreq_VALUE` 改成 `96000000` → `stm32_ioc_plan` 直接失败：
+`[R18] RCC.SYSCLKFreq_VALUE=96000000 Hz 超过 db（STM32F103C(8-B)Tx）的上限 72 MHz = 72000000 Hz`。
+
+### 48.2 db 指纹
+
+`IocPlanReport` 与 `stm32_ioc_plan` 的输出新增两个字段：
+
+- `dbVersion`：例如 `DB.6.0.150`；没找到 db 时是空串；
+- `dbRoot`：例如 `D:\app\STM32CubeMX\db`。
+
+**所有返回路径都要带**（包括「没有变化」「失败」）：实现上不是只改成功那条 return，而是在
+`createPinNameResolver()` 之后直接写进 `empty` 模板（`empty.dbVersion = pinNames.db?.version ?? ""`），
+其余 return 全是 `{ ...empty, ... }`。第一次只改成功路径时，「没有变化」的报告里两个字段是空串——
+这正好说明「db 指纹」这种诊断字段必须**无条件**带上，否则用户报 bug 时说不出自己用的哪版 db。
+
+### 48.3 测试
+
+`test/ioc-rules-units.test.mjs` 25 例（+2：R18 超频报错且恰好等于上限不报；缺键/缺 db 不判）；
+全量 **670 pass / 0 fail**；`npm run build` + `npx tsc --noEmit` 干净。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，
