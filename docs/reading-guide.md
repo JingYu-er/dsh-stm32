@@ -744,7 +744,7 @@ const fake = {
 2. **generate 是否补发 SetCopyLibrary "copy all"** 仍待定：只靠 .ioc 的 ProjectManager.LibraryCopy=1 不会让 CubeMX 从 setCustomFWPath 的包拷 HAL 源码。
 3. **firmware-install 的 existing 分支 nextStep 文案**偏旧（还停在「直接调 stm32_generate」的说法）。
 4. **四类探针故障只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验（`probeError` 的 kind 与专属 hint 已在 test/probe-error-units 覆盖）。
-5. **P2（多芯片 + HAL 外设源文件按需落位）** 未开工；P3（gdb MI 常驻会话）**已完成**，见 `docs/development-notes.md` §37 —— `stm32_debug_eval` 优先走常驻 MI（单条命令 20–70 ms），MI 连不上才退回每次 `gdb -batch`；`continue`/`next`/`step` 会在 3 s 窗口里等 `*stopped` 并报停点（`formatStopLocation`，见 §40）。
+5. **P2（多芯片 + HAL 外设源文件按需落位）** 未开工；P3（gdb MI 常驻会话）**已完成**，见 `docs/development-notes.md` §37 —— `stm32_debug_eval` 优先走常驻 MI（单条命令 20–70 ms），MI 连不上才退回每次 `gdb -batch`；`continue`/`next`/`step` 会在 3 s 窗口里等 `*stopped` 并报停点（`formatStopLocation`，见 §40），`si`/`stepi`/`ni`/`nexti` 走单指令步进（`steppingCommandFor`，见 §43.1）；`stm32_watch` 的采样提示会区分「目标本来就在停着」（§43.2）；RTT dump 尾部失步不再提前收尾，且帧头对齐改在 `parsed.rest` 上做（§43.3）。
 6. **docs/diagrams/** 那两张 HTML 图有 2 MB 原始 / 891 KB gz，已经不进 npm 包**（package.json 的 files 从 docs 收窄成 docs/*.md）。这事现在由 `scripts/pack-size.mjs`（npm run test:size）守着：tarball ≤1.2 MB、templates/** ≤60 KB、包内禁 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。实测包体 509.9 KB / 99 个文件。
 7. **CI 上的 test:pack** 只在本机跑过；第一次在 GitHub Actions 上跑还没有记录。
 8. 斜杠命令的卡片渲染只有用户手输能验，工具层测不到。

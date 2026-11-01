@@ -241,7 +241,7 @@ export function registerDebugSession(ctx: DshContext): void {
   ctx.tools.register({
     name: DEBUG_EVAL_TOOL,
     description:
-      "在调试会话里执行 gdb 命令（例如 \"print g_led_blink_count\"、\"info registers pc\"、\"bt\"、\"x/4xb 0x20000000\"）。B3 起没有会话时会先起一个（空闲 90 s 自动关、turn 结束也关）并复用它的 gdb server，不重复起 openocd。P3 起首次 eval 会挂一个常驻的 gdb MI 进程（--interpreter=mi2）：断点/变量/栈跨调用保留，单条命令约 20–70 ms；MI 连不上（比如 VS Code 正连着）才退回每次 gdb -batch 的老路径（约 1.5 s）。命令里写 continue 会走 -exec-continue 让目标跑起来（要停就下次先发 monitor halt）。",
+      "在调试会话里执行 gdb 命令（例如 \"print g_led_blink_count\"、\"info registers pc\"、\"bt\"、\"x/4xb 0x20000000\"）。B3 起没有会话时会先起一个（空闲 90 s 自动关、turn 结束也关）并复用它的 gdb server，不重复起 openocd。P3 起首次 eval 会挂一个常驻的 gdb MI 进程（--interpreter=mi2）：断点/变量/栈跨调用保留，单条命令约 20–70 ms；MI 连不上（比如 VS Code 正连着）才退回每次 gdb -batch 的老路径（约 1.5 s）。continue/next/step/si/ni 走 MI 的 -exec-*（si/ni 是单指令步进），会等 *stopped 报「停在哪」（3 s 窗口）；目标在跑时下条命令先 -exec-interrupt 停下，不写 keepHalted 的命令结束会 monitor resume。",
     parameters: {
       type: "object",
       additionalProperties: false,

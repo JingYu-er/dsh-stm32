@@ -3044,3 +3044,66 @@ remove/reset、采样分流、`markWatchpointsStale`、`recordWatchSample` 出�
 
 **教训**：登记表是模块级单例，工具层用例开头必须 `resetWatchState(watchState)`，否则前面用例的
 残留会让断言数不对 —— 这类「跨用例共享状态」的测试要显式重置，不能靠执行顺序。
+
+---
+
+## 43. 三处小改进：单指令步进、采样提示、RTT 尾部不再提前收尾（2026-11-01）
+
+### 43.1 单指令步进（si / ni）
+
+`stm32_debug_eval` 原来只认 `n/next`、`s/step`（整行），`si`/`stepi`/`ni`/`nexti` 被当成普通
+console 命令发给 gdb —— 目标在跑时照样卡 30 s。现在映射集中在一个纯函数里（`src/engine/gdb-mi.ts`）：
+
+```ts
+export function steppingCommandFor(command: string): string | null {
+  // n/next → -exec-next；s/step → -exec-step
+  // ni/nexti → -exec-next-instruction；si/stepi → -exec-step-instruction
+  // continue 不在这里（它要先清 lastStopped）；其余一律 null
+}
+```
+
+`debug-session.ts` 的 eval 循环用 `isContinue || stepCommand !== null` 判分支，两者都走
+「`^running` 之后等 `*stopped`（3 s 窗口）+ `formatStopLocation` 报停点」这条路。
+
+### 43.2 采样提示要区分「目标本来就在停着」
+
+会话刚起时 `MiSession.start` 已经发过 `monitor halt`，所以第一次 `sample` 的 `wasRunning` 是 false。
+真机表现：`g_tick_1k` 连采两次 delta 都是 0，而 `g_adc_dma[0]` 照样 +264（DMA 是外设，核停了也搬数）
+—— 看着像工具坏了。现在把提示做成纯函数（`src/engine/watch.ts`）并点明原因：
+
+```ts
+export function formatWatchSampleNote(halted: boolean, resumed: boolean, targetWasRunning: boolean): string {
+  if (!targetWasRunning) return "（目标本来就在停着：值不会变，想看得先 continue 或 monitor resume）";
+  if (halted && resumed) return "（目标在跑，已停下采完再放回去）";
+  if (halted) return "（目标在跑，已停下采样）";
+  return "";
+}
+```
+
+回退路径（MI 起不来、走一次性 gdb）不加这条提示：那时根本不知道目标原本跑没跑，宁可不说话。
+
+### 43.3 RTT dump 尾部不再提前收尾（顺带修掉一个真 bug）
+
+旧逻辑：解析失步、carry 里找不到帧头、但已经解出过记录时，直接 `finish("window")`。真机上 openocd
+会先推「一条完整帧 + 回绕剩下的半条」，于是在这里就收尾了，**后面 chunk 里还能解出来的记录一条都收不到**。
+现在改成：只记 `tailError`、把 carry 裁到 `maxFrameBytes + 13` 字节以内，继续等窗口结束；窗口结束时
+若 carry 还有残留，note 里带上解析错误原文。
+
+**顺带抓到的真 bug（写这条单测才暴露）**：`resyncRttFrames` 原来作用在整段 `carry` 上，不是
+`parsed.rest` 上 —— 刚解出的那帧首字节就在偏移 0，于是 `offset === 0` 永远成立，既不前进也不收尾，
+后面的记录全解不出来。改成在 `parsed.rest` 上找帧头，并且：
+
+- `offset > 0` → 累加 `skippedBytes`、从该处继续解析；
+- `offset === 0` → 这帧还没收齐，等下一个 chunk；
+- `offset === -1` → 真的没有帧头，按尾巴处理。
+
+### 43.4 测试与文档
+
+- `test/gdb-mi-units.test.mjs` 12 例（新增 `steppingCommandFor`，含「continue / print / 空串不是步进」）。
+- `test/watch-units.test.mjs` 17 例（新增 `formatWatchSampleNote` 四种组合）。
+- `test/rtt-units.test.mjs` 36 例（新增「尾部半条记录之后推来的记录照样要收」，假服务端按 chunk 推）。
+- 全量：**657 pass / 0 fail**（41 个套件）。
+
+**教训**：① 「已经解出过记录」不等于「这段窗口读完了」，尾部失步要等窗口结束再判；② resync 的输入
+必须是「失步点之后剩下的字节」，拿整段重扫会在偏移 0 命中自己刚解出的帧；③ 提示语要说清「为什么
+看起来没动」（核停着），否则用户会以为采样坏了。

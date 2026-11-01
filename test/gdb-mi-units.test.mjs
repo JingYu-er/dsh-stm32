@@ -1,7 +1,7 @@
 // gdb MI 常驻会话单测：node test/gdb-mi-units.test.mjs（需先 npm run build）
 import assert from "node:assert/strict";
 
-import { MiSession, decodeMiString, escapeMi, formatStopLocation, parseMiLine, parseMiTuple, parseMiValue, toGdbPath } from "../lib/engine/gdb-mi.js";
+import { MiSession, decodeMiString, escapeMi, formatStopLocation, parseMiLine, parseMiTuple, parseMiValue, steppingCommandFor, toGdbPath } from "../lib/engine/gdb-mi.js";
 
 const cases = [];
 function test(name, fn) { cases.push({ name, fn }); }
@@ -11,6 +11,21 @@ test("decodeMiString：MI 的 C 转义", () => {
   assert.equal(decodeMiString('say \"hi\"'), 'say "hi"');
   assert.equal(decodeMiString("path\\\\to"), "path\\to");
   assert.equal(decodeMiString("\\x41"), "A");
+});
+
+test("steppingCommandFor：整行步进与单指令步进映射到不同的 -exec-*", () => {
+  assert.equal(steppingCommandFor("n"), "-exec-next");
+  assert.equal(steppingCommandFor(" Next "), "-exec-next");
+  assert.equal(steppingCommandFor("s"), "-exec-step");
+  assert.equal(steppingCommandFor("step"), "-exec-step");
+  assert.equal(steppingCommandFor("ni"), "-exec-next-instruction");
+  assert.equal(steppingCommandFor("nexti"), "-exec-next-instruction");
+  assert.equal(steppingCommandFor("si"), "-exec-step-instruction");
+  assert.equal(steppingCommandFor("STEPI"), "-exec-step-instruction");
+  // continue 不走这里（它要先清掉旧的停止记录），别的命令也不该被当成步进。
+  for (const other of ["continue", "c", "print x", "bt", "monitor halt", ""]) {
+    assert.equal(steppingCommandFor(other), null, other);
+  }
 });
 
 test("parseMiLine：结果记录带 token 与嵌套 tuple", () => {

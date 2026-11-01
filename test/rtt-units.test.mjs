@@ -567,6 +567,26 @@ test("dumpRtt：同一段被重推时按时间戳+级别+文本去重", async ()
   }
 });
 
+test("dumpRtt：尾部半条记录之后推来的记录照样要收（旧写法会提前收尾丢一整段）", async () => {
+  // 真机现场：openocd 先推「一条有效帧 + 回绕剩下的半条」，此时 carry 里找不到任何帧头；
+  // 旧写法在这时就 finish("window") 收尾，后面 chunk 里还能解出来的记录全丢了。
+  const first = encodeRttFrame({ t: 80, level: 3, text: "尾部之前那条" });
+  const halfTail = Buffer.alloc(30);
+  const later = encodeRttFrame({ t: 81, level: 3, text: "尾部之后那条" });
+  const { tcl, rtt } = await setup({ frames: [Buffer.concat([first, halfTail]), later] });
+  try {
+    await startRtt({ addr: MAGIC_ADDR, port: rtt.port, checkPortBusy: NOT_BUSY });
+    const dumped = await dumpRtt({ seconds: 0.8 });
+    assert.equal(dumped.ok, true, dumped.message);
+    assert.deepEqual(dumped.records.map((record) => record.text), ["尾部之前那条", "尾部之后那条"]);
+    assert.ok(dumped.notes.some((note) => /不是帧头/u.test(note)), JSON.stringify(dumped.notes));
+  } finally {
+    await resetAll();
+    await tcl.close();
+    await rtt.close();
+  }
+});
+
 test("dumpRtt：整块 1024 字节缓冲（垃圾+有效帧+长串 0）时记录不能丢，对齐说明只留一条", async () => {
   // 真机现场（C8T6 + NO_BLOCK_SKIP 环形缓冲写满后 openocd 整块重推）：
   // 首字节落在帧中间，中间一条有效帧，后面是一长串 0（长度字段 0 → 解析必然报错）。

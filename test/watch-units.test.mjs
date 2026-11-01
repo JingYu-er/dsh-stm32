@@ -10,6 +10,7 @@ import {
   createWatchState,
   formatWatchDelta,
   formatWatchEntry,
+  formatWatchSampleNote,
   formatWatchLines,
   hardwareWatchpoints,
   isHardwareWatchpoint,
@@ -175,6 +176,16 @@ test("numericWatchValue / formatWatchDelta", () => {
   assert.equal(formatWatchDelta("1005", "1000"), "-5");
   assert.equal(formatWatchDelta("0x1", "0x3"), "+2");
   assert.equal(formatWatchDelta("{a=1}", "{a=2}"), "变化");
+});
+
+test("formatWatchSampleNote：目标本来就在停着时要明说值不会变", () => {
+  // 会话刚起时 MI 已经 monitor halt 过：这时采计数器 delta 恒为 0，提示必须点明原因。
+  const idle = formatWatchSampleNote(false, false, false);
+  assert.match(idle, /目标本来就在停着/u);
+  assert.match(idle, /continue|monitor resume/u);
+  assert.match(formatWatchSampleNote(true, true, true), /已停下采完再放回去/u);
+  assert.match(formatWatchSampleNote(true, false, true), /已停下采样/u);
+  assert.equal(formatWatchSampleNote(false, false, true), "");
 });
 
 test("formatWatchEntry / formatWatchLines 带 id、种类、值与失败原因", () => {

@@ -20,11 +20,12 @@ import type { ProcessHandle, SubprocessService } from "../types.js";
 import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
 import { pickPort, resolveElfPath } from "./debug.js";
-import { MiSession, formatStopLocation } from "./gdb-mi.js";
+import { MiSession, formatStopLocation, steppingCommandFor } from "./gdb-mi.js";
 import type { MiRecord } from "./gdb-mi.js";
 import {
   WATCH_KIND_LABELS,
   formatWatchDelta,
+  formatWatchSampleNote,
   hardwareWatchpoints,
   isHardwareWatchpoint,
   markWatchpointsStale,
@@ -603,14 +604,14 @@ export class DebugSessionManager {
             const interrupted = await mi.ensureHalted(request.timeoutMs ?? 30_000);
             if (interrupted) lines.push("（目标在跑，已用 -exec-interrupt 停下）");
           }
-          // continue / next / step：MI 的 -exec-* 在 ^running 就返回，真正"停在哪"要等 *stopped。
+          // continue / next / step / si / ni：MI 的 -exec-* 在 ^running 就返回，真正"停在哪"要等 *stopped。
           const isContinue = /^(?:c|cont|continue)$/u.test(normalized);
-          const isStep = /^(?:n|next|s|step)$/u.test(normalized);
-          if (isContinue || isStep) {
+          const stepCommand = steppingCommandFor(normalized);
+          if (isContinue || stepCommand !== null) {
             const timeout = request.timeoutMs ?? 30_000;
             const sentRecord: MiRecord = isContinue
               ? await mi.continueTarget(timeout)
-              : (await mi.send("-exec-" + (normalized === "s" || normalized === "step" ? "step" : "next"), timeout)).record;
+              : (await mi.send(stepCommand as string, timeout)).record;
             if (sentRecord.class !== "running") {
               lines.push(normalized + "：没有跑起来（" + String(sentRecord.data["msg"] ?? sentRecord.class) + "）");
               continue;
@@ -819,9 +820,12 @@ export class DebugSessionManager {
     let halted = false;
     let resumed = false;
     const mi = await this.ensureMi(session, gdb, timeout);
+    /** MI 路径下才知道目标原本跑没跑：用来区分「采不动」和「本来就在停着」。 */
+    let targetWasRunning = false;
     if (mi !== null) {
       try {
         const wasRunning = mi.targetRunning;
+        targetWasRunning = wasRunning;
         if (wasRunning) halted = await mi.ensureHalted(timeout);
         for (const entry of entries) {
           const previous = entry.lastValue;
@@ -871,7 +875,7 @@ export class DebugSessionManager {
     }
     const failed = samples.filter((sample) => !sample.ok);
     const ok = errors.length === 0 && failed.length === 0;
-    const resumedNote = halted && resumed ? "（目标在跑，已停下采完再放回去）" : (halted ? "（目标在跑，已停下采样）" : "");
+    const resumedNote = mi !== null ? formatWatchSampleNote(halted, resumed, targetWasRunning) : "";
     return {
       ok, halted, resumed, samples, durationMs: this.now() - startedAt, errors,
       message: ok

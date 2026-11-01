@@ -29,6 +29,20 @@ export interface MiRecord {
   text: string;
 }
 
+/**
+ * 步进命令映射到 MI 的 -exec-*：n/next、s/step 走整行（-exec-next / -exec-step），
+ * ni/nexti、si/stepi 走单指令（-exec-next-instruction / -exec-step-instruction）。
+ * continue 不在这里（它走 continueTarget，要先清掉旧的停止记录）。返回 null 表示不是步进命令。
+ */
+export function steppingCommandFor(command: string): string | null {
+  const normalized = command.trim().toLowerCase();
+  if (normalized === "n" || normalized === "next") return "-exec-next";
+  if (normalized === "s" || normalized === "step") return "-exec-step";
+  if (normalized === "ni" || normalized === "nexti") return "-exec-next-instruction";
+  if (normalized === "si" || normalized === "stepi") return "-exec-step-instruction";
+  return null;
+}
+
 /** 把 *stopped 记录描述成一行「func file:line @addr (reason)」，continue/step 报停点用。 */
 export function formatStopLocation(record: MiRecord): string {
   const reason = typeof record.data["reason"] === "string" ? record.data["reason"] : "";
