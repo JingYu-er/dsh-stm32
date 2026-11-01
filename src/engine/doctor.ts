@@ -120,6 +120,14 @@ export async function usbDiagnosis(subprocess: SubprocessService, signal?: Abort
   }
 }
 
+/** 探测结果压成「能干什么」的四项能力（只由 found 决定，与 required 无关）。 */
+export interface Capabilities {
+  build: boolean;
+  flash: boolean;
+  debug: boolean;
+  generate: boolean;
+}
+
 export interface DoctorReport {
   ok: boolean;
   projectDir: string;
@@ -127,6 +135,12 @@ export interface DoctorReport {
   durationMs: number;
   missingRequired: string[];
   tools: ProbeResult[];
+  /** 四项能力：以前由 stm32_doctor 报，现在并进 doctor（同一个 probeAll 结果，没必要两个工具各查一遍）。 */
+  capabilities: Capabilities;
+  /** 装什么、按什么顺序装、装完怎么自检。 */
+  recommendations: string[];
+  /** 工具链/CubeMX 的搜索范围（报「明明装了却找不到」时看这个）。 */
+  searched: string[];
   processes: DoctorProcess[];
   port: number;
   portBusy: boolean;
@@ -139,6 +153,44 @@ export interface DoctorReport {
   usb: UsbDiagnosis;
   blockers: string[];
   notes: string[];
+}
+
+export function capabilitiesOf(tools: ProbeResult[]): Capabilities {
+  const found = new Set(tools.filter((tool) => tool.found).map((tool) => tool.id));
+  const has = (id: string): boolean => found.has(id);
+  return {
+    build: has("gcc") && has("cmake") && has("ninja"),
+    flash: has("openocd"),
+    debug: has("openocd") && has("gdb"),
+    generate: has("cubemx") && has("cubemx-java"),
+  };
+}
+
+export function recommendationsOf(tools: ProbeResult[], missingRequired: string[], capabilities: Capabilities): string[] {
+  const lines: string[] = [];
+  const missing = tools.filter((tool) => tool.required && !tool.found);
+  if (missing.length === 0) {
+    lines.push(
+      "必需组件齐全：" + (capabilities.build ? "可以编译" : "但编译还缺组件") + "、" +
+        (capabilities.flash ? "可以只烧录" : "烧录还缺 openocd") + "、" +
+        (capabilities.debug ? "可以烧录并调试" : "调试还缺 gdb") + "。",
+    );
+  } else {
+    lines.push("缺 " + missingRequired.join("、") + "。按下面的顺序装，装一项就少一项：");
+    for (const item of missing) {
+      const step = item.install[0] ?? item.hint;
+      lines.push(item.label + "：" + step + "（自检：" + item.verify + "）");
+    }
+    lines.push("需要我帮你装吗？回一句「装 gcc」「装 openocd」或「把缺的都装上」，我就照上面的命令在这台机器上装，装完再跑一次 stm32_doctor 复测；你也可以自己装完再跑一次。");
+  }
+  const cubeMx = tools.find((item) => item.id === "cubemx");
+  const cubeMxJava = tools.find((item) => item.id === "cubemx-java");
+  if (cubeMx !== undefined && !cubeMx.found) {
+    lines.push("CubeMX 是可选的：不影响编译、烧录、调试和改 USER CODE，只影响建工程（stm32_project_create）与改 .ioc 后的重新生成（stm32_generate）。要建工程时再装，步骤见上面 cubemx / cubemx-java 两条。");
+  } else if (cubeMx !== undefined && cubeMx.found && cubeMxJava !== undefined && !cubeMxJava.found) {
+    lines.push("CubeMX 装上了但找不到内置 JRE：无头生成（stm32_generate / stm32_project_create）会失败，建议用官网安装包重装一次（只拷 exe 不够）。");
+  }
+  return lines;
 }
 
 /** 会占着探针/端口的进程名（小写比较）。 */
@@ -650,6 +702,12 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
     durationMs: Date.now() - startedAt,
     missingRequired,
     tools,
+    capabilities: capabilitiesOf(tools),
+    recommendations: recommendationsOf(tools, missingRequired, capabilitiesOf(tools)),
+    searched: [
+      "工具链搜索范围：" + describeSearchScope(config.binDirs, "PATH"),
+      "CubeMX 搜索范围：" + describeSearchScope(config.cubeMxRoots),
+    ],
     processes,
     port,
     portBusy,

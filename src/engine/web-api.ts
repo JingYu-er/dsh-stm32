@@ -26,7 +26,7 @@ import { buildTargets, probeAll, type ProbeResult } from "./probe.js";
 import { planOrInstallMsys2, type Msys2InstallResult } from "./msys2-install.js";
 import type { SubprocessService } from "../types.js";
 
-/** 面板能看到的四类能力（与 stm32_env_probe 同一口径）。 */
+/** 面板能看到的四类能力（与 stm32_doctor 同一口径）。 */
 export interface WebCapabilities {
   build: boolean;
   flash: boolean;

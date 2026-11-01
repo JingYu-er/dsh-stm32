@@ -23,7 +23,6 @@ import { registerDebugRun } from "./tools/debug.js";
 import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
 import { registerEnvInstall } from "./tools/env-install.js";
-import { registerEnvProbe } from "./tools/env-probe.js";
 import { registerFirmwareInstall } from "./tools/firmware-install.js";
 import { registerFlash } from "./tools/flash.js";
 import { registerGenerate } from "./tools/generate.js";
@@ -68,7 +67,6 @@ export function callerIdOf(event: unknown, session: unknown): string {
 }
 
 export function apply(ctx: DshContext): void {
-  registerEnvProbe(ctx);
   registerEnvInstall(ctx);
   registerFirmwareInstall(ctx);
   registerProjectCreate(ctx);

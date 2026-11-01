@@ -194,7 +194,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 | 工具 | 文件（行） | engine 入口 | 门禁能力 |
 | --- | --- | --- | --- |
-| `stm32_env_probe` | env-probe.ts（284） | probe.buildTargets / probeAll + search-roots.resolveSearchConfig | 无 |
+| `stm32_doctor` | env-probe.ts（284） | probe.buildTargets / probeAll + search-roots.resolveSearchConfig | 无 |
 | `stm32_env_install` | env-install.ts（550） | msys2-install.planOrInstallMsys2 | 无 |
 | `stm32_firmware_install` | firmware-install.ts（288） | firmware-install.planOrInstallFirmware | 无 |
 | `stm32_project_create` | project-create.ts（387） | scaffold.createProjectScaffold（型号 → hal-chip 渲染启动文件/设备宏/.ld/.ioc）/ register-template.createRegisterProject | build（仅 register 路线；hal 路线降级成 warnings） |

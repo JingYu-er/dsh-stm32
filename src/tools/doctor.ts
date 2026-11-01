@@ -70,6 +70,19 @@ export const outputSchema: JsonSchema = {
         durationMs: { type: "number" },
         missingRequired: { type: "array", items: { type: "string" } },
         tools: { type: "array", items: toolSchema },
+        capabilities: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            build: { type: "boolean", description: "gcc + cmake + ninja 齐全" },
+            flash: { type: "boolean", description: "openocd 可用（只烧录）" },
+            debug: { type: "boolean", description: "openocd + gdb 可用（烧录并调试）" },
+            generate: { type: "boolean", description: "CubeMX + 内置 JRE 可用（建工程/重新生成）" },
+          },
+          required: ["build", "flash", "debug", "generate"],
+        },
+        recommendations: { type: "array", items: { type: "string" }, description: "缺什么、按什么顺序装、装完怎么自检" },
+        searched: { type: "array", items: { type: "string" }, description: "工具链 / CubeMX 的搜索范围（报「明明装了却找不到」时看这个）" },
         processes: { type: "array", items: processSchema },
         usb: {
           type: "object",
@@ -90,7 +103,8 @@ export const outputSchema: JsonSchema = {
         notes: { type: "array", items: { type: "string" } },
       },
       required: [
-        "ok", "projectDir", "message", "durationMs", "missingRequired", "tools", "processes",
+        "ok", "projectDir", "message", "durationMs", "missingRequired", "tools",
+        "capabilities", "recommendations", "searched", "processes",
         "port", "portBusy", "buildDir", "elfPath", "elfSize", "iocPath", "iocWarnings", "usb", "blockers", "notes",
       ],
     },
@@ -115,6 +129,11 @@ function formatReport(report: DoctorReport): string[] {
   const lines: string[] = [];
   lines.push((report.ok ? "环境就绪" : "有阻塞项") + "：" + report.message);
   lines.push("工程：" + report.projectDir);
+  const caps = report.capabilities;
+  lines.push(
+    "能力：" + (caps.build ? "可编译" : "编译缺组件") + " / " + (caps.flash ? "可烧录" : "烧录缺组件") +
+      " / " + (caps.debug ? "可调试" : "调试缺组件") + " / " + (caps.generate ? "可建工程" : "建工程需装 CubeMX（可选）"),
+  );
   for (const tool of report.tools as ProbeResult[]) {
     lines.push(
       (tool.found ? "  OK   " : "  MISS ") + tool.id + (tool.version === "" ? "" : "  " + tool.version) +
@@ -135,6 +154,15 @@ if (report.buildDir !== "") lines.push("构建目录：" + report.buildDir);
     for (const blocker of report.blockers) lines.push("  ! " + blocker);
   }
   for (const note of report.notes) lines.push("· " + note);
+  if (report.recommendations.length > 0) {
+    lines.push("");
+    lines.push("下一步：");
+    for (const line of report.recommendations) lines.push("- " + line);
+  }
+  if (report.searched.length > 0) {
+    lines.push("");
+    for (const line of report.searched) lines.push(line);
+  }
   return lines;
 }
 
@@ -172,7 +200,11 @@ export function registerDoctor(ctx: DshContext): void {
           message: "宿主缺少 subprocess 服务，无法体检",
           report: {
             ok: false, projectDir: args.projectDir ?? "", message: "宿主缺少 subprocess 服务", durationMs: 0,
-            missingRequired: ["subprocess"], tools: [], processes: [], usb: { kind: "unknown", detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,
+            missingRequired: ["subprocess"], tools: [],
+            capabilities: { build: false, flash: false, debug: false, generate: false },
+            recommendations: ["宿主缺少 subprocess 服务：插件没法跑任何外部程序，先确认 DSH 宿主正常启动。"],
+            searched: [],
+            processes: [], usb: { kind: "unknown", detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,
             buildDir: "", elfPath: "", elfSize: 0, iocPath: "", iocWarnings: [], blockers: ["宿主缺少 subprocess 服务"], notes: [],
           },
         };

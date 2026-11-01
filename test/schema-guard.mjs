@@ -36,8 +36,7 @@ import { outputSchema as doctorSchema } from "../lib/tools/doctor.js";
 import { registerEnvInstall } from "../lib/tools/env-install.js";
 import { outputSchema as envInstallSchema } from "../lib/tools/env-install.js";
 import { registerBuild } from "../lib/tools/build.js";
-import { registerEnvProbe } from "../lib/tools/env-probe.js";
-import { outputSchema as envProbeSchema } from "../lib/tools/env-probe.js";
+import { capabilitiesOf, recommendationsOf } from "../lib/engine/doctor.js";
 import { registerIocInspect } from "../lib/tools/ioc-inspect.js";
 import { outputSchema as iocInspectSchema } from "../lib/tools/ioc-inspect.js";
 import { flashReportForHost, formatFlashReport, outputSchema as flashSchema } from "../lib/tools/flash.js";
@@ -453,89 +452,38 @@ test("stm32_route_plan 缺 requirement / 正常评估都符合 output schema（�
   }
 });
 
-// ── 补齐 env_probe / ioc_inspect：这两个工具此前没进守卫，README 却按"15 个工具"写────────
+// ── 原 stm32_env_probe 的能力矩阵/建议 → 已并进 stm32_doctor（纯函数，不 spawn）──────────
 
-const ENV_PROBE_VERSION = "arm-none-eabi-gcc (GNU Arm Embedded) 13.2.1\n";
-
-/** 假子进程：spawn 直接给出"版本命令成功"的结算，不真的起进程。 */
-const fakeVersionSubprocess = {
-  resolveExecutable: (command) => command,
-  spawn: (spec) => ({
-    done: Promise.resolve({ exitCode: 0, signal: null }),
-    collected: {
-      stdout: { readFrom: () => ({ text: ENV_PROBE_VERSION, nextOffset: spec.argv.length }) },
-      stderr: { readFrom: () => ({ text: "", nextOffset: 0 }) },
-    },
-    waitForExit: () => Promise.resolve({ exitCode: 0, signal: null }),
-  }),
-};
-
-test("stm32_env_probe 输出符合 output schema（每项 found/path/version/hint 都在）", async () => {
-  const defs = collectTools(registerEnvProbe, fakeVersionSubprocess);
-  const tool = defs.get("stm32_env_probe");
-  assert.ok(tool, "stm32_env_probe 应已注册");
-  const value = await tool.execute({ binDirs: ["D:/__dsh_stm32_missing_bin__"], cubeMxRoots: ["D:/__dsh_stm32_missing_cubemx__"] }, exec);
-  reportProblems("stm32_env_probe", envProbeSchema, value);
-  assert.equal(typeof value.platform, "string");
-  assert.ok(value.tools.length >= 5, "至少要报出 gcc/gdb/openocd/cmake/ninja 五条：" + String(value.tools.length));
-  for (const item of value.tools) {
-    assert.equal(typeof item.found, "boolean");
-    assert.equal(typeof item.path, "string");
-    assert.equal(typeof item.version, "string");
-    assert.equal(typeof item.hint, "string");
-    assert.equal(typeof item.error, "string");
-    assert.equal(typeof item.impact, "string", item.id + " 必须写清缺失影响");
-    assert.equal(typeof item.verify, "string", item.id + " 必须给出自检方式");
-    assert.ok(Array.isArray(item.install), item.id + " 必须给出安装步骤");
-    assert.ok(item.install.length > 0, item.id + " 的安装步骤不能为空");
-    assert.equal(typeof item.install[0], "string");
-    if (item.found) assert.ok(item.version.length > 0, item.id + " found=true 时应有版本号");
-    if (!item.found) assert.ok(item.impact.length > 0, item.id + " 缺失时影响不能为空");
-  }
-  // 版本命令全成功 → 五个必需项都不缺；CubeMX 缺只是可选。
-  assert.deepEqual(value.missingRequired, []);
-  assert.match(value.summary, /工具链就绪/u);
-  // 能力矩阵：编译/烧录/调试齐了，建工程因为 CubeMX 缺失而未就绪。
-  assert.deepEqual(value.capabilities, { build: true, flash: true, debug: true, generate: false });
-  assert.ok(value.recommendations.length > 0, "要给出下一步建议");
-  assert.ok(
-    value.recommendations.some((line) => line.includes("CubeMX 是可选的")),
-    "缺 CubeMX 时必须说明它是可选的：" + JSON.stringify(value.recommendations),
-  );
-  assert.equal(value.searched.length, 2, "要报告工具链与 CubeMX 两处搜索范围");
-  for (const line of value.searched) assert.ok(line.length > 0);
-});
-
-test("stm32_env_probe 全缺时给出安装顺序与「帮你装」的主动询问", async () => {
-  // resolveExecutable 直接抛错 = 所有候选都找不到（不 spawn，纯失败早退）。
-  const nothingSubprocess = {
-    resolveExecutable: () => {
-      throw new Error("not found");
-    },
-    spawn: () => {
-      throw new Error("全缺时不应该 spawn");
-    },
+/** 造一条 ProbeResult（只填能力矩阵/建议用得到的字段）。 */
+function probeItem(id, found, required = true) {
+  return {
+    id, label: id.toUpperCase(), found, path: found ? "C:/bin/" + id : "", version: found ? "1.0" : "",
+    required, hint: "装 " + id, impact: id + " 缺失会影响对应能力", install: ["pacman.exe -S " + id], verify: id + " --version", error: "",
   };
-  const defs = collectTools(registerEnvProbe, nothingSubprocess);
-  const tool = defs.get("stm32_env_probe");
-  assert.ok(tool, "stm32_env_probe 应已注册");
-  const value = await tool.execute({ binDirs: ["D:/__dsh_stm32_missing_bin__"], cubeMxRoots: ["D:/__dsh_stm32_missing_cubemx__"] }, exec);
-  reportProblems("stm32_env_probe(全缺)", envProbeSchema, value);
-  assert.match(value.summary, /工具链不完整/u);
-  assert.deepEqual(value.missingRequired, ["gcc", "gdb", "openocd", "cmake", "ninja"]);
-  assert.deepEqual(value.capabilities, { build: false, flash: false, debug: false, generate: false });
-  assert.ok(
-    value.recommendations.some((line) => line.includes("pacman.exe -S")),
-    "建议里要带可粘贴的安装命令：" + JSON.stringify(value.recommendations),
-  );
-  assert.ok(
-    value.recommendations.some((line) => line.includes("需要我帮你装吗")),
-    "必须主动问要不要代装：" + JSON.stringify(value.recommendations),
-  );
-  assert.ok(
-    value.recommendations.some((line) => line.includes("CubeMX 是可选的")),
-    "缺 CubeMX 时必须说明它是可选的",
-  );
+}
+
+test("stm32_doctor 的能力矩阵与安装建议（原 stm32_env_probe 的纯逻辑）", () => {
+  // 必需件齐全 + CubeMX 没装（可选件）：这台机器第一次跑时的样子。
+  const full = [
+    ...["gcc", "gdb", "openocd", "cmake", "ninja"].map((id) => probeItem(id, true)),
+    probeItem("cubemx", false, false),
+    probeItem("cubemx-java", false, false),
+  ];
+  const caps = capabilitiesOf(full);
+  assert.deepEqual(caps, { build: true, flash: true, debug: true, generate: false }, "CubeMX 不在就没法建工程");
+  const ready = recommendationsOf(full, [], caps);
+  assert.ok(ready.length > 0, "要给出下一步建议");
+  assert.ok(ready.some((line) => line.includes("CubeMX 是可选的")), "缺 CubeMX 时必须说明它是可选的：" + JSON.stringify(ready));
+
+  const missing = [
+    ...["gcc", "gdb", "openocd", "cmake", "ninja"].map((id) => probeItem(id, false)),
+    probeItem("cubemx", false, false),
+  ];
+  const missingCaps = capabilitiesOf(missing);
+  assert.deepEqual(missingCaps, { build: false, flash: false, debug: false, generate: false });
+  const advice = recommendationsOf(missing, missing.map((item) => item.label), missingCaps);
+  assert.ok(advice.some((line) => line.includes("pacman.exe -S")), "建议里要带可粘贴的安装命令：" + JSON.stringify(advice));
+  assert.ok(advice.some((line) => line.includes("需要我帮你装吗")), "必须主动问要不要代装");
 });
 
 test("stm32_ioc_inspect 找不到 .ioc 与解析成功都符合 output schema", async () => {

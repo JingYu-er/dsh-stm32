@@ -12,7 +12,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.3-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 21 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
+这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 23 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
 ## 为什么需要它
 
@@ -134,7 +134,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 | 能力 | 提供方式 |
 | --- | --- |
-| 环境体检 | `stm32_env_probe`（只读）、`stm32_doctor`（工具链 + 探针占用 + 端口 + 工程告警） |
+| 环境体检 | `stm32_doctor`（只读）、`stm32_doctor`（工具链 + 探针占用 + 端口 + 工程告警） |
 | 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
 | 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
 | 选技术路线 | `stm32_route_plan`：先按**这个工程**的需求，把每个外设的 HAL 版与寄存器版代价摆出来（效率 / 可读性 / 排错），再告诉你缺的是「能代装的」还是「只能人装的」（CubeMX 是 GUI 向导 + 要 ST 账号、固件包只由 CubeMX 包管理器维护） |
@@ -158,7 +158,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 | 工具 | 作用 |
 | --- | --- |
-| `stm32_env_probe` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
+| `stm32_doctor` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
 | `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
@@ -275,7 +275,7 @@ stm32_rtt action=stop                      # 释放端口；turn 结束也会自
 
 **优先级**：工具参数（`binDirs` / `cubeMxRoots`）> 环境变量 > 这个配置文件 > 内置默认值；自动发现只追加在"没点名参数"的那一档尾部。
 
-**内置默认值里没有任何"某台机器专属"的路径**：只有 `C:/msys64/...` 与 `C:/Program Files/...` 这种 Windows 默认安装位置，装在别处靠自动发现兜底。配置或环境变量里点名的目录如果在本机不存在（典型情况：配置是从别的机器拷过来的，带着 `D:/app/msys64` 这种路径），门禁与 `stm32_env_probe` 会明确写一句「配置文件里的 X 在本机不存在……这一条搜不到工具」，而**不会**悄悄改你的配置；安装器也不会拿这种路径当安装目标（盘符都没有时只提示、并要求你给 `targetDir`）。
+**内置默认值里没有任何"某台机器专属"的路径**：只有 `C:/msys64/...` 与 `C:/Program Files/...` 这种 Windows 默认安装位置，装在别处靠自动发现兜底。配置或环境变量里点名的目录如果在本机不存在（典型情况：配置是从别的机器拷过来的，带着 `D:/app/msys64` 这种路径），门禁与 `stm32_doctor` 会明确写一句「配置文件里的 X 在本机不存在……这一条搜不到工具」，而**不会**悄悄改你的配置；安装器也不会拿这种路径当安装目标（盘符都没有时只提示、并要求你给 `targetDir`）。
 
 ### 设置面板（GUI）
 
@@ -379,7 +379,7 @@ source [find target/stm32f1x.cfg]
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | 工具直接回「缺 arm-none-eabi-gcc…，这次没有开始编译」 | 这是开工前门禁（`envCheck` 默认 `block`）拦下来的，不是 bug：它比跑到一半才发现省时间。回一句「装」，模型调 `stm32_env_install` 出计划；确认后装好并写配置文件，**下一条命令就能用，不必重启**。想先看全貌就 `/stm32-env`；只想先跑起来就传 `envCheck: "warn"`（照做但写警告）或 `"off"`（不查） |
 | 第一次建工程回「设备事实还没就绪……先跑 stm32_assets refresh，或检查网络」 | 插件不内置芯片表：型号 → 启动文件 / 设备宏 / Flash / RAM 的事实只从本地资源包缓存（`~/.dsh-stm32/assets/<版本>/`）读。联网跑一次 `stm32_assets`（`action: "refresh"`，默认 `profile: "core"`，30 个文件约 237 KiB），装好后离线可用；`DSH_STM32_ASSETS` 可换根目录 |
-| `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_env_probe`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
+| `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_doctor`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
 | 生成变快了，但 CubeMX GUI 里看不到扩展包了 | `thirdpartyPacks: "auto"` 会在不需要扩展包时把 `thirdparties/pdsc` 停放成 `pdsc.dsh-parked`，生成结束自动还原。若正在 CubeMX GUI 里手工选包，传 `thirdpartyPacks: "keep"` |
@@ -424,7 +424,7 @@ node test\e2e-flash.mjs
 ```text
 src/
   index.ts                 插件入口（name / inject / apply）
-  tools/                   21 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
+  tools/                   23 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
   engine/                  纯逻辑与工作流（generate / build / flash / debug / ioc / scaffold …）
   commands/register.ts     7 条斜杠命令
   skill/stm32-workflow.ts  随插件下发的 SKILL
