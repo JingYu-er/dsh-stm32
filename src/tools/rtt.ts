@@ -60,7 +60,7 @@ const SESSION_SCHEMA: JsonSchema = {
   required: ["port", "tclPort"],
 };
 
-export const outputSchema: JsonSchema = {
+export const reportSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -108,6 +108,19 @@ export const outputSchema: JsonSchema = {
     "message",
     "notes",
   ],
+};
+
+/** 宿主按 `{ message, report }` 校验工具返回（与其它工具一致）；report 是上面这份扁平形状。
+ *  历史 bug：这里曾直接把扁平 report 形状当成 outputSchema 导出，宿主校验时每次都报
+ *  "missing required property value.ok"，导致 stm32_rtt 任何调用都失败。 */
+export const outputSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    message: { type: "string" },
+    report: reportSchema,
+  },
+  required: ["message", "report"],
 };
 
 interface RttSessionWire {

@@ -1750,7 +1750,7 @@ marker 只能证明"拿回来的像这个文件"，证明不了"还是那一份"
 - 2d 的 `errorCode` 已在真板上验过 `probe-busy`（见 §21.11）；`swd-locked` / `flash-protected` / `no-power` / `target-mismatch` 四种要制造锁片、写保护或拔电源，不能为了测试去毁板子，仍只有单测覆盖；
 - `/stm32-setup`、`/stm32-build` 等斜杠命令的人工卡片：命令只能用户自己输入，工具层结论已由上面的 1–8 覆盖；
 - `stm32_env_probe` 里 `cubemx` 的版本串为空是**设计如此**（`probe.ts` 的 cubemx 目标 `versionArgs: []`——启动器 exe 没有可用的 `--version`，版本靠 `cubemx-java` 那项）；卡片上 `OK  cubemx  <路径>` 正常显示，只有直接读 JSON 的 `version` 字段才是空串。验证时一度把它当缺陷，记在这里免得下次又查一遍；
-- P2（多芯片 F0/F3/F4/G0/L4、HAL 外设源文件落位）与 P3（gdb MI 常驻）未开工。
+- P2（多芯片 F0/F3/F4/G0/L4、HAL 外设源文件落位）未开工；P3（gdb MI 常驻）后来已在 §37 做完（此处是 10-28 的旧记录，保留原意以免误读时间线）。
 ### 21.11 上板验证（2026-10-28，蓝丸 F103C8T6 + CMSIS-DAP）
 
 用户插上板子后补的第五~九项。**这一步抓出了两个只有真硬件才会暴露的缺陷**，单测当时全是绿的。

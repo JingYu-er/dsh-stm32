@@ -28,7 +28,7 @@ import {
   startRtt,
   stopRtt,
 } from "../lib/engine/rtt.js";
-import { outputSchema as rttOutputSchema, registerRtt } from "../lib/tools/rtt.js";
+import { outputSchema as rttOutputSchema, reportSchema, registerRtt } from "../lib/tools/rtt.js";
 
 import { FIXTURE_PROJECT, fakeBinDirs } from "./fixtures.mjs";
 
@@ -263,9 +263,16 @@ function checkSchema(schema, value, path, problems) {
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) problems.push(path + " 不在 enum 里：" + String(value));
 }
 
+test("stm32_rtt 的 outputSchema 是 { message, report } 包装（回归：曾直接导出扁平 report 形状，宿主每次调用都校验失败）", () => {
+  assert.deepEqual(rttOutputSchema.required, ["message", "report"]);
+  assert.equal(rttOutputSchema.additionalProperties, false);
+  assert.ok(rttOutputSchema.properties.report, "wrapper 里必须有 report");
+  assert.ok(reportSchema.required.includes("ok"));
+});
+
 function assertSchema(value, label) {
   const problems = [];
-  checkSchema(rttOutputSchema, value, label, problems);
+  checkSchema(reportSchema, value, label, problems);
   assert.deepEqual(problems, [], label + " 不符合 outputSchema：\n" + problems.join("\n"));
 }
 
