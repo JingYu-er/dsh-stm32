@@ -3334,3 +3334,26 @@ const MAX_TEMPLATE_ASSET_FILE = 24 * 1024;  // 单文件上限，拦大资产
 口径（宿主过滤条数 ≠ 固件丢帧数）；③ 护栏要按「这条规则到底防什么」来定统计口径，别用一个总量数字同时代理
 「别塞二进制」和「别写太多文档」两件事。
 
+### 46.6 follow 自动 start + Tcl 连接重试（实机验收时补的）
+
+实机验收第一次就撞到两件事：
+
+1. `stm32_debug_session` 刚起、`stm32_rtt start` 紧接着调用 → `connect ECONNREFUSED 127.0.0.1:6666`，被
+   `sessionGoneHint` 报成「openocd 已经不在了」。其实 openocd 只是还没开始 accept：再等一会儿 6666/4444/3333
+   三个口都在监听，`p g_tick_1k` 也正常。修法：`readControlBlock` 遇到连接类错误先重试 2 次（间隔 250 ms），
+   仍失败才判死；`isConnectRefused()` / `sleepMs()` 放在 `sessionGoneHint` 旁边。
+2. `follow` 要求先手动 `action=start`，多一步。改成 `bringUpChannel()`：通道没在跑时自动走「门禁 → ensureSession
+   → startRtt」，`addr` 取参数、其次上次 start 记住的地址；起完在 notes 里写「没有 RTT 通道，已自动 start：控制块 …」，
+   `replacedDead` 也一并提示。`dump` 与 `follow` 共用这条路径。
+
+**实机验收（`_rich_hal`，2026-11-01，`follow` 窗口 20 s / 15 s）**
+
+| 观测 | 结果 |
+| --- | --- |
+| `follow seconds=20 maxRecords=30` | ok、30 条、`bytes=11444`、`t=2385363 → 2391151`（连续 6 s 历史），note「记录超过 maxRecords=30，只保留最新的 30 条」 |
+| `firmwareDropped` | 11806（自复位起累计，早期环被写坏期间攒下的） |
+| 连续两个 15 s follow | `s_dropped` 都是 **11837**，第二个窗口 **delta = 0** |
+| 中途 13 s 没客户端 | `t` 从 2414095 前进到 2427269，`s_dropped` 仍不动 → 修好 WrOff 之后 openocd 的 rtt server 自己就把环排空了 |
+
+结论：环不再被写坏之后，持续读的窗口里 `s_dropped` 就是不涨的；§45 里「间歇 dump 仍会丢」主要来自那个越界 bug。
+
