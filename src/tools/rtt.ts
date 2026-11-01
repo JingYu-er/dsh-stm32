@@ -3,7 +3,7 @@
  *
  *   start  —— 确认目标里有控制块 → openocd rtt setup/start → 开通道 TCP 端口
  *   dump   —— 连上通道读一段时间的记录（可按级别过滤、按条数截断）
- *   stop   —— 断通道，让 openocd 收掉 rtt server
+ *   stop   —— 断通道，让 openocd 收掉 rtt server；start 自己起的会话一并释放（探针归还）
  *   status —— 只读快照
  *
  * 设计取舍：
@@ -26,12 +26,22 @@ import {
 import type { RttRecord, RttStatusSnapshot } from "../engine/rtt.js";
 import type { ProbeError } from "../engine/probe-error.js";
 import { PROBE_ERROR_SCHEMA } from "../engine/probe-error.js";
-import { ensureSession, sessionInfo } from "../engine/probe-session.js";
+import { ensureSession, release, sessionInfo } from "../engine/probe-session.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
 
 export const RTT_TOOL = "stm32_rtt";
+
+/**
+ * RTT 自己起的调试会话的 startedAt（复用的会话不记）。
+ *
+ * 为什么记这个：RTT 只用了 openocd 的 rtt 通道，而会话归 probe-session 管（空闲 90 s 才自动收）。
+ * 实测踩过：stop 只关通道，openocd 还握着探针，紧接着 stm32_flash 就撞 CMSIS-DAP command mismatch。
+ * 所以 stop 时，只要当前会话还是 start 那一次起的（startedAt 没变），就顺手 release 掉；
+ * 复用的会话不动（那是别人起的）。
+ */
+let rttOwnedSessionStartedAt: number | null = null;
 
 const ENV_CHECK_SCHEMA: JsonSchema = {
   type: "string",
@@ -247,7 +257,7 @@ export function registerRtt(ctx: DshContext): void {
   ctx.tools.register({
     name: RTT_TOOL,
     description:
-      "RTT（Real Time Transfer）：start 起 openocd 的 rtt 通道并给出 TCP 端口，dump 读一段时间的记录（级别过滤/条数截断），stop 收掉，status 看状态。",
+      "RTT（Real Time Transfer）：start 起 openocd 的 rtt 通道并给出 TCP 端口，dump 读一段时间的记录（级别过滤/条数截断），stop 收掉通道（start 自己起的调试会话会一并释放、探针归还），status 看状态。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -334,8 +344,11 @@ export function registerRtt(ctx: DshContext): void {
           }
           session = ensured.session;
           notes.push("没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
+          // 记下"这是我起的"：stop 时据此决定要不要把 openocd 一起收掉（复用别人的就不动）。
+          rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
         } else {
           notes.push("复用已有调试会话（tcl 端口 " + String(session.tclPort) + "）");
+          rttOwnedSessionStartedAt = null;
         }
 
         const started = await startRtt({
@@ -389,6 +402,13 @@ export function registerRtt(ctx: DshContext): void {
 
       if (action === "stop") {
         const stopped = await stopRtt();
+        // RTT 起的会话由 RTT 收尾：只关 rtt 通道时 openocd 还握着探针，下一次烧录会撞 CMSIS-DAP。
+        const live = sessionInfo();
+        if (live !== null && rttOwnedSessionStartedAt !== null && live.startedAt === rttOwnedSessionStartedAt) {
+          rttOwnedSessionStartedAt = null;
+          const released = await release("rtt stop", exec.agent?.id === undefined ? {} : { requireOwner: exec.agent.id });
+          notes.push(released.stopped ? "RTT 起的调试会话已释放（openocd 退出，探针归还）" : released.message);
+        }
         const report = baseReport(action, projectDir);
         report.ok = stopped.ok;
         report.durationMs = stopped.durationMs;

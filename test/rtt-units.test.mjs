@@ -564,6 +564,61 @@ test("stm32_rtt start：没有活跃会话时自动起一个，报告符合 outp
   }
 });
 
+// 回归：stop 只关 rtt 通道时 openocd 还握着探针（实测 next flash 撞 CMSIS-DAP mismatch）。
+// start 自己起的会话，stop 时必须一并释放；复用的会话不动。
+test("stm32_rtt stop：start 自己起的会话要一并释放（openocd 退出、探针归还）", async () => {
+  await resetAll();
+  const tcl = await startFakeTclServer({ block: "ok" });
+  const fake = makeSubprocess({ tclPort: tcl.port });
+  debugSessions.configure(fake.service, BIN_DIRS);
+  const port = await freePort();
+  try {
+    const defs = collectTools(registerRtt, fake.service);
+    const tool = defs.get("stm32_rtt");
+    const value = await tool.execute(
+      { action: "start", projectDir: FIXTURE_PROJECT, addr: MAGIC_ADDR, rttPort: port, envCheck: "off" },
+      EXEC,
+    );
+    assert.equal(value.report.ok, true, value.message);
+    assert.notEqual(sessionInfo(), null, "start 应该自己起了会话");
+
+    const stopped = await tool.execute({ action: "stop", projectDir: FIXTURE_PROJECT }, EXEC);
+    assert.equal(stopped.report.ok, true, stopped.message);
+    assert.equal(sessionInfo(), null, "stop 之后会话应该被释放（openocd 不能继续握着探针）");
+    assert.equal(fake.spawned[0].terminated, true, "openocd 进程应该被终止");
+    assertSchema(stopped.report, "stop");
+  } finally {
+    await resetAll();
+    await tcl.close();
+  }
+});
+
+test("stm32_rtt stop：复用的会话不释放（别人起的探针不能收走）", async () => {
+  await resetAll();
+  const tcl = await startFakeTclServer({ block: "ok" });
+  const fake = makeSubprocess({ tclPort: tcl.port });
+  debugSessions.configure(fake.service, BIN_DIRS);
+  const port = await freePort();
+  try {
+    // 先由"别人"（宿主会话）起一个会话，RTT 只是复用。
+    const pre = await ensureSession(FIXTURE_PROJECT, { subprocess: fake.service, binDirs: BIN_DIRS, checkPortBusy: NOT_BUSY });
+    assert.equal(pre.ok, true, pre.message);
+    const defs = collectTools(registerRtt, fake.service);
+    const tool = defs.get("stm32_rtt");
+    const value = await tool.execute(
+      { action: "start", projectDir: FIXTURE_PROJECT, addr: MAGIC_ADDR, rttPort: port, envCheck: "off" },
+      EXEC,
+    );
+    assert.equal(value.report.ok, true, value.message);
+    const stopped = await tool.execute({ action: "stop", projectDir: FIXTURE_PROJECT }, EXEC);
+    assert.equal(stopped.report.ok, true, stopped.message);
+    assert.notEqual(sessionInfo(), null, "复用的会话不能因为 rtt stop 被收掉");
+  } finally {
+    await resetAll();
+    await tcl.close();
+  }
+});
+
 test("stm32_rtt dump：不需要 subprocess 也能读到记录，报告符合 outputSchema", async () => {
   const frames = [encodeRttFrame({ t: 5, level: 3, text: "hello" })];
   const { tcl, rtt } = await setup({ frames });

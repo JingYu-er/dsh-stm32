@@ -139,9 +139,15 @@ export function touch(): boolean {
   return debugSessions.touch();
 }
 
-/** 显式释放（stm32_debug_stop、进程退出等）。 */
-export async function release(reason = "显式释放"): Promise<{ ok: boolean; stopped: boolean; message: string }> {
-  return await debugSessions.stop(reason);
+/**
+ * 显式释放（stm32_debug_stop、rtt stop、进程退出等）。
+ * options.requireOwner 给定时，只有会话的 owner 对得上才关——多 agent 并行时不要收走别人的探针。
+ */
+export async function release(
+  reason = "显式释放",
+  options: { requireOwner?: string } = {},
+): Promise<{ ok: boolean; stopped: boolean; message: string }> {
+  return await debugSessions.stop(reason, options);
 }
 
 /**
