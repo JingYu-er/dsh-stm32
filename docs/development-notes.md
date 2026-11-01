@@ -2923,7 +2923,31 @@ main.c:196 → 197 → 198 → 242 → 244 → 251 → 252 → 257
 **教训**：`lastStopped` 是「当前状态」不是「事件队列」——只要把它当缓冲，就必须显式定好
 「谁清、谁消费、消费后还能不能看见」，否则断点报告会张冠李戴（而且在单测里比在板子上更容易先炸）。
 
+## 41. RTT dump 在「整块环缓冲」上：已解出的记录不能丢，对齐说明只能有一条（2026-11-01）
 
+真机（C8T6 + `_rich_hal`，环缓冲 1024 字节写满后固件不再写，openocd 每次连上都把整块重推）：
 
+- 现象 A：`stm32_rtt action=dump` 报 `ok=false、bytes=28598、records=0`，`notes` 里
+  「开头 929 字节不是帧头…」**重复 27 条**，最后「窗口结束时尾部还有 855 字节的半个帧」。
+- 现象 B：`monitor reset run` 让固件重来后再 dump，记录能出来（13 条），但 notes 里
+  「中段 42 字节不是帧头」**重复 26 条** —— 每个 chunk 撞一次就 push 一条，纯噪音。
 
+根因两处，都在 `src/engine/rtt.ts` 的 `socket.on("data")` 里：
 
+1. **判定顺序反了**：先判 `parsed.error !== null` 才收 `parsed.records`。而「一条有效帧 + 后面一长串 0」
+   是同一次 `parseRttFrames` 的结果（`length=0` 触发失步），于是这次已经解出来的记录跟着被丢掉。
+2. **note 在循环里 push**：对齐一次 push 一条，上限 64 次内每个 chunk 都来一遍，把 notes 刷屏。
+
+修法：
+
+- 新增本地 `takeRecords(list)`：统一做「去重（`t|level|text`）→ 按 level 过滤 → maxRecords 收尾」，
+  在每次 `parseRttFrames` 之后**先收记录再判 error**。
+- 对齐统计改成状态量：`skippedBytes` / `skippedAtHead` / `tailNote`，只在 `finish()` 里
+  `notes.unshift("开头|中段 N 字节不是帧头…")` 一条、并 push `tailNote`。
+- `for (let guard = 0; guard < 64; guard += 1)` 保留防死循环；不收敛就把剩余字节当垃圾丢掉并记 error。
+
+测试：`rtt-units` 34 例（新增「整块 1024 字节缓冲（垃圾+有效帧+长串 0）时记录不能丢，对齐说明只留一条」，
+同一块连推三次，断言 records 只有 1 条、`/不是帧头/` 的 note 恰好 1 条）；全量 **637 pass / 0 fail**。
+
+**教训**：解析器的 `records` 和 `error` 不是互斥的——「读到这里出错」之前读到的数据仍然是有效数据，
+API 一旦把两者放在同一个返回值里，调用方就必须**先消费成功部分**，否则每次失步都白丢一批记录。
