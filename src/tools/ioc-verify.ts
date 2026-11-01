@@ -48,11 +48,20 @@ const diffSchema: JsonSchema = {
     },
     removedKeys: { type: "array", items: { type: "string" } },
     addedKeys: { type: "array", items: { type: "string" } },
+    changedValues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { key: { type: "string" }, before: { type: "string" }, after: { type: "string" } },
+        required: ["key", "before", "after"],
+      },
+    },
     hints: { type: "array", items: { type: "string" } },
   },
   required: [
     "afterPeripherals", "droppedPeripherals", "addedPeripherals", "plannedFunctions", "plannedFunctionsRaw",
-    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "hints",
+    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "changedValues", "hints",
   ],
 };
 
@@ -96,6 +105,9 @@ function format(report: IocVerifyReport): string[] {
   for (const block of diff.sharedSignals) {
     lines.push("共享信号块：SH." + block.key + " → " + block.entries.join("  "));
   }
+  for (const change of diff.changedValues) {
+    lines.push("值被改写： " + change.key + "  " + change.before + " → " + change.after);
+  }
   for (const hint of diff.hints) lines.push("* " + hint);
   lines.push("副本：" + report.snapshotPath + "（工程 .ioc 未改动）");
   return lines;
@@ -130,7 +142,8 @@ export function registerIocVerify(ctx: DshContext): void {
         ok: false, projectDir: resolution.projectDir, iocPath: "", snapshotPath: "", durationMs: 0,
         message: "", notes: [], errors: [], diff: {
           afterPeripherals: [], droppedPeripherals: [], addedPeripherals: [], plannedFunctions: [],
-          plannedFunctionsRaw: [], signalRewrites: [], sharedSignals: [], removedKeys: [], addedKeys: [], hints: [],
+          plannedFunctionsRaw: [], signalRewrites: [], sharedSignals: [], removedKeys: [], addedKeys: [],
+          changedValues: [], hints: [],
         },
       };
       if (subprocess === undefined) {

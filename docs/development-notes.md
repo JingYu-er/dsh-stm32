@@ -3669,3 +3669,42 @@ db/boardmanager 语料（504 份 .ioc 实测分布）、现有生成器（我们
 
 **教训**：验证脚手架里那段最小 `SubprocessService`（`spawn` 把 `java` 映射到 `D:/app/STM32CubeMX/jre/bin/java.exe`，
 `readFrom()` 返回累计文本）可以直接复用，不必为了跑一次 `runIocVerify` 去起宿主。
+
+## 59. 按三源比对（abc-diff）修真机零 diff 的四类破绽（2026-11-01）
+
+§58 的三路取证产出 `.dsh-stm32/cubemx-re/abc-diff.md`（A 16 / B 9 / C 13），B 表是「我们写、CubeMX 不这么写或写法不同」，
+其中 4 条会直接毁掉字节级零 diff；C 表里挑出 1 条会让人误判「零 diff」的盲区。逐条核实后动的是这 4 + 1：
+
+1. **键排序必须是纯字典序**（`src/engine/ioc-plan.ts` `compareIocKeys()`）。真值 :`com.st.components.util.SortedProperties`
+   =`java.util.Properties` + `Collections.sort` + `String.compareTo`；语料 6.x 266 份里 261 份（98.1%）满足 `sort(decode(key))`。
+   旧实现按「数字段比数值」排，`Mcu.Pin10` 会排到 `Mcu.Pin2` 之前——≥10 个引脚/外设时整段错位。
+2. **值开头的空格要转义成 `\\ `**（`encodeIocValue()`）。`Properties#store` 对 `escapeSpace` 的首字符空格写 `\\ `，
+   不转义则 CubeMX 读回时前导空白被吃掉（`ProjectManager.DeviceId=" xyz"` 这类）。
+3. **ADC 分频与 `RCC.ADCFreqValue` 必须同步**（`src/data/ioc-presets.ts` 预设块 + `adcPrescalerDiv()`）。
+   预设写 `RCC.ADCPresc=RCC_ADCPCLK2_DIV6` 却留着模板里 ÷2 的 `RCC.ADCFreqValue=36000000`，自相矛盾；
+   语料里 `RCC.ADCPresc` 只有 4 份，但 4/4 都满足 `ADCFreqValue == APB2/分频`——CubeMX 自己维护这个不变量。
+   现在按 `APB2Freq_Value` 重算并写回，同时把 `RCC.IPParameters` 按字典序重排（`clock-plan.ts` 的 `mergeIpParameters` 本来就 sort，两处终于一致）。
+4. **纯 LF 的 .ioc 只告警不静默**（`planIocChanges()`）。CubeMX 写 CRLF + ISO-8859-1；
+   写回沿用源文件行尾（`dominantEol`）才不会首次 `apply` 就整文件变换行，但这样「逐字节零 diff」对 LF 源永远不可达——
+   所以明确告警，别让人以为已经对齐。
+5. **`ioc_verify` 新增 `changedValues`**（`src/engine/ioc-verify.ts` `diffIocForVerify()`）。
+   原来只比键存在性（`removedKeys`/`addedKeys`）和引脚信号，**键还在、值被 CubeMX 改写时零 diff**，
+   这类最常见（token 改名、派生频率重算）反而看不出来。现在逐键比值，报告 `{key,before,after}`（截 60 条），
+   并进 `message`（「另有 N 个键的值被改写」）与终端渲染。
+
+### 59.1 真机证据
+
+- **ADC 预设（`ADC1:1`）**：`durationMs=70753`，`dropped/added/removed/signalRewrites` 全空；候选与 CubeMX 回写快照逐字比对：
+  `RCC.ADCFreqValue=12000000`、`RCC.ADCPresc=RCC.ADCPCLK2_DIV6`、`RCC.IPParameters` 的字典序名单完全相同——CubeMX 保留了我们重算的值。
+- **`changedValues` 正例**：把副本里的 `RCC.SYSCLKFreq_VALUE` 从 72000000 改成 64000000 → `durationMs=63234`，
+  `changedValues=[{"key":"RCC.SYSCLKFreq_VALUE","before":"64000000","after":"72000000"}]`，其余 diff 全空。
+  CubeMX 自己把派生时钟改回 72 MHz，我们抓到了——证明这条检测不是空跑。
+- 单测：`npm run build` + `node test/run-units.mjs` → **681 pass / 0 fail**（原 680 + changedValues 1 条）。
+
+### 59.2 判过但不改（留证据，免得下次又当缺口报）
+
+- **`<pin>.Locked` 恒写 true 不是伪 diff**：语料 24,990 个 `Locked=true`、`Locked=false` **0 个**（497 文件）——CubeMX 只在锁定时写，我们恒写 true 与它语义一致。
+- **`entries` 的键名校验已够用**：`planIocChanges` 已拒绝空键、含 `=` 的键、值里有换行的键（`ioc-plan.ts:957-968`）；
+  再往前一步就得有完整 schema（真值表）才能判「这个键 CubeMX 认不认」，现在加只会造噪声——打错的键由 R7（IPParameters 白名单）和 R20（NVIC 名）兜住。
+- **DMA 通道 NVIC 的 9 段值**与真机一致（`true:0:0:false:false:true:false:true:true`，§58.3.3 实测回写零 diff），B8 不动。
+- **`<IP>.IPParameters` 成员序推不出来**（jar 的 U2：35% 与任何推导都不符，`LinkedHashMap` 插入序取决于 db 加载与改参历史），只能照抄用户给的顺序；B5 不修，留作已知限制。

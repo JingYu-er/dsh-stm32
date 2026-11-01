@@ -90,7 +90,16 @@ test("diff：两边一样时没有任何丢弃与改写（健康配置）", () =
   const diff = diffIocForVerify(BEFORE, BEFORE);
   assert.deepEqual(diff.droppedPeripherals, []);
   assert.deepEqual(diff.signalRewrites, []);
+  assert.deepEqual(diff.changedValues, []);
   assert.deepEqual(diff.hints, []);
+});
+
+test("diff：键还在但值被 CubeMX 改写 → 必须报 changedValues（零 diff 不能只看键）", () => {
+  // CubeMX 会把派生频率之类按自己的不变量重算，键名不变。
+  const diff = diffIocForVerify(BEFORE + "RCC.SYSCLKFreq_VALUE=72000000\n", BEFORE + "RCC.SYSCLKFreq_VALUE=64000000\n");
+  assert.deepEqual(diff.changedValues, [{ key: "RCC.SYSCLKFreq_VALUE", before: "72000000", after: "64000000" }]);
+  assert.deepEqual(diff.removedKeys, [], "键没被删，只改了值");
+  assert.deepEqual(diff.addedKeys, []);
 });
 
 let failed = 0;

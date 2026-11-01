@@ -30,6 +30,13 @@ export interface IocSignalRewrite {
   after: string;
 }
 
+/** 两边都有、但值被 CubeMX 改掉的键（它会把值规范化或按自己的不变量重算）。 */
+export interface IocValueChange {
+  key: string;
+  before: string;
+  after: string;
+}
+
 export interface IocVerifyDiff {
   /** CubeMX 认定激活的外设（after 的 Mcu.IPn）。 */
   afterPeripherals: string[];
@@ -49,6 +56,8 @@ export interface IocVerifyDiff {
   removedKeys: string[];
   /** 它自己补出来的键（截断后）。 */
   addedKeys: string[];
+  /** 值被改写（截断后）：键存在性对比看不出的那类差异。 */
+  changedValues: IocValueChange[];
   /** 人话诊断：每个被丢的外设缺什么。 */
   hints: string[];
 }
@@ -178,6 +187,13 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
   const listed = listedPins(before);
   const removedKeys = [...before.keys()].filter((key) => !after.has(key)).sort();
   const addedKeys = [...after.keys()].filter((key) => !before.has(key)).sort();
+  // 只比键存在性会漏掉「值被 CubeMX 规范化/重算」：键还在、值变了——这类差异最容易被误读成零 diff。
+  const changedValues: IocValueChange[] = [];
+  for (const [key, value] of before) {
+    const next = after.get(key);
+    if (next !== undefined && next !== value) changedValues.push({ key, before: value, after: next });
+  }
+  changedValues.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
 
   const hints: string[] = [];
   for (const device of dropped) {
@@ -224,6 +240,7 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
     sharedSignals: sharedSignalBlocks(after),
     removedKeys: removedKeys.slice(0, KEY_SAMPLE_LIMIT),
     addedKeys: addedKeys.slice(0, KEY_SAMPLE_LIMIT),
+    changedValues: changedValues.slice(0, KEY_SAMPLE_LIMIT),
     hints,
   };
 }
@@ -324,6 +341,9 @@ export async function runIocVerify(
       notes.push("日志里没看到保存完成的行，结论可能不完整；原始日志末尾：" + log.trim().split(/\r?\n/u).slice(-3).join(" | "));
     }
     const dropped = diff.droppedPeripherals;
+    const valueSuffix = diff.changedValues.length === 0
+      ? ""
+      : "；另有 " + String(diff.changedValues.length) + " 个键的值被改写（键还在，值不一样）";
     return {
       ...base,
       ok: true,
@@ -332,9 +352,9 @@ export async function runIocVerify(
       diff,
       notes,
       message:
-        dropped.length === 0
+        (dropped.length === 0
           ? "CubeMX 认了全部 " + String(diff.afterPeripherals.length) + " 个外设；计划生成 " + String(diff.plannedFunctions.length) + " 个初始化函数"
-          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）",
+          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") + valueSuffix,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
