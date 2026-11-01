@@ -3432,6 +3432,46 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 
 `test/ioc-rules-units.test.mjs` 25 例（+2：R18 超频报错且恰好等于上限不报；缺键/缺 db 不判）；
 全量 **670 pass / 0 fail**；`npm run build` + `npx tsc --noEmit` 干净。
+
+## 49. 冗余清理：包瘦身 + 删死代码（2026-11-01）
+
+用户问「插件还有哪些地方是冗余的」，做了一次全仓扫描（89 个 src 文件、24 个工具），结论与动作：
+
+### 49.1 包里的开发文档（最大的一处冗余）
+
+`package.json` 的 `files` 写的是 `docs/*.md`，于是四份文档全进了 npm 包：
+`development-notes.md` 375 KB、`reading-guide.md` 94.6 KB、`logic-audit.md` 38.8 KB、`dsh-stm32-plugin-规格.md` 53 KB。
+装插件的用户只需要 `reading-guide.md`。
+
+改成 `"docs/reading-guide.md"` 后：**包体 714.2 KB → 522.7 KB，文件 119 → 116**（`scripts/pack-size.mjs` 实测），
+`scripts/pack-smoke.mjs` 的必需文件清单本来只要 reading-guide，无需改；`npm run test:pack` 全过。
+
+### 49.2 死导出 11 个
+
+扫法：把所有 `export function/const/class/interface/type` 收集起来，在 **src + test + scripts** 里数引用（含同文件内的使用），
+零引用即删除：`regs.describeSample`、`breakpoints.DEFAULT_BREAKPOINT_BUDGET`、`toolchain-gate.gateBlockedMessage`、
+`scaffold.DEFAULT_MCU_CUBE_VERSION`、`watch.isSampledKind`、`firmware-install.planOrInstallFirmware`、
+`clock-f1.{pllMulFromValue,F1_CLOCK_LIMIT_LABELS,F1_RCC_IP_KEYS}`、`ioc-presets.pinLogicalName`、`toolchain-config.describeToolchainConfig`。
+其中 `pinLogicalName` 与 `cubemx-db.logicalPinName` 是同一件事的两份实现，删掉多余那份。
+
+**保留**：`cubemx-db.hasIpInstance` / `cubemx-db.logicalPinName` 目前零引用，但它们是 R19/R15 扩展的预留 API，留着更划算。
+
+### 49.3 顺带清掉的东西
+
+仓库根 11 个 `.tmp-*`（`.tmp-audit*.mjs`、`.tmp-deadcode.cjs`、`.tmp-hal-check*.mjs`、`.tmp-t4-*.mjs`、`.tmp-units.log`、`.tmp-escape-probe.txt`）
+全部送回收站——`git ls-files` 确认它们从未被提交。
+
+### 49.4 明确判为「必要」的（别再动）
+
+`zip.ts`（工程导出）、`tar.ts`（HAL 包解包）、`svd.ts`（35 KB，`stm32_regs_read` 的符号名，R20 也要用）、
+`msys2-install.ts`（95 KB，一键装工具链）、`web-api.ts`/`web-routes.ts`（Web 面板）、`ioc-presets.ts` 的 `PIN_DB_ALIASES`（db 不可用时的离线兜底）。
+每个 engine 模块都能查到真实 import 方，没有孤儿文件（唯一「无 import」的是入口 `src/index.ts` 和 `zip.ts` 的动态使用）。
+
+### 49.5 还没做的结构性合并
+
+三套缓存 UX（`stm32_cache` / `stm32_assets` / `stm32_firmware_install`）、`stm32_env_probe` 与 `stm32_doctor` 的重叠、
+24 个工具的样板（`resolveProjectDir` 15 处、`ensureToolchain` 10 处、`baseReport` 9 处）——这些改的是命令名/结构，
+要在同一次里同步 `src/skill/stm32-workflow.ts`、README、docs 与测试，单独一轮做。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，

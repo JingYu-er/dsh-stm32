@@ -357,14 +357,3 @@ export function cubeMxRootsFromConfig(config: ToolchainConfig | null): string[] 
 export function resetToolchainConfigCache(): void {
   cache = null;
 }
-
-/** 给报告 / 命令卡片用的一句话描述。 */
-export function describeToolchainConfig(read: ToolchainConfigRead): string {
-  if (!read.exists) return "还没有配置（没有 " + read.path + "）";
-  if (read.config === null) return "配置读不了：" + (read.errors[0] ?? "未知原因");
-  const parts: string[] = [];
-  parts.push(read.config.msys64 === "" ? "MSYS2 未配置" : "MSYS2 " + read.config.msys64);
-  if (read.config.packages.length > 0) parts.push("包 " + String(read.config.packages.length) + " 个");
-  if (read.config.cubeMxRoot !== "") parts.push("CubeMX " + read.config.cubeMxRoot);
-  return parts.join("；") + "（" + read.path + "）";
-}

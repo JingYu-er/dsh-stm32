@@ -72,14 +72,6 @@ export function pllMulValue(mul: number): string {
   return "RCC_PLL_MUL" + String(mul);
 }
 
-/** 从 RCC.PLLMUL 的值（RCC_PLL_MUL9）反解倍频；认不出来返回 null。 */
-export function pllMulFromValue(value: string): number | null {
-  const matched = /^RCC_PLL_MUL(\d{1,2})$/u.exec(value.trim());
-  if (matched === null) return null;
-  const mul = Number.parseInt(matched[1] as string, 10);
-  return Number.isFinite(mul) && mul >= 2 && mul <= 16 ? mul : null;
-}
-
 export interface DividerFact {
   div: number;
   /** .ioc 里的取值，例如 RCC_HCLK_DIV2 / RCC_ADCPCLK2_DIV6。 */
@@ -137,15 +129,6 @@ export const F1_CLOCK_LIMITS = {
   usbHz: 48_000_000,
 } as const;
 
-/** 上限的人读标签，报告里拼错误消息用。 */
-export const F1_CLOCK_LIMIT_LABELS = {
-  sysclkHz: "SYSCLK",
-  apb1Hz: "APB1",
-  apb2Hz: "APB2",
-  adcHz: "ADC",
-  usbHz: "USB",
-} as const;
-
 export type ClockBusId = "ahb" | "apb1" | "apb2";
 export type PeripheralKind = "usart" | "spi" | "i2c" | "tim" | "adc" | "usb" | "core";
 
@@ -185,31 +168,3 @@ export const F1_PERIPHERAL_CLOCKS: readonly PeripheralClockFact[] = [
 
 /** UART 波特率整除误差默认算这几档（F1 值料号常用档）。 */
 export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 115200, 230400];
-
-/**
- * templates/scaffold/demo.ioc 里 RCC.IPParameters 列出的那 20 个键。
- * 改时钟时必须成套重算——只改 RCC.PLLMUL 会让 CubeMX 下次打开按旧 Freq_Value 生成
- * SystemClock_Config，HAL_RCC_ClockConfig 直接算错（这是本插件最容易埋雷的地方）。
- */
-export const F1_RCC_IP_KEYS: readonly string[] = [
-  "ADCFreqValue",
-  "AHBFreq_Value",
-  "APB1CLKDivider",
-  "APB1Freq_Value",
-  "APB1TimFreq_Value",
-  "APB2Freq_Value",
-  "APB2TimFreq_Value",
-  "FCLKCortexFreq_Value",
-  "FamilyName",
-  "HCLKFreq_Value",
-  "MCOFreq_Value",
-  "PLLCLKFreq_Value",
-  "PLLMCOFreq_Value",
-  "PLLMUL",
-  "PLLSourceVirtual",
-  "SYSCLKFreq_VALUE",
-  "SYSCLKSource",
-  "TimSysFreq_Value",
-  "USBFreq_Value",
-  "VCOOutput2Freq_Value",
-];

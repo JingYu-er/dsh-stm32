@@ -79,16 +79,6 @@ export function pinDbName(family: string, pin: string): string {
   return table[pin.trim().toUpperCase()] ?? pin;
 }
 
-/** 逻辑引脚名（PA0-WKUP → PA0）：反查用，也用于"这个引脚是否已被占用"的提示。 */
-export function pinLogicalName(family: string, dbName: string): string {
-  const table = PIN_DB_ALIASES[family.trim().toUpperCase()];
-  if (table === undefined) return dbName;
-  for (const [logical, mapped] of Object.entries(table)) {
-    if (mapped === dbName) return logical;
-  }
-  return dbName;
-}
-
 function usart(name: string, tx: string, rx: string): PeripheralPreset {
   return {
     name,

@@ -244,7 +244,3 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
     notes,
   };
 }
-
-export function describeSample(sample: RegsSample): string {
-  return sample.address + " = " + (sample.ok ? sample.value : "（读不到）");
-}

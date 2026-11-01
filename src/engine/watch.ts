@@ -62,10 +62,6 @@ export function isWatchKind(value: string): value is WatchKind {
   return (WATCH_KINDS as readonly string[]).includes(value);
 }
 
-export function isSampledKind(kind: WatchKind): boolean {
-  return kind === "value";
-}
-
 /** 表达式去空白、拒绝空/超长/带换行的（带换行会把 gdb 命令行拆坏）。 */
 export function normalizeWatchExpression(text: string): string | null {
   if (typeof text !== "string") return null;

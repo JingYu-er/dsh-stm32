@@ -488,8 +488,3 @@ export function gateReportNotes(result: GateResult): string[] {
   for (const warning of result.warnings) lines.push("⚠ " + warning);
   return lines;
 }
-
-/** 一句话给别的工具拼失败报告用（tool card 第一行）。 */
-export function gateBlockedMessage(result: GateResult): string {
-  return result.message;
-}

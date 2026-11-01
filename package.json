@@ -13,7 +13,7 @@
     "lib",
     "client",
     "templates",
-    "docs/*.md",
+    "docs/reading-guide.md",
     "cordis.patch.yml",
     "README.md",
     "README_EN.md",

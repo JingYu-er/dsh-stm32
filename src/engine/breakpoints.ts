@@ -27,9 +27,6 @@ export interface BreakpointBudget {
 /** F1 实测：6 个硬件断点、4 个观察点。 */
 export const F1_BREAKPOINT_BUDGET: BreakpointBudget = { code: 6, data: 4 };
 
-/** 目前插件只支持 F1：拿不到更精确的值时就用这一份。 */
-export const DEFAULT_BREAKPOINT_BUDGET: BreakpointBudget = F1_BREAKPOINT_BUDGET;
-
 export type BreakpointKind = "code" | "data";
 
 /** 一个待设的断点。location 原样交给 gdb（符号名、file:line、*0x0800xxxx 都行）。 */

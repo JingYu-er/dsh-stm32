@@ -753,8 +753,3 @@ export async function installFirmware(request: FirmwareInstallRequest): Promise<
     }
   }
 }
-
-/** 计划 / 真装的总入口。 */
-export async function planOrInstallFirmware(request: FirmwareInstallRequest): Promise<FirmwareInstallResult> {
-  return (request.mode ?? "plan") === "install" ? installFirmware(request) : firmwareInstallPlan(request);
-}

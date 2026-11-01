@@ -36,7 +36,6 @@ import {
 import { describeDroppedPlaceholder, detectVscodeFill, fillVscodeTemplate } from "./vscode-config.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
-export const DEFAULT_MCU_CUBE_VERSION = "6.15.0";
 export const SCAFFOLD_PROJECT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 /**
