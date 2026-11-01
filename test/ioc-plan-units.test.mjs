@@ -588,6 +588,25 @@ test("peripherals(ADC1:1,4,5)：多 Rank 三路扫描，Rank 从 1 连续、NbrO
   assert.equal(shKeys.length, 3, "每路都要有一个 SH 块：" + JSON.stringify(shKeys));
 });
 
+test("peripherals(DMA:ADC1)：写八个 Dma 字段，RequestsNb 按组数算，Mcu.IPn 里有 DMA", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "ADC1:1,4,5" }, { name: "DMA:ADC1" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("Dma.RequestsNb"), "1");
+  assert.equal(entries.get("Dma.ADC1.0.Instance"), "DMA1_Channel1");
+  assert.equal(entries.get("Dma.ADC1.0.Direction"), "DMA_PERIPH_TO_MEMORY");
+  assert.equal(entries.get("Dma.ADC1.0.PeriphInc"), "DMA_PINC_DISABLE");
+  assert.equal(entries.get("Dma.ADC1.0.MemInc"), "DMA_MINC_ENABLE");
+  assert.equal(entries.get("Dma.ADC1.0.PeriphDataAlignment"), "DMA_PDATAALIGN_HALFWORD");
+  assert.equal(entries.get("Dma.ADC1.0.MemDataAlignment"), "DMA_MDATAALIGN_HALFWORD");
+  assert.equal(entries.get("Dma.ADC1.0.Mode"), "DMA_CIRCULAR");
+  assert.equal(entries.get("Dma.ADC1.0.Priority"), "DMA_PRIORITY_LOW");
+  const ipValues = [...entries.entries()].filter(([key]) => /^Mcu\.IP[0-9]+$/u.test(key)).map(([, value]) => value);
+  assert.ok(ipValues.includes("DMA"), "Mcu.IPn 必须有 DMA，否则整组 Dma.* 被丢：" + JSON.stringify(ipValues));
+  assert.equal(report.errors.length, 0, "不该有错误：" + JSON.stringify(report.errors));
+});
+
 let failed = 0;
 for (const item of cases) {
   try {

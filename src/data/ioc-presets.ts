@@ -48,6 +48,11 @@ export interface PeripheralPreset {
   parameters: Array<{ name: string; value: string }>;
   /** 额外的全局键（例如 ADC 的 RCC.ADCPresc）。 */
   extraEntries?: Array<{ key: string; value: string }>;
+  /**
+   * 逐字写入的键（不受 `<ip>.<名字>` 约束、也不进 IPParameters）。
+   * DMA 就靠这个：真键是 `Dma.ADC1.0.Instance`，跟预设的 ip 名对不上。
+   */
+  rawEntries?: Array<{ key: string; value: string }>;
   /** 该预设的注意点，plan 的时候原样报给用户。 */
   notes?: string[];
 }
@@ -145,6 +150,9 @@ function adc(name: string, pin: string, channel: number): PeripheralPreset {
 }
 
 /** F103C8 上 ADC 通道 → 默认引脚（只收这颗片子上真实存在的 IN0..IN9）。 */
+/** 允许配 DMA 的外设（F103 的 DMA 请求表：ADC1/SPI/I2C/USART/TIM 都能接到 DMA1 的某个通道）。 */
+const ALLOWED_DMA_IP = ["ADC1", "ADC2", "ADC3", "SPI1", "SPI2", "I2C1", "I2C2", "USART1", "USART2", "USART3", "TIM1", "TIM2", "TIM3", "TIM4"];
+
 const ADC_PIN_BY_CHANNEL: Record<number, string> = {
   0: "PA0", 1: "PA1", 4: "PA4", 5: "PA5", 6: "PA6", 7: "PA7", 8: "PB0", 9: "PB1",
 };
@@ -213,6 +221,40 @@ function timerBase(name: string): PeripheralPreset {
   };
 }
 
+/**
+ * DMA 通道预设（C3）：`DMA:ADC1` → 给 ADC1 配一条 DMA 通道。
+ *
+ * 八个字段的顺序来自 ImportDMAParameter 的反汇编：Instance、Direction、PeriphInc、MemInc、
+ * PeriphDataAlignment、MemDataAlignment、Mode、Priority。缺 `Mcu.IPn=DMA` 时 CubeMX 会把整组
+ * Dma.* 丢掉（R1 规则专盯这一条），所以预设的 ip 就是 "DMA"。
+ * `Dma.RequestsNb` 由 ioc-plan 按实际 Dma.<IP>.<n> 组数重算，不在这里写死。
+ */
+function dmaPreset(ip: string, channel: string): PeripheralPreset {
+  const base = "Dma." + ip + ".0.";
+  const isAdc = ip.startsWith("ADC");
+  return {
+    name: "DMA:" + ip,
+    label: ip + " 的 DMA 通道（" + channel + "）",
+    ip: "DMA",
+    pins: [],
+    parameters: [],
+    rawEntries: [
+      { key: base + "Instance", value: channel },
+      { key: base + "Direction", value: "DMA_PERIPH_TO_MEMORY" },
+      { key: base + "PeriphInc", value: "DMA_PINC_DISABLE" },
+      { key: base + "MemInc", value: "DMA_MINC_ENABLE" },
+      { key: base + "PeriphDataAlignment", value: isAdc ? "DMA_PDATAALIGN_HALFWORD" : "DMA_PDATAALIGN_BYTE" },
+      { key: base + "MemDataAlignment", value: isAdc ? "DMA_MDATAALIGN_HALFWORD" : "DMA_MDATAALIGN_BYTE" },
+      { key: base + "Mode", value: "DMA_CIRCULAR" },
+      { key: base + "Priority", value: "DMA_PRIORITY_LOW" },
+    ],
+    notes: [
+      ip + " 的 DMA：circular + MINC，外设/内存都是半字（ADC 是 12 位右对齐，用 uint16_t 缓冲最省事）；" +
+        "要改通道/优先级用 parameters 覆盖 Instance / Mode / Priority",
+    ],
+  };
+}
+
 /** 内置预设表（按名字查）。 */
 export const PERIPHERAL_PRESETS: PeripheralPreset[] = [
   usart("USART1", "PA9", "PA10"),
@@ -237,6 +279,11 @@ export function findPeripheralPreset(name: string): PeripheralPreset | null {
     if (channels.length === 0 || channels.some((channel) => ADC_PIN_BY_CHANNEL[channel] === undefined)) return null;
     return adcMulti(base as string, channels);
   }
+  if (variant !== undefined && /^[A-Z]+[0-9]+$/u.test(variant) && base === "DMA") {
+    const ip = variant;
+    const channel = ip.startsWith("ADC") ? "DMA1_Channel1" : "DMA1_Channel" + String((ALLOWED_DMA_IP.indexOf(ip) % 7) + 2);
+    return ALLOWED_DMA_IP.includes(ip) ? dmaPreset(ip, channel) : null;
+  }
   if (variant === "TIMEBASE") {
     if (!/^TIM[1-8]$/u.test(base ?? "")) return null;
     return timerBase(base as string);
@@ -247,5 +294,5 @@ export function findPeripheralPreset(name: string): PeripheralPreset | null {
 /** 支持的外设名列表（报错时给用户看）。 */
 export function peripheralPresetNames(): string[] {
   // 纯时基是"变体"写法：TIM2/3/4:timebase，不占引脚。
-  return [...PERIPHERAL_PRESETS.map((preset) => preset.name), "TIM1..TIM8:timebase", "ADC1:1,4,5（多 Rank，通道号列表）"];
+  return [...PERIPHERAL_PRESETS.map((preset) => preset.name), "TIM1..TIM8:timebase", "ADC1:1,4,5（多 Rank，通道号列表）", "DMA:ADC1（给该外设配 DMA 通道）"];
 }

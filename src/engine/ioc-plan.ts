@@ -648,6 +648,19 @@ function enablePeripheral(
     }
   }
 
+  // 逐字键（DMA 这类键名不受 <ip>.<名字> 约束）：先写它们，再统一重算 Dma.RequestsNb。
+  for (const raw of preset.rawEntries ?? []) {
+    table.entries.set(raw.key, request.parameters?.[raw.key.replace("Dma.", "").replace(/\.0\./u, ".")] ?? raw.value);
+  }
+  if ((preset.rawEntries ?? []).some((raw) => raw.key.startsWith("Dma."))) {
+    const groups = new Set<string>();
+    for (const key of table.entries.keys()) {
+      const match = /^Dma\.([A-Za-z0-9_]+)\.([0-9]+)\./u.exec(key);
+      if (match !== null) groups.add((match[1] as string) + "." + (match[2] as string));
+    }
+    table.entries.set("Dma.RequestsNb", String(groups.size));
+  }
+
   // 参数：写 <ip>.<名字>=值，并把名字合并进 <ip>.IPParameters。
   const paramsKey = preset.ip + ".IPParameters";
   const names = (table.entries.get(paramsKey) ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
@@ -666,7 +679,7 @@ function enablePeripheral(
     names.push(name);
     table.entries.set(preset.ip + "." + name, value);
   }
-  table.entries.set(paramsKey, names.join(","));
+  if (names.length > 0) table.entries.set(paramsKey, names.join(","));
 
   for (const extra of preset.extraEntries ?? []) {
     table.entries.set(extra.key, extra.value);

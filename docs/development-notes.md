@@ -3531,6 +3531,20 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
   三个 `ADCx_INn` 信号、三个 `SH.*.ConfNb`）；全量 **671 pass / 0 fail**。
 
 **注意**：单路 ADC 还是老预设（`ADC1`），多路用新写法——`findPeripheralPreset` 只命中第一个，别造同名第二条。
+
+## 53. P3'-C3：DMA 预设 `DMA:ADC1`（2026-11-01）
+
+`Dma.*` 的键名是 `Dma.<外设>.<n>.<字段>`，跟预设的 `<ip>.<参数>` 规则对不上，所以给预设加了 `rawEntries`：
+逐字写入、不进 `IPParameters`。八字段照 `ImportDMAParameter` 的顺序：
+`Instance / Direction / PeriphInc / MemInc / PeriphDataAlignment / MemDataAlignment / Mode / Priority`。
+
+- `src/data/ioc-presets.ts`：`dmaPreset(ip, channel)`（ADC 用半字对齐 + `DMA_CIRCULAR` + MINC；预设的 `ip` 就是 `DMA`，
+  这样 `Mcu.IPn=DMA` 由 `enablePeripheral` 自动补上——缺它 CubeMX 会把整组 `Dma.*` 丢掉，R1 规则专盯这条）；
+  写法 `peripherals: [{ name: "DMA:ADC1" }]`，`ALLOWED_DMA_IP` 限定在外设 DMA 请求表内的实例。
+- `src/engine/ioc-plan.ts`：写 `rawEntries` 后按实际 `Dma.<IP>.<n>` 组数重算 `Dma.RequestsNb`；
+  另外修了一个小坑——`parameters` 为空时不再写空的 `<ip>.IPParameters=`（否则 DMA 这种无参预设会留一个空键）。
+- 测试：`test/ioc-plan-units.test.mjs` +1（`ADC1:1,4,5` + `DMA:ADC1` → 八个字段、`RequestsNb=1`、`Mcu.IPn` 含 DMA、无 error）；
+  全量 **672 pass / 0 fail**。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，
