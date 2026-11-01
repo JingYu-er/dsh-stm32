@@ -3612,3 +3612,16 @@ R20 命中：NVIC.TIM9_IRQn 的中断名 TIM9 不在 SVD 的中断表里：CubeM
 插件与资源包都在仓库里了，但**本机装的是旧资源包**（`2026.10.31-1`）。要真机生效：
 `stm32_assets refresh`（拉到 `2026.11.01-1`）→ 重启宿主（插件 lib 也要重载）→ 在 `.ioc` 里塞 `NVIC.TIM9_IRQn` 跑 `stm32_ioc_plan`，
 报告里应出现同一条 R20。
+## 57. R20 真机验收：发现并修掉 9 条内核异常误报（2026-11-01）
+
+资源包刷到 `2026.11.01-1` 后第一次在真工程上跑 R20，结果 **`_rich_hal/richhal.ioc` 直接刷出 9 条假警报**：
+`NVIC.BusFault_IRQn`、`HardFault`、`MemoryManagement`、`NonMaskableInt`、`PendSV`、`SVCall`、`SysTick`、`UsageFault`、`DebugMonitor`。
+
+根因：SVD 的 `<interrupt>` 只列**器件外设**中断，Cortex-M 内核异常不在里面；而这些键在 `.ioc` 里永远合法。
+修法：`src/engine/ioc-rules.ts` 加 `CORE_EXCEPTIONS` 白名单（9 个内核异常名），命中即跳过。
+
+修后同一次检查：**R20 命中 1 条**——只有手工注入的 `NVIC.TIM9_IRQn`（F103 确实没有 TIM9），
+工程自带的 TIM2/USART1 等一个都不报。全量 **674 pass / 0 fail**。
+
+**教训**：规则用外部数据（SVD）判定「名字是否存在」时，必须先想清楚这份数据**覆盖不到什么**——
+内核异常、厂商伪信号、CubeMX 渲染名都属于这一类；先跑一遍真工程，比先写单测更容易发现这类盲区。
