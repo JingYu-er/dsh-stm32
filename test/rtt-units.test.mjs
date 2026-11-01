@@ -26,6 +26,7 @@ import {
   parseRttFrames,
   resyncRttFrames,
   rttStatus,
+  sessionGoneHint,
   startRtt,
   stopRtt,
 } from "../lib/engine/rtt.js";
@@ -300,6 +301,20 @@ test("parseRttFrames：半个帧留在 rest 里，补齐后接着解", () => {
   assert.equal(first.rest.length, 7);
   const second = parseRttFrames(Buffer.concat([first.rest, whole.subarray(7)]));
   assert.deepEqual(second.records, [{ t: 1, level: 2, text: "两句" }]);
+});
+
+test("sessionGoneHint：连接被拒/被重置要报「会话已经没了」，别报成没控制块", () => {
+  // 真机踩过：openocd 被探针 HID 错误带走后，旧代码把 ECONNREFUSED 说成
+  // 「目标内存里没有 RTT 控制块」，照着提示改 addr 永远改不好。
+  for (const text of [
+    "连不上 openocd 的 Tcl 口：connect ECONNREFUSED 127.0.0.1:6666",
+    "读控制块失败：read ECONNRESET",
+    "socket hang up",
+  ]) {
+    assert.match(sessionGoneHint(text) ?? "", /已经不在了|插拔探针/u, text);
+  }
+  assert.equal(sessionGoneHint("控制块读取的回复解析不了：\"\""), null);
+  assert.equal(sessionGoneHint("timeout 5000ms"), null);
 });
 
 test("resyncRttFrames：跳过非帧头字节，对齐到帧边界后能解出后面的记录", () => {

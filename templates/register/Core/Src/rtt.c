@@ -112,6 +112,58 @@ uint32_t rtt_control_block_size(void)
     return (uint32_t)sizeof(_SEGGER_RTT);
 }
 
+/* ---------------- 并发保护（弱符号：裸机与 RTOS 用同一份代码） ----------------
+ *
+ * rtt_write 在临界区里读改写 WrOff，所以写方必须互斥：主循环与中断同时打印时，
+ * 不保护会丢掉一次 WrOff 更新（现象是偶发丢记录，严重时把环写乱）。
+ *
+ * 默认实现 = **裸机关中断**（保存/恢复 PRIMASK）：零依赖，C8T6 这种裸机直接能用。
+ * 有 RTOS 时用强符号覆盖这一对 —— mutex 负责"任务 vs 任务"，关中断负责"任务 vs ISR"，
+ * 两个都要，缺一个都会漏：
+ *
+ *     static SemaphoreHandle_t s_rtt_mutex;   （调度器起来之后再创建）
+ *     uint32_t rtt_lock(void)
+ *     {
+ *         uint32_t primask = __get_PRIMASK();
+ *         __disable_irq();
+ *         if (s_rtt_mutex != NULL) { (void)xSemaphoreTake(s_rtt_mutex, portMAX_DELAY); }
+ *         return primask;
+ *     }
+ *     void rtt_unlock(uint32_t primask)
+ *     {
+ *         if (s_rtt_mutex != NULL) { (void)xSemaphoreGive(s_rtt_mutex); }
+ *         if (primask == 0u) { __enable_irq(); }
+ *     }
+ *
+ * 三条约束：
+ *   1) 返回的 token 语义由实现自己定，rtt_write 只原样回传、不解释（裸机版就是 PRIMASK）；
+ *   2) 不得在 ISR 里阻塞等待（ISR 里 take mutex 会死锁）——中断里要打印就只靠关中断那一段；
+ *   3) 临界区里只有 memcpy + 时间戳，vsnprintf 在锁外，不会长时间关中断。
+ */
+__attribute__((weak)) uint32_t rtt_lock(void)
+{
+#if defined(RTT_HAVE_CMSIS)
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+#else
+    /* 没有 CMSIS 头（非 Cortex-M 或头文件缺失）时退化为不加锁：
+     * 这种配置下请自己提供 rtt_lock/rtt_unlock（照上面的示例写）。 */
+    return 0u;
+#endif
+}
+
+__attribute__((weak)) void rtt_unlock(uint32_t token)
+{
+#if defined(RTT_HAVE_CMSIS)
+    if (token == 0u) {
+        __enable_irq();
+    }
+#else
+    (void)token;
+#endif
+}
+
 /*
  * 往一个环里写一整块数据。返回写进去的字节数，放不下返回 0。
  * 关键顺序：先 memcpy 数据、最后写 WrOff；RdOff 只读不改（openocd 的）。
@@ -149,7 +201,9 @@ static uint32_t rtt_ring_write(rtt_buffer_desc_t *desc, const uint8_t *data, uin
     return len;
 }
 
-void rtt_init(void)
+/* rtt_init() 的本体：**这里不拿锁** —— rtt_write 已经握着锁调它（懒初始化），
+ * 再进一次 rtt_lock() 在有 RTOS 的 mutex 实现下会自锁。拿锁的是下面那个 rtt_init()。 */
+static void rtt_init_locked(void)
 {
     uint32_t index;
 
@@ -178,6 +232,14 @@ void rtt_init(void)
 
     /* ID 最后写：看到 "SEGGER RTT" 时通道描述符一定已经就绪。 */
     memcpy(_SEGGER_RTT.acID, RTT_ID_TEXT, sizeof(RTT_ID_TEXT));
+}
+
+void rtt_init(void)
+{
+    uint32_t token = rtt_lock();
+
+    rtt_init_locked();
+    rtt_unlock(token);
 }
 
 __attribute__((weak)) uint64_t rtt_time_ms(void)
@@ -220,11 +282,10 @@ uint32_t rtt_write(uint32_t level, const char *text)
     uint8_t frame[RTT_FRAME_OVERHEAD + RTT_MSG_MAX];
     uint32_t payload = 0u;
     uint32_t total;
+    uint32_t token;
+    uint32_t result;
     size_t length = 0u;
 
-    if (s_initialized == 0u) {
-        rtt_init();     /* 忘了初始化也能用：第一条记录时补上 */
-    }
     if (level < RTT_LEVEL_ERROR) {
         level = RTT_LEVEL_ERROR;
     }
@@ -240,16 +301,25 @@ uint32_t rtt_write(uint32_t level, const char *text)
         payload = (uint32_t)length;
     }
 
+    /* 组帧（长度/级别）在锁外做：strlen/memcpy 可能耗几十微秒，不该占着临界区。
+     * 时间戳和写环必须在锁内：rtt_time_ms() 自己有静态状态，WrOff 是读改写。 */
     total = RTT_FRAME_OVERHEAD + payload;
     rtt_put_u32(&frame[0], RTT_FRAME_MIN_BYTES + payload);
     frame[4] = (uint8_t)level;
-    rtt_put_u64(&frame[5], rtt_time_ms());
 
+    token = rtt_lock();
+    if (s_initialized == 0u) {
+        rtt_init_locked();  /* 忘了初始化也能用：第一条记录时补上（已在锁内，别再拿锁） */
+    }
+    rtt_put_u64(&frame[5], rtt_time_ms());
     if (rtt_ring_write(&_SEGGER_RTT.aUp[0], frame, total) == 0u) {
         s_dropped++;
-        return 0u;
+        result = 0u;
+    } else {
+        result = payload;
     }
-    return payload;
+    rtt_unlock(token);
+    return result;
 }
 
 #if defined(RTT_HAVE_STDIO)

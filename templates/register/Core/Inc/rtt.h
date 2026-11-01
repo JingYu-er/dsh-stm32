@@ -15,9 +15,26 @@
  *
  * RAM 成本：RTT_UP_CHANNELS × RTT_BUF_SIZE = 3 × 1 KB = 3 KB（.bss）。
  *   C8T6 只有 20 KB，RAM 紧就把 RTT_UP_CHANNELS 改成 1，或把 RTT_BUF_SIZE 改成 256。
+ *   （只用到通道 0 的话，先把 RTT_UP_CHANNELS 改成 1 省 2 KB，比扩环更划算。）
  *   注意：模板默认**不调用** rtt_init()，工具链开了 --gc-sections，所以未启用时
  *   这块内存与 rtt.c 的代码都会被链接器丢掉，不占 RAM/Flash；取消了 main.c 里
  *   USER CODE BEGIN 2 的注释才会真正进来。
+ *
+ * 环能撑多久（决定会不会丢）：
+ *   可容纳记录数 = RTT_BUF_SIZE ÷ 单条帧字节数（13 + payload；一行 70 字符的日志约 83 B）
+ *   撑住的时长   = 可容纳记录数 × 打印间隔
+ *   例：1024 ÷ 83 ≈ 12 条、每 200 ms 一条 → 约 2.4 s。宿主不读的这段时间一过，环满，
+ *   NO_BLOCK_SKIP 会**整条丢新记录**（绝不覆盖还没被读走的数据），rtt_dropped_count() 记数。
+ *   所以要么让宿主持续读（stm32_rtt 的 dump 只在窗口内读），要么拉长打印间隔 / 放大环。
+ *
+ * 并发：rtt_write 默认在**临界区**里写环 —— 裸机是关中断（保存/恢复 PRIMASK），
+ *   RTOS 用强符号覆盖 rtt_lock()/rtt_unlock() 换成「mutex + 关中断」（示例见 rtt.c）。
+ *   所以主循环和中断同时打印也不会丢 WrOff 更新。
+ *
+ * 注意 RTT **不是 SWO**：SWO 是 SWD 的 trace 引脚协议（ITM/printf 用），要配 trace 时钟、
+ *   抓线、算带宽；RTT 是**纯内存轮询** —— openocd 通过 SWD 直接读写目标 RAM 里的环，
+ *   没有线协议、没有 trace 时钟、也不走 DMA。看到「给 RTT 调中断优先级 / 用 DMA 提速 /
+ *   抓 SWO 波形 / 加 CRC 校验」这类建议，那是把两者搞混了，本项目不适用。
  *
  * 地址怎么拿（start 时 addr 填它）：
  *   arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT
@@ -72,9 +89,19 @@ void rtt_init(void);
  * 写一条记录到通道 0。level 取 RTT_LEVEL_*（越界会被夹到 1..4）。
  * text 是已经格式化好的字符串（结尾 0 会被 strlen 截掉，不写进环）。
  * 返回写进去的 payload 字节数；环满/放不下完整一条时返回 0（整条丢，不写半条）。
- * 可以从主循环和中断里调用；但它不加锁，多个上下文同时写会互相踩（要并发就在外面关中断）。
+ * 可以从主循环和中断里调用：内部已经做了临界区保护（默认裸机关中断；RTOS 覆盖
+ * rtt_lock/rtt_unlock 换成 mutex，见 rtt.c）。
  */
 uint32_t rtt_write(uint32_t level, const char *text);
+
+/*
+ * 并发保护钩子（弱符号，默认实现见 rtt.c）：
+ *   裸机默认：保存 PRIMASK → 关中断，unlock 时按原样恢复；
+ *   RTOS：覆盖成「mutex（任务 vs 任务）+ 关中断（任务 vs ISR）」，缺一个都会漏。
+ * 返回的 token 由实现自己定，rtt_write 只原样回传。
+ */
+uint32_t rtt_lock(void);
+void rtt_unlock(uint32_t token);
 
 /*
  * printf 风格：先 vsnprintf 到内部缓冲（最多 RTT_MSG_MAX 字节），再走 rtt_write。
@@ -93,7 +120,11 @@ uint32_t rtt_printf(uint32_t level, const char *fmt, ...);
  */
 uint64_t rtt_time_ms(void);
 
-/* 因为环满而整条丢掉的记录数（只在本地可见，dump 的 dropped 只统计按级别过滤掉的）。 */
+/*
+ * 因为环满而整条丢掉的记录数（dump 报的 dropped 只统计「按级别过滤掉」的，两者不同）。
+ * 只读一个 u32，可以在中断里调用。建议在周期日志里把它打出来（例如 drop=%u），
+ * 这样宿主端一眼能看出「环满丢了 N 条」，不用去猜。
+ */
 uint32_t rtt_dropped_count(void);
 
 #ifdef __cplusplus

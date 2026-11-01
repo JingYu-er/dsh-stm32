@@ -64,14 +64,17 @@ stm32_rtt action=stop
 - 默认 `RTT_UP_CHANNELS=3`、`RTT_BUF_SIZE=1024` → **3 KB RAM**（.bss）；
   `RTT_MSG_MAX=120` 是单条 payload 上限。RAM 紧就改 `rtt.h` 的这两个宏（例如 1 个通道 512 字节）。
 - 工具链开了 `--gc-sections`：不调用 `rtt_init()` 时 `rtt.c` 的代码和那块缓冲会被链接器丢掉，不占 RAM/Flash。
-- 环满时**整条丢弃**（不阻塞、不覆盖还没被读走的数据），`rtt_dropped_count()` 能看丢了几条。
+- 环满时**整条丢弃**（不阻塞、不覆盖还没被读走的数据），`rtt_dropped_count()` 能看丢了几条；建议照模板在周期日志里打 `drop=%u`，不然丢了也看不出来。
+- 容量：可容纳条数 = `RTT_BUF_SIZE` ÷ 单条帧字节数（`13 + 正文长`），1024 缓冲 + 80 字节正文 ≈ 12 条；撑多久 = 条数 × 打印间隔（200 ms 一条 ≈ 2.4 s）。掉电前要留的关键日志，别指望环能存下。
+- **RTT 不是 SWO**：openocd 用 SWD 读目标 RAM 里的环，不占 ITM/引脚，也跟中断优先级无关（改 SysTick 优先级不会改变丢不丢）。
 - 时间戳默认用 DWT 周期计数器；已经有 `HAL_GetTick()` 的话覆盖弱符号更省事：
 
 ```c
 uint64_t rtt_time_ms(void) { return (uint64_t)HAL_GetTick(); }
 ```
 
-- 主循环和中断都能写，但它没加锁：多个上下文并发写要自己在外面关中断。
+- 主循环和中断都能写：`rtt_write()` 内部已经过临界区（`rtt_lock()`/`rtt_unlock()` 弱符号，默认存/恢复 PRIMASK），**不需要自己在外面关中断**。
+- 用 RTOS 时覆盖这两个弱符号即可（`rtt.h` 头注释里有 FreeRTOS 例子）：拿 mutex 包住 + 里面再关中断，裸机和 RTOS 就都能用了。
 - `rtt_printf()` 用 newlib 的 `vsnprintf`，会牵进 `_sbrk`。HAL 工程本来就带 `Core/Src/syscalls.c`，不用管；
   寄存器版没有 syscalls.c，所以 `rtt.c` 里给了一份**弱符号** `_sbrk` 兜底（直接失败，等于没有堆），
   你自己实现 `_sbrk` 时那份强符号会自动覆盖它。只想要零依赖就用 `rtt_write(level, "已经格式化好的串")`。

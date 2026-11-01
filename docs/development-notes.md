@@ -3107,3 +3107,86 @@ export function formatWatchSampleNote(halted: boolean, resumed: boolean, targetW
 **教训**：① 「已经解出过记录」不等于「这段窗口读完了」，尾部失步要等窗口结束再判；② resync 的输入
 必须是「失步点之后剩下的字节」，拿整段重扫会在偏移 0 命中自己刚解出的帧；③ 提示语要说清「为什么
 看起来没动」（核停着），否则用户会以为采样坏了。
+
+## 44. RTT 加固：写侧临界区、丢帧可观测、会话死掉要说真话（2026-11-01）
+
+起因：用户拿来一份 CSDN 问答「JLINK RTT 高速传输怎么不丢数据」的五条对策，问哪些值得做。逐条判：
+
+| 对策 | 判断 |
+| --- | --- |
+| ① 加大 RTT 缓冲 | 换成「砍通道数」更划算：默认 3 通道 × 1 KB = 3 KB RAM，C8T6 只有 20 KB |
+| ② 提高主机读取频率 | **真缺口**：`stm32_rtt` 只有窗口式 dump，窗口外 openocd 不排空环 → 后续做 `follow` |
+| ③ 给 RTT 写加互斥锁 | 裸机用关中断就够，做成**弱符号钩子**，裸机/RTOS 两种都能用（本节的 44.1） |
+| ④ 调中断优先级 | 不适用：RTT 不走中断，改 SysTick 优先级只会打乱 1 kHz 时基 |
+| ⑤ DMA + SWO | 概念错：RTT 是 openocd 经 SWD 读目标 RAM 的环，跟 SWO/ITM 无关（44.3 写清） |
+
+### 44.1 写侧临界区：弱符号 `rtt_lock`/`rtt_unlock`
+
+`templates/register/Core/Src/rtt.c` 与 `_rich_hal/App/rtt.c` 是同一份实现。加两个弱函数：
+
+```c
+__attribute__((weak)) uint32_t rtt_lock(void);          /* 返回 token */
+__attribute__((weak)) void     rtt_unlock(uint32_t token);
+```
+
+默认实现只在 `RTT_HAVE_CMSIS` 下生效：`__get_PRIMASK()` → `__disable_irq()` → 返回旧 PRIMASK；解锁时
+`__set_PRIMASK(token)`。RTOS 使用者覆盖成「拿 mutex + 内部再关中断」即可（`rtt.h` 头注释里给了
+FreeRTOS 例子）。
+
+三个坑：
+
+1. **`rtt_init()` 会自锁**：它原来直接在 `rtt_write()` 的临界区里被懒调用，如果 `rtt_init()` 自己也拿锁，
+   mutex 实现（不可重入）当场死锁。所以拆成内部 `static void rtt_init_locked(void)`（不拿锁）+
+   公开 `rtt_init()`（拿锁包一层）。
+2. **锁要拿得够小**：`strlen`/`memcpy`/长度与级别字段都可以在锁外算好，锁内只做「写时间戳 + 环写入 +
+   失败则 `s_dropped++`」。
+3. **时间戳必须在锁内取**：否则两条记录的时间戳可能倒序，dump 端按时间戳去重/排序会乱。
+
+实测：新固件 RAM 27.62%（与改前同，弱函数没多占）、FLASH 36.38%、elf 954504 B；`_SEGGER_RTT` 仍在
+`0x20000f88`、`s_dropped` 在 `0x20001000`；dump 出来 `dma` 与 `t` 仍严格 1:1 → 关中断钩子没有破坏
+1 kHz 时基。
+
+### 44.2 丢帧可观测：周期日志打 `drop=%u`
+
+`rtt_dropped_count()` 早就存在，但没人看就等于不存在。模板和 `_rich_hal` 的周期日志都加上了
+`drop=%u`，dump 一条记录就能读出累计丢帧。
+
+**现象学**（写清楚免得下次误判）：`drop>0` 只有在「环写满 → 宿主把环读走 → 又有新记录落进环」之后才
+看得到。环满期间新记录**根本写不进去**（`NO_BLOCK_SKIP`：整条丢弃，不阻塞主循环、不覆盖没读走的数据），
+所以现场表现为**内容冻结**：多次 dump 时间戳一模一样、重复记录一大堆、`drop` 不动。要解冻就先
+`monitor reset run` 让宿主把环排空。
+
+### 44.3 RTT ≠ SWO（写进头注释，防止再被误开药方）
+
+RTT 是目标内存里的一段环形缓冲 + 控制块（`SEGGER RTT` 魔数），openocd 通过 SWD 读内存取数据；SWO/ITM
+是另一套（单线输出、要配 trace 时钟、要 SWO 引脚）。两者唯一的共同点是「都能打印」。所以：
+
+- 调 NVIC 优先级、开 DMA 送 ITM、换 SWO 引脚，对 RTT 丢数据**一点用都没有**；
+- 真想少丢，只有三条路：环更大/记录更短、写侧不被打断（44.1）、宿主读得更勤（`follow`）。
+
+### 44.4 会话死掉时别报「目标里没有控制块」
+
+真机踩到的顺序：探针在 openocd 手里报 `hid_write/WaitForSingleObject: (0x000003E5)` +
+`CMSIS-DAP command CMD_INFO failed.` → openocd 退出 → `stm32_rtt start` 得到 `ECONNREFUSED`，但旧代码
+把任何「读控制块失败」都归到 `HINT_NO_BLOCK`（「目标内存里没有 RTT 控制块」），照着提示改 addr 永远
+改不好。
+
+新增 `export function sessionGoneHint(error: string): string | null`：命中
+`ECONNREFUSED|ECONNRESET|ECONNABORTED|EPIPE|socket hang up` 就返回「调试会话的 openocd 已经不在了…
+先 stm32_debug_stop…反复出现就插拔探针」，`startRtt` 读控制块失败时优先用它。
+
+顺带发现一个**没修的真 bug**（记为待办）：`stm32_debug_session` 的 status 只看自己记的会话对象，
+openocd 进程死了它照样回 ok；需要加「会话存活校验」（`EvalRequest` 失败/lsof 端口/proc 名）并按需重建。
+
+### 44.5 测试与文档
+
+- `test/rtt-units.test.mjs` 37 例（新增 `sessionGoneHint`：三种连接类错误都要报「会话没了」，超时和解析
+  错误不能误报）。
+- 全量 `node test/run-units.mjs` → **658 pass / 0 fail**；`npm run build` + `npx tsc --noEmit` 干净。
+- 两份 `RTT.md`（`templates/scaffold/RTT.md`、`_rich_hal/RTT.md`）同步改：不再需要自己在外面关中断、
+  给容量公式（1024 ÷ 83 ≈ 12 条 ≈ 2.4 s）、写清 RTT≠SWO、建议打 `drop=`。
+
+**教训**：① 修「丢数据」这类问题，先分清是**写不进**（环满丢弃）还是**没读走**（宿主不排空），两条路
+的药方完全不同；② 提示语写错方向比不写更坏（`ECONNREFUSED` 被说成「没有控制块」害人改 addr）；
+③ 弱符号钩子是把「裸机能用、RTOS 也能用」落到同一个 API 上的最低成本做法，代价只有一次 PRIMASK 存取。
+
