@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { applyIocPlan, compareIocKeys, inspectIocText, planIocChanges, renderIocText, rollbackIoc, sha256Hex } from "../lib/engine/ioc-plan.js";
+import { applyIocPlan, compareIocKeys, encodeIocValue, inspectIocText, planIocChanges, renderIocText, rollbackIoc, sha256Hex } from "../lib/engine/ioc-plan.js";
 import { parseIocEntries, summarizeIoc } from "../lib/engine/ioc.js";
 
 import { FIXTURE_ASSETS, FIXTURE_PROJECT, e2eWorkDir } from "./fixtures.mjs";
@@ -354,6 +354,37 @@ test("peripherals(ADC1)：# 要转义，并顺带把 ADC 预分频改成 ÷6", (
   // 72 MHz ÷6 = 12 MHz（F1 的 ADC 上限 14 MHz）
   assert.equal(entries.get("RCC.ADCPresc"), "RCC_ADCPCLK2_DIV6");
   assert.match(entries.get("RCC.IPParameters") ?? "", /(^|,)ADCPresc(,|$)/u, "RCC.IPParameters 必须合并进 ADCPresc");
+  // B3：分频改了，ADCFreqValue 必须跟着重算——夹具里是 ÷2 的 36000000，÷6 之后必须是 12000000，
+  // 否则 .ioc 自相矛盾（语料 4 份带 ADCPresc 的文件全都满足 ADCFreqValue == APB2/分频）。
+  assert.equal(entries.get("RCC.ADCFreqValue"), "12000000");
+  // B1：RCC.IPParameters 必须是字典序（jar.md：RCCService 自己 Collections.sort；语料 429/504）
+  const rccNames = (entries.get("RCC.IPParameters") ?? "").split(",");
+  assert.deepEqual(rccNames, [...rccNames].sort(), "RCC.IPParameters 必须字典序：" + rccNames.join(","));
+});
+
+test("值开头的空格要转义（java.util.Properties 会把前导空白吃掉）", () => {
+  // 直接测编码器（标签必须是 C 标识符，走不到这里；但 entries 可以写任意值）
+  assert.equal(encodeIocValue(" x"), "\\ x");
+  assert.equal(encodeIocValue("a b"), "a b", "值内部空格不转义");
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, entries: [{ key: "ProjectManager.DeviceId", value: " xyz" }] });
+  assert.equal(report.ok, true, report.message);
+  const raw = candidateText(projectDir, report.planId);
+  assert.match(raw, /^ProjectManager\.DeviceId=\\ xyz$/mu, "前导空格写成 \\ 空格");
+  assert.equal(parseIocEntries(raw).get("ProjectManager.DeviceId"), " xyz", "解析回来要还原成带前导空格的原文");
+});
+
+test("纯 LF 的 .ioc：写回保持 LF，但计划阶段要告警（CubeMX 另存是 CRLF）", () => {
+  const { projectDir } = freshProject();
+  const iocPath = join(projectDir, "demo.ioc");
+  writeFileSync(iocPath, readFileSync(iocPath, "utf8").replace(/\r\n/gu, "\n"), "utf8");
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA7", label: "led7", signal: "output" }] });
+  assert.equal(report.ok, true, report.message);
+  assert.ok(
+    report.warnings.some((warning) => warning.includes("纯 LF")),
+    "应告警纯 LF：\n" + JSON.stringify(report.warnings),
+  );
+  assert.equal(candidateText(projectDir, report.planId).includes("\r"), false, "保持 LF，不擅自改换行");
 });
 
 test("peripherals：不认识的名字直接报错，并列出内置预设", () => {
@@ -439,8 +470,11 @@ test("renderIocText：新增键按 key 排序插入，不再一律追加到文�
   assert.equal(rendered, ["Alpha.x=1", "Beta.a=0", "Beta.y=2", "Gamma.z=3", "", "# 注释"].join("\n") + "\n");
 });
 
-test("renderIocText：数字按数值排序（Mcu.Pin10 排在 Mcu.Pin2 之后，与 CubeMX 一致）", () => {
-  assert.ok(compareIocKeys("Mcu.Pin2", "Mcu.Pin10") < 0);
+// 键序必须和 CubeMX 落盘逐字一致：java.util.Properties 写盘前 Collections.sort → String.compareTo，
+// 是 UTF-16 纯字典序（jar.md「落盘」；语料 6.x 261/266 = 98.1%）。所以 Mcu.Pin10 **排在** Mcu.Pin2 之前——
+// 以前这条断言写反了（按数值排），会让我们的 .ioc 与 CubeMX 另存的结果满屏错行。
+test("renderIocText：键序是纯字典序（Mcu.Pin10 在 Mcu.Pin2 之前，与 CubeMX 的 SortedProperties 一致）", () => {
+  assert.ok(compareIocKeys("Mcu.Pin10", "Mcu.Pin2") < 0);
   assert.ok(compareIocKeys("Mcu.IP3", "Mcu.IPNb") < 0);
   assert.ok(compareIocKeys("ADC1.master", "CAD.formats") < 0, "official .ioc 里 ADC1.* 就在文件最前面");
   assert.ok(compareIocKeys("VP_SYS_VS_Systick.Mode", "board") < 0);
@@ -449,7 +483,7 @@ test("renderIocText：数字按数值排序（Mcu.Pin10 排在 Mcu.Pin2 之后�
     { key: "Mcu.Pin10", before: null, after: "PC3" },
     { key: "Mcu.Pin9", before: null, after: "PC2" },
   ]);
-  assert.equal(rendered, "Mcu.Pin2=PC1\nMcu.Pin9=PC2\nMcu.Pin10=PC3\n");
+  assert.equal(rendered, "Mcu.Pin10=PC3\nMcu.Pin2=PC1\nMcu.Pin9=PC2\n");
 });
 
 test("无损：没有任何改动时 renderIocText 必须逐字节还原原文（含 CRLF 与末尾换行有无）", () => {
