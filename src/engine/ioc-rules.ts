@@ -11,9 +11,22 @@
  * 这些规则在这里离线执行：不启动 CubeMX 就能报出这份 .ioc 会不会被丢键或被覆盖。
  */
 
+import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
+import { readIpModeNames, resolveDbPinName } from "./cubemx-db.js";
+
 export interface IocRuleIssue {
   rule: string;
   message: string;
+}
+
+/**
+ * db 类规则（R13/R14/R17）需要的上下文：本机 CubeMX db 与这颗芯片的事实。
+ * 没有 db（没装 CubeMX、版本不匹配）时这几条规则整体跳过——它们是「补充校验」，
+ * 不能因为查不到 db 就把一份本来能用的 .ioc 判出问题。
+ */
+export interface IocRuleContext {
+  db?: CubemxDb | null;
+  facts?: CubemxMcuFacts | null;
 }
 
 export interface IocRuleReport {
@@ -285,8 +298,138 @@ function checkModeSignalPairs(entries: Map<string, string>, report: IocRuleRepor
     }
   }
 }
+/** 模式名归一：CubeMX 里 "Serial Wire" / "Serial_Wire"、"PWM Generation1 CH1" 混着用。 */
+function normalizeModeText(text: string): string {
+  return text.trim().toLowerCase().replace(/[\s_-]+/gu, "_").replace(/^_+|_+$/gu, "");
+}
+
+/**
+ * R13 的判定核心：.ioc 写的 Signal 是不是这根脚在 db 里支持的信号。
+ * 要容忍三类 CubeMX 自己写出来的「伪信号」：
+ *   - GPIO_Output / GPXTI8（GPIO 模式与外部中断）：等价于 db 的 GPIO；
+ *   - ADCx_IN1：db 里是 ADC1_IN1 / ADC2_IN1（x 是占位符）；
+ *   - S_TIM2_CH1_ETR：db 把共享信号拆成 TIM2_CH1 与 TIM2_ETR，认前缀即可。
+ */
+export function pinSignalSupported(signals: Map<string, string[]>, signal: string): boolean {
+  const raw = signal.trim();
+  if (raw === "") return false;
+  if (signals.has(raw)) return true;
+  const gpio = signals.has("GPIO");
+  if (/^GPIO(?:_|$)/u.test(raw)) return gpio;
+  if (/^GPXTI[0-9]+$/u.test(raw)) return gpio;
+  const adc = /^ADCx_IN([0-9]+)$/u.exec(raw);
+  if (adc !== null) {
+    return [...signals.keys()].some((name) => name === "ADC1_IN" + (adc[1] as string) || name === "ADC2_IN" + (adc[1] as string) || name === "ADC3_IN" + (adc[1] as string));
+  }
+  const stripped = raw.replace(/^S_/u, "");
+  if (signals.has(stripped)) return true;
+  for (const name of signals.keys()) {
+    if (name.length >= 5 && stripped.startsWith(name)) return true;
+  }
+  return false;
+}
+
+/** 从信号名推外设实例（TIM3_CH1 → TIM3、USART1_TX → USART1）；推不出返回空串。 */
+export function instanceFromSignal(signal: string): string {
+  const raw = signal.replace(/^S_/u, "");
+  const match = /^([A-Z]+[0-9]+)_/u.exec(raw);
+  if (match !== null) return match[1] as string;
+  if (/^SYS_/u.test(raw)) return "SYS";
+  return "";
+}
+
+/** 收集「引脚 → (Signal, Mode)」：键里带点的是外设参数（Dma.ADC1.0.Mode），不是引脚。 */
+function collectPins(entries: Map<string, string>): Array<{ pin: string; signal: string; mode: string }> {
+  const out: Array<{ pin: string; signal: string; mode: string }> = [];
+  for (const key of entries.keys()) {
+    if (!key.endsWith(".Signal")) continue;
+    const pin = key.slice(0, key.length - ".Signal".length);
+    if (pin.includes(".")) continue;
+    if (pin.startsWith("VP_") || pin.startsWith("SH")) continue;
+    const index = out.findIndex((item) => item.pin === pin);
+    const signal = entries.get(pin + ".Signal") ?? "";
+    const mode = entries.get(pin + ".Mode") ?? "";
+    if (index >= 0) out[index] = { pin, signal, mode };
+    else out.push({ pin, signal, mode });
+  }
+  return out;
+}
+
+/** R13：<pin>.Signal 必须是该脚在 db 里支持的信号（含 GPIO/ADCx_INn/S_ 共享名）。 */
+function checkPinSignals(entries: Map<string, string>, facts: CubemxMcuFacts, report: IocRuleReport): void {
+  for (const item of collectPins(entries)) {
+    if (item.signal === "") continue;
+    const dbPin = resolveDbPinName(facts, item.pin) ?? item.pin;
+    const fact = facts.pins.get(dbPin);
+    if (fact === undefined) continue;
+    if (pinSignalSupported(fact.signals, item.signal)) continue;
+    const sample = [...fact.signals.keys()].slice(0, 8).join("、");
+    report.warnings.push({
+      rule: "R13",
+      message: item.pin + ".Signal=" + item.signal + " 不是 db（" + facts.name + "）里 " + dbPin +
+        " 支持的信号（该脚支持：" + sample + (fact.signals.size > 8 ? "…" : "") + "）",
+    });
+  }
+}
+
+/** R14：<pin>.Mode 必须是该信号允许的模式（GPIO 查 IOModes，外设查该 IP 的 RefMode 名单）。 */
+function checkPinModes(entries: Map<string, string>, facts: CubemxMcuFacts, db: CubemxDb | null, report: IocRuleReport): void {
+  for (const item of collectPins(entries)) {
+    if (item.mode === "") continue;
+    const dbPin = resolveDbPinName(facts, item.pin) ?? item.pin;
+    const fact = facts.pins.get(dbPin);
+    if (fact === undefined) continue;
+    if (/^GPIO(?:_|$)/u.test(item.signal) || /^GPXTI[0-9]+$/u.test(item.signal)) {
+      const allowed = fact.signals.get("GPIO") ?? [];
+      if (allowed.length === 0) continue;
+      const wanted = normalizeModeText(item.mode.replace(/^GPIO_/u, ""));
+      if (allowed.some((name) => normalizeModeText(name) === wanted)) continue;
+      report.warnings.push({ rule: "R14", message: item.pin + ".Mode=" + item.mode + " 不在 db 的 GPIO 模式里（" + allowed.join("、") + "）" });
+      continue;
+    }
+    const instance = instanceFromSignal(item.signal);
+    if (instance === "" || db === null || !facts.ips.has(instance)) continue;
+    const modes = readIpModeNames(db, facts, instance);
+    if (modes.length === 0) continue;
+    const wanted = normalizeModeText(item.mode);
+    if (modes.some((name) => normalizeModeText(name) === wanted)) continue;
+    report.warnings.push({
+      rule: "R14",
+      message: item.pin + ".Mode=" + item.mode + " 不是 " + instance + " 在 db 里的合法模式（例：" + modes.slice(0, 6).join("、") + "…）",
+    });
+  }
+}
+
+/** R17：同一根物理引脚被写了两份（PA0 与 PA0-WKUP），或同一个外设信号挂到两根脚上。 */
+function checkPinConflicts(entries: Map<string, string>, facts: CubemxMcuFacts, report: IocRuleReport): void {
+  const byDbPin = new Map<string, string[]>();
+  const bySignal = new Map<string, string[]>();
+  for (const item of collectPins(entries)) {
+    const dbPin = resolveDbPinName(facts, item.pin) ?? item.pin;
+    byDbPin.set(dbPin, [...(byDbPin.get(dbPin) ?? []), item.pin]);
+    if (item.signal === "" || /^GPIO(?:_|$)/u.test(item.signal) || /^GPXTI[0-9]+$/u.test(item.signal)) continue;
+    bySignal.set(item.signal, [...(bySignal.get(item.signal) ?? []), item.pin]);
+  }
+  for (const [dbPin, pins] of byDbPin) {
+    const unique = [...new Set(pins)];
+    if (unique.length < 2) continue;
+    report.errors.push({
+      rule: "R17",
+      message: "同一个物理引脚写了多份：" + unique.join("、") + "（db 里都是 " + dbPin + "），CubeMX 只会认其中一份",
+    });
+  }
+  for (const [signal, pins] of bySignal) {
+    const unique = [...new Set(pins)];
+    if (unique.length < 2) continue;
+    report.errors.push({
+      rule: "R17",
+      message: "信号 " + signal + " 同时挂在 " + unique.join("、") + " 上：一个外设信号只能占一根脚",
+    });
+  }
+}
+
 /** 对外入口：跑一遍全部离线规则。 */
-export function checkIocRules(entries: Map<string, string>): IocRuleReport {
+export function checkIocRules(entries: Map<string, string>, context: IocRuleContext = {}): IocRuleReport {
   const report: IocRuleReport = { errors: [], warnings: [] };
   const family = (entries.get("Mcu.Family") ?? "").trim();
   checkIpParameters(entries, report);
@@ -299,5 +442,12 @@ export function checkIocRules(entries: Map<string, string>): IocRuleReport {
   checkIpPinCounts(entries, report);
   checkModeSignalPairs(entries, report);
   checkIpInstanceKeys(entries, report);
+  // db 类规则：没有 db 就整体跳过（查不到 ≠ 写错了）。
+  const facts = context.facts ?? null;
+  if (facts !== null) {
+    checkPinSignals(entries, facts, report);
+    checkPinModes(entries, facts, context.db ?? null, report);
+    checkPinConflicts(entries, facts, report);
+  }
   return report;
 }

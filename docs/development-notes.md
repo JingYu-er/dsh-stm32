@@ -3356,6 +3356,50 @@ const MAX_TEMPLATE_ASSET_FILE = 24 * 1024;  // 单文件上限，拦大资产
 | 中途 13 s 没客户端 | `t` 从 2414095 前进到 2427269，`s_dropped` 仍不动 → 修好 WrOff 之后 openocd 的 rtt server 自己就把环排空了 |
 
 结论：环不再被写坏之后，持续读的窗口里 `s_dropped` 就是不涨的；§45 里「间歇 dump 仍会丢」主要来自那个越界 bug。
+## 47. P1'：把 db 查询接进 .ioc 规则（R13/R14/R17）（2026-11-01）
+
+背景：`src/engine/cubemx-db.ts` 早就能查「这颗芯片有哪些引脚/信号/模式」，但只有 `ioc-plan.ts` 拿它解析引脚名。
+这一批把「查到了」变成「拿去判定」，新增三条规则——它们都只读 db，不落盘、不导出任何表。
+
+### 47.1 三条规则
+
+| 规则 | 判定 | 级别 |
+| --- | --- | --- |
+| R13 | `<pin>.Signal` 必须是该脚在 db 里支持的信号 | 告警 |
+| R14 | `<pin>.Mode` 必须是该信号允许的模式（GPIO 查 IOModes，外设查该 IP 的 RefMode 名单） | 告警 |
+| R17 | 同一物理引脚被写两份（`PA0` + `PA0-WKUP`）、或同一外设信号挂到两根脚上 | 错误 |
+
+### 47.2 实现要点：CubeMX 的「伪信号」必须放行
+
+`.ioc` 里的 Signal 不是 db 里的名字，直接字符串比对会全是误报。实测四种写法都要容忍：
+
+- `GPIO_Output` / `GPXTI8`：GPIO 模式与外部中断，等价于 db 的 `GPIO`（db 里 PA8 只有 RCC_MCO/TIM1_CH1/USART1_CK/GPIO，**没有 EXTI**）；
+- `ADCx_IN1`：db 是 `ADC1_IN1`/`ADC2_IN1`，`x` 是占位符；
+- `S_TIM2_CH1_ETR`：db 把共享信号拆成 `TIM2_CH1` 与 `TIM2_ETR`，认前缀；
+- `SYS_JTMS-SWDIO`、`RCC_OSC_IN`：和 db 完全一致，精确匹配。
+
+模式名也要归一（`Serial Wire` / `Serial_Wire` / `PWM Generation1 CH1`）。
+
+### 47.3 db 缺失时整体跳过
+
+`checkIocRules(entries, { db, facts })` 的 context 是可选的：`facts === null` 就不跑这三条。理由：没装 CubeMX 或版本不匹配时，
+「查不到」不等于「写错了」，把一份本来能用的 `.ioc` 判出问题比不检查更坏。`ioc-plan.ts` 里 `PinNameResolver` 现在多带
+`db`/`facts` 两个字段，调用处直接 `checkIocRules(after, { db: pinNames.db, facts: pinNames.facts })`。
+
+### 47.4 实测（真 db：DB.6.0.150）
+
+- `_rich_hal/richhal.ioc`、`templates/scaffold/demo.ioc` → **R13/R14/R17 命中 0**（真工程不能有误报）。
+- 故意写坏：`PA9.Mode=Bogus_Mode` → R14（列出 USART1 的合法模式；注意 db 的 RefMode 里还有 `usartBasic` 这种名字）；
+  `PA9.Signal=USART9_TX` → R13（并列出该脚真支持的 TIM1_CH2/USART1_TX/GPIO）；
+  额外加 `PA8.Signal=USART1_TX` → R17「信号 USART1_TX 同时挂在 PA8、PA9 上」+ R13（PA8 不支持 USART1_TX）。
+
+### 47.5 测试
+
+`test/ioc-rules-units.test.mjs` 23 例（新增 7 例：R13 的四类伪信号放行、R13 非法信号、R13 无 db 跳过、R14 GPIO 模式、
+R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 同脚两份、R17 同信号两脚）；全量 **668 pass / 0 fail**。
+
+**教训**：① 规则吃 db 之前先想清楚「哪些是 CubeMX 自己的写法」——`.ioc` 的 Signal 是**渲染后的名字**，不是 db 里的原名；
+② 每条 db 规则都要有「db 不在就不判」的开关，否则 CI/无 CubeMX 的机器会集体误报。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，

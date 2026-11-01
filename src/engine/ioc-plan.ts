@@ -30,7 +30,7 @@ import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./
 import { checkIocRules } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
-import type { CubemxMcuFacts } from "./cubemx-db.js";
+import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
@@ -527,6 +527,10 @@ function enableSharedSignal(
 export interface PinNameResolver {
   /** 逻辑名（PA0）→ 写进 .ioc 的名字（PA0-WKUP）。 */
   resolve(logical: string): string;
+  /** 这次用的 db（没有则为 null）：R13/R14/R17 需要它查引脚信号与 IP 模式。 */
+  db: CubemxDb | null;
+  /** 这颗芯片的 db 事实（没有则为 null）。 */
+  facts: CubemxMcuFacts | null;
   /** 这次用的哪个来源（进 notes）。 */
   describe(): string;
   /** 用了内置别名表时的提醒（db 可用时为空串）。 */
@@ -559,12 +563,16 @@ export function createPinNameResolver(options: {
   if (hit !== null) {
     return {
       resolve: (logical) => resolveDbPinName(hit, logical) ?? logical,
+      db: locateCubemxDb(roots),
+      facts: hit,
       describe: () => "引脚名按本机 CubeMX db 解析（" + hit.name + "，" + dbVersion + "）",
       warning: () => "",
     };
   }
   return {
     resolve: (logical) => pinDbName(options.family, logical),
+    db: null,
+    facts: null,
     describe: () =>
       "引脚名按内置别名表解析（本机没有可用的 CubeMX db：Mcu.Name=" + (mcuName === "" ? "（空）" : mcuName) + "）",
     warning: () =>
@@ -884,7 +892,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
 
   // 从 CubeMX 字节码还原出来的离线规则（docs §35）：IPParameters 白名单、DMA 需要 Mcu.IP=DMA、
   // ADC Rank 一致性、NVIC 值 9 段、F1 的 ADC 时钟上限。
-  const ruleReport = checkIocRules(after);
+  const ruleReport = checkIocRules(after, { db: pinNames.db, facts: pinNames.facts });
   for (const issue of ruleReport.errors) errors.push("[" + issue.rule + "] " + issue.message);
   for (const issue of ruleReport.warnings) warnings.push("[" + issue.rule + "] " + issue.message);
 

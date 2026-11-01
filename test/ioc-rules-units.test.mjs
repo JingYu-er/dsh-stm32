@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 
 import { checkIocRules } from "../lib/engine/ioc-rules.js";
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 const cases = [];
 function test(name, fn) { cases.push({ name, fn }); }
 function entries(pairs) { return new Map(pairs); }
@@ -174,6 +178,126 @@ test("R12：只有 .Mode 没有 .Signal → 告警", () => {
   assert.equal(report.warnings.some((item) => item.rule === "R12"), true);
 });
 
+// ---------------------------------------------------------------- db 类规则（R13/R14/R17）
+
+/** 造一份最小的 db 事实：只填 R13/R14/R17 用得到的字段。 */
+function facts(pinSpecs, ipSpecs = []) {
+  const pins = new Map();
+  for (const [name, signalSpecs] of Object.entries(pinSpecs)) {
+    const signals = new Map();
+    for (const [signal, ioModes] of Object.entries(signalSpecs)) signals.set(signal, ioModes ?? []);
+    pins.set(name, { name, position: 0, signals });
+  }
+  const ips = new Map();
+  for (const spec of ipSpecs) ips.set(spec.instanceName, spec);
+  return { name: "STM32F103C(8-B)Tx", packageName: "LQFP48", frequencyMhz: 72, pins, ips };
+}
+
+const GPIO_MODES = ["Input", "Output", "Analog", "EVENTOUT", "EXTI"];
+
+test("R13：GPIO_ / GPXTI / ADCx_INn / S_ 共享信号都是 CubeMX 的合法写法，不能报", () => {
+  const dbFacts = facts({
+    "PA0-WKUP": { GPIO: GPIO_MODES, TIM2_CH1: [], TIM2_ETR: [], ADC1_IN0: [] },
+    "PA1": { GPIO: GPIO_MODES, ADC1_IN1: [], ADC2_IN1: [] },
+    "PA8": { GPIO: GPIO_MODES, TIM1_CH1: [] },
+    "PC13-TAMPER-RTC": { GPIO: GPIO_MODES },
+    "PA13": { GPIO: GPIO_MODES, "SYS_JTMS-SWDIO": [] },
+  });
+  const report = checkIocRules(entries([
+    ["PA0-WKUP.Signal", "S_TIM2_CH1_ETR"],
+    ["PA1.Signal", "ADCx_IN1"],
+    ["PA8.Signal", "GPXTI8"],
+    ["PC13-TAMPER-RTC.Signal", "GPIO_Output"],
+    ["PA13.Signal", "SYS_JTMS-SWDIO"],
+  ]), { facts: dbFacts });
+  assert.equal(report.warnings.filter((item) => item.rule === "R13").length, 0, JSON.stringify(report.warnings));
+});
+
+test("R13：信号不在该脚的支持列表里要告警（并列出该脚真支持哪些）", () => {
+  const dbFacts = facts({ "PA9": { GPIO: GPIO_MODES, USART1_TX: [], TIM1_CH2: [] } });
+  const report = checkIocRules(entries([["PA9.Signal", "USART3_TX"]]), { facts: dbFacts });
+  const r13 = report.warnings.filter((item) => item.rule === "R13");
+  assert.equal(r13.length, 1);
+  assert.match(r13[0].message, /USART3_TX/u);
+  assert.match(r13[0].message, /USART1_TX/u);
+});
+
+test("R13：没有 db 时整体跳过（查不到 ≠ 写错了）", () => {
+  const report = checkIocRules(entries([["PA9.Signal", "USART3_TX"]]));
+  assert.equal(report.warnings.some((item) => item.rule === "R13"), false);
+});
+
+test("R14：GPIO 模式必须在 db 的 IOModes 里", () => {
+  const dbFacts = facts({ "PC13-TAMPER-RTC": { GPIO: GPIO_MODES } });
+  const ok = checkIocRules(entries([
+    ["PC13-TAMPER-RTC.Signal", "GPIO_Output"],
+    ["PC13-TAMPER-RTC.Mode", "GPIO_Output"],
+  ]), { facts: dbFacts });
+  assert.equal(ok.warnings.some((item) => item.rule === "R14"), false);
+  const bad = checkIocRules(entries([
+    ["PC13-TAMPER-RTC.Signal", "GPIO_Output"],
+    ["PC13-TAMPER-RTC.Mode", "GPIO_Bogus"],
+  ]), { facts: dbFacts });
+  const r14 = bad.warnings.filter((item) => item.rule === "R14");
+  assert.equal(r14.length, 1);
+  assert.match(r14[0].message, /GPIO_Bogus/u);
+});
+
+test("R14：外设模式要能在该 IP 的 RefMode 名单里找到", () => {
+  const root = mkdtempSync(join(tmpdir(), "iocrules-db-"));
+  try {
+    writeFileSync(join(root, "package.xml"), "<PackDescription Release=\"DB.6.0.150\"/>");
+    mkdirSync(join(root, "mcu", "IP"), { recursive: true });
+    writeFileSync(
+      join(root, "mcu", "IP", "USART-STM32F1xx-usart_v1_0_Modes.xml"),
+      "<RefMode Name=\"Asynchronous\"/><RefMode Name=\"Synchronous\"/>",
+    );
+    const db = { root, version: "DB.6.0.150" };
+    const dbFacts = facts(
+      { PA9: { GPIO: GPIO_MODES, USART1_TX: [], USART1_RX: [] } },
+      [{ instanceName: "USART1", name: "USART", version: "STM32F1xx-usart_v1_0", configFile: "USART-STM32F1xx" }],
+    );
+    const ok = checkIocRules(entries([
+      ["PA9.Signal", "USART1_TX"],
+      ["PA9.Mode", "Asynchronous"],
+    ]), { db, facts: dbFacts });
+    assert.equal(ok.warnings.some((item) => item.rule === "R14"), false, JSON.stringify(ok.warnings));
+    const bad = checkIocRules(entries([
+      ["PA9.Signal", "USART1_TX"],
+      ["PA9.Mode", "Synchronous Slave"],
+    ]), { db, facts: dbFacts });
+    const r14 = bad.warnings.filter((item) => item.rule === "R14");
+    assert.equal(r14.length, 1);
+    assert.match(r14[0].message, /USART1/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R17：同一个物理引脚写了两份（PA0 与 PA0-WKUP）→ 报错", () => {
+  const dbFacts = facts({ "PA0-WKUP": { GPIO: GPIO_MODES, TIM2_CH1: [] } });
+  const report = checkIocRules(entries([
+    ["PA0.Signal", "GPIO_Input"],
+    ["PA0-WKUP.Signal", "TIM2_CH1"],
+  ]), { facts: dbFacts });
+  const r17 = report.errors.filter((item) => item.rule === "R17");
+  assert.equal(r17.length, 1);
+  assert.match(r17[0].message, /PA0-WKUP/u);
+});
+
+test("R17：同一个外设信号挂到两根脚上 → 报错", () => {
+  const dbFacts = facts({
+    "PA0-WKUP": { GPIO: GPIO_MODES, TIM2_CH1: [] },
+    "PA1": { GPIO: GPIO_MODES, TIM2_CH2: [] },
+  });
+  const report = checkIocRules(entries([
+    ["PA0-WKUP.Signal", "TIM2_CH1"],
+    ["PA1.Signal", "TIM2_CH1"],
+  ]), { facts: dbFacts });
+  const r17 = report.errors.filter((item) => item.rule === "R17");
+  assert.equal(r17.length, 1);
+  assert.match(r17[0].message, /TIM2_CH1/u);
+});
 let failed = 0;
 for (const item of cases) {
   try { item.fn(); console.log("ok   " + item.name); }
