@@ -3502,6 +3502,21 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 用户仍然得知道自己在操作哪份数据。冗余的标准是「同一件事有两份实现」，不是「两个命令长得像」。
 
 同理，`stm32_env_probe` → `stm32_doctor` 之所以该合，是因为它们**跑的是同一个 `probeAll()`**，那才是真冗余。
+
+## 51. P3'-C4：纯时基定时器预设 `TIM<n>:timebase`（2026-11-01）
+
+只想「每 1 ms 进一次中断」时，`TIM2/3/4` 的 PWM 预设会顺手占掉 CH1 引脚——对纯时基来说那是噪音。
+新增一种「变体预设」写法：`peripherals: [{ name: "TIM3:timebase" }]`。
+
+- `src/data/ioc-presets.ts`：新增 `timerBase(name)`（`pins: []`，参数 Prescaler=71 / Period=999 / CounterMode=UP /
+  ClockDivision=DIV1 / AutoReloadPreload=DISABLE，72 MHz 下正好 1 kHz）；`findPeripheralPreset()` 识别 `:timebase` 变体，
+  `peripheralPresetNames()` 里也列出来，用户报错时能看到这个写法。
+- `enablePeripheral()` 对空 `pins` 本来就能工作（循环不执行、仍会写 `Mcu.IPn` 与 `<IP>.IPParameters`），无需改动。
+- 测试：`test/ioc-plan-units.test.mjs` +1 例（TIM3:timebase → 只写 TIM3 参数、`Mcu.IPn` 含 TIM3、引脚数不变且不出现 TIM3 引脚）；
+  全量 **670 pass / 0 fail**。
+
+**教训**：同一实例名要两种用法（PWM / 纯时基）时，别加第二个同名预设（`findPeripheralPreset` 只会命中第一个）；
+用「实例名:变体」的写法让查找函数自己决定，既不动老名字也不制造歧义。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，

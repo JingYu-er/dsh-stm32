@@ -144,6 +144,33 @@ function adc(name: string, pin: string, channel: number): PeripheralPreset {
   };
 }
 
+/**
+ * 纯时基定时器（C4）：只有 Prescaler/Period，不占任何引脚。
+ *
+ * 为什么单独一条：TIM2/3/4 的 PWM 预设会占 CH1 引脚；只想"每 1 ms 中断一次"时占引脚反而添乱，
+ * 而 CubeMX 对"没有引脚的定时器"是完全支持的（生成 MX_TIM3_Init，HAL_TIM_Base_Start_IT 就能用）。
+ * 调用方式：peripherals: [{ name: "TIM3:timebase" }]。
+ */
+function timerBase(name: string): PeripheralPreset {
+  return {
+    name,
+    label: name + " 纯时基（无引脚）",
+    ip: name,
+    pins: [],
+    parameters: [
+      { name: "Prescaler", value: "71" },
+      { name: "Period", value: "999" },
+      { name: "CounterMode", value: "TIM_COUNTERMODE_UP" },
+      { name: "ClockDivision", value: "TIM_CLOCKDIVISION_DIV1" },
+      { name: "AutoReloadPreload", value: "TIM_AUTORELOAD_PRELOAD_DISABLE" },
+    ],
+    notes: [
+      name + " 纯时基：只生成 MX_" + name + "_Init，不占引脚。要中断再在 entries 里加 NVIC." + name + "_IRQn；" +
+        "Prescaler/Period 是 72 MHz 下的 1 kHz（71 / 999），换频率用 parameters 覆盖",
+    ],
+  };
+}
+
 /** 内置预设表（按名字查）。 */
 export const PERIPHERAL_PRESETS: PeripheralPreset[] = [
   usart("USART1", "PA9", "PA10"),
@@ -157,13 +184,19 @@ export const PERIPHERAL_PRESETS: PeripheralPreset[] = [
   adc("ADC2", "PA1", 1),
 ];
 
-/** 按名字找预设（大小写不敏感）。 */
+/** 按名字找预设（大小写不敏感）。支持 `TIM3:timebase` 这种"变体"写法。 */
 export function findPeripheralPreset(name: string): PeripheralPreset | null {
-  const wanted = name.trim().toUpperCase();
-  return PERIPHERAL_PRESETS.find((preset) => preset.name.toUpperCase() === wanted) ?? null;
+  const raw = name.trim().toUpperCase();
+  const [base, variant] = raw.split(":");
+  if (variant === "TIMEBASE") {
+    if (!/^TIM[1-8]$/u.test(base ?? "")) return null;
+    return timerBase(base as string);
+  }
+  return PERIPHERAL_PRESETS.find((preset) => preset.name.toUpperCase() === raw) ?? null;
 }
 
 /** 支持的外设名列表（报错时给用户看）。 */
 export function peripheralPresetNames(): string[] {
-  return PERIPHERAL_PRESETS.map((preset) => preset.name);
+  // 纯时基是"变体"写法：TIM2/3/4:timebase，不占引脚。
+  return [...PERIPHERAL_PRESETS.map((preset) => preset.name), "TIM1..TIM8:timebase"];
 }

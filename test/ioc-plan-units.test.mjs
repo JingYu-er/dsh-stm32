@@ -550,6 +550,25 @@ test("引脚名查询化：没有 CubeMX db 时退回内置别名表，并在 wa
   assert.match(warning, /6 根/u);
 });
 
+test("peripherals(TIM3:timebase)：纯时基定时器不占引脚，只写 Prescaler/Period", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM3:timebase" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("TIM3.Prescaler"), "71");
+  assert.equal(entries.get("TIM3.Period"), "999");
+  assert.equal(entries.get("TIM3.CounterMode"), "TIM_COUNTERMODE_UP");
+  assert.match(entries.get("TIM3.IPParameters") ?? "", /Prescaler/u);
+  const ipValues = [...entries.entries()].filter(([key]) => /^Mcu\.IP[0-9]+$/u.test(key)).map(([, value]) => value);
+  assert.ok(ipValues.includes("TIM3"), "Mcu.IPn 里要有 TIM3：" + JSON.stringify(ipValues));
+  // 夹具工程本来就有调试口/晶振脚；这里只要求「纯时基不新增引脚」。
+  const before = parseIocEntries(readFileSync(DEMO_IOC, "utf8"));
+  const countPins = (map) => [...map.keys()].filter((key) => /^Mcu\.Pin[0-9]+$/u.test(key)).length;
+  assert.equal(countPins(entries), countPins(before), "纯时基不该新增引脚");
+  const tim3Pins = [...entries.entries()].filter(([key, value]) => key.endsWith(".Signal") && value.includes("TIM3"));
+  assert.equal(tim3Pins.length, 0, "纯时基不该写任何 TIM3 引脚：" + JSON.stringify(tim3Pins));
+});
+
 let failed = 0;
 for (const item of cases) {
   try {
