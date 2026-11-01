@@ -26,6 +26,7 @@ import {
 import type { RttRecord, RttStatusSnapshot } from "../engine/rtt.js";
 import type { ProbeError } from "../engine/probe-error.js";
 import { PROBE_ERROR_SCHEMA } from "../engine/probe-error.js";
+import { isPortBusy } from "../engine/debug.js";
 import { ensureSession, release, sessionInfo } from "../engine/probe-session.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
@@ -317,7 +318,14 @@ export function registerRtt(ctx: DshContext): void {
       // follow / dump 共用：通道没在跑就自动起一个（addr 取参数，其次上次 start 记住的地址）。
       // 以前这两个动作要求先手动 action=start，多一步而且容易忘；自动起也顺手把会话/探针错误带出来。
       const bringUpChannel = async (actionName: string): Promise<ToolValue | null> => {
-        if (rttStatus().running) return null;
+        // 「通道在跑」只是内存里的状态：openocd 死了这个标志还亮着。先连一下通道端口确认它真的在，
+        // 不然 follow 会直接卡到 connect ECONNREFUSED，而不是把死会话清掉重起。
+        if (rttStatus().running) {
+          const livePort = rttStatus().port;
+          const listening = livePort > 0 && (await isPortBusy(livePort, 300));
+          if (listening) return null;
+          notes.push("RTT 通道端口 " + String(livePort) + " 连不上（openocd 多半已退出），清理后重起");
+        }
         const explicit = readString(args.addr);
         const remembered = rttStatus().addr;
         const target = explicit ?? (remembered === "" ? undefined : remembered);

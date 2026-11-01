@@ -3356,4 +3356,10 @@ const MAX_TEMPLATE_ASSET_FILE = 24 * 1024;  // 单文件上限，拦大资产
 | 中途 13 s 没客户端 | `t` 从 2414095 前进到 2427269，`s_dropped` 仍不动 → 修好 WrOff 之后 openocd 的 rtt server 自己就把环排空了 |
 
 结论：环不再被写坏之后，持续读的窗口里 `s_dropped` 就是不涨的；§45 里「间歇 dump 仍会丢」主要来自那个越界 bug。
+补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
+
+- `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，
+  notes 三条：「没有活跃会话，先起了一个调试会话（gdb 端口 3333，tcl 端口 6666）」「没有 RTT 通道，已自动 start：控制块 0x20000f88，通道端口 9090」「记录超过 maxRecords=8，只保留最新的 8 条」，`firmwareDropped=13611` → 自动 start 端到端成立。
+- 手动 `Stop-Process` 杀掉 openocd（模拟探针掉线）后：`stm32_rtt start` 回 ok、notes 出现「旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起」→ 死会话自动重起成立。
+- 但同一时刻 `follow` 直接失败（`连不上 RTT 通道端口 9090：connect ECONNREFUSED`）—— `bringUpChannel` 只看了内存里的 `rttStatus().running`。**修**：`running` 为真也要先 `isPortBusy(port, 300)` 探一次通道端口，连不上就当通道已死、走「清理 + 重起」那条路，并写 note「RTT 通道端口 N 连不上（openocd 多半已退出），清理后重起」。这条要等下次重启才生效。
 
