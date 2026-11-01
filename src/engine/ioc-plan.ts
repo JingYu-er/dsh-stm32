@@ -116,6 +116,10 @@ export interface IocPlanReport {
   errors: string[];
   message: string;
   summaryAfter?: IocSummary;
+  /** 这次用的 CubeMX db 版本（例如 DB.6.0.150）；没有 db 时为空串。报 bug 时一眼看出 db 差异。 */
+  dbVersion: string;
+  /** db 根目录（例如 D:/app/STM32CubeMX/db）；没有 db 时为空串。 */
+  dbRoot: string;
   /** 时钟报告：没请求 clock 时是 .ioc 现状（只读），请求了就是规划结果。永远有值。 */
   clockPlan: ClockPlan;
 }
@@ -786,6 +790,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const empty: IocPlanReport = {
     ok: false, projectDir, iocPath: iocPath ?? "", planId: "", sourceSha256: "", candidateSha256: "",
     changes: [], warnings: [], notes: [], errors: [], message: "",
+    dbVersion: "", dbRoot: "",
     clockPlan: emptyClockPlan("还没读到 .ioc，时钟没算"),
   };
   if (iocPath === null || !existsSync(iocPath)) {
@@ -832,6 +837,9 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
   }
   const pinNames = createPinNameResolver({ mcuName: (after.get("Mcu.Name") ?? "").trim(), family });
+  // db 指纹写进报告：任何一条返回路径（包括"没有变化"、失败）都要带上，报 bug 时能一眼看出 db 版本差异。
+  empty.dbVersion = pinNames.db?.version ?? "";
+  empty.dbRoot = pinNames.db?.root ?? "";
   if ((request.peripherals ?? []).length > 0) {
     notes.push(pinNames.describe());
     const pinWarning = pinNames.warning();
@@ -961,6 +969,8 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     ok: true, projectDir, iocPath, planId, sourceSha256, candidateSha256,
     changes, warnings, notes,
     errors: [],
+    dbVersion: pinNames.db?.version ?? "",
+    dbRoot: pinNames.db?.root ?? "",
     message: "已生成计划 " + planId + "：" + String(changes.length) + " 个键变化（新增 " + String(added) + "、删除 " + String(removedCount) + "、修改 " + String(changes.length - added - removedCount) + "）",
     summaryAfter: summary,
     clockPlan,

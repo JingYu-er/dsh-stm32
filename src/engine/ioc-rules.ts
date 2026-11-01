@@ -428,6 +428,25 @@ function checkPinConflicts(entries: Map<string, string>, facts: CubemxMcuFacts, 
   }
 }
 
+/**
+ * R18：主频不得超过 db 里这颗芯片的上限。
+ *
+ * 上限只认 db 的 <Frequency>（F103C8 = 72），不写死数字；恰好等于上限是合法的。
+ * APB1 的 36 MHz、ADC 的 14 MHz 属于「派生上限」：ADC 由 R5 管，APB1 暂不在这里判
+ * （F1 之外的族上限不同，硬编码会误报）。
+ */
+function checkClockCeiling(entries: Map<string, string>, facts: CubemxMcuFacts, report: IocRuleReport): void {
+  const hz = Number.parseInt(entries.get("RCC.SYSCLKFreq_VALUE") ?? "", 10);
+  const maxHz = Math.round(facts.frequencyMhz * 1_000_000);
+  if (!Number.isFinite(hz) || hz <= 0 || maxHz <= 0) return;
+  if (hz <= maxHz) return;
+  report.errors.push({
+    rule: "R18",
+    message: "RCC.SYSCLKFreq_VALUE=" + String(hz) + " Hz 超过 db（" + facts.name + "）的上限 " +
+      String(facts.frequencyMhz) + " MHz = " + String(maxHz) + " Hz",
+  });
+}
+
 /** 对外入口：跑一遍全部离线规则。 */
 export function checkIocRules(entries: Map<string, string>, context: IocRuleContext = {}): IocRuleReport {
   const report: IocRuleReport = { errors: [], warnings: [] };
@@ -448,6 +467,7 @@ export function checkIocRules(entries: Map<string, string>, context: IocRuleCont
     checkPinSignals(entries, facts, report);
     checkPinModes(entries, facts, context.db ?? null, report);
     checkPinConflicts(entries, facts, report);
+    checkClockCeiling(entries, facts, report);
   }
   return report;
 }

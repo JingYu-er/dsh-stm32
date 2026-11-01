@@ -181,10 +181,12 @@ export const outputSchema: JsonSchema = {
     errors: { type: "array", items: { type: "string" } },
     nextStep: { type: "string" },
     clockPlan: clockPlanSchema,
+    dbVersion: { type: "string", description: "这次用的 CubeMX db 版本（例如 DB.6.0.150）；空串 = 没找到 db" },
+    dbRoot: { type: "string", description: "db 根目录" },
   },
   required: [
     "message", "ok", "projectDir", "iocPath", "planId", "sourceSha256", "candidateSha256",
-    "changes", "pinsAfter", "warnings", "notes", "errors", "nextStep", "clockPlan",
+    "changes", "pinsAfter", "warnings", "notes", "errors", "nextStep", "clockPlan", "dbVersion", "dbRoot",
   ],
 };
 
@@ -418,6 +420,8 @@ export function registerIocPlan(ctx: DshContext): void {
         errors: report.errors,
         nextStep,
         clockPlan: report.clockPlan,
+        dbVersion: report.dbVersion,
+        dbRoot: report.dbRoot,
       };
     },
   });

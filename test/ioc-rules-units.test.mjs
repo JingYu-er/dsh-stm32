@@ -298,6 +298,23 @@ test("R17：同一个外设信号挂到两根脚上 → 报错", () => {
   assert.equal(r17.length, 1);
   assert.match(r17[0].message, /TIM2_CH1/u);
 });
+
+test("R18：主频超过 db 上限报错，恰好等于上限不报", () => {
+  const dbFacts = facts({ "PA9": { GPIO: GPIO_MODES } });
+  const ok = checkIocRules(entries([["RCC.SYSCLKFreq_VALUE", "72000000"]]), { facts: dbFacts });
+  assert.equal(ok.errors.some((item) => item.rule === "R18"), false, JSON.stringify(ok.errors));
+  const bad = checkIocRules(entries([["RCC.SYSCLKFreq_VALUE", "96000000"]]), { facts: dbFacts });
+  const r18 = bad.errors.filter((item) => item.rule === "R18");
+  assert.equal(r18.length, 1);
+  assert.match(r18[0].message, /96000000/u);
+  assert.match(r18[0].message, /72 MHz/u);
+});
+
+test("R18：没有 SYSCLKFreq_VALUE 或缺 db 时不判", () => {
+  const dbFacts = facts({ "PA9": { GPIO: GPIO_MODES } });
+  assert.equal(checkIocRules(entries([["Mcu.Family", "STM32F1"]]), { facts: dbFacts }).errors.some((i) => i.rule === "R18"), false);
+  assert.equal(checkIocRules(entries([["RCC.SYSCLKFreq_VALUE", "96000000"]])).errors.some((i) => i.rule === "R18"), false);
+});
 let failed = 0;
 for (const item of cases) {
   try { item.fn(); console.log("ok   " + item.name); }
