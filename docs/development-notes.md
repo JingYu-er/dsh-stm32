@@ -3579,3 +3579,36 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 第一次实现漏了这条判断，直接打挂 `clock-units` 两例 + `ioc-plan-units` 一例，加守卫后恢复 **673 pass**。
 
 注：C6 目前靠既有 plan 用例回归覆盖（没有专门的新用例），下一步补一条「entries 写 TIM3.Prescaler 但没列白名单 → 自动补上」的断言。
+## 56. P4' 收尾：资源包带 interrupts + R20 实测 + C6 专测（2026-11-01）
+
+### 56.1 资源包侧（`dsh-stm32-assets` 提交 `5b5e6c6`，VERSION → `2026.11.01-1`）
+
+`scripts/svd-f1.mjs`：`parseSvd()` 解析顶层 `<interrupt><name/><value/>`；`buildSvdDoc()` 的**两个输入分支**都写入 `interrupts`；
+`renderSvdDoc()` 输出 `"interrupts": [...]` 段。`scripts/build-assets.mjs` 把 `parsed.interrupts` 传进 `buildSvdDoc`。
+
+生成的条数：F100 57 / F103 67 / F107 61 条（F103 去重后 60 个不同名字）。
+
+**踩的坑（三小时变三分钟的教训）**：`buildSvdDoc(input)` 里有个三元分支——`input.deviceName` 存在时走 `input` 分支，
+而 `build-assets.mjs` 恰好传了 `deviceName`。我先只改了另一支（`parsed` 分支），所以产物里永远是空数组；
+改对后再看：`parseSvd()` 单独调用一直是对的（67 条），问题从头到尾都在**装配层**。教训：先确认「数据源解析对不对」，
+再确认「传给渲染器的对象里有没有这个字段」——两步都用一个 3 行脚本就能证，别猜。
+
+### 56.2 R20 实测（用真实 SVD 数据，不是假数据）
+
+```
+SVD 103 中断数 = 60，含 TIM2 = true，含 TIM9 = false
+R20 命中：NVIC.TIM9_IRQn 的中断名 TIM9 不在 SVD 的中断表里：CubeMX 会忽略这条，生成代码里不会有对应的 NVIC 使能
+```
+
+`NVIC.TIM2_IRQn` 不报（真实存在），`NVIC.TIM9_IRQn` 报（F103 没有 TIM9）——规则与数据都对上了。
+
+### 56.3 C6 专测（补上 §55 缺的那条）
+
+`test/ioc-plan-units.test.mjs` +1：`peripherals: [{name:"USART3"}]` + `entries: [{key:"USART3.BaudRate", value:"9600"}]`
+→ 断言 `USART3.IPParameters` 里出现 `BaudRate`，且 notes 有「自动补 USART3.IPParameters」。全量 **674 pass / 0 fail**。
+
+### 56.4 还差最后一步（设备侧）
+
+插件与资源包都在仓库里了，但**本机装的是旧资源包**（`2026.10.31-1`）。要真机生效：
+`stm32_assets refresh`（拉到 `2026.11.01-1`）→ 重启宿主（插件 lib 也要重载）→ 在 `.ioc` 里塞 `NVIC.TIM9_IRQn` 跑 `stm32_ioc_plan`，
+报告里应出现同一条 R20。

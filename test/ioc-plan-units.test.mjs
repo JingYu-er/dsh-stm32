@@ -607,6 +607,21 @@ test("peripherals(DMA:ADC1)：写八个 Dma 字段，RequestsNb 按组数算，M
   assert.equal(report.errors.length, 0, "不该有错误：" + JSON.stringify(report.errors));
 });
 
+test("C6：entries 写的标量键自动补进 <IP>.IPParameters（不补会被 CubeMX 静默丢）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    peripherals: [{ name: "USART3" }],
+    entries: [{ key: "USART3.BaudRate", value: "9600" }],
+  });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  const listed = (entries.get("USART3.IPParameters") ?? "").split(",");
+  assert.ok(listed.includes("BaudRate"), "BaudRate 必须被补进白名单：" + JSON.stringify(listed));
+  assert.equal(entries.get("USART3.BaudRate"), "9600");
+  assert.ok(report.notes.some((note) => note.includes("自动补 USART3.IPParameters")), "notes 要说明补了什么：" + JSON.stringify(report.notes));
+});
+
 let failed = 0;
 for (const item of cases) {
   try {
