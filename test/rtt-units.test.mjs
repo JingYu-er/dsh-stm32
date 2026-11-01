@@ -317,6 +317,19 @@ test("resyncRttFrames：跳过非帧头字节，对齐到帧边界后能解出�
   assert.equal(resyncRttFrames(Buffer.from("nothing-here", "utf8")), -1);
 });
 
+test("parseRttFrames：payload 尾部被环缓冲残留补成 NUL 时裁掉", () => {
+  const text = "t=3000 duty=523";
+  const payload = Buffer.concat([Buffer.from(text, "utf8"), Buffer.alloc(6)]);
+  const frame = Buffer.alloc(13 + payload.length);
+  frame.writeUInt32LE(9 + payload.length, 0);
+  frame.writeUInt8(3, 4);
+  frame.writeBigUInt64LE(3000n, 5);
+  payload.copy(frame, 13);
+  const parsed = parseRttFrames(frame);
+  assert.equal(parsed.error, null);
+  assert.equal(parsed.records[0].text, text);
+});
+
 test("parseRttFrames：长度非法 / 级别越界都给失步错误", () => {
   const short = Buffer.alloc(4);
   short.writeUInt32LE(2, 0);
