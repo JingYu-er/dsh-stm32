@@ -2839,5 +2839,36 @@ main.c:196 → 197 → 198 → 242 → 244 → 251 → 252 → 257
 **教训**：改 USER CODE 时别把 ST 模板的 `while (1)` 外壳一起删掉——症状是 HardFault 且
 `BFAR=_estack`，很容易误判成外设初始化问题。
 
+## 39. RTT dump 首读失步：环缓冲从中间推过来，解析器要能对齐（2026-11-01）
+
+**症状**：重启宿主后按 start → dump 验 `cfc7694`，`dump` 返回 `ok=false bytes=1024 records=0`，
+错误是 `帧长度 1836544032 超过上限 4096，通道里很可能不是我们的帧`；同样的固件上一轮
+（缓冲还没绕圈时）却 `bytes=1059 records=12` 正常。再复跑一轮（start → 等 2.5 s → dump 2 s）
+仍必现。
+
+**根因**：`bytes` 恰好等于通道缓冲大小（1024 = `DEFAULT_RTT_SIZE`）。openocd 的 rtt server
+在客户端连上时把整块环形缓冲一次性推过来，而固件（1 kHz 打印 + boot 段日志）的写指针早已
+绕过好几圈 —— 首字节落在某条记录中间。`parseRttFrames` 是**严格解析器**：偏移 0 的 4 字节
+被当作长度字段（读成 1836544032 级乱码）→ 直接 return error → 整次 dump 判失败。
+
+**修复**（只加在 dump 路径上，纯函数保持严格）：
+
+1. `src/engine/rtt.ts` 新增 `resyncRttFrames(buffer, maxFrameBytes = DEFAULT_MAX_FRAME_BYTES)`：
+   从 `offset=0` 起逐字节找第一个「长度在 9..maxFrameBytes、级别在 1..4、剩余字节够整帧」的位置；
+   找不到返回 `-1`（那才是真的不是我们的帧）。
+2. `collectFromPort` 的 data 处理器里：解出 0 条记录且解析报错时先 `resyncRttFrames`，
+   `offset > 0` 就切掉前导垃圾、记一条 note（`开头 N 字节不是帧头…已对齐到帧边界继续读`）再重解。
+3. 一条都没解出来时不再立刻收尾：把错误存进 `state.lastError`，等窗口结束再判 —— 窗口结束时
+   仍然 0 条才判失败（保留「帧对不上就报错」的语义，`test/rtt-units.test.mjs` 里那条断言不变）。
+
+**测试**（`test/rtt-units.test.mjs`，31 pass）：新增纯函数用例（乱字节前缀 + 两帧，`resyncRttFrames`
+返回 `garbage.length`、对齐后两条中文都能解出来；纯垃圾返回 `-1`），以及假 RTT 服务端用例
+（首包发乱字节再接两帧，dump 仍 `ok=true`、records 对、notes 里有一句「不是帧头」）。
+全量 `node test/run-units.mjs` → **TOTAL pass=631 fail=0**。
+
+**教训**：RTT 通道的「字节流不等于从帧边界开始」——凡是从环形缓冲直读的地方都不能假设
+偏移 0 对齐。严格解析器 + 调用侧对齐，比把 resync 塞进解析器更好测也更好读。
+
+
 
 

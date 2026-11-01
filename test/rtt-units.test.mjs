@@ -24,6 +24,7 @@ import {
   dumpRtt,
   encodeRttFrame,
   parseRttFrames,
+  resyncRttFrames,
   rttStatus,
   startRtt,
   stopRtt,
@@ -301,6 +302,21 @@ test("parseRttFrames：半个帧留在 rest 里，补齐后接着解", () => {
   assert.deepEqual(second.records, [{ t: 1, level: 2, text: "两句" }]);
 });
 
+test("resyncRttFrames：跳过非帧头字节，对齐到帧边界后能解出后面的记录", () => {
+  // 环缓冲绕圈后从某条记录中间开始：前面是乱字节，后面才是完整帧。
+  const garbage = Buffer.from("mid-frame-bytes-from-ring-buffer-", "utf8");
+  const frames = [encodeRttFrame({ t: 900, level: 3, text: "新一行" }), encodeRttFrame({ t: 901, level: 2, text: "warn" })];
+  const stream = Buffer.concat([garbage, ...frames]);
+  const strict = parseRttFrames(stream);
+  assert.notEqual(strict.error, null);
+  const offset = resyncRttFrames(stream);
+  assert.equal(offset, garbage.length);
+  const aligned = parseRttFrames(stream.subarray(offset));
+  assert.equal(aligned.error, null);
+  assert.deepEqual(aligned.records.map((record) => record.text), ["新一行", "warn"]);
+  assert.equal(resyncRttFrames(Buffer.from("nothing-here", "utf8")), -1);
+});
+
 test("parseRttFrames：长度非法 / 级别越界都给失步错误", () => {
   const short = Buffer.alloc(4);
   short.writeUInt32LE(2, 0);
@@ -480,6 +496,23 @@ test("dumpRtt：通道端口连不上归成 timeout，并给连接建议", async
     assert.equal(dumped.ok, false);
     assert.equal(dumped.probeError?.kind, "timeout");
     assert.match(dumped.probeError?.hint ?? "", /连不上 RTT 通道/u);
+  } finally {
+    await resetAll();
+    await tcl.close();
+    await rtt.close();
+  }
+});
+
+test("dumpRtt：通道首字节落在帧中间时先对齐再解，不把整次 dump 判失败", async () => {
+  const frames = [encodeRttFrame({ t: 50, level: 3, text: "对齐后第一条" }), encodeRttFrame({ t: 51, level: 3, text: "对齐后第二条" })];
+  const garbage = Buffer.from("mid-frame-bytes-from-ring-buffer-", "utf8");
+  const { tcl, rtt } = await setup({ frames: [garbage, ...frames] });
+  try {
+    await startRtt({ addr: MAGIC_ADDR, port: rtt.port, checkPortBusy: NOT_BUSY });
+    const dumped = await dumpRtt({ seconds: 0.8 });
+    assert.equal(dumped.ok, true, dumped.message);
+    assert.deepEqual(dumped.records.map((record) => record.text), ["对齐后第一条", "对齐后第二条"]);
+    assert.ok(dumped.notes.some((note) => /不是帧头/u.test(note)), JSON.stringify(dumped.notes));
   } finally {
     await resetAll();
     await tcl.close();
