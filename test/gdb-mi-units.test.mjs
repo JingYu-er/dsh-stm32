@@ -86,6 +86,11 @@ class FakeChild {
         this.emit(token + "^running");
         return;
       }
+      if (command === "-exec-next") {
+        this.emit(token + "^running");
+        setTimeout(() => this.emit('*stopped,reason="end-stepping-range",frame={func="main",line="242"}'), 5);
+        return;
+      }
       if (command === "-stack-list-frames") {
         this.emit(token + '^done,stack=[frame={level="0",func="HardFault_Handler",line="84"},frame={level="1",func="main",line="244"}]');
         return;
@@ -130,6 +135,21 @@ test("MiSession：start → 命令排队 → 控制台输出归属当前请求 �
   assert.equal(running.class, "running");
   await session.stop();
   assert.equal(session.alive, false);
+});
+
+test("MiSession：-exec-next 之后 waitStopped 能等到停在哪一帧", async () => {
+  const child = new FakeChild();
+  const started = MiSession.start({ gdb: "fake-gdb", port: 3333, spawner: () => child, timeoutMs: 2000 });
+  setTimeout(() => child.emit("(gdb)"), 0);
+  const session = await started;
+  const waiting = session.waitStopped(2000);
+  await session.send("-exec-next", 2000);
+  const stop = await waiting;
+  assert.equal(stop.class, "stopped");
+  assert.equal(stop.data.reason, "end-stepping-range");
+  assert.equal(stop.data.frame.func, "main");
+  assert.equal(stop.data.frame.line, "242");
+  await session.stop();
 });
 
 test("MiSession：gdb 不回命令就超时失败（不挂死）", async () => {

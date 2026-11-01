@@ -2784,4 +2784,60 @@ CubeMX 的 db 里同一根脚常带后缀（F103C8 的 `PA0` 是 `PA0-WKUP`、`P
 **测试**：`test/gdb-mi-units.test.mjs` 7 例（解析 + FakeChild 假进程的排队/控制台归属/*stopped/超时不挂死）；
 全量 `node test/run-units.mjs` → 625 pass / 0 fail。
 
+补充：首轮之后又加了 `MiSession.waitStopped(timeoutMs)`（把 `*stopped` 的等待者排队，配合 `-exec-next`
+做源级单步），测试增到 8 例，全量 626 pass / 0 fail。
+
+## 38. `_rich_hal` 的 HardFault：根因是 `main()` 少了 `while (1)`（2026-11-01）
+
+**症状**：`demo/_rich_hal` 上电即进 `HardFault_Handler`，用户变量全 0；CFSR 在 `0x100`（IBUSERR）、
+`0x400`（IMPRECISERR）、`0x8200`（PRECISERR+BFARVALID）之间飘，`BFAR` 曾读到 `0x20005000`（`_estack`）。
+
+**定位方式**（MI 常驻带来的新手段）：`break main` + `break *HardFault_Handler`，然后连续 `-exec-next`
+看每一行停在哪：
+
+```text
+main.c:196 → 197 → 198 → 242 → 244 → 251 → 252 → 257
+  → Reset_Handler @ startup_stm32f103xb.s:101（bx lr）
+  → main.c:244 → 245 → 246 → 248 → 246
+  → HardFault_Handler（stm32f1xx_it.c:79，breakpoint-hit）
+```
+
+`main.c:257` 是 `main` 的收尾 `}`——**函数返回了**。
+
+**根因**：`Core/Src/main.c` 的 `/* USER CODE BEGIN WHILE */` 区里，ST 模板自带的
+`while (1) { … }` 外壳被删掉了（这两行在 ST 模板里属于 USER CODE 区，CubeMX 会原样保留，所以
+「重新生成」也救不回来）。于是 `main()` 返回 → 控制流回到 `Reset_Handler` 的 `bx lr` →
+栈指针被打回 `0x20005000`（RAM 顶端）→ 下一次给 `rtt_printf` 传 12 个参数时的压栈
+（`0x08002652 str.w ip,[sp,#28]` / `0x08002656 str r6,[sp,#24]` / `0x0800266c bl 8002e44 <rtt_printf>`）
+写到 `0x20005000` —— 刚过 RAM 末尾 4 字节 → 总线错误 → HardFault。
+
+异常帧（`0x20004fe0` 起 8 字）能对上：`r0..r3=0`、`r12=0`、`lr=0x0800260b`、`pc=0x08002656`、
+`xpsr=0xa1000000`。
+
+**这也解释了之前二分的飘忽**：崩不崩取决于 `main` 返回后落到什么状态，跟具体哪个 `MX_*_Init` 无关。
+
+**修复**（都在 `_rich_hal`，非 git 仓库）：
+
+1. 恢复循环外壳：`/* USER CODE BEGIN WHILE */` 后加 `while (1)` + `{`，`/* USER CODE BEGIN 3 */` 后补 `}`。
+2. 撤销之前所有二分注释（`HAL_Init`、`SystemClock_Config`、六个 `MX_*_Init`、`rtt_init`、NVIC 使能、
+   `HAL_UART_Receive_IT`、`HAL_TIM_PWM_Start`、`HAL_TIM_Base_Start_IT`、`EXTI->SWIER`、裸寄存器写）。
+3. **ADC 外部触发缺 `EXTTRIG`**：`.ioc` 里 ADC 是 "Software start"，HAL 不会置 `ADC_CR2` bit20，
+   只改 `EXTSEL` 外部触发不生效（这是 ADC 读数恒为 0 的原因）→ 补 `ADC1->CR2 |= (1u << 20);`。
+4. 打开 `HAL_ADC_Start_DMA(&hadc1, (uint32_t *)g_adc_dma, ADC_CH_COUNT)`。
+5. `DMA1_Channel1->CCR` 由「清 TCIE/HTIE」改成「置位」：`|= ((1u << 1) | (1u << 2))`，
+   否则 `g_dma_tc`/`g_dma_ht` 永远不涨。
+6. 恢复 PA8 EXTI 的 `HAL_GPIO_Init` + `HAL_NVIC_SetPriority(EXTI9_5_IRQn, 1, 0)`
+   （`MX_GPIO_Init_1` 里先 `__HAL_RCC_AFIO_CLK_ENABLE()`，写 `EXTICR` 不会再总线错误）。
+
+**验证**（MI 实机，2 s）：`g_tick_1k=2032`（1 kHz TIM2 节拍）、`g_duty=329`（PWM 跟随 ADC 均值）、
+`g_adc_dma = 0,1591,1786,2047`（4 通道扫描 + DMA 搬运）、`CFSR=0`、PC 停在 `main` 循环内。
+
+**遗留**：`g_dma_tc`/`g_dma_ht` 仍只到 1（2 s 内应约 2000），待查（先看 `DMA1_Channel1->CNDTR`
+是否在动、`DMA1_Channel1_IRQn` 是否真进、`Dma.ADC1.0.Mode=DMA_CIRCULAR` 是否生效）；
+`stm32f1xx_it.c:82-86` 的 `frame[6]` 取值偏移错（恒读 0），要修或删。
+
+**教训**：改 USER CODE 时别把 ST 模板的 `while (1)` 外壳一起删掉——症状是 HardFault 且
+`BFAR=_estack`，很容易误判成外设初始化问题。
+
+
 

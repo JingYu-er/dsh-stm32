@@ -188,6 +188,7 @@ export class MiSession {
   private token = 0;
   private pending: Pending | null = null;
   private lastStopped: MiRecord | null = null;
+  private stopWaiters: Array<(record: MiRecord) => void> = [];
   private lastPromptResolve: (() => void) | null = null;
   private exited = false;
   private miLog: string[] = [];
@@ -278,7 +279,12 @@ export class MiSession {
       return;
     }
     if (record.kind === "exec") {
-      if (record.class === "stopped") this.lastStopped = record;
+      if (record.class === "stopped") {
+        this.lastStopped = record;
+        const waiters = this.stopWaiters;
+        this.stopWaiters = [];
+        for (const waiter of waiters) waiter(record);
+      }
       this.miLog.push("exec:" + record.class);
       return;
     }
@@ -364,6 +370,26 @@ export class MiSession {
       if (typeof frame === "object" && frame !== null) out.push(frame as Record<string, unknown>);
     }
     return out;
+  }
+
+  /**
+   * 等下一个 *stopped（断点命中/单步结束/信号）。
+   * continueTarget / -exec-next 只在 ^running 时返回，真正"停在哪"要靠这个方法。
+   */
+  waitStopped(timeoutMs = 20_000): Promise<MiRecord> {
+    const stopped = this.lastStopped;
+    return new Promise<MiRecord>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.stopWaiters = this.stopWaiters.filter((item) => item !== waiter);
+        reject(new Error("等 *stopped 超时（" + String(timeoutMs) + " ms）"));
+      }, timeoutMs);
+      const waiter = (record: MiRecord): void => {
+        clearTimeout(timer);
+        resolve(record);
+      };
+      void stopped;
+      this.stopWaiters.push(waiter);
+    });
   }
 
   /** 结束会话：-gdb-exit，超时就 kill。 */
