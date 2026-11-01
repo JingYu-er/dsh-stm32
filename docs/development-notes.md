@@ -3472,6 +3472,24 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 三套缓存 UX（`stm32_cache` / `stm32_assets` / `stm32_firmware_install`）、`stm32_env_probe` 与 `stm32_doctor` 的重叠、
 24 个工具的样板（`resolveProjectDir` 15 处、`ensureToolchain` 10 处、`baseReport` 9 处）——这些改的是命令名/结构，
 要在同一次里同步 `src/skill/stm32-workflow.ts`、README、docs 与测试，单独一轮做。
+
+## 50. 工具合并第一刀：stm32_env_probe → stm32_doctor（2026-11-01）
+
+`stm32_doctor` 与 `stm32_env_probe` 各自调一次同一个 `probeAll()`，一个报「工程/探针现在为什么不能烧」，
+一个报「这台机器能编译/烧录/调试/建工程吗」——同一份数据的两种排版。合并后：
+
+- `src/engine/doctor.ts`：`DoctorReport` 增 `capabilities: Capabilities`、`recommendations: string[]`、`searched: string[]`；
+  新增纯函数 `capabilitiesOf(tools)`（build = gcc+cmake+ninja、flash = openocd、debug = openocd+gdb、generate = cubemx+cubemx-java）
+  与 `recommendationsOf(tools, missingRequired, capabilities)`（缺件按顺序装 + 「需要我帮你装吗」+ CubeMX/JRE 两条提示），都从原 env-probe 搬过来。
+- `src/tools/doctor.ts`：schema/`required` 补三个字段，`formatReport` 加一行能力矩阵与「下一步」段。
+- 删掉 `src/tools/env-probe.ts` 与 `src/index.ts` 的注册；**工具数 24 → 23**。
+- 提示语里的 `stm32_env_probe` 全部改成 `stm32_doctor`（`install-guides.ts`、`debug-session.ts`、`debug.ts`、`msys2-install.ts`、`probe.ts`、`web-api.ts`、`src/skill/stm32-workflow.ts`、README 两份、`docs/reading-guide.md`）。
+- `test/schema-guard.mjs`：两个 env_probe 测试改成 `capabilitiesOf`/`recommendationsOf` 的纯函数测试（不 spawn 进程）。
+
+结果：全量 **669 pass / 0 fail**（原 670，两个工具测试换成一个纯函数测试），`pack-size` 通过，工具数 23（README 两处数字同步）。
+
+**教训**：合并「同一份数据两种排版」的工具几乎没有成本，只要把纯逻辑抽成函数；真正贵的是**提示语**——
+一个工具名散落在 8 个文件的 hint/verify 字段里，删工具时必须全量替换，否则用户按提示去调用一个不存在的工具。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，
