@@ -334,33 +334,29 @@ export function registerRtt(ctx: DshContext): void {
           return failure(actionName, projectDir, gate.message, [...notes, ...gateReportNotes(gate)]);
         }
         const gateNotes = gateReportNotes(gate);
-        let session = sessionInfo();
-        if (session === null) {
-          const subprocess = ctx.get<SubprocessService>("subprocess");
-          if (subprocess === undefined) {
-            return failure(actionName, projectDir, "宿主没有 subprocess 服务，起不了 openocd 会话", [...notes, ...gateNotes]);
-          }
-          const ensured = await ensureSession(projectDir, {
-            subprocess,
-            ...(binDirs === undefined ? {} : { binDirs }),
-            ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
-          });
-          if (!ensured.ok || ensured.session === null) {
-            const report = baseReport(actionName, projectDir);
-            report.message = ensured.message;
-            report.errors = [ensured.message];
-            report.notes = [...notes, ...gateNotes];
-            if (ensured.probeError !== null) report.probeError = ensured.probeError;
-            return { message: ensured.message, report };
-          }
-          session = ensured.session;
-          notes.push("没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
-          if (ensured.replacedDead) notes.push("旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起");
-          rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
-        } else {
-          notes.push("复用已有调试会话（tcl 端口 " + String(session.tclPort) + "）");
-          rttOwnedSessionStartedAt = null;
+        const subprocess = ctx.get<SubprocessService>("subprocess");
+        if (subprocess === undefined) {
+          return failure(actionName, projectDir, "宿主没有 subprocess 服务，起不了 openocd 会话", [...notes, ...gateNotes]);
         }
+        const ensured = await ensureSession(projectDir, {
+          subprocess,
+          ...(binDirs === undefined ? {} : { binDirs }),
+          ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
+        });
+        if (!ensured.ok || ensured.session === null) {
+          const report = baseReport(actionName, projectDir);
+          report.message = ensured.message;
+          report.errors = [ensured.message];
+          report.notes = [...notes, ...gateNotes];
+          if (ensured.probeError !== null) report.probeError = ensured.probeError;
+          return { message: ensured.message, report };
+        }
+        const session = ensured.session;
+        notes.push(ensured.reused
+          ? "复用已有调试会话（tcl 端口 " + String(session.tclPort) + "）"
+          : "没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
+        if (ensured.replacedDead) notes.push("旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起");
+        rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
         const started = await startRtt({
           addr: target,
           ...(readNumber(args.size) === undefined ? {} : { size: readNumber(args.size) ?? DEFAULT_RTT_SIZE }),
@@ -396,34 +392,35 @@ export function registerRtt(ctx: DshContext): void {
         }
 
         const gateNotes = gateReportNotes(gate);
-        let session = sessionInfo();
-        if (session === null) {
-          const subprocess = ctx.get<SubprocessService>("subprocess");
-          if (subprocess === undefined) {
-            return failure(action, projectDir, "宿主没有 subprocess 服务，起不了 openocd 会话", [...notes, ...gateNotes]);
-          }
-          const ensured = await ensureSession(projectDir, {
-            subprocess,
-            ...(binDirs === undefined ? {} : { binDirs }),
-            ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
-          });
-          if (!ensured.ok || ensured.session === null) {
-            const probeError = ensured.probeError;
-            const report = baseReport(action, projectDir);
-            report.message = ensured.message;
-            report.errors = [ensured.message];
-            report.notes = [...notes, ...gateNotes];
-            if (probeError !== null) report.probeError = probeError;
-            return { message: ensured.message, report };
-          }
-          session = ensured.session;
-          notes.push("没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
-          // 记下"这是我起的"：stop 时据此决定要不要把 openocd 一起收掉（复用别人的就不动）。
-          rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
-        } else {
-          notes.push("复用已有调试会话（tcl 端口 " + String(session.tclPort) + "）");
-          rttOwnedSessionStartedAt = null;
+        // 一律走 ensureSession（哪怕 sessionInfo() 看起来有会话）：只有它会在复用前确认 openocd 还活着。
+        // 真机踩过：探针掉线后 openocd 自己退出，会话记录还在，于是 start 一直"复用"一个死会话。
+        const subprocess = ctx.get<SubprocessService>("subprocess");
+        if (subprocess === undefined) {
+          return failure(action, projectDir, "宿主没有 subprocess 服务，起不了 openocd 会话", [...notes, ...gateNotes]);
         }
+        const ensured = await ensureSession(projectDir, {
+          subprocess,
+          ...(binDirs === undefined ? {} : { binDirs }),
+          ...(exec.agent?.id === undefined ? {} : { owner: exec.agent.id }),
+        });
+        if (!ensured.ok || ensured.session === null) {
+          const probeError = ensured.probeError;
+          const report = baseReport(action, projectDir);
+          report.message = ensured.message;
+          report.errors = [ensured.message];
+          report.notes = [...notes, ...gateNotes];
+          if (probeError !== null) report.probeError = probeError;
+          return { message: ensured.message, report };
+        }
+        const session = ensured.session;
+        if (ensured.reused) {
+          notes.push("复用已有调试会话（tcl 端口 " + String(session.tclPort) + "）");
+        } else {
+          notes.push("没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
+        }
+        if (ensured.replacedDead) notes.push("旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起");
+        // 记下"这是我起的"：stop 时据此决定要不要把 openocd 一起收掉（复用别人的就不动）。
+        rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
 
         const started = await startRtt({
           addr,
