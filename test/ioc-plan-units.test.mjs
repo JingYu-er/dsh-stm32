@@ -569,6 +569,25 @@ test("peripherals(TIM3:timebase)：纯时基定时器不占引脚，只写 Presc
   assert.equal(tim3Pins.length, 0, "纯时基不该写任何 TIM3 引脚：" + JSON.stringify(tim3Pins));
 });
 
+test("peripherals(ADC1:1,4,5)：多 Rank 三路扫描，Rank 从 1 连续、NbrOfConversion=3", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "ADC1:1,4,5" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("ADC1.NbrOfConversion"), "3");
+  assert.equal(entries.get("ADC1.Rank-0#ChannelRegularConversion"), "1");
+  assert.equal(entries.get("ADC1.Rank-1#ChannelRegularConversion"), "2");
+  assert.equal(entries.get("ADC1.Rank-2#ChannelRegularConversion"), "3");
+  assert.equal(entries.get("ADC1.Channel-0#ChannelRegularConversion"), "ADC_CHANNEL_1");
+  assert.equal(entries.get("ADC1.Channel-1#ChannelRegularConversion"), "ADC_CHANNEL_4");
+  assert.equal(entries.get("ADC1.Channel-2#ChannelRegularConversion"), "ADC_CHANNEL_5");
+  assert.match(entries.get("ADC1.SamplingTime-2#ChannelRegularConversion") ?? "", /SAMPLETIME/u);
+  const signals = [...entries.entries()].filter(([, value]) => value.startsWith("ADCx_IN"));
+  assert.equal(signals.length, 3, "三根脚各一个 ADCx_INn 信号：" + JSON.stringify(signals));
+  const shKeys = [...entries.keys()].filter((key) => /^SH\.ADCx_IN[0-9]+\.ConfNb$/u.test(key));
+  assert.equal(shKeys.length, 3, "每路都要有一个 SH 块：" + JSON.stringify(shKeys));
+});
+
 let failed = 0;
 for (const item of cases) {
   try {

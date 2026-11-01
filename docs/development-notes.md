@@ -3517,6 +3517,20 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 
 **教训**：同一实例名要两种用法（PWM / 纯时基）时，别加第二个同名预设（`findPeripheralPreset` 只会命中第一个）；
 用「实例名:变体」的写法让查找函数自己决定，既不动老名字也不制造歧义。
+
+## 52. P3'-C5：多 Rank ADC 预设 `ADC1:1,4,5`（2026-11-01）
+
+键的形状照抄 ImportADCParameter 的结论：每条转换占三个同下标键，`NbrOfConversion` 等于条数，Rank 从 1 连续。
+
+- `src/data/ioc-presets.ts`：`ADC_PIN_BY_CHANNEL`（F103C8 的 IN0–IN9 → PA0/PA1/PA4/PA5/PA6/PA7/PB0/PB1）+ `adcMulti(name, channels)`；
+  写法是 `peripherals: [{ name: "ADC1:1,4,5" }]`，由 `findPeripheralPreset()` 解析 `/^[0-9]+(,[0-9]+)*$/` 变体生成，
+  通道去重、只接受这张表里存在的通道（不认识的通道直接返回 null，报错里会列出 `ADC1:1,4,5（多 Rank，通道号列表）` 的写法）。
+- 每路引脚用 `ADCx_INn` 共享信号 + `shared` 块，`enableSharedSignal()` 自动写 `SH.ADCx_INn.0/ConfNb`；
+  `RCC.ADCPresc=RCC_ADCPCLK2_DIV6` 照旧带上（F1 的 ADC 上限 14 MHz）。
+- 测试：`test/ioc-plan-units.test.mjs` +1（`ADC1:1,4,5` → `NbrOfConversion=3`、Rank-0/1/2 = 1/2/3、Channel-n = ADC_CHANNEL_1/4/5、
+  三个 `ADCx_INn` 信号、三个 `SH.*.ConfNb`）；全量 **671 pass / 0 fail**。
+
+**注意**：单路 ADC 还是老预设（`ADC1`），多路用新写法——`findPeripheralPreset` 只命中第一个，别造同名第二条。
 补记（同一天，用户第三次重启后实机验 `a77528b`/`7bcd2ee`）：
 
 - `stm32_rtt action=follow addr=0x20000f88`（**既不先 debug_session，也不先 rtt start**）→ ok、8 条、`t=2793184 → 2794581`，
