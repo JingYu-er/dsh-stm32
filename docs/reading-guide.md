@@ -467,7 +467,7 @@ stateDiagram-v2
   空闲 --> 启动中: stm32_debug_session(start)
   启动中 --> 活跃: openocd 常驻 + 首次 gdb -batch 连上
   启动中 --> 空闲: 端口占用 / 探针失败、带 probeError（kind / cause / hint）
-  活跃 --> 活跃: stm32_debug_eval、每次新起 gdb -batch：连上 → halt → 命令 → resume → detach
+  活跃 --> 活跃: stm32_debug_eval、优先常驻 MI（连不上才每次新起 gdb -batch：连上 → halt → 命令 → resume → detach）
   活跃 --> 空闲: stm32_debug_stop
   活跃 --> 空闲: 空闲 90 s
   活跃 --> 空闲: 总时长 10 min
@@ -731,7 +731,7 @@ const fake = {
 | 改 .elf 选择规则 | engine/build.ts 的 `pickElf` / `elfCandidates` / `elfSelectionNote`（flash、debug_run、doctor、export 全都间接用它） | build-units 里要同时断言「工程名优先」和「退化到最新」两条路 |
 | 加 / 改探针错误分类 | engine/probe-error.ts 的 `classifyProbeFailure` 与 `PROBE_ERROR_KINDS`（MATCHERS 顺序敏感；flash / debug / session 三条路径共用同一份） | 三处同改：probe-error 的 MATCHERS 与 hint、tools 层的 `PROBE_ERROR_SCHEMA` 声明、test/probe-error-units 与 schema-guard |
 | 改 cmake 源清单的认法（设备宏、startup、HAL 模块） | engine/cmake-sources.ts 的 `collectCmakeSources` / `halModulesInUse` | 注释掉的 `#define` 与 `#include` 不能算启用；内容没变必须零写入（cmake-sources-units 15 例兜这两条） |
-| 改 RTT 帧格式（头长、级别含义、长度字段） | engine/rtt.ts 的 `RTT_FRAME_HEADER_BYTES` / `RTT_MIN_FRAME_BYTES` / `parseRttFrames` + templates/register/Core/Src/rtt.c 的 `RTT_FRAME_OVERHEAD` / `RTT_FRAME_MIN_BYTES` / `rtt_ring_write` | 两侧常量必须一致（rtt-units 有一条反算断言），还要同步 templates/scaffold/RTT.md 与两份 README 的三行示例；改帧头等于改 ABI，老固件会被判成帧失步；dump 侧另有 `resyncRttFrames` 负责把环缓冲首字节对齐到帧边界（严格解析器不动，见 development-notes §39） |
+| 改 RTT 帧格式（头长、级别含义、长度字段） | engine/rtt.ts 的 `RTT_FRAME_HEADER_BYTES` / `RTT_MIN_FRAME_BYTES` / `parseRttFrames` + templates/register/Core/Src/rtt.c 的 `RTT_FRAME_OVERHEAD` / `RTT_FRAME_MIN_BYTES` / `rtt_ring_write` | 两侧常量必须一致（rtt-units 有一条反算断言），还要同步 templates/scaffold/RTT.md 与两份 README 的三行示例；改帧头等于改 ABI，老固件会被判成帧失步；dump 侧另有 `resyncRttFrames` 负责把环缓冲首字节/中段对齐到帧边界，并按「时间戳+级别+文本」去重（严格解析器不动，见 development-notes §39、§40） |
 | 改寄存器写法的解析或位域解释 | `src/data/svd.ts`（符号解析 / 反向查 / 解码）+ `src/tools/regs.ts`（五种写法、去重、dump、渲染、建议文案） | `svd-units` 39 例兜着；夹具在 `test/fixtures/svd/`（flat / versioned / badline 三种布局）；改渲染要同步两份 README 与 development-notes §31 |
 | 更新 SVD 事实表（新 line / 新资源版本） | **资源仓库** `node scripts/build-assets.mjs` 重新从 cmsis-svd-data 生成 `device/f1/svd/<line>.json`（`files[].profile` 标 full，并带 ST EULA 来源）→ 插件侧 `stm32_assets action=refresh profile="full"` | SVD 严格解析：外设/寄存器/字段有一条不合法就整份拒绝；缓存键是 path+size+mtimeMs，升级后自动失效 |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
@@ -742,7 +742,7 @@ const fake = {
 2. **generate 是否补发 SetCopyLibrary "copy all"** 仍待定：只靠 .ioc 的 ProjectManager.LibraryCopy=1 不会让 CubeMX 从 setCustomFWPath 的包拷 HAL 源码。
 3. **firmware-install 的 existing 分支 nextStep 文案**偏旧（还停在「直接调 stm32_generate」的说法）。
 4. **四类探针故障只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验（`probeError` 的 kind 与专属 hint 已在 test/probe-error-units 覆盖）。
-5. **P2（多芯片 + HAL 外设源文件按需落位）** 未开工；P3（gdb MI 常驻会话）**已完成**，见 `docs/development-notes.md` §37 —— `stm32_debug_eval` 优先走常驻 MI（单条命令 20–70 ms），MI 连不上才退回每次 `gdb -batch`。
+5. **P2（多芯片 + HAL 外设源文件按需落位）** 未开工；P3（gdb MI 常驻会话）**已完成**，见 `docs/development-notes.md` §37 —— `stm32_debug_eval` 优先走常驻 MI（单条命令 20–70 ms），MI 连不上才退回每次 `gdb -batch`；`continue`/`next`/`step` 会在 3 s 窗口里等 `*stopped` 并报停点（`formatStopLocation`，见 §40）。
 6. **docs/diagrams/** 那两张 HTML 图有 2 MB 原始 / 891 KB gz，已经不进 npm 包**（package.json 的 files 从 docs 收窄成 docs/*.md）。这事现在由 `scripts/pack-size.mjs`（npm run test:size）守着：tarball ≤1.2 MB、templates/** ≤60 KB、包内禁 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。实测包体 509.9 KB / 99 个文件。
 7. **CI 上的 test:pack** 只在本机跑过；第一次在 GitHub Actions 上跑还没有记录。
 8. 斜杠命令的卡片渲染只有用户手输能验，工具层测不到。
@@ -751,7 +751,7 @@ const fake = {
 11. **别用 .elf 文件大小判「超 Flash」**：带 `-g3` 的 20 KiB 固件，.elf 里有 600 KB 调试信息，按文件大小判会把正经 C8T6 工程误报成超容量。doctor 因此读 ELF program header，只累加 `p_paddr` 落在 0x08000000 起 1 MiB 的 `PT_LOAD` 的 `p_filesz`；解析不出 program header 时才退回文件大小并注明是粗算。
 12. **换芯片后别留旧链接脚本名**：`-T` 出现两个 .ld 时链哪个取决于顺序，症状是「编译过、上板跑飞」。hal-chip.pointLinkerFlagAt 会把工具链里的旧名改指新名，doctor 的 ①③ 两项检查也会先报 blocker。
 13. **B3 的真机计时还欠着**：会话复用快路径只有假探针（假 subprocess + 本地假 Tcl 服务端）的数字，真机 10 连读没测成——当时插的是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；同一句在 B3 之前的旧版一次性路径上也复现，所以不是这次改动引入的。**复测方法**：换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
-14. **RTT 只有离线验证**：`rtt-units` 26 例全离线（假 subprocess + 假端口），真机上只做到「建工程 + 编译 + `nm` 取址」，**没有一次真板子 dump**（手头的 WCH-Link 与坑 13 是同一个问题）。「只有通道 0 / 无 defmt 解码 / 默认占 3 KB RAM」是设计取舍，见 development-notes §30.6。**复测方法**：换回 CMSIS-DAP 探针，烧一个取消 `USER CODE BEGIN 2` 注释的寄存器工程，`nm` 拿 `_SEGGER_RTT`，再跑 `stm32_rtt action=start addr=<addr>` + `action=dump seconds=3`。
+14. **RTT 已真机验证（2026-11-01）**：`rtt-units` 33 例仍全离线（假 subprocess + 假端口），但真板上跑通了 start → dump（1 kHz 固件打印、`dma` 与 `t` 1:1）→ stop（openocd 一并退出、探针归还）→ flash 的完整链路，见 development-notes §10.2/§39/§40。剩下的设计取舍（只有通道 0 / 无 defmt 解码 / 默认占 3 KB RAM）见 development-notes §30.6。**复现命令**（`_rich_hal` 上验过）：`stm32_rtt action=start projectDir=<工程> addr=0x20000f88` → `action=dump seconds=3` → `action=stop`。
 15. **寄存器符号名与位域解释只有离线验证**：`svd-units` 39 例全离线（真实资源包 + 假 subprocess + 假 Tcl 服务端），**没有一次「真板子 + 真探针 + `GPIOC.ODR`」**（与坑 13 同一个 WCH-Link 问题）。**复测方法**：换回 CMSIS-DAP 探针后 `stm32_regs_read addresses=["GPIOC.ODR","0x4001100C"]`，看 `samples[0].name` / `fields` 与 notes 里的 SVD line。
 
 ---

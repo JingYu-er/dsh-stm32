@@ -520,6 +520,40 @@ test("dumpRtt：通道首字节落在帧中间时先对齐再解，不把整次 
   }
 });
 
+test("dumpRtt：中段混进回绕垃圾时跳过它，后面的记录照样解出来", async () => {
+  const first = encodeRttFrame({ t: 60, level: 3, text: "垃圾前一条" });
+  const garbage = Buffer.from("half-frame-left-by-ring-wrap............", "utf8");
+  const second = encodeRttFrame({ t: 61, level: 3, text: "垃圾后一条" });
+  const { tcl, rtt } = await setup({ frames: [first, Buffer.concat([garbage, second])] });
+  try {
+    await startRtt({ addr: MAGIC_ADDR, port: rtt.port, checkPortBusy: NOT_BUSY });
+    const dumped = await dumpRtt({ seconds: 0.8 });
+    assert.equal(dumped.ok, true, dumped.message);
+    assert.deepEqual(dumped.records.map((record) => record.text), ["垃圾前一条", "垃圾后一条"]);
+    assert.ok(dumped.notes.some((note) => /中段 .* 字节不是帧头/u.test(note)), JSON.stringify(dumped.notes));
+  } finally {
+    await resetAll();
+    await tcl.close();
+    await rtt.close();
+  }
+});
+
+test("dumpRtt：同一段被重推时按时间戳+级别+文本去重", async () => {
+  const frame = encodeRttFrame({ t: 70, level: 3, text: "推了两遍的同一条" });
+  const { tcl, rtt } = await setup({ frames: [frame, frame] });
+  try {
+    await startRtt({ addr: MAGIC_ADDR, port: rtt.port, checkPortBusy: NOT_BUSY });
+    const dumped = await dumpRtt({ seconds: 0.8 });
+    assert.equal(dumped.ok, true, dumped.message);
+    assert.deepEqual(dumped.records.map((record) => record.text), ["推了两遍的同一条"]);
+    assert.ok(dumped.notes.some((note) => /已去重/u.test(note)), JSON.stringify(dumped.notes));
+  } finally {
+    await resetAll();
+    await tcl.close();
+    await rtt.close();
+  }
+});
+
 test("dumpRtt：帧对不上时报失步错误而不是死等", async () => {
   const broken = Buffer.alloc(8);
   broken.writeUInt32LE(2, 0);

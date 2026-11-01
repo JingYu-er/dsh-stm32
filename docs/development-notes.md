@@ -2869,6 +2869,61 @@ main.c:196 → 197 → 198 → 242 → 244 → 251 → 252 → 257
 **教训**：RTT 通道的「字节流不等于从帧边界开始」——凡是从环形缓冲直读的地方都不能假设
 偏移 0 对齐。严格解析器 + 调用侧对齐，比把 resync 塞进解析器更好测也更好读。
 
+## 40. continue/step 等到 `*stopped` 报停点；RTT 中段对齐 + 去重（2026-11-01）
+
+**背景**：`MiSession.waitStopped` 早在 `81586d6` 就有了，但**零调用方** —— `stm32_debug_eval` 里的
+`continue` 只回一句「目标已继续运行（要停下就在下次 eval 里先发 monitor halt，或让断点命中）」。
+断点命中了也拿不到「停在哪一行」，排障时还是得靠 `-exec-next` 逐行看。
+
+**改动 1（`src/engine/gdb-mi.ts`）**：把 `lastStopped` 变成真正可消费的停止记录。
+
+- `^running`/`*running` 到达时清掉 `lastStopped`：`MiSession.start` 的 `monitor halt` 必留一条
+  `*stopped`，不清就会把「上一次停在哪」当成本次 continue 的结果（实测就是这条把单测顶红的）。
+- `waitStopped`：有现成停止记录就立刻返回并标记已消费（`this.lastStopped = null`）；排队等到的那条
+  也在分发后清空，同一条停止记录不会报两次。
+- `continueTarget` 发送前也清一次，避免命令本身没跑起来时留下旧记录。
+- 新增 `formatStopLocation(record)`：把 `*stopped` 压成一行
+  `main Core/Src/main.c:196 @0x08001234 (breakpoint-hit)`，纯函数、好测。
+
+**改动 2（`src/engine/debug-session.ts`）**：`continue`/`next`/`step` 统一走 MI：
+
+- `continue` → `-exec-continue`，`next|n` → `-exec-next`，`step|s` → `-exec-step`；
+  `^running` 之后最多等 `MI_STOP_WAIT_MS = 3000` 的 `*stopped`。
+- 停住：`c：已停下 —— main Core/Src/main.c:196 @0x08001234 (breakpoint-hit)（本次 eval 结束会按默认再 resume；要停在那里用 keepHalted=true）`。
+- 没停（纯主循环）：`c：目标已继续运行（3000 ms 内没命中断点；要停下就在下次 eval 里先发 monitor halt）`。
+- 没跑起来（`^error`）：直接把 gdb 的 `msg` 报出来，不假装成功。
+
+**改动 3（`src/engine/rtt.ts`）**：§39 的 resync 只覆盖「首包偏移 0 失步」；这轮补两头。
+
+- 已经解出过记录、**中段**又出现非帧头字节（环缓冲回绕时很常见）：同样先 `resyncRttFrames`，
+  `offset > 0` 就切掉垃圾继续解，note 写「中段 N 字节不是帧头…」；只有整段都找不到帧头才按
+  「尾部半帧」收尾。
+- 去重：`seen` 集合按 `t|level|text` 记已收过的记录，重复的只计数，收尾时 note「重复记录 N 条…已去重」。
+  环缓冲被 openocd 重推时不再让 records 里出现两遍同一行。
+
+**测试**：`test/gdb-mi-units.test.mjs` 10 例（新增 waitStopped 消费语义 + `formatStopLocation`），
+`test/rtt-units.test.mjs` 33 例（新增「中段垃圾跳过」「重推去重」两条假服务端用例）；
+全量 `node test/run-units.mjs` → **TOTAL pass=635 fail=0**。
+
+**实机验收又抓到一个真 bug（同一天）**：`break main` + `continue` 在**目标已经在 main 循环里**时不可能命中，
+于是 3 s 后按「已继续运行」返回（这是对的）；但紧接着的 `next` 卡满 30 s：`-exec-next` 在**运行态**下 gdb 根本不回。
+第二轮更糟：目标还跑着，连 `break TIM2_IRQHandler` 这条 console 命令都超时 30 s —— 也就是说原来提示用户的
+「下次 eval 里先发 monitor halt」**一样会卡**。
+
+根因：MI 会话是常驻的，而「目标在跑」这件事没有任何地方记着。修法三处：
+
+1. `MiSession` 新增 `private runningState` + `get targetRunning()`：`^running`/`*running` 置 true，`*stopped` 置 false；
+2. `console()` 里嗅探 `monitor halt` / `monitor resume`（这两条不产生 `^running`/`*stopped`，运行态只能从命令本身记）；
+3. 新增 `async ensureHalted(timeoutMs)`：跑着就发 `-exec-interrupt`（**只有它是异步感知的**，console 命令在运行态会卡），
+   失败回滚状态并抛错；`debug-session` 的 eval 循环在**每条命令前**先 `if (mi.targetRunning) await mi.ensureHalted()`，
+   日志里记一条「（目标在跑，已用 -exec-interrupt 停下）」。
+
+测试：`gdb-mi-units` 11 例（新增「运行态 ensureHalted 走 -exec-interrupt」「monitor resume/halt 记运行态」
+「*stopped 落回停止态」）；全量 **636 pass / 0 fail**。
+**教训**：`lastStopped` 是「当前状态」不是「事件队列」——只要把它当缓冲，就必须显式定好
+「谁清、谁消费、消费后还能不能看见」，否则断点报告会张冠李戴（而且在单测里比在板子上更容易先炸）。
+
+
 
 
 

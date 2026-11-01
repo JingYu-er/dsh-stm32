@@ -29,6 +29,26 @@ export interface MiRecord {
   text: string;
 }
 
+/** 把 *stopped 记录描述成一行「func file:line @addr (reason)」，continue/step 报停点用。 */
+export function formatStopLocation(record: MiRecord): string {
+  const reason = typeof record.data["reason"] === "string" ? record.data["reason"] : "";
+  const parts: string[] = [];
+  const frame = record.data["frame"];
+  if (typeof frame === "object" && frame !== null) {
+    const item = frame as Record<string, unknown>;
+    const func = typeof item["func"] === "string" ? item["func"] : "";
+    const file = typeof item["file"] === "string" ? item["file"] : "";
+    const line = typeof item["line"] === "string" ? item["line"] : typeof item["line"] === "number" ? String(item["line"]) : "";
+    const addr = typeof item["addr"] === "string" ? item["addr"] : "";
+    if (func !== "") parts.push(func);
+    if (file !== "" && line !== "") parts.push(file + ":" + line);
+    else if (line !== "") parts.push("行 " + line);
+    if (addr !== "") parts.push("@" + addr);
+  }
+  if (reason !== "") parts.push("(" + reason + ")");
+  return parts.length === 0 ? "位置未知" : parts.join(" ");
+}
+
 /** MI 的 C 字符串转义：\\ \" \n \t \r 以及 \xNN。 */
 export function decodeMiString(text: string): string {
   let out = "";
@@ -188,6 +208,8 @@ export class MiSession {
   private token = 0;
   private pending: Pending | null = null;
   private lastStopped: MiRecord | null = null;
+  /** 目标是否在跑。运行态下 gdb 不回任何命令（连 console 的 break 都卡），所以动它之前先看这个。 */
+  private runningState = false;
   private stopWaiters: Array<(record: MiRecord) => void> = [];
   private lastPromptResolve: (() => void) | null = null;
   private exited = false;
@@ -220,6 +242,11 @@ export class MiSession {
   /** 最近一次 *stopped 记录（断点命中/单步结束）。 */
   get stopped(): MiRecord | null {
     return this.lastStopped;
+  }
+
+  /** 目标现在是不是在跑（continue / monitor resume / 断点放过之后）。 */
+  get targetRunning(): boolean {
+    return this.runningState;
   }
 
   /** 会话日志（调试用：记录所有收到的记录类别）。 */
@@ -267,6 +294,12 @@ export class MiSession {
     }
     const record = parseMiLine(line);
     if (record === null) return;
+    // 目标重新跑起来（^running / *running）后，旧的停止记录就作废——否则 waitStopped
+    // 会把上一条（比如 start 时 monitor halt 产生的）当成这次 continue 的结果。
+    if (record.class === "running") {
+      this.runningState = true;
+      this.lastStopped = null;
+    }
     if (record.kind === "prompt") {
       const resolve = this.lastPromptResolve;
       this.lastPromptResolve = null;
@@ -280,10 +313,13 @@ export class MiSession {
     }
     if (record.kind === "exec") {
       if (record.class === "stopped") {
+        this.runningState = false;
         this.lastStopped = record;
         const waiters = this.stopWaiters;
         this.stopWaiters = [];
         for (const waiter of waiters) waiter(record);
+        // 已经被 waitStopped 取走的停止记录不再留档，避免下一次重复报告。
+        if (waiters.length > 0) this.lastStopped = null;
       }
       this.miLog.push("exec:" + record.class);
       return;
@@ -336,7 +372,28 @@ export class MiSession {
 
   /** 用 gdb 控制台语法执行（等价于 -interpreter-exec console），返回控制台输出文本。 */
   async console(command: string, timeoutMs = 20_000): Promise<{ record: MiRecord; text: string }> {
-    return this.send('-interpreter-exec console "' + escapeMi(command) + '"', timeoutMs);
+    const result = await this.send('-interpreter-exec console "' + escapeMi(command) + '"', timeoutMs);
+    if (result.record.class !== "error") {
+      // monitor halt/resume 不会产生 *stopped / ^running，运行态只能从命令本身记。
+      if (/^monitor\s+halt\b/iu.test(command)) this.runningState = false;
+      if (/^monitor\s+resume\b/iu.test(command)) this.runningState = true;
+    }
+    return result;
+  }
+
+  /**
+   * 确保目标停着。跑着就用 -exec-interrupt：运行态下 console 命令（连 "break"）都不会回，
+   * 只有 -exec-interrupt 是异步感知的。返回 true 表示这次真的打断过。
+   */
+  async ensureHalted(timeoutMs = 10_000): Promise<boolean> {
+    if (!this.runningState) return false;
+    this.runningState = false;
+    const result = await this.send("-exec-interrupt", timeoutMs);
+    if (result.record.class === "error") {
+      this.runningState = true;
+      throw new Error("打断运行中的目标失败：" + String(result.record.data["msg"] ?? "未知原因"));
+    }
+    return true;
   }
 
   /** 求值一个 gdb 表达式，返回打印出来的字符串（如 "0x20004fd0"）。 */
@@ -348,6 +405,7 @@ export class MiSession {
 
   /** -exec-continue：目标开跑，本方法在 ^running 时返回（不等到下一个断点）。 */
   async continueTarget(timeoutMs = 20_000): Promise<MiRecord> {
+    this.lastStopped = null;
     const result = await this.send("-exec-continue", timeoutMs);
     return result.record;
   }
@@ -378,6 +436,11 @@ export class MiSession {
    */
   waitStopped(timeoutMs = 20_000): Promise<MiRecord> {
     const stopped = this.lastStopped;
+    if (stopped !== null) {
+      // 已经停住了（比如断点在别的命令里命中了）：立刻返回并标记已消费。
+      this.lastStopped = null;
+      return Promise.resolve(stopped);
+    }
     return new Promise<MiRecord>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.stopWaiters = this.stopWaiters.filter((item) => item !== waiter);
@@ -387,7 +450,6 @@ export class MiSession {
         clearTimeout(timer);
         resolve(record);
       };
-      void stopped;
       this.stopWaiters.push(waiter);
     });
   }

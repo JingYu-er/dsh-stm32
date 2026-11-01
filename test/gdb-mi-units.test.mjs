@@ -1,7 +1,7 @@
 // gdb MI 常驻会话单测：node test/gdb-mi-units.test.mjs（需先 npm run build）
 import assert from "node:assert/strict";
 
-import { MiSession, decodeMiString, escapeMi, parseMiLine, parseMiTuple, parseMiValue, toGdbPath } from "../lib/engine/gdb-mi.js";
+import { MiSession, decodeMiString, escapeMi, formatStopLocation, parseMiLine, parseMiTuple, parseMiValue, toGdbPath } from "../lib/engine/gdb-mi.js";
 
 const cases = [];
 function test(name, fn) { cases.push({ name, fn }); }
@@ -150,6 +150,59 @@ test("MiSession：-exec-next 之后 waitStopped 能等到停在哪一帧", async
   assert.equal(stop.data.frame.func, "main");
   assert.equal(stop.data.frame.line, "242");
   await session.stop();
+});
+
+test("MiSession：waitStopped 只认 continue 之后的新 *stopped（旧的作废、取走的不重复给）", async () => {
+  const child = new FakeChild();
+  const started = MiSession.start({ gdb: "fake-gdb", port: 3333, spawner: () => child, timeoutMs: 2000 });
+  setTimeout(() => child.emit("(gdb)"), 0);
+  const session = await started;
+
+  // start 时的 monitor halt 会先留下一条停止记录：continue 之后它必须失效。
+  child.emit('*stopped,reason="signal-received",frame={func="old_stop",line="1"}');
+  assert.equal(session.stopped.data.frame.func, "old_stop");
+  await session.continueTarget();
+  assert.equal(session.stopped, null, "^running 之后旧停止记录要清掉");
+  await assert.rejects(session.waitStopped(50), /超时/u);
+
+  child.emit('*stopped,reason="breakpoint-hit",frame={func="main",file="main.c",line="196",addr="0x08001234"}');
+  const stop = await session.waitStopped(1000);
+  assert.equal(stop.data.frame.func, "main");
+  await assert.rejects(session.waitStopped(50), /超时/u, "已经取走的停止记录不能重复给");
+  await session.stop();
+});
+
+test("MiSession：目标在跑时 ensureHalted 用 -exec-interrupt 停下（console 在运行态会卡）", async () => {
+  const child = new FakeChild();
+  const started = MiSession.start({ gdb: "fake-gdb", port: 3333, spawner: () => child, timeoutMs: 2000 });
+  setTimeout(() => child.emit("(gdb)"), 0);
+  const session = await started;
+  assert.equal(session.targetRunning, false);
+
+  await session.continueTarget();
+  assert.equal(session.targetRunning, true, "^running 之后应记为运行态");
+  assert.equal(await session.ensureHalted(), true);
+  assert.equal(child.written.some((line) => line.includes("-exec-interrupt")), true, child.written.join(" | "));
+  assert.equal(session.targetRunning, false);
+
+  // monitor resume / monitor halt 不会产生 ^running / *stopped，运行态只能从命令本身记。
+  await session.console("monitor resume");
+  assert.equal(session.targetRunning, true);
+  await session.console("monitor halt");
+  assert.equal(session.targetRunning, false);
+
+  child.emit('*stopped,reason="breakpoint-hit",frame={func="main",line="196"}');
+  assert.equal(session.targetRunning, false, "*stopped 到达也要落回停止态");
+  await session.stop();
+});
+
+test("formatStopLocation：func file:line @addr (reason) 一行说清停在哪", () => {
+  const hit = parseMiLine('*stopped,reason="breakpoint-hit",frame={func="main",file="Core/Src/main.c",line="196",addr="0x08001234"}');
+  assert.equal(formatStopLocation(hit), "main Core/Src/main.c:196 @0x08001234 (breakpoint-hit)");
+  const bare = parseMiLine('*stopped,reason="exited-normally"');
+  assert.equal(formatStopLocation(bare), "(exited-normally)");
+  const empty = parseMiLine("*stopped");
+  assert.equal(formatStopLocation(empty), "位置未知");
 });
 
 test("MiSession：gdb 不回命令就超时失败（不挂死）", async () => {

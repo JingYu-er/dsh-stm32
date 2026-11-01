@@ -20,7 +20,8 @@ import type { ProcessHandle, SubprocessService } from "../types.js";
 import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
 import { pickPort, resolveElfPath } from "./debug.js";
-import { MiSession } from "./gdb-mi.js";
+import { MiSession, formatStopLocation } from "./gdb-mi.js";
+import type { MiRecord } from "./gdb-mi.js";
 import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
@@ -159,6 +160,8 @@ const SWEEP_MS = 5_000;
  * （读丢只是慢一点：快路径会回退到 gdb）。
  */
 const TCL_PORT_SETTLE_MS = 120;
+/** continue/step 之后等 *stopped 的窗口：命中断点就报停点，纯主循环跑就最多等这么久。 */
+const MI_STOP_WAIT_MS = 3_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
@@ -503,9 +506,31 @@ export class DebugSessionManager {
         for (const command of commands) {
           const normalized = command.trim();
           commandLine = (commandLine === "" ? "" : commandLine + " ;; ") + normalized;
-          if (/^(?:c|cont|continue)$/u.test(normalized)) {
-            await mi.continueTarget(request.timeoutMs ?? 30_000);
-            lines.push("continue：目标已继续运行（要停下就在下次 eval 里先发 monitor halt，或让断点命中）");
+          // 目标在跑时 gdb 不回命令（-exec-next、连 console 的 break 都会卡到超时），先打断。
+          if (mi.targetRunning) {
+            const interrupted = await mi.ensureHalted(request.timeoutMs ?? 30_000);
+            if (interrupted) lines.push("（目标在跑，已用 -exec-interrupt 停下）");
+          }
+          // continue / next / step：MI 的 -exec-* 在 ^running 就返回，真正"停在哪"要等 *stopped。
+          const isContinue = /^(?:c|cont|continue)$/u.test(normalized);
+          const isStep = /^(?:n|next|s|step)$/u.test(normalized);
+          if (isContinue || isStep) {
+            const timeout = request.timeoutMs ?? 30_000;
+            const sentRecord: MiRecord = isContinue
+              ? await mi.continueTarget(timeout)
+              : (await mi.send("-exec-" + (normalized === "s" || normalized === "step" ? "step" : "next"), timeout)).record;
+            if (sentRecord.class !== "running") {
+              lines.push(normalized + "：没有跑起来（" + String(sentRecord.data["msg"] ?? sentRecord.class) + "）");
+              continue;
+            }
+            const waitMs = Math.min(timeout, MI_STOP_WAIT_MS);
+            try {
+              const stopped = await mi.waitStopped(waitMs);
+              const keepHint = request.keepHalted === true ? "" : "（本次 eval 结束会按默认再 resume；要停在那里用 keepHalted=true）";
+              lines.push(normalized + "：已停下 —— " + formatStopLocation(stopped) + keepHint);
+            } catch {
+              lines.push(normalized + "：目标已继续运行（" + String(waitMs) + " ms 内没命中断点）；下条命令会先 -exec-interrupt 把它停下");
+            }
             continue;
           }
           const result = await mi.console(normalized, request.timeoutMs ?? 30_000);
