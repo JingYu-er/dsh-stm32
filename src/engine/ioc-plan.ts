@@ -30,6 +30,7 @@ import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./
 import { checkIocRules } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
+import { loadSvdForLine, svdLineForChip } from "../data/svd.js";
 import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import type { IocSummary } from "./ioc.js";
@@ -913,7 +914,16 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
 
   // 从 CubeMX 字节码还原出来的离线规则（docs §35）：IPParameters 白名单、DMA 需要 Mcu.IP=DMA、
   // ADC Rank 一致性、NVIC 值 9 段、F1 的 ADC 时钟上限。
-  const ruleReport = checkIocRules(after, { db: pinNames.db, facts: pinNames.facts });
+  // R20 要 SVD 的中断表：.ioc 里只有 CPN，先换成 SVD 的 line（STM32F103C8T6 → "103"）。
+  // 没有资源包（或老包没有 interrupts 字段）时 device 为 null / 表为空 → R20 自动跳过。
+  let interrupts: ReadonlySet<string> | null = null;
+  const cpn = (after.get("Mcu.CPN") ?? "").trim();
+  if (cpn !== "") {
+    const line = svdLineForChip(cpn);
+    const device = line === null ? null : loadSvdForLine(line);
+    if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
+  }
+  const ruleReport = checkIocRules(after, { db: pinNames.db, facts: pinNames.facts, interrupts });
   for (const issue of ruleReport.errors) errors.push("[" + issue.rule + "] " + issue.message);
   for (const issue of ruleReport.warnings) warnings.push("[" + issue.rule + "] " + issue.message);
 
