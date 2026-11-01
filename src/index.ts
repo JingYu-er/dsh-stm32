@@ -36,6 +36,7 @@ import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerRtt } from "./tools/rtt.js";
+import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
 import type { DshContext } from "./types.js";
 
@@ -85,6 +86,7 @@ export function apply(ctx: DshContext): void {
   registerRegsRead(ctx);
   registerRoutePlan(ctx);
   registerRtt(ctx);
+  registerWatchTool(ctx);
   registerAssets(ctx);
   registerCache(ctx);
   registerDoctor(ctx);

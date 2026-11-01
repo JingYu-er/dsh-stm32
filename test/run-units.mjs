@@ -47,6 +47,7 @@ const suites = [
   "tool-contract-units.test.mjs",
   "toolchain-units.test.mjs",
   "vscode-units.test.mjs",
+  "watch-units.test.mjs",
   "web-api-units.test.mjs",
   "xcube-units.test.mjs",
   "schema-guard.mjs",

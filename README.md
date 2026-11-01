@@ -149,6 +149,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 调试 | `stm32_debug_run` / `stm32_debug_session` / `stm32_debug_eval` / `stm32_debug_stop` |
 | 验证"真的在跑" | `stm32_regs_read`：按地址或符号名（`GPIOC.ODR`）把任意外设寄存器读回来，有 SVD 时顺带解位域（`→ ODR5=1`）；halt 读值后 `resume`，不复位芯片 |
 | 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
+| 变量监视 / 观察点 | `stm32_watch`：`action=add` 登记表达式（`kind=value` 只是采样，不用开会话）；`action=sample` 停下→逐项求值→算 delta→原本在跑就放回；`kind=write/read/access` 装成硬件观察点（gdb `watch`/`rwatch`/`awatch`），受 F1 的 4 个数据比较器预算约束 |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
 ## 工具参考
@@ -193,6 +194,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_debug_eval` | 在会话里执行 gdb 命令或读表达式（如 `g_led_blink_count`），读完立刻 `resume` + `detach` |
 | `stm32_debug_stop` | 立刻释放探针，幂等 |
 | `stm32_regs_read` | 读寄存器，`addresses` 五种写法：物理地址 `0x4001100C` / `4001100C`、符号名 `GPIOC.ODR` / `GPIOC->ODR`、只写外设名 `GPIOC`（按偏移升序把它的 7 个寄存器整体 dump，上限 64 条）。装了资源包的 `full` profile 时，每条样本带规范化名与**置位位域**（`GPIOC.ODR (0x4001100C) = 0x00000020  → ODR5=1`）；未知外设会列出可用的前 10 个（共 53 个），未知寄存器会列出该外设的已知寄存器；没有 SVD 时纯地址照读（只是没有名字与位域），符号名报错并提示 `stm32_assets refresh --profile full`。收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零；连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
+| `stm32_watch` | **变量监视与硬件观察点**：`action: "add"` 登记表达式（`expressions`，`kind` 默认 `value`＝每次 `sample` 求值；`write` / `read` / `access` 走 gdb `watch` / `rwatch` / `awatch`，是**数据**比较器，和代码断点不共用预算，F1 只有 4 个，超出在起进程之前就拒绝）。`kind=value` 只登记、不需要会话。`action: "sample"` 停下→逐项求值→和上次值算 `delta`→原本在跑就 `monitor resume` 放回去（`resume: false` 可留住）；出错时保留上一次的值并写 `lastError`。`action: "list"` / `"remove"`（`ids`）/ `"clear"` 管登记表。生命周期：会话 `stop` 时清表（观察点住在 gdb 进程里）；MI 重建会把观察点标成失效并提示重新 `add`。gdb 退回**软件观察点**时会在 `notes` 里警告（会拖慢目标） |
 | `stm32_rtt` | **RTT 日志**（不占串口）：`action: "start"` 先用 `mdw` 读三个字确认 RAM 里真有 `SEGGER RTT` 控制块（`addr` 填控制块起始地址，不是通道缓冲地址），再发 `rtt setup/start/server start`；没有活跃会话时自己起一个。`action: "dump"` 读 `seconds`（默认 3 s）或 `maxRecords`（默认 200 条），返回 `records[{ t, level, text }]`——`level` 是**保留到哪一级**（1 error / 2 warn / 3 info / 4 debug，默认 4 全要），`dropped` / `truncated` 如实报。`action: "stop"` 幂等（turn 结束也会自动停），`action: "status"` 看端口与已运行时长。目标必须**真在跑**（`rtt start` 读的是运行时 RAM）。失败带 `probeError`：控制块全 0 = 固件没调 `rtt_init()`、魔数不符 = `addr` 填错、连不上 = 会话掉了或 9090 端口被占 |
 
 ### 固件里怎么加 RTT（最短示例）

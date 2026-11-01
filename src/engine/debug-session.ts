@@ -22,6 +22,23 @@ import type { BreakpointQuota } from "./breakpoints.js";
 import { pickPort, resolveElfPath } from "./debug.js";
 import { MiSession, formatStopLocation } from "./gdb-mi.js";
 import type { MiRecord } from "./gdb-mi.js";
+import {
+  WATCH_KIND_LABELS,
+  formatWatchDelta,
+  hardwareWatchpoints,
+  isHardwareWatchpoint,
+  markWatchpointsStale,
+  normalizeWatchExpression,
+  parseWatchMarkers,
+  parseWatchpointNumber,
+  recordWatchSample,
+  registerWatch,
+  removeWatchByIds,
+  resetWatchState,
+  sampledWatches,
+  watchState,
+} from "./watch.js";
+import type { WatchEntry, WatchKind } from "./watch.js";
 import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
@@ -116,6 +133,71 @@ export interface SessionWordsReport {
   samples: SessionWordSample[];
   durationMs: number;
   output: string;
+  errors: string[];
+  message: string;
+}
+
+/** P3：一次值采样的结果（stm32_watch action=sample 的每一项）。 */
+export interface WatchSample {
+  id: number;
+  expression: string;
+  kind: WatchKind;
+  /** 这次采到的值（gdb 打印原文）。 */
+  value: string;
+  /** 上次采到的值（空串＝第一次采）。 */
+  previous: string;
+  /** 与上次的差：数字给带符号差值，非数字给"变化"。 */
+  delta: string;
+  ok: boolean;
+  error: string;
+  lastAt: number;
+}
+
+export interface WatchSampleRequest {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** 默认 true：采样前目标在跑就先打断，采完再放它继续跑。 */
+  resume?: boolean;
+}
+
+export interface WatchSampleReport {
+  ok: boolean;
+  /** 采样期间是否真的把目标拦停过（原本就停着也算 true，因为没有 resume）。 */
+  halted: boolean;
+  /** 采完是否把目标放回去了。 */
+  resumed: boolean;
+  samples: WatchSample[];
+  durationMs: number;
+  errors: string[];
+  message: string;
+}
+
+export interface WatchAddRequest {
+  expression: string;
+  kind: WatchKind;
+}
+
+export interface WatchAddReport {
+  ok: boolean;
+  /** 这次真装上/登记上的项。 */
+  added: WatchEntry[];
+  /** 有没有把目标放回去（装观察点要求目标先停）。 */
+  resumed: boolean;
+  /** 硬件观察点预算（用/上限/还剩），口径与 stm32_debug_session 的 watchpoints 一致。 */
+  budget: { used: number; limit: number; remaining: number };
+  durationMs: number;
+  errors: string[];
+  /** 软件观察点之类的补充说明（gdb 建不起硬件观察点时它会退化成单步）。 */
+  notes: string[];
+  message: string;
+}
+
+export interface WatchRemoveReport {
+  ok: boolean;
+  removed: WatchEntry[];
+  resumed: boolean;
+  budget: { used: number; limit: number; remaining: number };
+  durationMs: number;
   errors: string[];
   message: string;
 }
@@ -405,7 +487,7 @@ export class DebugSessionManager {
     if (!listening.ok) {
       handle.terminate();
       await handle.waitForExit().catch(() => undefined);
-      const tail = listening.text.split(/\r?\n/u).slice(-12).join("\n");
+      const tail = listening.text.split(/\r\n|\r|\n/u).slice(-12).join("\n");
       return emptyReport(
         [/Error connecting DP|no device found|CMSIS-DAP/iu.test(listening.text) ? "openocd 连不上探针/芯片（见日志）" : "openocd 没有在 15 s 内监听 " + String(port), tail],
         "没开会话：openocd 起不来",
@@ -444,6 +526,23 @@ export class DebugSessionManager {
     };
   }
 
+  /**
+   * 取这次会话该用的 gdb：会话起的目录优先，其次工具层配置，最后环境变量。
+   * eval 与 watch（采样/观察点）共用——换一台机器时不会出现"openocd 找得到、gdb 找不到"的错位。
+   */
+  private async resolveGdb(session: InternalSession): Promise<string | null> {
+    const subprocess = this.subprocess;
+    if (subprocess === null) return null;
+    const envConfig: SearchConfig = resolveSearchConfig(process.env, {});
+    const searchDirs: string[][] = [session.binDirs, this.binDirs, envConfig.binDirs];
+    for (const dirs of searchDirs) {
+      if (dirs.length === 0) continue;
+      const gdb = await resolveToolIn(subprocess, ["gdb-multiarch", "arm-none-eabi-gdb"], dirs);
+      if (gdb !== null) return gdb;
+    }
+    return null;
+  }
+
   async eval(request: EvalRequest): Promise<EvalReport> {
     const session = this.current;
     const startedAt = this.now();
@@ -460,14 +559,7 @@ export class DebugSessionManager {
     }
     // 用"起会话时那份"工具链目录：只读环境变量的话，调用方传了 binDirs 也会出现
     // "openocd 起来了、eval 却说缺 gdb"的错位（也便于离线单测给假目录）。
-    const envConfig: SearchConfig = resolveSearchConfig(process.env, {});
-    const searchDirs: string[][] = [session.binDirs, this.binDirs, envConfig.binDirs];
-    let gdb: string | null = null;
-    for (const dirs of searchDirs) {
-      if (dirs.length === 0) continue;
-      gdb = await resolveToolIn(this.subprocess, ["gdb-multiarch", "arm-none-eabi-gdb"], dirs);
-      if (gdb !== null) break;
-    }
+    const gdb = await this.resolveGdb(session);
     if (gdb === null) {
       return { ok: false, output: "", command: "", durationMs: 0, remainingMs: this.remainingMs(session), errors: ["找不到 gdb"], message: "没执行：缺 gdb" };
     }
@@ -611,6 +703,9 @@ export class DebugSessionManager {
         timeoutMs: Math.max(3000, Math.min(timeoutMs, 30_000)),
       });
       session.mi = mi;
+      // 新 MI 进程里没有任何观察点：登记表里那些编号指向的旧进程已经没了，
+      // 留着编号会让人以为还在拦（delete N 也删不掉别的东西），标成失效更诚实。
+      markWatchpointsStale(watchState, "gdb MI 会话重建，观察点已随旧进程丢失：重新 action=add");
       return mi;
     } catch {
       return null;
@@ -700,6 +795,217 @@ export class DebugSessionManager {
   }
 
   /**
+   * P3：一次值采样（stm32_watch action=sample）。
+   *
+   * 语义：目标在跑就先 -exec-interrupt 停住（读变量必须在停止态），逐项 mi.evaluate，
+   * 再按原状态放回去；原本就停着的不会被偷偷 resume。
+   * MI 起不来（VS Code 正连着同一个 gdb server）时退回一次性 gdb -batch + 标记解析。
+   */
+  async sampleWatches(request: WatchSampleRequest = {}): Promise<WatchSampleReport> {
+    const startedAt = this.now();
+    const session = this.current;
+    const timeout = request.timeoutMs ?? 20_000;
+    const entries = sampledWatches(watchState);
+    const fail = (errors: string[], message: string): WatchSampleReport => ({
+      ok: false, halted: false, resumed: false, samples: [], durationMs: this.now() - startedAt, errors, message,
+    });
+    if (session === null) return fail(["没有调试会话（先 stm32_debug_session；短任务用 stm32_debug_run）"], "没采样：没有调试会话");
+    if (entries.length === 0) return fail(["还没有值监视项：先 action=add 登记表达式"], "没采样：没有登记值监视项");
+    const gdb = await this.resolveGdb(session);
+    if (gdb === null) return fail(["找不到 gdb"], "没采样：缺 gdb");
+
+    const samples: WatchSample[] = [];
+    const errors: string[] = [];
+    let halted = false;
+    let resumed = false;
+    const mi = await this.ensureMi(session, gdb, timeout);
+    if (mi !== null) {
+      try {
+        const wasRunning = mi.targetRunning;
+        if (wasRunning) halted = await mi.ensureHalted(timeout);
+        for (const entry of entries) {
+          const previous = entry.lastValue;
+          let value = "";
+          let error = "";
+          try {
+            value = (await mi.evaluate(entry.expression, timeout)).trim();
+          } catch (caught) {
+            error = caught instanceof Error ? caught.message : String(caught);
+          }
+          const now = this.now();
+          recordWatchSample(entry, value, error, now);
+          samples.push({
+            id: entry.id, expression: entry.expression, kind: entry.kind,
+            value, previous, delta: formatWatchDelta(previous, value), ok: error === "", error, lastAt: now,
+          });
+        }
+        if (wasRunning && request.resume !== false) {
+          await mi.console("monitor resume", timeout);
+          resumed = true;
+        }
+      } catch (caught) {
+        errors.push("采样出错：" + (caught instanceof Error ? caught.message : String(caught)));
+      }
+      session.lastUsedAt = this.now();
+    } else {
+      // MI 起不来时退回一次性 gdb：每项前面打标记，结构体/数组的多行输出也能对上号。
+      const commands: string[] = [];
+      for (const entry of entries) commands.push("echo ===DSH:W" + String(entry.id) + "===", "print " + entry.expression);
+      const evaluated = await this.eval({
+        commands,
+        timeoutMs: timeout,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      errors.push(...evaluated.errors);
+      const parsed = parseWatchMarkers(evaluated.output);
+      const now = this.now();
+      for (const entry of entries) {
+        const hit = parsed.get(entry.id) ?? { value: "", error: "没拿到这条的输出" };
+        const previous = entry.lastValue;
+        recordWatchSample(entry, hit.value, hit.error, now);
+        samples.push({
+          id: entry.id, expression: entry.expression, kind: entry.kind,
+          value: hit.value, previous, delta: formatWatchDelta(previous, hit.value), ok: hit.error === "", error: hit.error, lastAt: now,
+        });
+      }
+    }
+    const failed = samples.filter((sample) => !sample.ok);
+    const ok = errors.length === 0 && failed.length === 0;
+    const resumedNote = halted && resumed ? "（目标在跑，已停下采完再放回去）" : (halted ? "（目标在跑，已停下采样）" : "");
+    return {
+      ok, halted, resumed, samples, durationMs: this.now() - startedAt, errors,
+      message: ok
+        ? "采样 " + String(samples.length) + " 项" + resumedNote
+        : "采样有问题：" + String(failed.length) + " 项失败",
+    };
+  }
+
+  /**
+   * P3：装硬件观察点（stm32_watch action=add，kind=write/read/access）。
+   *
+   * 先做纯校验（表达式、重复、F1 的 4 个数据比较器预算），一个都不通过就不碰目标；
+   * 真正装的时候目标必须停着（gdb 写比较器），装完按原状态放回去。
+   */
+  async addWatchpoints(request: { entries: WatchAddRequest[]; timeoutMs?: number }): Promise<WatchAddReport> {
+    const startedAt = this.now();
+    const session = this.current;
+    const timeout = request.timeoutMs ?? 20_000;
+    const budgetInfo = resolveBreakpointBudget(session === null ? "" : session.projectDir);
+    const quota = (): { used: number; limit: number; remaining: number } => quotaOf(hardwareWatchpoints(watchState).length, budgetInfo.budget.data);
+    const fail = (errors: string[], notes: string[] = []): WatchAddReport => ({
+      ok: false, added: [], resumed: false, budget: quota(), durationMs: this.now() - startedAt, errors, notes,
+      message: "没装观察点：" + (errors[0] ?? "未知原因"),
+    });
+    if (session === null) return fail(["没有调试会话（先 stm32_debug_session）"]);
+    if (request.entries.length === 0) return fail(["没有表达式"]);
+    const normalized: WatchAddRequest[] = [];
+    for (const item of request.entries) {
+      const expression = normalizeWatchExpression(item.expression);
+      if (expression === null) return fail(["表达式不合法：" + JSON.stringify(item.expression)]);
+      if (watchState.entries.some((entry) => entry.expression === expression && entry.kind === item.kind)) {
+        return fail(["已经登记过：" + expression + "（" + WATCH_KIND_LABELS[item.kind] + "）"]);
+      }
+      normalized.push({ expression, kind: item.kind });
+    }
+    const used = hardwareWatchpoints(watchState).length;
+    if (used + normalized.length > budgetInfo.budget.data) {
+      return fail([
+        "观察点超预算：要用 " + String(used + normalized.length) + " 个，芯片上限 " + String(budgetInfo.budget.data) + "（已用 " + String(used) + "）",
+        budgetInfo.note,
+        "先 remove 掉不用的观察点；F1 的观察点与硬件断点共用比较器",
+      ]);
+    }
+    const gdb = await this.resolveGdb(session);
+    if (gdb === null) return fail(["找不到 gdb"]);
+    const mi = await this.ensureMi(session, gdb, timeout);
+    if (mi === null) return fail(["常驻 MI 会话起不来（VS Code 可能正连着同一个 gdb server）：观察点必须装在 gdb 里"]);
+    const added: WatchEntry[] = [];
+    const notes: string[] = [];
+    const errors: string[] = [];
+    let resumed = false;
+    try {
+      const wasRunning = mi.targetRunning;
+      if (wasRunning) await mi.ensureHalted(timeout);
+      for (const item of normalized) {
+        const command = item.kind === "write" ? "watch " : (item.kind === "read" ? "rwatch " : "awatch ");
+        const result = await mi.console(command + item.expression, timeout);
+        const text = result.text.trim();
+        if (result.record.class === "error") {
+          errors.push("装观察点失败：" + item.expression + "：" + String(result.record.data["msg"] ?? text));
+          continue;
+        }
+        const number = parseWatchpointNumber(text);
+        if (number === null) {
+          const tail = text === "" ? "空" : text.split(/\r\n|\r|\n/u).slice(-3).join(" ");
+          errors.push("没解析出观察点编号：" + item.expression + "（gdb 回：" + tail + "）");
+          continue;
+        }
+        if (!isHardwareWatchpoint(text)) notes.push(item.expression + " 装成了软件观察点（硬件比较器不够，gdb 退化成单步，会拖慢目标）");
+        const registered = registerWatch(watchState, item.expression, item.kind, this.now(), number);
+        if (registered.entry === null) { errors.push(registered.error); continue; }
+        added.push(registered.entry);
+      }
+      if (wasRunning) { await mi.console("monitor resume", timeout); resumed = true; }
+      session.lastUsedAt = this.now();
+    } catch (caught) {
+      errors.push("装观察点出错：" + (caught instanceof Error ? caught.message : String(caught)));
+    }
+    session.watchpoints = quotaOf(hardwareWatchpoints(watchState).length, budgetInfo.budget.data);
+    const ok = errors.length === 0;
+    return {
+      ok, added, resumed, budget: quota(), durationMs: this.now() - startedAt, errors, notes,
+      message: ok
+        ? "装了 " + String(added.length) + " 个观察点（硬件 " + String(quota().used) + "/" + String(quota().limit) + "）"
+        : "装观察点有问题：" + (errors[0] as string),
+    };
+  }
+
+  /** P3：删观察点（先删登记项，再让 gdb delete 对应编号；目标在跑就先停）。 */
+  async removeWatchpoints(ids: readonly number[]): Promise<WatchRemoveReport> {
+    const startedAt = this.now();
+    const session = this.current;
+    const budgetInfo = resolveBreakpointBudget(session === null ? "" : session.projectDir);
+    const quota = (): { used: number; limit: number; remaining: number } => quotaOf(hardwareWatchpoints(watchState).length, budgetInfo.budget.data);
+    const removed = removeWatchByIds(watchState, ids);
+    if (removed.length === 0) {
+      return { ok: false, removed: [], resumed: false, budget: quota(), durationMs: this.now() - startedAt, errors: ["没有匹配的 id"], message: "没删：没有匹配的 id" };
+    }
+    const errors: string[] = [];
+    let resumed = false;
+    const withNumber = removed.filter((entry) => entry.kind !== "value" && entry.gdbNumber > 0);
+    if (withNumber.length > 0 && session !== null) {
+      const gdb = await this.resolveGdb(session);
+      const mi = gdb === null ? null : await this.ensureMi(session, gdb, 20_000);
+      if (mi === null) {
+        errors.push("旧 gdb 已经不在了（观察点随进程消失）：登记项已删，芯片侧不用再动");
+      } else {
+        try {
+          const wasRunning = mi.targetRunning;
+          if (wasRunning) await mi.ensureHalted(20_000);
+          for (const entry of withNumber) {
+            const result = await mi.console("delete " + String(entry.gdbNumber), 20_000);
+            if (result.record.class === "error") {
+              errors.push("删观察点失败：#" + String(entry.id) + "（gdb #" + String(entry.gdbNumber) + "）：" + String(result.record.data["msg"] ?? ""));
+            }
+          }
+          if (wasRunning) { await mi.console("monitor resume", 20_000); resumed = true; }
+          session.lastUsedAt = this.now();
+        } catch (caught) {
+          errors.push("删观察点出错：" + (caught instanceof Error ? caught.message : String(caught)));
+        }
+      }
+    }
+    if (session !== null) session.watchpoints = quotaOf(hardwareWatchpoints(watchState).length, budgetInfo.budget.data);
+    const ok = errors.length === 0;
+    return {
+      ok, removed, resumed, budget: quota(), durationMs: this.now() - startedAt, errors,
+      message: ok
+        ? "删了 " + String(removed.length) + " 项（硬件观察点还剩 " + String(quota().used) + "/" + String(quota().limit) + "）"
+        : "删了 " + String(removed.length) + " 项，但有 " + String(errors.length) + " 个问题：" + (errors[0] as string),
+    };
+  }
+
+  /**
    * 关会话。options.requireOwner 给定时，只有 owner 对得上才关（审计 A9）。
    *
    * 原来 turn/end 一到就无条件关，多 agent 并行时会把别人正在用的探针收走；
@@ -717,6 +1023,9 @@ export class DebugSessionManager {
     }
     this.current = null;
     this.stopSweeper();
+    // 观察点住在 gdb 进程里：会话一关就全没了，登记表必须跟着清，
+    // 否则下次会话里 action=list 会报一堆已经不存在的观察点。
+    resetWatchState();
     if (session === null) return { ok: true, stopped: false, message: "本来就没有会话（" + reason + "）" };
     // 先让 openocd 自己 shutdown：直接 kill 时它来不及给探针发断开命令，
     // CMSIS-DAP 固件会被留在「半连接」状态，下一次 CMD_INFO 直接超时（实测踩过两次）。

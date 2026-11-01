@@ -2965,3 +2965,82 @@ API 一旦把两者放在同一个返回值里，调用方就必须**先消费�
   要彻底解决得让 dump 端知道环大小并按环序重排分片，代价远大于收益；这是 dump 窗口边界上的一条，
   下一块里就是完整记录。文档写清，别让用户以为解析错位。
 - 全量：**638 pass / 0 fail**（`rtt-units` 35 例）。
+
+## 42. 变量监视与硬件观察点（P3 续）（2026-11-01）
+
+**需求**：`stm32_debug_eval` 只能一条条敲 gdb 命令 —— 想看「`g_tick_1k` 这一秒涨了多少」
+得自己 `print` 两次再心算，想抓「谁在写这个变量」得手敲 `watch` 并自己数还剩几个比较器。
+P3 把这两件事做成一个工具：`stm32_watch`。
+
+### 42.1 为什么不塞进 stm32_debug_eval
+
+两条硬理由，都是「语义不同」而不是「代码放不下」：
+
+1. **观察点吃芯片资源**。F1 只有 6 个代码断点 / 4 个数据观察点（`breakpoints.ts` 的
+   `F1_BREAKPOINT_BUDGET`），而 `watch` / `rwatch` / `awatch` 是**数据**比较器，和 `break` 抢的
+   不是同一份预算。塞进 eval 就没有统一登记表，用户看不到「4 个里用了几个」。
+2. **值监视需要「暂停语义」**。目标跑着的时候 gdb 不回任何命令（§40 踩过：连 `-interpreter-exec
+   console "break"` 都要卡 30 s）。所以「采样」必须是：在跑就先 `-exec-interrupt` 停住 → 逐项
+   `evaluate` → 原本在跑就 `monitor resume` 放回去。这个「临时停一下再放回」不该让用户手写。
+
+### 42.2 数据模型：状态归纯函数，动作归 debug-session
+
+`src/engine/watch.ts`（266 行）**不碰任何进程**，只做登记表与文本：
+
+- `WatchKind = value | write | read | access`；`value` 是「每次 sample 求值」，其余三种是真正的
+  硬件观察点（对应 gdb 的 `watch` / `rwatch` / `awatch`）。
+- `WatchEntry{id, expression, kind, gdbNumber, lastValue, lastAt, lastError, addedAt}`：`gdbNumber`
+  是 gdb 分配的观察点编号，`0` 表示「值监视」或「观察点已失效」。
+- `watchState` 是模块级单例（`nextId` 单调递增，删了不回收），所以 id 不会因为删除而串号。
+- 去重按 `expression + kind`：同一个表达式既可以当值监视又可以当写观察点，这是有意的。
+- `MAX_WATCH_ENTRIES = 32`、`MAX_WATCH_EXPRESSION_LENGTH = 200`；`normalizeWatchExpression` 拒空、
+  超长、含换行或 NUL（表达式会被拼进 gdb 命令行，换行等于注入第二条命令）。
+
+真正下达 gdb 的三个方法在 `debug-session.ts`（`DebugSessionManager`），因为它们要复用常驻 MI：
+
+- `sampleWatches({timeoutMs, signal, resume})`：没有会话 / 没有值监视项都给人话；MI 可用时按上面
+  的暂停语义逐项 `evaluate`，`recordWatchSample` 写回 `lastValue`（**出错时保留上一次的值**，只写
+  `lastError`，免得一抖动整列变空）；MI 不可用时退回一次性 gdb 路径，用 `===DSH:W<id>===` 标记
+  分段再 `parseWatchMarkers` —— 和 `readWords` 的标记法同源。
+- `addWatchpoints({entries, timeoutMs})`：先按 `resolveBreakpointBudget(projectDir)` 取 data 预算做
+  **纯校验**（重复、超预算都在起进程之前拒绝），再 `ensureMi` → 目标在跑先停 → 逐条 `watch`/
+  `rwatch`/`awatch` → `parseWatchpointNumber` 取编号 → 装完 `monitor resume`。
+- `removeWatchpoints(ids)`：先删登记项，再对 `gdbNumber > 0` 的项在 MI 里 `delete <n>`；MI 已经不在了
+  就只提示「旧 gdb 已经没了，登记项已删」，不假装删成功。
+
+### 42.3 两个容易漏的生命周期
+
+1. **会话关闭要清表**：观察点住在 gdb 进程里，`stop()` 之后 gdb 没了，登记表还留着就会骗人。
+   所以 `stop()` 在 `this.current = null` 之后调 `resetWatchState()`。
+2. **MI 重建要标 stale**：`ensureMi` 发现原 MI 死了会新起一个，此时旧观察点编号全失效。
+   `markWatchpointsStale(watchState, reason)` 把 `gdbNumber` 清 0 并写 `lastError`，用户下次
+   `list` 就能看到「观察点已随旧进程丢失：重新 action=add」，而不是看到一个永远不命中的编号。
+
+### 42.4 「装成了软件观察点」要告警
+
+`isHardwareWatchpoint(text)` 认 gdb 的 `Hardware watchpoint N:` / `Hardware read watchpoint` /
+`Hardware access watchpoint`。目标或表达式不支持硬件比较器时 gdb 会退回软件观察点（单步 + 比较），
+那会把 1 kHz 的主循环拖成几十 Hz —— 所以这种情况必须在 `notes` 里说清，不能静默接受。
+
+### 42.5 工具层
+
+`src/tools/watch.ts`（304 行）注册 `stm32_watch`：`action` = `add` / `sample` / `list` / `remove` /
+`clear`（缺省 `list`），参数 `expressions` / `kind` / `ids` / `timeoutMs` / `resume`；输出统一
+`{ message, report }`，report 带 `entries`（含 `delta`）/ `watchpoints`（used/limit/remaining）/
+`halted` / `resumed` / `errors` / `notes`。`action=add` 且 `kind=value` 时**只登记，不需要会话** ——
+「先记下我想看什么」和「现在就去读」是两件事。
+
+注册函数叫 `registerWatchTool` 而不是 `registerWatch`：engine 里已经导出了同名的 `registerWatch`，
+同一文件里 import 会 TS2440 撞名。
+
+### 42.6 测试
+
+`test/watch-units.test.mjs` 16 例：纯函数（kind 表、normalize 的四种拒绝、register 的去重与上限、
+remove/reset、采样分流、`markWatchpointsStale`、`recordWatchSample` 出错保留旧值、`numericWatchValue`
+与 `formatWatchDelta`、`parseWatchMarkers` 多标记多行、`parseWatchpointNumber` + `isHardwareWatchpoint`）
++ 工具层（schema 的 required 与 properties 一一对应、空表 `list`、`add` 值监视、重复 `add` 报错、
+坏 `kind` / 空 `expressions` / 未知 `action` / `remove` 没给 `ids` 都给人话、无会话 `sample` 干净失败
+且不起进程、`clear` 清空）。全量：**654 pass / 0 fail**（41 个套件）。
+
+**教训**：登记表是模块级单例，工具层用例开头必须 `resetWatchState(watchState)`，否则前面用例的
+残留会让断言数不对 —— 这类「跨用例共享状态」的测试要显式重置，不能靠执行顺序。
