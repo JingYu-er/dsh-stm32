@@ -13,6 +13,7 @@ import {
   readWordsViaSession,
   release,
   sessionInfo,
+  sessionLooksAlive,
   tclRoundTrip,
   touch,
   withSession,
@@ -23,6 +24,9 @@ import { FIXTURE_PROJECT, fakeBinDirs } from "./fixtures.mjs";
 const BIN_DIRS = fakeBinDirs();
 /** 测试里永远不真的去探测 3333（CI/本机可能恰好占着），端口占用用例自己注入。 */
 const NOT_BUSY = async () => false;
+/** 假会话的 tcl 端口没人监听，存活探测会判死；显式注入「活着」保住复用语义（真探测另有专测）。 */
+const ALIVE = async () => true;
+const REUSE_OPTS = { checkPortBusy: NOT_BUSY, checkSessionAlive: ALIVE };
 const FRAME = String.fromCharCode(0x1a);
 
 /**
@@ -165,7 +169,7 @@ test("ensureSession：首次起会话，tcl 端口从日志里解析出来", asy
   try {
     const fake = makeSubprocess({ tclPort: server.port });
     debugSessions.configure(fake.service, BIN_DIRS);
-    const ensured = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+    const ensured = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
     assert.equal(ensured.ok, true, ensured.message);
     assert.equal(ensured.reused, false);
     assert.equal(fake.spawned.length, 1, "只该起一个 openocd");
@@ -184,13 +188,50 @@ test("ensureSession：第二次直接复用，不再 spawn", async () => {
   await resetSession();
   const fake = makeSubprocess({ tclPort: 4446 });
   debugSessions.configure(fake.service, BIN_DIRS);
-  const first = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
-  const second = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const first = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
+  const second = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(first.reused, false);
   assert.equal(second.reused, true);
   assert.equal(second.ok, true);
   assert.equal(fake.spawned.length, 1, "复用会话不能再起 openocd");
   assert.match(second.message, /复用/u);
+  await resetSession();
+});
+
+test("sessionLooksAlive：端口有人监听＝活着，关掉＝死了；没有端口当活着", async () => {
+  const server = await startFakeTclServer();
+  try {
+    assert.equal(await sessionLooksAlive({ port: server.port, tclPort: server.port, projectDir: FIXTURE_PROJECT, configFile: "", startedAt: 0, idleDeadline: 0 }), true);
+  } finally {
+    await server.close();
+  }
+  // 端口已关：连不上就是死了（真机场景 = openocd 被探针 HID 错误带走后自己退出）。
+  assert.equal(await sessionLooksAlive({ port: server.port, tclPort: server.port, projectDir: FIXTURE_PROJECT, configFile: "", startedAt: 0, idleDeadline: 0 }), false);
+  // 两个端口都 0：没法判，当活着（真失败会在下一步报出来，不能在这里误杀）。
+  assert.equal(await sessionLooksAlive({ port: 0, tclPort: 0, projectDir: FIXTURE_PROJECT, configFile: "", startedAt: 0, idleDeadline: 0 }), true);
+});
+
+test("ensureSession：复用前发现 openocd 已经死了 → 清掉记录、重起一个", async () => {
+  await resetSession();
+  const fake = makeSubprocess({ tclPort: 4448 });
+  debugSessions.configure(fake.service, BIN_DIRS);
+  const first = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
+  assert.equal(first.ok, true, first.message);
+  assert.equal(fake.spawned.length, 1);
+  // 探测说死了：必须丢掉旧记录重起，而不是继续「复用」一个已经不存在的会话。
+  // 注：注入的探针也给 manager 的「起完确认没当场死」用，所以这里第 1 次答「死了」（旧会话），
+  // 之后答「活着」（新会话）。
+  let probes = 0;
+  const dyingThenAlive = async () => {
+    probes += 1;
+    return probes > 1;
+  };
+  const revived = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY, checkSessionAlive: dyingThenAlive });
+  assert.equal(revived.ok, true, revived.message);
+  assert.equal(revived.reused, false);
+  assert.equal(revived.replacedDead, true);
+  assert.match(revived.message, /旧会话的 openocd 已经不在了/u);
+  assert.equal(fake.spawned.length, 2, "死会话要重起一个，而不是复用");
   await resetSession();
 });
 
@@ -213,8 +254,8 @@ test("并发两次 ensureSession：只起一个 openocd", async () => {
   const fake = makeSubprocess({ tclPort: 4447 });
   debugSessions.configure(fake.service, BIN_DIRS);
   const [left, right] = await Promise.all([
-    ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY }),
-    ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY }),
+    ensureSession(FIXTURE_PROJECT, REUSE_OPTS),
+    ensureSession(FIXTURE_PROJECT, REUSE_OPTS),
   ]);
   assert.equal(left.ok, true);
   assert.equal(right.ok, true);
@@ -228,7 +269,7 @@ test("10 连读快路径：复用会话 + 每次都走 Tcl，单次 < 150 ms、�
   try {
     const fake = makeSubprocess({ tclPort: server.port });
     debugSessions.configure(fake.service, BIN_DIRS);
-    assert.equal((await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY })).ok, true);
+    assert.equal((await ensureSession(FIXTURE_PROJECT, REUSE_OPTS)).ok, true);
 
     const durations = [];
     const startedAt = Date.now();
@@ -261,7 +302,7 @@ test("readWordsViaSession：会话没有 Tcl 端口时回退提示（老 openocd
   await resetSession();
   const fake = makeSubprocess({ mode: "no-tcl" });
   debugSessions.configure(fake.service, BIN_DIRS);
-  const ensured = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const ensured = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(ensured.ok, true, "没有 tcl 端口也要能起会话（只是快路径不可用）");
   assert.equal(sessionInfo().tclPort, 0);
   const read = await readWordsViaSession({ addresses: ["0x4001100C"] });
@@ -274,7 +315,7 @@ test("openocd 起不来：归类 no-probe，不给 active 会话", async () => {
   await resetSession();
   const fake = makeSubprocess({ mode: "fail" });
   debugSessions.configure(fake.service, BIN_DIRS);
-  const ensured = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const ensured = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(ensured.ok, false);
   assert.ok(ensured.probeError !== null);
   assert.match(ensured.message, /^错误：/u);
@@ -286,7 +327,7 @@ test("release：关掉会话、旧句柄失效，再 ensureSession 会重建", a
   await resetSession();
   const fake = makeSubprocess({ tclPort: 4448 });
   debugSessions.configure(fake.service, BIN_DIRS);
-  await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   const handle = fake.spawned[0];
   const stopped = await release("单测显式释放");
   assert.equal(stopped.stopped, true);
@@ -295,7 +336,7 @@ test("release：关掉会话、旧句柄失效，再 ensureSession 会重建", a
   assert.equal(await touch(), false, "没有会话时 touch 不该造出会话");
   const read = await readWordsViaSession({ addresses: ["0x4001100C"] });
   assert.equal(read.ok, false);
-  const again = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const again = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(again.reused, false);
   assert.equal(fake.spawned.length, 2, "释放之后再读要能重新起会话");
   await resetSession();
@@ -305,11 +346,11 @@ test("租约到期：sweep 关会话后 ensureSession 重建（空闲超时语�
   await resetSession();
   const fake = makeSubprocess({ tclPort: 4449 });
   debugSessions.configure(fake.service, BIN_DIRS);
-  await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY, idleTtlMs: 60 });
+  await ensureSession(FIXTURE_PROJECT, { ...REUSE_OPTS, idleTtlMs: 60 });
   await new Promise((done) => setTimeout(done, 80));
   assert.equal(await debugSessions.sweepExpired(), true, "空闲超时应该收掉会话");
   assert.equal(sessionInfo(), null);
-  const again = await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const again = await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(again.ok, true);
   assert.equal(again.reused, false);
   assert.equal(fake.spawned.length, 2);
@@ -320,7 +361,7 @@ test("touch：续租把 idleDeadline 往后推", async () => {
   await resetSession();
   const fake = makeSubprocess({ tclPort: 4450 });
   debugSessions.configure(fake.service, BIN_DIRS);
-  await ensureSession(FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  await ensureSession(FIXTURE_PROJECT, REUSE_OPTS);
   const before = sessionInfo().idleDeadline;
   await new Promise((done) => setTimeout(done, 20));
   assert.equal(touch(), true);
@@ -333,14 +374,14 @@ test("withSession：拿会话跑一段操作，成功返回 value、失败返回
   await resetSession();
   const fake = makeSubprocess({ tclPort: 4451 });
   debugSessions.configure(fake.service, BIN_DIRS);
-  const ok = await withSession(async (session) => session.port, FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  const ok = await withSession(async (session) => session.port, FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(ok.ok, true);
   assert.equal(ok.value, DEFAULT_PROBE_PORT);
   assert.equal(ok.reused, false);
 
   const failure = await withSession(async () => {
     throw new Error("gdb 炸了");
-  }, FIXTURE_PROJECT, { checkPortBusy: NOT_BUSY });
+  }, FIXTURE_PROJECT, REUSE_OPTS);
   assert.equal(failure.ok, false);
   assert.equal(failure.probeError?.kind, "unknown");
   assert.match(failure.message, /会话内操作失败：gdb 炸了/u);

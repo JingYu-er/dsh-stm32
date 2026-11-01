@@ -2084,7 +2084,7 @@ npm run build exit 0；npm test 26 套件 374 pass / 0 fail（CI 372 + 2 skipped
 | 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头、HAL 固件包 | 带 sha256 校验，缓存在本机 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` MEMORY（`renderLinkerScript`）、cmake 源清单（`refreshCubemxCmakeLists`） | 不进包，按型号生成 |
 
-护栏是 `scripts/pack-size.mjs`（80 行，`npm run test:size`，CI 在 `test:pack` 之后跑）：tarball ≤1.2 MB、`templates/**` ≤60 KB、包内禁止 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。它用 `npm pack --dry-run --json` 拿文件清单，不写盘。
+护栏是 `scripts/pack-size.mjs`（80 行，`npm run test:size`，CI 在 `test:pack` 之后跑）：tarball ≤1.2 MB、`templates/**` 里的**运行时资产**（`.ioc/.xml/.ld/.json/.cfg/.svd/.csv`）≤40 KB（2026-11-01 改口径：`.md` 文档与 C/CMake 源码不算资产，另设单文件 24 KB 上限）、包内禁止 png/jpg/jpeg/gif/webp/bmp/pdf/html/zip/7z/exe/dll、必须含 README.md / README_EN.md / LICENSE / cordis.patch.yml / docs/reading-guide.md。它用 `npm pack --dry-run --json` 拿文件清单，不写盘。
 
 ### 28.6 芯片薄表：scripts/gen-chip-table.mjs（371 行）——**2026-10-31 已整体删除，见 §28.9**
 
@@ -2111,7 +2111,7 @@ skill 的 R2 现在点名「本型号的启动文件 + 本型号的 `.ld`」，R
 - `npm run build` → exit 0。
 - `npm test` → **29 套件 418 pass / 0 fail**（CI 上 416 pass + 2 skipped）；本批新登记 `hal-route-units`（12 例）、`clock-units`（14 例）、`doctor-chip-units`（15 例），既有套件未回归。
 - `node scripts/gen-chip-table.mjs --check` → exit 0（生成物与 db 一致）。
-- `npm run test:size` → exit 0（tarball 525.7 KB / 上限 1171.9 KB，templates 38.5 KB / 上限 60 KB）。
+- `npm run test:size` → exit 0（tarball 525.7 KB / 上限 1171.9 KB，templates 38.5 KB；当时的上限是 templates 总量 60 KB，2026-11-01 改成「运行时资产 ≤40 KB」，见 §46.4）。
 
 注：§27.5 里的「26 套件 374 例」是当时的数，现在是 29 套件 418 例（captain 口径里的 28 个套件少算了 `schema-guard`）；§27.3 的坑、§27.4 的接口都还成立，只是 `startupChoiceFor` 现在委托给 `resolveF1Chip` 了。
 
@@ -3259,4 +3259,78 @@ desc->WrOff = wr;
 ① 环形缓冲的读写指针是**协议**不是内部变量：只要有一端按 `[0, size)` 解释，另一端就必须回绕；
 ② 「内容冻结 + 重复记录刷屏」这种症状要第一时间去读描述符（`mdw` 6 个字），比在宿主侧加多少 resync 都直接；
 ③ 加大缓冲（CSDN 对策①）在这种 bug 面前完全无效——环更大只会让冻结来得更晚一点。
+
+## 46. follow 流式读、固件侧丢帧计数、会话存活校验、包体护栏改口径（2026-11-01）
+
+§45 收尾时留了三条待办：① `stm32_rtt` 加 `follow`（窗口外不丢）② 会话存活校验（openocd 死了还报 ok）
+③ 报告带固件侧 `s_dropped`。这一节把三条做完，另外按用户要求改掉包体护栏的统计口径。
+
+### 46.1 follow：`keepNewest` 而不是「更大的 dump」
+
+`dump` 到 `maxRecords` 就 `finish("truncated")` 提前关连接——恰好把「窗口长」这件事废掉了。follow 复用同一条
+采集管线，只改两处：
+
+- `collectFromPort(..., keepNewest: true)`：到上限时 `records.shift()` 丢最旧、继续读；note 只写一次
+  「记录超过 maxRecords=N，只保留最新的 N 条」，不再提前收尾。
+- `dumpRtt` 的窗口上限从 60 s 放宽到 300 s（仅 follow），失败原因和 dump 共用一张表。
+
+为什么这才是「不丢」的正解：`s_dropped` 涨的根源是「两次读之间没人排空环」（1 KB ≈ 2.4 s），只要窗口内一直
+挂着读者，环就不会满。加大缓冲只是把 2.4 s 变成 4.8 s。
+
+### 46.2 固件侧 s_dropped：`p (unsigned)s_dropped`
+
+宿主侧的 `dropped` 是「按 level 过滤掉几条」，跟丢帧无关，容易看错。固件里的 `static uint32_t s_dropped` 才是
+「环满丢了几条」：`readFirmwareDropCount()` 走 `debugSessions.eval({ commands: ["p (unsigned)s_dropped"] })`，
+正则 `\$\d+\s*=\s*(\d+)` 取数，**读不到就返回 -1**（沿用仓库 0/-1 哨兵风格，不给假数）。代价是目标被停
+约 50–100 ms（eval 会 halt → print → resume），所以它是 `readFirmwareDrop: true` 时的额外一步，不是每次 dump 都做。
+
+`src/engine/rtt.ts` 里用 `await import("./debug-session.js")` 动态引入：`probe-session` 已经 import 了
+`debugSessions`，静态 import 会把 rtt ↔ debug-session 绑成环。
+
+### 46.3 会话存活校验：openocd 死了不能还报 ok
+
+真机事故：探针 HID 掉线后 openocd 打完 `Listening on port …` 就退出，而 `status()` 只看内存里的会话对象，
+于是 `stm32_rtt start` 报「复用已有调试会话」，然后 `read ECONNRESET`。两处补：
+
+1. `probe-session.sessionLooksAlive(info)`：连一下 `tclPort`（没有就 `port`），`isPortBusy(port, 500)`；两个端口
+   都是 0 时返回 true（没法判，别在这里误杀）。`ensureSession` 复用前先问它，死了就 `debugSessions.stop(...)`
+   后重起，结果里带 `replacedDead: true`，message 前缀「旧会话的 openocd 已经不在了，已重起：」。
+2. `DebugSessionManager.start()` 起完会话再确认一次：`aliveProbe(tclPort)` 失败 → 等 300 ms 再试 → 仍失败就
+   `terminate()` + `emptyReport(["…Tcl 端口 X 连不上（探针掉线？插拔探针后重试）", tail], "没开会话：openocd 起来后立刻退出")`。
+   `aliveProbe` 通过 `configure(subprocess, binDirs, aliveProbe?)` 或 `setAliveProbe()` 注入，单测用假探针。
+
+**踩的两个坑**（都写进单测注释了）：
+
+- 测试里的假 subprocess 的 `waitForExit()` 是 `Promise.resolve()`，第一时间就完成。所以「用 waitForExit 竞速
+  判进程有没有当场退出」在单测里恒为真，把 6 个复用用例全弄失败 → 改成连 Tcl 端口 + 可注入探针。
+- 单测跑的是 `lib/`：改完 `src/` 不 `npm run build` 就跑去 `node test/*.test.mjs`，看到的是旧行为（这次白查两轮）。
+
+### 46.4 包体护栏改口径：只算运行时资产
+
+用户口径：「md 文档应该被排除在外，因为这本身不算做资产，资产应该是那些在工具使用过程中用到的 xml,ioc 等文件」。
+于是 `scripts/pack-size.mjs` 不再对 `templates/**` 总量设限，而是：
+
+```js
+const ASSET_EXTS = [".ioc", ".xml", ".ld", ".json", ".cfg", ".svd", ".csv"];
+const MAX_TEMPLATE_ASSETS = 40 * 1024;      // 7 个文件实测 16.4 KB
+const MAX_TEMPLATE_ASSET_FILE = 24 * 1024;  // 单文件上限，拦大资产
+```
+
+报告改成 `模板：66.4 KB，其中运行时资产 16.4 KB / 7 个（上限 40.0 KB；.md 文档与源码不计入资产）`。
+`.md`（文档）与 `.c/.h/.cmake`（模板工程源码）都不计入资产，它们由 tarball ≤1.2 MB 那条兜住；二进制/图仍然
+由扩展名禁令拦。CI 的 `npm run test:size` 因此从「66.4 KB > 60 KB 失败」变成通过。
+
+### 46.5 测试与教训
+
+- `test/rtt-units.test.mjs` 38 例（+1「keepNewest 只留最新 N 条」：5 帧 + `maxRecords: 2` → `line4/line5`，
+  `truncated: true`，note 与 message 都要出现「只保留最新 2 条」，且 `firmwareDropped === -1`）。
+- `test/probe-session-units.test.mjs` 18 例（+2：`sessionLooksAlive` 三态；「复用前发现 openocd 已死 → 重起」）。
+  测试里新增 `const ALIVE = async () => true; const REUSE_OPTS = { checkPortBusy: NOT_BUSY, checkSessionAlive: ALIVE };`，
+  死会话用例用计数探针（第 1 次答死=旧会话，之后答活=新会话）——注入的探针同时喂给 manager 的起后确认。
+- 全量：`node test/run-units.mjs` → **661 pass / 0 fail**；`npm run build` + `npx tsc --noEmit` 干净；
+  `node scripts/pack-size.mjs` exit 0（包体 714.2 KB / 119 文件，资产 16.4 KB / 40 KB）。
+
+**教训**：① 「时长不够」和「没人读」是两件事——dump 窗口再长，提前收尾也会把它废掉；② 报告里的数字要写清
+口径（宿主过滤条数 ≠ 固件丢帧数）；③ 护栏要按「这条规则到底防什么」来定统计口径，别用一个总量数字同时代理
+「别塞二进制」和「别写太多文档」两件事。
 

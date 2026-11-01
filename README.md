@@ -72,7 +72,7 @@ npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
 npm test                            # 可选：497 个离线用例、34 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
-npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
+npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -392,7 +392,7 @@ source [find target/stm32f1x.cfg]
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
 npm test                 # 34 个离线套件、497 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
-npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates ≤60 KB、包内不许二进制/图表
+npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
@@ -408,7 +408,7 @@ GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的�
 | 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（`device/f1/chips.json` 9 个字段 + .ioc 模板 + .ld + SVD，core 29 个文件约 197 KiB、full 69 个文件——SVD / startup / headers 都在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
 
-护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` ≤ 60 KB、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
+护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` 里的运行时资产（`.ioc/.xml/.ld/.json/.cfg/.svd/.csv`）≤ 40 KB 且单文件 ≤ 24 KB（`.md` 文档与 C/CMake 源码不算资产——文档是给人读的，源码是模板工程本身，二者由 tarball 上限兜住）、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

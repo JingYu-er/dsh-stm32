@@ -123,6 +123,10 @@ export interface RttDumpRequest {
   timeoutMs?: number;
   maxFrameBytes?: number;
   signal?: AbortSignal;
+  /** true = 持续读（follow）：超过 maxRecords 只保留最新的 N 条，不提前收尾。 */
+  keepNewest?: boolean;
+  /** true = 收完再读一次固件里的 s_dropped（会短暂 halt 目标，代价约一次 gdb 往返）。 */
+  readFirmwareDrop?: boolean;
 }
 
 export interface RttDumpResult {
@@ -131,6 +135,8 @@ export interface RttDumpResult {
   dropped: number;
   bytes: number;
   truncated: boolean;
+  /** 固件侧累计丢帧（s_dropped，自复位起）；读不到时 -1。 */
+  firmwareDropped: number;
   stopped: boolean;
   port: number;
   addr: string;
@@ -489,7 +495,7 @@ interface CollectOutcome {
 }
 
 /** 连上 RTT 通道端口，采 seconds 秒（或直到 maxRecords / 通道关闭 / 出错）。 */
-async function collectFromPort(port: number, options: { seconds: number; level: number; maxRecords: number; maxFrameBytes: number; connectTimeoutMs: number; signal?: AbortSignal }): Promise<CollectOutcome> {
+async function collectFromPort(port: number, options: { seconds: number; level: number; maxRecords: number; maxFrameBytes: number; connectTimeoutMs: number; keepNewest?: boolean; signal?: AbortSignal }): Promise<CollectOutcome> {
   return await new Promise<CollectOutcome>((resolve) => {
     const startedAt = Date.now();
     const records: RttRecord[] = [];
@@ -512,6 +518,8 @@ async function collectFromPort(port: number, options: { seconds: number; level: 
     let skippedAtHead = true;
     /** 尾部半条记录的解析错误：等窗口结束再写进 notes，中途不提前收尾。 */
     let tailError: string | null = null;
+    /** follow 模式下"只留最新 N 条"的提示只写一次。 */
+    let keepNewestNoted = false;
     const socket = createConnection({ host: "127.0.0.1", port });
     state.socket = socket;
     socket.setNoDelay(true);
@@ -590,8 +598,17 @@ async function collectFromPort(port: number, options: { seconds: number; level: 
           continue;
         }
         if (records.length >= options.maxRecords) {
-          finish("truncated", null);
-          return false;
+          if (options.keepNewest !== true) {
+            finish("truncated", null);
+            return false;
+          }
+          // follow：窗口长、记录多，只留最新的 N 条（用户要的是"现在在打什么"，不是全史）。
+          records.shift();
+          if (!keepNewestNoted) {
+            keepNewestNoted = true;
+            notes.push("记录超过 maxRecords=" + String(options.maxRecords) + "，只保留最新的 " + String(options.maxRecords) + " 条");
+          }
+          truncated = true;
         }
         records.push(record);
         state.records += 1;
@@ -682,10 +699,35 @@ async function collectFromPort(port: number, options: { seconds: number; level: 
   });
 }
 
+/**
+ * 读固件侧的丢帧计数（rtt.c 里的 static uint32_t s_dropped，自复位起累计）。
+ * 为什么值得多花一次 gdb 往返：宿主侧的 dropped 是「按级别过滤掉几条」，固件侧的 s_dropped 才是
+ * 「环满丢了几条」—— 这才是「RTT 会不会丢数据」真正该看的数字。
+ * 走 eval（halt -> print -> resume），目标会被停约 50–100 ms；读不到就返回 -1，不编数。
+ */
+export async function readFirmwareDropCount(): Promise<{ value: number; note: string }> {
+  const session = sessionInfo();
+  if (session === null) return { value: -1, note: "没有活跃会话，读不到固件侧 s_dropped（-1）" };
+  try {
+    const { debugSessions } = await import("./debug-session.js");
+    const report = await debugSessions.eval({ commands: ["p (unsigned)s_dropped"] });
+    const matched = /\$\d+\s*=\s*(\d+)/u.exec(report.output);
+    if (matched === null) {
+      const last = report.output.trim().split("\n").slice(-1)[0];
+      return { value: -1, note: "固件里没找到 s_dropped（符号被优化掉或改名）：" + last };
+    }
+    return { value: Number(matched[1]), note: "固件侧 s_dropped=" + matched[1] + "（自复位起累计）" };
+  } catch (error) {
+    return { value: -1, note: "读 s_dropped 失败：" + (error instanceof Error ? error.message : String(error)) };
+  }
+}
+
 /** dump：从通道 0 读一段时间的记录；level 是保留上限（默认 4 = 全要）。 */
 export async function dumpRtt(request: RttDumpRequest = {}): Promise<RttDumpResult> {
   const rawSeconds = request.seconds ?? DEFAULT_DUMP_SECONDS;
-  const seconds = clampNumber(rawSeconds, 0.2, 60);
+  const keepNewest = request.keepNewest === true;
+  const maxWindow = keepNewest ? 300 : 60;
+  const seconds = clampNumber(rawSeconds, 0.2, maxWindow);
   const level = Math.round(clampNumber(request.level ?? RTT_MAX_LEVEL, RTT_MIN_LEVEL, RTT_MAX_LEVEL));
   const maxRecords = Math.round(clampNumber(request.maxRecords ?? DEFAULT_MAX_RECORDS, 1, 5_000));
   const maxFrameBytes = Math.round(clampNumber(request.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES, RTT_MIN_FRAME_BYTES, 65_536));
@@ -698,6 +740,7 @@ export async function dumpRtt(request: RttDumpRequest = {}): Promise<RttDumpResu
     dropped: 0,
     bytes: 0,
     truncated: false,
+    firmwareDropped: -1,
     stopped: false,
     port,
     addr,
@@ -720,16 +763,23 @@ export async function dumpRtt(request: RttDumpRequest = {}): Promise<RttDumpResu
     return { ...base, probeError, error: probeError.cause, message: formatProbeError(probeError) };
   }
 
-  const outcome = await collectFromPort(port, { seconds, level, maxRecords, maxFrameBytes, connectTimeoutMs, ...(request.signal === undefined ? {} : { signal: request.signal }) });
+  const outcome = await collectFromPort(port, { seconds, level, maxRecords, maxFrameBytes, connectTimeoutMs, keepNewest, ...(request.signal === undefined ? {} : { signal: request.signal }) });
   const notes = [...outcome.notes];
-  if (seconds !== rawSeconds) notes.push("seconds=" + String(rawSeconds) + " 超出 0.2..60，按 " + String(seconds) + " s 收；要更长的窗口就分多次 dump");
+  if (seconds !== rawSeconds) notes.push("seconds=" + String(rawSeconds) + " 超出 0.2.." + String(maxWindow) + "，按 " + String(seconds) + " s 收");
   if (outcome.error !== null) state.lastError = outcome.error;
+  let firmwareDropped = -1;
+  if (request.readFirmwareDrop === true && outcome.ok) {
+    const reading = await readFirmwareDropCount();
+    firmwareDropped = reading.value;
+    notes.push(reading.note);
+  }
 
   let message: string;
   if (outcome.ok) {
     message = "dump 到 " + String(outcome.records.length) + " 条 RTT 记录（端口 " + String(port) + "，窗口 " + String(seconds) + " s，收 " + String(outcome.bytes) + " 字节）";
     if (outcome.dropped > 0) message += "，按级别过滤掉 " + String(outcome.dropped) + " 条";
-    if (outcome.truncated) message += "，达到 maxRecords 提前收尾";
+    if (outcome.truncated) message += keepNewest ? "，超过 maxRecords 只保留最新 " + String(maxRecords) + " 条" : "，达到 maxRecords 提前收尾";
+    if (firmwareDropped >= 0) message += "；固件侧累计丢帧 " + String(firmwareDropped) + " 条";
     if (outcome.stopped) message += "，通道在窗口内被关掉（目标复位或 rtt stop）";
   } else {
     const probeError = outcome.probeError ?? rttError("unknown", outcome.error ?? "未知原因", HINT_FRAME);
@@ -741,6 +791,7 @@ export async function dumpRtt(request: RttDumpRequest = {}): Promise<RttDumpResu
     dropped: outcome.dropped,
     bytes: outcome.bytes,
     truncated: outcome.truncated,
+    firmwareDropped,
     stopped: outcome.stopped,
     port,
     addr,

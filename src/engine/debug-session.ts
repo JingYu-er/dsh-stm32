@@ -19,7 +19,7 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
-import { pickPort, resolveElfPath } from "./debug.js";
+import { isPortBusy, pickPort, resolveElfPath } from "./debug.js";
 import { MiSession, formatStopLocation, steppingCommandFor } from "./gdb-mi.js";
 import type { MiRecord } from "./gdb-mi.js";
 import {
@@ -336,6 +336,8 @@ function emptyReport(errors: string[], message: string): SessionReport {
 export class DebugSessionManager {
   private subprocess: SubprocessService | null = null;
   private binDirs: string[] = [];
+  /** 会话存活探测（默认连 openocd 的 Tcl 端口；单测用假进程替代）。 */
+  private aliveProbe: (port: number) => Promise<boolean> = (port) => isPortBusy(port, 500);
   private current: InternalSession | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
@@ -344,9 +346,19 @@ export class DebugSessionManager {
     this.now = options.now ?? ((): number => Date.now());
   }
 
-  configure(subprocess: SubprocessService, binDirs: string[] = []): void {
+  /**
+   * @param aliveProbe 起会话后探测「openocd 还活着吗」（默认连 Tcl 端口；单测注入假探针）。
+   *   真机踩过：探针 HID 掉线时 openocd 打完 Listening 就退出，而 status() 只看内存里的会话对象。
+   */
+  configure(subprocess: SubprocessService, binDirs: string[] = [], aliveProbe?: (port: number) => Promise<boolean>): void {
     this.subprocess = subprocess;
     this.binDirs = binDirs;
+    if (aliveProbe !== undefined) this.aliveProbe = aliveProbe;
+  }
+
+  /** 单测注入用：替换「会话还活着吗」的探测（见 configure 的 aliveProbe）。 */
+  setAliveProbe(probe: (port: number) => Promise<boolean>): void {
+    this.aliveProbe = probe;
   }
 
   isActive(): boolean {
@@ -507,6 +519,30 @@ export class DebugSessionManager {
 
     this.current = session;
     this.ensureSweeper();
+
+    // 真机踩过：openocd 打完 "Listening on port …" 之后仍可能因为探针 HID 错误当场退出
+    // （hid_write/WaitForSingleObject 0x3E5 + CMSIS-DAP CMD_INFO failed）。status() 只看内存里的
+    // 会话对象，于是后面每个工具都报「会话进行中」，实际全程失败。这里连一下 Tcl 口确认它真活着
+    // （探针可注入，单测用假进程替代）。
+    if (session.tclPort > 0) {
+      let alive = await this.aliveProbe(session.tclPort);
+      if (!alive) {
+        await sleep(300);
+        alive = await this.aliveProbe(session.tclPort);
+      }
+      if (!alive) {
+        const tail = [session.logText, handle.collected.stderr?.readFrom(0).text ?? ""]
+          .join("\n").split(/\r\n|\r|\n/u).filter((line) => line.trim() !== "").slice(-10).join("\n");
+        this.current = null;
+        this.stopSweeper();
+        handle.terminate();
+        await handle.waitForExit().catch(() => undefined);
+        return emptyReport(
+          ["会话的 openocd 起来后立刻没了：Tcl 端口 " + String(session.tclPort) + " 连不上（探针掉线？插拔探针后重试）", tail],
+          "没开会话：openocd 起来后立刻退出",
+        );
+      }
+    }
 
     if (request.reset !== undefined && request.reset !== "none") {
       const resetResult = await this.eval({ commands: ["monitor reset " + request.reset], keepHalted: true, timeoutMs: 20_000 });

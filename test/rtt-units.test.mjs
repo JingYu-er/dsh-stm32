@@ -489,6 +489,25 @@ test("dumpRtt：maxRecords 到了就提前收尾并标记 truncated", async () =
   }
 });
 
+test("dumpRtt keepNewest（follow）：超过 maxRecords 只保留最新的 N 条，不提前收尾", async () => {
+  const frames = [1, 2, 3, 4, 5].map((index) => encodeRttFrame({ t: index, level: 3, text: "line" + String(index) }));
+  const { tcl, rtt } = await setup({ frames });
+  try {
+    await startRtt({ addr: MAGIC_ADDR, port: rtt.port, checkPortBusy: NOT_BUSY });
+    const dumped = await dumpRtt({ seconds: 0.8, maxRecords: 2, keepNewest: true });
+    assert.equal(dumped.ok, true, dumped.message);
+    assert.deepEqual(dumped.records.map((record) => record.text), ["line4", "line5"], "follow 只留最新两条");
+    assert.equal(dumped.truncated, true);
+    assert.match(dumped.notes.join("\n"), /只保留最新的 2 条/u);
+    assert.match(dumped.message, /只保留最新 2 条/u);
+    assert.equal(dumped.firmwareDropped, -1, "没开 readFirmwareDrop 就不去读固件计数");
+  } finally {
+    await resetAll();
+    await tcl.close();
+    await rtt.close();
+  }
+});
+
 test("dumpRtt：一帧被拆成两次写也能拼起来", async () => {
   const frames = [encodeRttFrame({ t: 7, level: 3, text: "half" }), encodeRttFrame({ t: 8, level: 3, text: "again" })];
   const { tcl, rtt } = await setup({ frames, chunked: true });

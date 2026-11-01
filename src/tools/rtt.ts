@@ -87,6 +87,7 @@ export const reportSchema: JsonSchema = {
     durationMs: { type: "number", description: "这次动作花了多少毫秒" },
     records: { type: "array", description: "dump 到的记录（按时间顺序）", items: RECORD_SCHEMA },
     dropped: { type: "number", description: "按 level 过滤掉的条数" },
+    firmwareDropped: { type: "number", description: "固件侧累计丢帧（rtt.c 里的 s_dropped，自复位起）；读不到时 -1" },
     bytes: { type: "number", description: "从通道读到的字节数" },
     truncated: { type: "boolean", description: "是否因为 maxRecords 提前收尾" },
     stopped: { type: "boolean", description: "通道是否在窗口内被关掉（目标复位或 stop）" },
@@ -110,6 +111,7 @@ export const reportSchema: JsonSchema = {
     "durationMs",
     "records",
     "dropped",
+    "firmwareDropped",
     "bytes",
     "truncated",
     "stopped",
@@ -152,6 +154,7 @@ interface RttToolReport {
   durationMs: number;
   records: RttRecord[];
   dropped: number;
+  firmwareDropped: number;
   bytes: number;
   truncated: boolean;
   stopped: boolean;
@@ -167,7 +170,9 @@ interface ToolValue {
   report: RttToolReport;
 }
 
-const ACTIONS = ["start", "dump", "stop", "status"] as const;
+const ACTIONS = ["start", "dump", "follow", "stop", "status"] as const;
+/** follow 的默认窗口：比 dump 长得多——它存在的意义就是"整段时间都挂着读者"，让环不被灌满。 */
+const DEFAULT_FOLLOW_SECONDS = 10;
 
 function sessionWire(): RttSessionWire {
   const session = sessionInfo();
@@ -192,6 +197,7 @@ function baseReport(action: string, projectDir: string): RttToolReport {
     durationMs: 0,
     records: [],
     dropped: 0,
+    firmwareDropped: -1,
     bytes: 0,
     truncated: false,
     stopped: false,
@@ -226,7 +232,8 @@ function formatReport(report: RttToolReport): string[] {
     lines.push("  [" + String(record.t) + " ms][" + name + "] " + record.text);
   }
   if (report.records.length > shown.length) lines.push("  … 还有 " + String(report.records.length - shown.length) + " 条（调大 maxRecords 或分批 dump）");
-  if (report.truncated) lines.push("· 达到 maxRecords 上限，提前收尾");
+  if (report.truncated) lines.push(report.action === "follow" ? "· 超过 maxRecords，只保留最新 " + String(report.records.length) + " 条" : "· 达到 maxRecords 上限，提前收尾");
+  if (report.firmwareDropped >= 0) lines.push("· 固件侧累计丢帧 " + String(report.firmwareDropped) + " 条（s_dropped，自复位起）");
   if (report.stopped) lines.push("· RTT 通道已停（目标复位或 rtt stop）");
   lines.push("· 这次读 " + String(report.bytes) + " 字节" + (report.dropped > 0 ? "，按级别过滤掉 " + String(report.dropped) + " 条" : ""));
   for (const note of report.notes) lines.push("· " + note);
@@ -257,18 +264,18 @@ export function registerRtt(ctx: DshContext): void {
   ctx.tools.register({
     name: RTT_TOOL,
     description:
-      "RTT（Real Time Transfer）：start 起 openocd 的 rtt 通道并给出 TCP 端口，dump 读一段时间的记录（级别过滤/条数截断），stop 收掉通道（start 自己起的调试会话会一并释放、探针归还），status 看状态。",
+      "RTT（Real Time Transfer）：start 起 openocd 的 rtt 通道并给出 TCP 端口，dump 读一段时间的记录（级别过滤/条数截断），follow 连续读一段（只留最新 N 条，并读固件侧 s_dropped 丢帧计数——想确认「到底丢没丢」就用它），stop 收掉通道（start 自己起的调试会话会一并释放、探针归还），status 看状态。",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
-        action: { type: "string", enum: [...ACTIONS], description: "start（起 RTT）/ dump（读记录）/ stop（停）/ status（看状态）" },
+        action: { type: "string", enum: [...ACTIONS], description: "start（起 RTT）/ dump（读一段记录）/ follow（持续读一段，只留最新 N 条，顺带读固件侧丢帧数）/ stop（停）/ status（看状态）" },
         projectDir: { type: "string", description: "工程目录；缺省取会话工作目录" },
         addr: { type: "string", description: "RTT 控制块起始地址（十六进制，例如 0x20000000）；action=start 必填" },
         size: { type: "number", description: "控制块预留字节数，默认 " + String(DEFAULT_RTT_SIZE) },
         banner: { type: "string", description: "控制块标识（openocd rtt setup 的第三个参数）；一般不用填" },
         rttPort: { type: "number", description: "RTT 通道的 TCP 端口，默认 " + String(DEFAULT_RTT_PORT) },
-        seconds: { type: "number", description: "dump 的采集窗口（秒），默认 " + String(DEFAULT_DUMP_SECONDS) + "，范围 0.2..60" },
+        seconds: { type: "number", description: "采集窗口（秒）：dump 默认 " + String(DEFAULT_DUMP_SECONDS) + "（0.2..60），follow 默认 " + String(DEFAULT_FOLLOW_SECONDS) + "（0.2..300）" },
         level: { type: "number", description: "dump 保留到哪一级：1=error 2=warn 3=info 4=debug（默认 4，全要）" },
         maxRecords: { type: "number", description: "dump 最多返回多少条，默认 " + String(DEFAULT_MAX_RECORDS) },
         timeoutMs: { type: "number", description: "Tcl 往返 / 连通道的超时毫秒数" },
@@ -374,12 +381,26 @@ export function registerRtt(ctx: DshContext): void {
         return { message: started.message, report };
       }
 
-      if (action === "dump") {
+      if (action === "dump" || action === "follow") {
+        const isFollow = action === "follow";
+        if (!rttStatus().running) {
+          return failure(
+            action,
+            projectDir,
+            isFollow
+              ? "follow 需要 RTT 通道已经在跑：先 action=start（给 addr），再 action=follow"
+              : "dump 需要 RTT 通道已经在跑：先 action=start（给 addr）",
+            notes,
+          );
+        }
+        const defaultSeconds = isFollow ? DEFAULT_FOLLOW_SECONDS : DEFAULT_DUMP_SECONDS;
         const dumped = await dumpRtt({
-          ...(readNumber(args.seconds) === undefined ? {} : { seconds: readNumber(args.seconds) ?? DEFAULT_DUMP_SECONDS }),
+          ...(readNumber(args.seconds) === undefined ? {} : { seconds: readNumber(args.seconds) ?? defaultSeconds }),
           ...(readNumber(args.level) === undefined ? {} : { level: readNumber(args.level) ?? 4 }),
           ...(readNumber(args.maxRecords) === undefined ? {} : { maxRecords: readNumber(args.maxRecords) ?? DEFAULT_MAX_RECORDS }),
           ...(readNumber(args.timeoutMs) === undefined ? {} : { timeoutMs: readNumber(args.timeoutMs) ?? 3_000 }),
+          keepNewest: isFollow,
+          readFirmwareDrop: true,
           signal: exec.signal,
         });
         const report = baseReport(action, projectDir);
@@ -387,6 +408,7 @@ export function registerRtt(ctx: DshContext): void {
         report.durationMs = dumped.durationMs;
         report.records = dumped.records;
         report.dropped = dumped.dropped;
+        report.firmwareDropped = dumped.firmwareDropped;
         report.bytes = dumped.bytes;
         report.truncated = dumped.truncated;
         report.stopped = dumped.stopped;

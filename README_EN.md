@@ -71,7 +71,7 @@ npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
 npm test                            # optional: 497 offline cases in 34 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
-npm run test:size                   # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
+npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
@@ -389,7 +389,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
 npm test                 # 34 offline suites, 497 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
-npm run test:size        # package guard: tarball <=1.2 MB, templates <=60 KB, no binaries/diagrams inside
+npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
@@ -405,7 +405,7 @@ A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that nee
 | Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages; the **device-facts asset pack** (`device/f1/chips.json` with 9 fields, .ioc templates, .ld, SVD — 29 files ≈ 197 KiB for the core profile, 69 files for `full`, which is where the SVDs, startup files and headers live — the plugin ships no chip table, the first run needs one online `stm32_assets refresh` and it is offline afterwards) | manage the caches with `stm32_cache list/verify/purge` and `stm32_assets list/verify/prune` |
 | Rendered on the spot | `.ioc` content (`renderIoc`), `.ld` MEMORY (`renderLinkerScript`), the cmake source list | rendered per part, never stored as a template |
 
-The guard is `scripts/pack-size.mjs` (`npm run test:size`): tarball ≤ 1.2 MB (1 200 000 B), `templates/**` ≤ 60 KB, no `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll` inside, and `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md` all present.
+The guard is `scripts/pack-size.mjs` (`npm run test:size`): tarball ≤ 1.2 MB (1 200 000 B), the runtime assets under `templates/**` (`.ioc/.xml/.ld/.json/.cfg/.svd/.csv`) ≤ 40 KB with a 24 KB per-file cap (Markdown docs and C/CMake sources are not assets — docs are for humans and sources are the template project itself; the tarball cap covers both), no `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll` inside, and `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md` all present.
 
 Hardware e2e writes to the board and needs a project you point it at:
 
