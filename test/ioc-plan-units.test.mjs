@@ -70,6 +70,24 @@ test("plan 只算不写：源文件 SHA-256 不变，候选文件已落盘", () 
   assert.equal(report.summaryAfter?.pins.some((pin) => pin.pin === "PA5" && pin.label === "led2"), true);
 });
 
+test("GPIO 只写非默认属性：默认输出脚没有 GPIO_PuPd/GPIO_Speed，GPIOParameters 只列写了的名字", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA5", label: "led2", signal: "output" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  // CubeMX 自己的 demo.ioc:45-48：PC13 输出脚只有 GPIO_Label，没有 PuPd/Speed
+  assert.equal(entries.get("PA5.GPIOParameters"), "GPIO_Label");
+  assert.equal(entries.get("PA5.GPIO_Label"), "led2");
+  assert.equal(entries.get("PA5.GPIO_PuPd"), undefined, "默认无上下拉不该写 GPIO_PuPd");
+  assert.equal(entries.get("PA5.GPIO_Speed"), undefined, "默认低速不该写 GPIO_Speed");
+  // 显式给了非默认值才写，并且按 CubeMX 的顺序列进 GPIOParameters
+  const second = planIocChanges({ projectDir, pins: [{ pin: "PA6", signal: "input", pull: "up", speed: "high" }] });
+  const entries2 = parseIocEntries(candidateText(projectDir, second.planId));
+  assert.equal(entries2.get("PA6.GPIO_PuPd"), "GPIO_PULLUP");
+  assert.equal(entries2.get("PA6.GPIO_Speed"), "GPIO_SPEED_FREQ_HIGH");
+  assert.equal(entries2.get("PA6.GPIOParameters"), "GPIO_Speed,GPIO_PuPd");
+});
+
 test("apply 成功：SHA 与候选一致、备份存在、引脚真的落地", () => {
   const { projectDir, iocPath } = freshProject();
   const plan = planIocChanges({ projectDir, pins: [{ pin: "PA0", label: "key", signal: "input", pull: "up" }] });
@@ -594,6 +612,12 @@ test("peripherals(DMA:ADC1)：写八个 Dma 字段，RequestsNb 按组数算，M
   assert.equal(report.ok, true, report.message);
   const entries = parseIocEntries(candidateText(projectDir, report.planId));
   assert.equal(entries.get("Dma.RequestsNb"), "1");
+  // G1/G2：三件套 —— 白名单（CubeMX 只认名单里的字段）与请求号绑定
+  assert.equal(
+    entries.get("Dma.ADC1.0.RequestParameters"),
+    "Instance,Direction,PeriphInc,MemInc,PeriphDataAlignment,MemDataAlignment,Mode,Priority",
+  );
+  assert.equal(entries.get("Dma.Request0"), "ADC1");
   assert.equal(entries.get("Dma.ADC1.0.Instance"), "DMA1_Channel1");
   assert.equal(entries.get("Dma.ADC1.0.Direction"), "DMA_PERIPH_TO_MEMORY");
   assert.equal(entries.get("Dma.ADC1.0.PeriphInc"), "DMA_PINC_DISABLE");
@@ -602,6 +626,8 @@ test("peripherals(DMA:ADC1)：写八个 Dma 字段，RequestsNb 按组数算，M
   assert.equal(entries.get("Dma.ADC1.0.MemDataAlignment"), "DMA_MDATAALIGN_HALFWORD");
   assert.equal(entries.get("Dma.ADC1.0.Mode"), "DMA_CIRCULAR");
   assert.equal(entries.get("Dma.ADC1.0.Priority"), "DMA_PRIORITY_LOW");
+  // CubeMX 见到 DMA 通道会顺手打开它的中断（实测 6.15.0/F1 回写唯一多出的键），补上以免零 diff 失败
+  assert.equal(entries.get("NVIC.DMA1_Channel1_IRQn"), "true:0:0:false:false:true:false:true:true");
   const ipValues = [...entries.entries()].filter(([key]) => /^Mcu\.IP[0-9]+$/u.test(key)).map(([, value]) => value);
   assert.ok(ipValues.includes("DMA"), "Mcu.IPn 必须有 DMA，否则整组 Dma.* 被丢：" + JSON.stringify(ipValues));
   assert.equal(report.errors.length, 0, "不该有错误：" + JSON.stringify(report.errors));

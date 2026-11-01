@@ -55,6 +55,39 @@ test("R1：Mcu.IPn 里有 DMA 就不报错", () => {
   assert.equal(report.errors.some((item) => item.rule === "R1"), false);
 });
 
+test("R21：DMA 缺 RequestParameters / Dma.Request<i> → 报错（同 IPParameters 机制，整组静默失效）", () => {
+  const report = checkIocRules(entries([
+    ["Mcu.IP0", "DMA"],
+    ["Dma.RequestsNb", "1"],
+    ["Dma.ADC1.0.Instance", "DMA1_Channel1"],
+  ]));
+  assert.equal(report.errors.filter((item) => item.rule === "R21").length, 2, JSON.stringify(report.errors));
+});
+
+test("R21：三件套齐全且绑定一致 → 不报", () => {
+  const report = checkIocRules(entries([
+    ["Mcu.IP0", "DMA"],
+    ["Dma.RequestsNb", "1"],
+    ["Dma.ADC1.0.RequestParameters", "Instance,Direction,PeriphInc,MemInc,PeriphDataAlignment,MemDataAlignment,Mode,Priority"],
+    ["Dma.ADC1.0.Instance", "DMA1_Channel1"],
+    ["Dma.Request0", "ADC1"],
+  ]));
+  assert.equal(report.errors.some((item) => item.rule === "R21"), false, JSON.stringify(report.errors));
+  assert.equal(report.warnings.some((item) => item.rule === "R21"), false, JSON.stringify(report.warnings));
+});
+
+test("R21：RequestParameters 漏了写了字段 → 告警", () => {
+  const report = checkIocRules(entries([
+    ["Mcu.IP0", "DMA"],
+    ["Dma.RequestsNb", "1"],
+    ["Dma.ADC1.0.RequestParameters", "Instance,Direction"],
+    ["Dma.ADC1.0.Instance", "DMA1_Channel1"],
+    ["Dma.ADC1.0.Priority", "DMA_PRIORITY_LOW"],
+    ["Dma.Request0", "ADC1"],
+  ]));
+  assert.equal(report.warnings.some((item) => item.rule === "R21"), true);
+});
+
 test("R2：NbrOfConversion 与 Rank 组数不一致 → 告警", () => {
   const report = checkIocRules(entries([
     ["Mcu.Family", "STM32F1"],

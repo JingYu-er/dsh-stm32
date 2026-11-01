@@ -3625,3 +3625,47 @@ R20 命中：NVIC.TIM9_IRQn 的中断名 TIM9 不在 SVD 的中断表里：CubeM
 
 **教训**：规则用外部数据（SVD）判定「名字是否存在」时，必须先想清楚这份数据**覆盖不到什么**——
 内核异常、厂商伪信号、CubeMX 渲染名都属于这一类；先跑一遍真工程，比先写单测更容易发现这类盲区。
+
+## 58. 逆向 CubeMX 写侧 → 修 GPIO 默认属性与 DMA 三件套（2026-11-01）
+
+动机：`ioc-plan` 一直是「按我们理解的 .ioc 格式拼键」，正确性只能靠 `ioc_verify`（CubeMX config load+save 回写再 diff）证伪，
+且三个结构性问题——只能证伪不能证明、一次 25–40 s 太贵、差异归因不清。于是分三路取证：javap 反汇编（写侧真值表）、
+db/boardmanager 语料（504 份 .ioc 实测分布）、现有生成器（我们写了什么），再做三源比对。
+
+### 58.1 真值表（`.dsh-stm32/cubemx-re/jar.md`，约 80 键/键族，带 类#方法 证据）
+
+落盘链路唯一：`mxsystem.ProjectFactory#saveConfigFile` → `db.DbConfProperties#store` → `com.st.components.util.SortedProperties`。
+所以**文件键序 = 字符串字典序**（`Collections.sort` + `String.compareTo`），我们的写调用序对结果没有影响——这条推翻了先前「块序」的猜测；
+`#<date>` 时间戳行被 `StripTimeStampOuputStream` 删掉，CRLF + ISO-8859-1 + 反斜杠转义，因此零 diff 在原理上可行。
+`<IP>.IPParameters` 成员序 = `LinkedHashMap` 插入序（**不是**字典序，也不是 db 序），所以只能照抄用户给的顺序；
+`RCC.IPParameters` 是例外，`Collections.sort` 后字典序。共享信号引脚（`SH.*`）不写 `.Mode`；无信号引脚只写 `.Locked` 就 return。
+
+### 58.2 语料实测（504 份板级 .ioc，跨 4.5.0–6.15.0）
+
+- `GPIOParameters` 最常见值：`GPIO_Label`（14,357 次）、`GPIO_Label,PinAttribute`（3,546）、`GPIO_Label,GPIO_Speed,GPIO_PuPd,GPIO_Mode`（2,400）。
+  **默认属性不写**是常态（14k 对 2.4k）；只有用户改过才出现 Speed/PuPd/Mode。
+- 含 DMA 的 17 份文件里：`Dma.RequestsNb` 17/17、`Dma.Request<i>` 17/17、`Dma.<IP>.<n>.RequestParameters` 共 64 处；
+  F4 的参数是 9 段（多 `FIFOMode`），MDMA 22 段、L4/L5/WB/MP1 16–23 段——**名单必须覆盖该组实际写了的每个字段**（83 个 request 里 0 处不符）。
+- 我们的 `src/` 里只有 `Dma.RequestsNb`，另外两类键全仓库 0 命中 → DMA 极可能被 CubeMX 整组静默丢弃。
+
+### 58.3 改动（未发版）
+
+1. **GPIO 只写非默认属性**（`src/engine/ioc-plan.ts` `addPin()`）：label 为空 / speed=`low` / pull=`none` 时不写对应键，
+   `GPIOParameters` 只列真正写了的名字；原来是无条件写 `GPIO_Label,GPIO_PuPd,GPIO_Speed` 三项。
+2. **DMA 三件套**（同文件入库块）：按 `Dma.<IP>.<n>.<field>` 归组，写 `RequestParameters`=`DMA_PARAM_ORDER` 过滤后的实写字段名，
+   写 `Dma.Request<i>`=<IP>（i 从 0 按首次出现序），清理多余 `Request<i>`，最后 `RequestsNb`=组数。
+3. **DMA 通道中断**：Instance 形如 `DMA[12]_Channel<n>` 且缺 `NVIC.<Instance>_IRQn` 时补
+   `true:0:0:false:false:true:false:true:true`（实测 CubeMX 6.15.0/F1 保存时会自己加这一条，不补就永远差一条键）。
+4. **新规则 R21**（`src/engine/ioc-rules.ts` `checkDmaRequests()`）：缺 `RequestParameters`、名单漏字段、
+   有组无 `Dma.Request<i>`、条数不符、值与该组 IP 名不符，分别 error/warning。
+
+### 58.4 验收
+
+- 单测：`npm run build` 后 `node test/run-units.mjs` → **678 pass / 0 fail**（原 674 + 4）；`tsc --noEmit` 干净。
+- **GPIO 真机零 diff**：复制 demo.ioc → `planIocChanges({pins:[{pin:"PA5",label:"led2",signal:"output"}]})` → `applyIocPlan` → `runIocVerify`：
+  `durationMs=62358`，`droppedPeripherals/addedPeripherals/addedKeys/removedKeys/signalRewrites` 全空，PA5 四行回写后逐字不变。
+- **DMA 真机零 diff**：`peripherals:[{name:"ADC1:1"},{name:"DMA:ADC1"}]` → 第一轮 `durationMs=75917`，只剩
+  `addedKeys=["NVIC.DMA1_Channel1_IRQn"]`（`Dma.*` 三件套逐字保留、ADC1 认了）；补 §58.3.3 后复跑 `durationMs=62280`，四项 diff 全空。
+
+**教训**：验证脚手架里那段最小 `SubprocessService`（`spawn` 把 `java` 映射到 `D:/app/STM32CubeMX/jre/bin/java.exe`，
+`readFrom()` 返回累计文本）可以直接复用，不必为了跑一次 `runIocVerify` 去起宿主。
