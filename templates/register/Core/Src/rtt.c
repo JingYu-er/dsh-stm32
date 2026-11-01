@@ -180,7 +180,9 @@ static uint32_t rtt_ring_write(rtt_buffer_desc_t *desc, const uint8_t *data, uin
     if (size == 0u || data == NULL || len == 0u) {
         return 0u;
     }
-    used = wr - rd;
+    /* 偏移一律按 [0, size) 解释（SEGGER 约定，openocd 也按这个区间算剩余量）。
+     * 不能直接用无符号相减：RdOff 绕过一圈后可能比 WrOff 大，相减会得到天文数字。 */
+    used = (wr >= rd) ? (wr - rd) : (size - (rd - wr));
     if (used >= size) {
         return 0u;  /* 满：整条丢掉（NO_BLOCK_SKIP），不覆盖还没被读走的数据 */
     }
@@ -197,7 +199,11 @@ static uint32_t rtt_ring_write(rtt_buffer_desc_t *desc, const uint8_t *data, uin
     if (len > first) {
         memcpy(desc->pBuffer, data + first, len - first);
     }
-    desc->WrOff = wr + len; /* 最后一步：对端看到写指针前进时数据已经就位 */
+    wr += len;
+    if (wr >= size) {
+        wr -= size;         /* 必须回绕：WrOff 一旦发布成 >= size，对端再也算不清还剩多少，环就永久卡死 */
+    }
+    desc->WrOff = wr;       /* 最后一步：对端看到写指针前进时数据已经就位 */
     return len;
 }
 

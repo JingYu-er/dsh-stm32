@@ -27,6 +27,10 @@
  *   NO_BLOCK_SKIP 会**整条丢新记录**（绝不覆盖还没被读走的数据），rtt_dropped_count() 记数。
  *   所以要么让宿主持续读（stm32_rtt 的 dump 只在窗口内读），要么拉长打印间隔 / 放大环。
  *
+ * 偏移约定（踩过坑，别改）：WrOff/RdOff 必须**永远**落在 [0, RTT_BUF_SIZE)。
+ *   曾经发布过 wr + len 这种"只增不减"的 WrOff，一旦 >= Size，openocd 就再也算不清还剩多少、
+ *   不再推进 RdOff，环从此永久冻结（现象：dump 每次都是同一块字节 + 重复记录刷屏 + drop 一直涨）。
+ *
  * 并发：rtt_write 默认在**临界区**里写环 —— 裸机是关中断（保存/恢复 PRIMASK），
  *   RTOS 用强符号覆盖 rtt_lock()/rtt_unlock() 换成「mutex + 关中断」（示例见 rtt.c）。
  *   所以主循环和中断同时打印也不会丢 WrOff 更新。
