@@ -3567,3 +3567,15 @@ R14 外设 RefMode（临时目录造 `db/mcu/IP/USART-...-Modes.xml`）、R17 �
 - 手动 `Stop-Process` 杀掉 openocd（模拟探针掉线）后：`stm32_rtt start` 回 ok、notes 出现「旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起」→ 死会话自动重起成立。
 - 但同一时刻 `follow` 直接失败（`连不上 RTT 通道端口 9090：connect ECONNREFUSED`）—— `bringUpChannel` 只看了内存里的 `rttStatus().running`。**修**：`running` 为真也要先 `isPortBusy(port, 300)` 探一次通道端口，连不上就当通道已死、走「清理 + 重起」那条路，并写 note「RTT 通道端口 N 连不上（openocd 多半已退出），清理后重起」。这条要等下次重启才生效。
 
+
+## 55. P4'-C6：`<IP>.IPParameters` 自动补齐（2026-11-01）
+
+以前 `entries` 里直接写 `<IP>.Prescaler=71` 而不把它列进 `<IP>.IPParameters` 时，R7 只会**告警**，
+但 CubeMX 那边是真**静默丢弃**。这次改成主动补齐：写盘前扫一遍，把实例下所有标量键补进白名单，
+并在 notes 里说明补了哪些——`自动补 TIM3.IPParameters：Prescaler、Period（不补会被 CubeMX 静默丢弃）`。
+
+**关键限制**：只补真外设实例（`/^[A-Z]+[0-9]+$/`，例如 ADC1/TIM3/USART1）。`NVIC`/`RCC`/`SYS`/`DMA`
+是「伪实例」——它们的键（`NVIC.TIM2_IRQn`、`RCC.SYSCLKSource`）不在 IPParameters 白名单里，补进去反而写错。
+第一次实现漏了这条判断，直接打挂 `clock-units` 两例 + `ioc-plan-units` 一例，加守卫后恢复 **673 pass**。
+
+注：C6 目前靠既有 plan 用例回归覆盖（没有专门的新用例），下一步补一条「entries 写 TIM3.Prescaler 但没列白名单 → 自动补上」的断言。
