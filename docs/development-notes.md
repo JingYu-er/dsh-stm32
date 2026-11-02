@@ -4908,3 +4908,66 @@ F0/L0 的 db 里这两根脚叫 **`SYS_SWDIO` / `SYS_SWCLK`** —— 名字不�
 | F4 | pllmn | ✅ 真机 benign=true（168 MHz，÷25×336÷2） |
 | F2 / F7 / G4 / L4 / L4+ / C0 / G0 / F3 / L1 / F2 | pllmul / pllmn | ❌ 缺「核过的总线上限 / VCO 区间」，拒绝并说明 |
 | H5 / U5 / H7 等 | unknown（分相 PLL） | ❌ 拒绝 |
+
+## 69. 为什么生成时弹出 CubeMX 的"是否保存工程"模态框，以及为什么不替用户点它
+
+### 69.1 现象
+
+跑 `stm32_generate` 时，屏幕上出现 CubeMX 的 GUI 弹窗：
+
+```text
+Warning: Load Project
+Project Untitled has been modified would you like to save the project ?   [Yes] [No] [Cancel]
+```
+
+不点它，生成就一直挂着（3–4 分钟的活变成无限等）。
+
+### 69.2 原因：CubeMX 是单实例应用
+
+插件走的是无头调用：`jre/bin/java.exe -Dfile.encoding=UTF-8 -jar STM32CubeMX.exe -q <script>`。
+但 CubeMX 只允许一个实例：**GUI 已经开着时，新命令行会被转发给那个 GUI 进程**，`-q`（无界面）随之失效，
+脚本在 GUI 里执行、装载工程时 CubeMX 发现当前编辑的工程（这里是一个叫 Untitled 的、还没保存过的窗口）被改动过，
+就弹出上面那个模态框等人工决定。
+
+也就是说：弹窗不是我们的脚本要保存什么，而是**用户自己开着的那个 CubeMX 窗口**在拦路。
+
+### 69.3 插件的处理：先探测、先拒绝（不替你点按钮）
+
+新增 `src/engine/cube-mx-guard.ts`：
+
+- `findRunningCubeMxGui(subprocess)` 用 `tasklist /NH /FO CSV` 找 **`STM32CubeMX.exe`**（无头调用自己跑的是
+  `jre/bin/java.exe`，不算），复用 `doctor.ts` 的 `parseTasklistCsv`；
+- `describeCubeMxGuiConflict(processes)` 生成一句人话（点名 PID、说明单实例与模态框、让人关掉 GUI 再重跑）；
+- `generate.ts` 与 `ioc-verify.ts` 在真正 spawn CubeMX **之前**调用它，检测到就直接失败返回；
+- **探测失败不拦人**：非 Windows、`tasklist` 不可用、退出码非 0 一律当"没检测到"——不能因为诊断手段缺失就挡住正常生成。
+
+报错长这样（不再是静默卡住）：
+
+```text
+检测到 STM32CubeMX 图形界面正在运行（STM32CubeMX.exe#8124）：CubeMX 是单实例，命令行会被转发给它，
+无头模式（-q）失效并可能弹出"是否保存工程"这类模态框，生成会一直等下去。
+请先关掉 CubeMX 窗口（或保存后退出），再重跑；不想关也可以先用 CubeMX 自己 Generate Code，再回来跑 stm32_build
+```
+
+### 69.4 为什么不做"CLI 点按钮"
+
+技术上能用 PowerShell + UI Automation / SendKeys 去点那个 `Yes`/`No`，但不该做成常态：
+
+1. 那是 CubeMX 的 **SWT 原生窗口**，控件结构没有稳定的自动化标识，只能按窗口标题 + 按钮文本匹配，
+   换个语言（中文界面是"是/否/取消"）或换个 CubeMX 版本就点空；
+2. UIA/SendKeys 都要求窗口在前台、且不能被别的窗口抢焦点（我们是在后台跑生成，做不到）；
+3. 就算点中了，按的是**用户自己的**工程状态（"要不要保存 Untitled"）——这个决定轮不到插件替人做，
+   点错（比如自动 Yes）会在 CubeMX 的工作目录里写出一个无关的 `Untitled.ioc`。
+
+结论：这类"有人开着的 GUI 在挡路"的情况，正确做法是**发现并如实拒绝**，而不是绕过它。
+
+### 69.5 已经弹出来了，该点哪个
+
+**No**（不保存）。那个 `Untitled` 与我们的工程无关，Yes 只会多写一个无用的 `Untitled.ioc`；
+Cancel 会让 CubeMX 继续停在旧工程上，脚本仍然不会前进。点完之后把 CubeMX 关掉，再重跑生成即可。
+
+### 69.6 验证
+
+`test/cubemx-guard-units.test.mjs` 4 例：认出 `STM32CubeMX.exe` 并报 PID、只有 `java.exe` 时返回空、
+`tasklist` 退出码非 0 / spawn 报错时返回空（不拦生成）、冲突文案包含"单实例""关掉 CubeMX""模态框"。
+全量 `node test/run-units.mjs` → **770 pass / 0 fail（48 套件）**，pack-size 护栏通过。

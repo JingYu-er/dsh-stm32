@@ -28,6 +28,7 @@ import type { GenerateLayout, GenerateVerdict } from "./generate-script.js";
 import { cacheRoot } from "./cache.js";
 import { firmwareExtraDirs } from "./firmware-install.js";
 import { describeRefresh, refreshCubemxCmakeLists } from "./cmake-sources.js";
+import { describeCubeMxGuiConflict, findRunningCubeMxGui } from "./cube-mx-guard.js";
 import { cacheHit, cacheKeyFor, entryFromFiles, readCache, writeCache } from "./generate-cache.js";
 import { cubeMxUserHome, needsThirdpartyPacks, parkThirdpartyDb } from "./thirdparty.js";
 import type { ParkHandle } from "./thirdparty.js";
@@ -574,6 +575,12 @@ export async function runGenerate(
   // 路径含中文时脚本会乱码，这里逼 JVM 用 UTF-8 读文件。
   const argv = [launch.java, "-Dfile.encoding=UTF-8", "-jar", launch.jar, "-q", scriptPath];
   const command = argv.map((part) => (part.includes(" ") ? '"' + part + '"' : part)).join(" ");
+  // CubeMX 单实例：GUI 开着时 -q 会被转发过去、弹出模态框，生成会一直挂着（实测卡 4 分钟以上）。
+  // 这里先探测、先拒绝，别让用户对着一个不动的进度条猜。
+  const guiProcesses = await findRunningCubeMxGui(subprocess, request.signal);
+  if (guiProcesses.length > 0) {
+    return fail(request, describeCubeMxGuiConflict(guiProcesses));
+  }
   const startedAt = Date.now();
   if (skipMiss !== "") progress("未跳过 CubeMX：" + skipMiss);
   progress("使用布局：" + (layout === "coupled" ? "coupled（外设初始化并入 main.c）" : "per-ip（每外设一对 .c/.h）"));

@@ -21,6 +21,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { parseIocEntries } from "./ioc.js";
 import { STATE_DIR, acquireLock, cubeMxLaunch } from "./generate.js";
 import { runStreaming } from "./subprocess-runner.js";
+import { describeCubeMxGuiConflict, findRunningCubeMxGui } from "./cube-mx-guard.js";
 import { locateCubemxDb, readIpParameterNames, readMcuFacts } from "./cubemx-db.js";
 import { DMA_PARAM_ORDER } from "./ioc-plan.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -631,6 +632,12 @@ export async function runIocVerify(
 
   const lock = acquireLock(projectDir, "ioc verify");
   if ("error" in lock) return { ...base, errors: [lock.error], message: "没诊断：CubeMX 正忙" };
+  // 与 generate 同一个理由：CubeMX 是单实例，GUI 开着时无头调用会被转发并弹模态框。
+  const guiProcesses = await findRunningCubeMxGui(subprocess);
+  if (guiProcesses.length > 0) {
+    const conflict = describeCubeMxGuiConflict(guiProcesses);
+    return { ...base, errors: [conflict], message: "没诊断：" + conflict };
+  }
   const beforeText = readFileSync(iocPath, "utf8");
   const stamp = new Date().toISOString().replace(/[-:T.]/gu, "").slice(0, 14);
   const workDir = join(projectDir, STATE_DIR, "verify", stamp);
