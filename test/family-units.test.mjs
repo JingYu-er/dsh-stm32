@@ -15,6 +15,7 @@ import { test } from "node:test";
 import { instancesWithPins, parseMcuXml } from "../lib/engine/cubemx-db.js";
 import {
   FALLBACK_DEBUG_BUDGET,
+  bundledOpenocdConfig,
   chooseOpenocdTarget,
   debugBudgetForCore,
   debugBudgetOfFamily,
@@ -115,6 +116,13 @@ test("没有 openocd target 脚本的族标成 null，并在 note 里说明", ()
     assert.equal(profile.openocdTarget, null, family);
     assert.match(profile.note, /openocd/u, family);
   }
+  // C0 / U0 有插件内置的适配版脚本；其它没脚本的族没有（不猜）。
+  for (const [family, name] of [["STM32C0", "stm32c0x"], ["STM32U0", "stm32u0x"]]) {
+    const profile = familyProfileOf(family);
+    assert.equal(profile.bundledTarget, name, family + " 应内置 " + name);
+    assert.notEqual(bundledOpenocdConfig(name), null, name + ".cfg 必须在 templates/openocd 里");
+  }
+  assert.equal(familyProfileOf("STM32H5").bundledTarget, null);
 });
 
 test("debugBudgetForCore：比较器个数按内核（M0 4/2、M3・M4 6/4、M7・M33・M55 8/4）", () => {
@@ -144,11 +152,20 @@ test("chooseOpenocdTarget：按族给 target；没脚本的族拒绝硬连；认
   assert.equal(chooseOpenocdTarget(familyProfileOf("STM32G4")).targetConfig, "target/stm32g4x.cfg");
   assert.equal(chooseOpenocdTarget(familyProfileOf("STM32L4+")).targetConfig, "target/stm32l4x.cfg");
 
-  // 没有脚本：必须报错（拿别的族硬连会连不上或读错 flash 布局），不能悄悄回退。
+  // C0 / U0：openocd 0.12 没有官方脚本，但有插件内置的适配版 → 给绝对路径，不报错。
   const c0 = chooseOpenocdTarget(familyProfileOf("STM32C0"));
-  assert.ok(c0.error.length > 0);
-  assert.match(c0.error, /openocd.cfg/u);
-  assert.equal(c0.targetConfig, "");
+  assert.equal(c0.error, "");
+  assert.equal(c0.bundled, true);
+  assert.match(c0.targetConfig, /templates[\\/]openocd[\\/]stm32c0x\.cfg$/u);
+  const u0 = chooseOpenocdTarget(familyProfileOf("STM32U0"));
+  assert.match(u0.targetConfig, /stm32u0x\.cfg$/u);
+
+  // 既没有官方脚本也没有内置脚本的族：必须报错（拿别的族硬连会连不上或读错 flash 布局），不能悄悄回退。
+  const h5 = chooseOpenocdTarget(familyProfileOf("STM32H5"));
+  assert.ok(h5.error.length > 0);
+  assert.match(h5.error, /openocd.cfg/u);
+  assert.equal(h5.targetConfig, "");
+  assert.equal(h5.bundled, false);
 
   // .ioc 都没有（认不出族）：回退 F1，但要说清楚。
   const none = chooseOpenocdTarget(null);

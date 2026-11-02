@@ -177,16 +177,27 @@ test("renderOpenocdTarget：有 target 的族换脚本名，没 target 的族原
   const f1 = renderOpenocdTarget(ioc, resolveHalChip("STM32F103C8T6").facts);
   assert.match(f1.text, /target\/stm32f1x\.cfg/u);
 
-  // C0：openocd 0.12 没有脚本 → 保持 F1 的 target 并明确提示（绝不猜一个别的族）
+  // C0：openocd 0.12 没有官方脚本，但有插件内置的适配版 → 工程内的 openocd/stm32c0x.cfg
   const c0Facts = {
     mcu: "STM32C031C6T6", deviceId: "STM32C031C6Tx", mcuName: "STM32C031C(6-8)Tx", packageName: "LQFP48",
     pinCount: 48, startup: "startup_stm32c031xx.s", deviceDefine: "STM32C031xx", deviceHeader: "stm32c031xx.h",
     flashBytes: 32768, ramBytes: 12288, linkerScript: "STM32C031C6Tx_FLASH.ld",
     familyId: "STM32C0", familyLine: "C0", keepLegacyLinkerScript: false, notes: [],
   };
-  const c0 = renderOpenocdTarget(ioc, c0Facts);
-  assert.equal(c0.text, ioc);
-  assert.match(c0.note, /STM32C0/u);
+  const c0 = renderOpenocdTarget(ioc, c0Facts, "openocd");
+  assert.match(c0.text, /source \[find openocd\/stm32c0x\.cfg\]/u);
+  assert.equal(c0.note, "");
+  // launch.json 要的是工作区绝对路径
+  const c0Launch = renderOpenocdTarget('"target/stm32f1x.cfg"', c0Facts, "launch");
+  assert.equal(c0Launch.text, '"\${workspaceFolder}/openocd/stm32c0x.cfg"');
+
+  // 既没有官方脚本也没有内置脚本的族（H5）：原样保留并给 note，绝不猜一个别的族
+  const h5 = renderOpenocdTarget(ioc, {
+    ...c0Facts, mcu: "STM32H563ZIT6", deviceId: "STM32H563ZITx", startup: "startup_stm32h563xx.s",
+    deviceDefine: "STM32H563xx", deviceHeader: "stm32h563xx.h", familyId: "STM32H5", familyLine: "H5",
+  });
+  assert.equal(h5.text, ioc);
+  assert.match(h5.note, /STM32H5/u);
 });
 
 test("resolveFamilyFirmwareRoot：取本机已装的最高版本，显式包名优先，装不到就给包名前缀", () => {

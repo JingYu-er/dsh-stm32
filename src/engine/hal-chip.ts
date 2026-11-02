@@ -367,11 +367,25 @@ export function renderCmakeLists(text: string, facts: HalChipFacts): string {
 /**
  * openocd.cfg / .vscode/launch.json 里的 target 脚本按族替换（模板里写的是 stm32f1x）。
  *
- * 不认识的族返回原文并给 note：宁可让用户看到"还是 F1 的 target"，也不猜一个别的族的脚本
- * ——连错了不是连不上，是能连上但 flash 布局读错。
+ * 三种情况：
+ *   - 该族有官方脚本 → `target/stm32c0x.cfg`… 这种相对 openocd scripts 目录的路径；
+ *   - 该族只有插件内置脚本（C0 / U0）→ 工程内的 `openocd/<name>.cfg`（scaffold 会把文件复制进去），
+ *     launch.json 里要用 `\${workspaceFolder}/` 前缀，所以两个文件分开处理（variant）；
+ *   - 认不出的族 → 原文返回并给 note：宁可让用户看到"还是 F1 的 target"，也不猜一个别的族的脚本
+ *     ——连错了不是连不上，是能连上但 flash 布局读错。
  */
-export function renderOpenocdTarget(text: string, facts: HalChipFacts): { text: string; note: string } {
-  const target = familyProfileOf(facts.familyId).openocdTarget;
+export function renderOpenocdTarget(
+  text: string,
+  facts: HalChipFacts,
+  variant: "openocd" | "launch" = "openocd",
+): { text: string; note: string } {
+  const profile = familyProfileOf(facts.familyId);
+  if (profile.bundledTarget !== null) {
+    const rel = "openocd/" + profile.bundledTarget + ".cfg";
+    const replacement = variant === "launch" ? "\${workspaceFolder}/" + rel : rel;
+    return { text: text.split("target/stm32f1x.cfg").join(replacement), note: "" };
+  }
+  const target = profile.openocdTarget;
   if (target === null || target === "") {
     return {
       text,

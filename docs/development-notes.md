@@ -4556,9 +4556,59 @@ openocd 0.12 没有 `stm32c0x.cfg`，工程里的 `openocd.cfg` 仍指向 `stm32
 ### 63.9 这一步**没有**做什么（别当成已支持）
 
 - **时钟规划、.ioc 外设预设、SVD 校验、寄存器版模板仍然只有 F1**：非 F1 族照旧明确拒绝（`capabilities` 为 false）。
-- **C0 / U0 还不能烧录/调试**：本机 openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`；内置适配版脚本是下一步
-  （上游 master 版用 0.13 语法 `dap create ... -tap`，把 `-tap` 换成 `-chain-position` 后 0.12 能完整加载）。
+- **C0 / U0 的 target 脚本是插件自带的**（§63.10）：本机 openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`，
+  插件内置了一份把 `-tap` 换成 `-chain-position` 的适配版；**还没在 C0/U0 真板子上烧过**（手上没有这两族的板子），
+  「脚本能被 0.12 完整加载」是验证过的，「烧写时序在真芯片上对不对」没有。
 - **F2 / F3 / F7 / G0 / L1 / L4 / L4+ / U0 没有真机验收**：本机 CubeMX Repository 里只有 C0/F0/F1/F4/G4/L0 六族固件包，
   其余族要先用 CubeMX 包管理器装包（插件的 `stm32_firmware_install` 目前只能下 F1）。
 - **链接脚本仍是「F1 模板改尺寸」**：F4 的 CCMRAM（0x10000000）没有 `.ccmram` 段；不用 CCM 时无影响，
   要用 CCM 就得按族给真模板。
+
+### 63.10 内置 C0 / U0 的 openocd target 脚本
+
+openocd 0.12 是 2023-01 的最后一个正式版，包里没有 `stm32c0x.cfg` / `stm32u0x.cfg`（两族都更晚）。
+升级 openocd 不是选项（本机 pacman/xPack/上游正式版都停在 0.12），所以在**插件里带一份适配脚本**，
+不去改用户机器上的 openocd 安装：
+
+| | C0 | U0 |
+| --- | --- | --- |
+| 文件 | `templates/openocd/stm32c0x.cfg`（2088 B） | `templates/openocd/stm32u0x.cfg`（1853 B） |
+| 来源 | openocd master `tcl/target/stm32c0x.cfg` | openocd master `tcl/target/stm32u0x.cfg` |
+| 与上游的差异 | 只把 `dap create $_CHIPNAME.dap -tap $_CHIPNAME.cpu` 换成 `-chain-position` | 同上 |
+| 关键事实 | CPUTAPID 0x0bc11477、work-area 0x1800、flash bank 用 `stm32l4x` 驱动 @0x08000000、otp @0x1fff7000 | CPUTAPID 0x6ba02477、work-area 0x1000、flash bank `stm32l4x` @0x08000000、otp @0x1FFF6800 |
+
+为什么只改一处就够：0.12 的 `dap create` 没有 `-tap` 参数（会报 `Unknown param: -tap`），
+换成同义的 `-chain-position` 后整份脚本在 0.12 上**完整加载**（adapter / target / flash bank 全部通过），
+只有没接探针时 `init` 会报 `Error: CMSIS-DAP command CMD_INFO failed.` —— 这正是「脚本没问题、只是没硬件」。
+GPL-2.0-or-later 头保留在文件里，注释写清来源与这处改动。
+
+接线只有三处，其余全复用：
+
+1. `src/data/family.ts`：族画像加 `bundledTarget`（C0 → `stm32c0x`、U0 → `stm32u0x`），
+   `bundledOpenocdConfig(name)` 给出模板目录里的**绝对路径**；`chooseOpenocdTarget()` 在
+   `openocdTarget === null` 但 `bundledTarget !== null` 时返回该绝对路径（`bundled: true`、`error: ""`），
+   模板缺文件才报「插件安装不完整」。`OpenocdTargetChoice` 的 `targetConfig` 语义因此变成
+   「原样传给 openocd `-f` 的值」——正常是相对 scripts 目录的路径，内置时是绝对路径。
+2. `flash.ts` / `debug.ts` / `debug-session.ts` / `regs.ts` 四个调用点**一行都不用改**：它们本来就透传
+   `choice.targetConfig`。
+3. `scaffold.ts` + `renderOpenocdTarget(text, facts, variant)`：建工程时把插件里那份 cfg 复制到工程
+   `openocd/<name>.cfg`（失败即整体拒绝，不留半成品），`openocd.cfg` 里写
+   `source [find openocd/stm32c0x.cfg]`，`.vscode/launch.json` 的 configFiles 写
+   `${workspaceFolder}/openocd/stm32c0x.cfg` —— 工程自带脚本，换机器、换 openocd 版本都还能用。
+
+验证（不需要真板子）：
+
+```
+cd <新建的 C0 工程>
+openocd -f interface/cmsis-dap.cfg -f openocd/stm32c0x.cfg -c "init; shutdown"
+# 期望：exit=1，唯一错误 Error: CMSIS-DAP command CMD_INFO failed.（没接探针）
+# 出现 Unknown param: -tap / invalid command name 之类，说明脚本语法没适配好
+```
+
+C0 建工程冒烟（`accept/C0-openocd`）：create ok，`openocd.cfg` 含
+`source [find interface/cmsis-dap.cfg]` / `transport select swd` / `source [find openocd/stm32c0x.cfg]` /
+`adapter speed 2000`，launch.json 两条 configFiles 都指向 `${workspaceFolder}/openocd/stm32c0x.cfg`，
+工程内 `openocd/stm32c0x.cfg` 存在，`chooseOpenocdTarget(readProjectFamily(dir))` 给出插件内的绝对路径。
+
+**还没做的诚实说明**：手上没有 C0/U0 板子，所以「能连上、能烧、烧完能跑」没有真机证据；
+H5 / N6 / U3 / WBA / WB0 / WL3 / MP2 依旧没有脚本（也不在 14 族范围里），照旧明确拒绝。

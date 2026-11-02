@@ -349,7 +349,10 @@ transport select hla_swd
 source [find target/stm32f1x.cfg]
 ```
 
-没有 `openocd.cfg` 时回退 `interface/cmsis-dap.cfg` + `target/stm32f1x.cfg`。ST-Link 用户请把上面第二段写进工程根目录的 `openocd.cfg`。
+没有 `openocd.cfg` 时**按 `.ioc` 的 `Mcu.Family` 选 target**（F1 → `target/stm32f1x.cfg`、F4 → `target/stm32f4x.cfg`、G4 → `target/stm32g4x.cfg` …；L4 与 L4+ 共用 `stm32l4x`）。
+C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配版：建工程时会复制到工程的 `openocd/stm32c0x.cfg`（U0 同理），
+`openocd.cfg` 里写 `source [find openocd/stm32c0x.cfg]`，`.vscode/launch.json` 用 `${workspaceFolder}/openocd/stm32c0x.cfg`。
+其它没有脚本的族（H5 / N6 / U3 / WBA / WB0 / WL3 / MP2）会**明确拒绝烧录**，不会拿别的族的脚本硬连。ST-Link 用户把上面第二段写进工程根目录的 `openocd.cfg` 即可。
 
 ### .ioc 的两个硬要求
 
@@ -361,6 +364,7 @@ source [find target/stm32f1x.cfg]
 | 限制 | 说明 | 有没有办法 |
 | --- | --- | --- |
 | 只在 **Windows** 上验证 | `stm32_generate` 依赖 `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`，Linux/macOS 上的 CubeMX 不是这个形态 | 暂无；烧录/调试/读寄存器在 Linux 上若 openocd 与 gdb 齐全可能可用，但未验证 |
+| **C0 / U0 的 target 脚本是插件自带的** | openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`，插件内置适配版（只把 `dap create … -tap` 换成 `-chain-position`），建工程时复制进工程 `openocd/` | 已用 openocd 0.12 验证脚本能完整加载（只差探针）；**没有 C0/U0 真板烧写证据** |
 | **HAL 建工程覆盖 14 个单核族** | C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / L0 / L1 / L4 / L4+ / U0 已按族实现：固件包按族找（`resolveFamilyFirmwareRoot`）、启动文件/设备宏/链接脚本来自资源包的 `device/<族>/chips.json`、`.ioc` 用资源包的 `ioc/family/<族>.ioc` 模板（逐族时钟树）、cmake 与 openocd/launch.json 里的 `STM32F1xx`/`stm32f1x` 按族替换。已实测 F4（407VGT6）create→generate→build 出 elf | 双核（WB/WL）、M33/M55（H5/L5/U3/U5/N6/WBA）、MPU（MP1/MP2）、H7/WB0/WL3 仍明确拒绝；资源包里没有的族要先 `stm32_assets refresh` |
 | 深层能力仍只按 **F1** 实现 | 族画像覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走；HAL 建工程已扩到 14 个单核族。但**时钟规划**（HSE 8 MHz、PLL ×2..×16、SYSCLK ≤72 MHz）、**.ioc 外设预设表**（USART1/TIM2/ADC1 这些内建名）、**SVD 校验**（资源包只有 `device/f1/svd`）与**寄存器版模板**仍只有 F1 | 这些能力在非 F1 族上会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false），不会悄悄套 F1 表；下一步是按族从 CubeMX `db/mcu/IP/*_Modes.xml` 的 `<RefParameter>` 生成预设与时钟上限，并给资源包补各族的 SVD |
 | 默认探针是 **CMSIS-DAP** | 没有 `openocd.cfg` 时回退 cmsis-dap | 用 `openocd.cfg` 换 `interface/stlink.cfg`（见上） |

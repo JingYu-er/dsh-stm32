@@ -37,6 +37,7 @@ import {
 } from "./hal-chip.js";
 import { describeDroppedPlaceholder, detectVscodeFill, fillVscodeTemplate } from "./vscode-config.js";
 import { readLocalManifest } from "./assets.js";
+import { bundledOpenocdConfig, familyProfileOf } from "../data/family.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
 export const SCAFFOLD_PROJECT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -512,7 +513,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
       // Cmake 与 openocd 配置里的族相关字面量（STM32F1xx / stm32f1x）都按芯片换掉。
       if (destRel === "cmake/stm32cubemx/CMakeLists.txt") text = renderCmakeLists(text, facts);
       if (destRel === "openocd.cfg" || destRel === ".vscode/launch.json") {
-        const rendered = renderOpenocdTarget(text, facts);
+        const rendered = renderOpenocdTarget(text, facts, destRel === "openocd.cfg" ? "openocd" : "launch");
         text = rendered.text;
         if (rendered.note !== "") openocdNote = rendered.note;
       }
@@ -522,6 +523,18 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
         for (const token of filled.dropped) droppedVscode.add(token);
       }
       written.push({ rel: destRel, text });
+    }
+    // 该族在 openocd 0.12 里没有 target 脚本（C0 / U0）：把插件内置的那份复制进工程，
+    // 让 openocd.cfg / launch.json 里那条 source openocd/<name>.cfg 真能找到文件。
+    const bundled = familyProfileOf(facts.familyId).bundledTarget;
+    if (bundled !== null) {
+      const source = bundledOpenocdConfig(bundled);
+      if (source === null) {
+        throw new Error(
+          "插件缺少内置 target 脚本 templates/openocd/" + bundled + ".cfg（安装不完整）：" + facts.familyId + " 靠它烧录/调试",
+        );
+      }
+      written.push({ rel: "openocd/" + bundled + ".cfg", text: fs.readFileSync(source, "utf8") });
     }
   } catch (error) {
     return fail(

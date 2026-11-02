@@ -22,8 +22,9 @@
  * 调用方应当直接报"不支持"并说清原因，绝不能悄悄用 F1 的表去凑。
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** 插件对各族"支持到哪一步"。false = 这条路线还没按该族实现，调用方必须拒绝而不是猜。 */
 export interface Stm32FamilyCapabilities {
@@ -49,6 +50,12 @@ export interface Stm32FamilyProfile {
   readonly core: string;
   /** openocd target 脚本名（不含 target/ 前缀与 .cfg）；null = 本版 openocd 没有该族脚本。 */
   readonly openocdTarget: string | null;
+  /**
+   * 插件自带（内置）的 target 脚本名（不含 .cfg），用于 openocd 0.12 里还没有脚本的族
+   * （C0 / U0）。非 null 时 `bundledOpenocdConfig()` 给出模板目录里的绝对路径，
+   * 选 target 时直接用它替代 "target/xxx.cfg"。
+   */
+  readonly bundledTarget: string | null;
   /** CubeMX 固件包名前缀（不含 _V<版本>），例如 STM32Cube_FW_F1；null = 没有/未确认。 */
   readonly firmwarePrefix: string | null;
   /** 资源包 dsh-stm32-assets 里的 SVD 数据目录；null = 资源包还没收该族 SVD。 */
@@ -83,6 +90,8 @@ interface ProfileInit {
   readonly firmware: string | null;
   readonly svd?: string | null;
   readonly caps?: Stm32FamilyCapabilities;
+  /** 插件内置的 target 脚本名（C0 → "stm32c0x"）。 */
+  readonly bundled?: string | null;
   readonly note: string;
 }
 
@@ -92,6 +101,7 @@ function profile(init: ProfileInit): Stm32FamilyProfile {
     line: init.line,
     core: init.core,
     openocdTarget: init.target,
+    bundledTarget: init.bundled ?? null,
     firmwarePrefix: init.firmware,
     assetSvdDir: init.svd ?? null,
     capabilities: init.caps ?? NO_CAPS,
@@ -121,7 +131,7 @@ const NO_SVD = "资源包只有 F1 的 SVD（中断名/寄存器名校验暂不�
  * 用户看不出到底哪一项挡住了他。
  */
 export const CAPABILITY_GAPS: Readonly<Record<keyof Stm32FamilyCapabilities, string>> = {
-  halScaffold: "HAL 建工程（模板/启动文件/链接脚本/设备宏）只按 F1 实现",
+  halScaffold: "HAL 建工程（模板/启动文件/链接脚本/设备宏）只按 14 个单核族实现",
   registerScaffold: "寄存器版模板（CMSIS 头 + 启动文件）目前只有 F1",
   iocPresets: ".ioc 外设预设表目前只有 F1",
   clockPlan: "时钟规划只按 F1 的 RCC/PLL 键实现",
@@ -141,8 +151,8 @@ export function capabilityGap(profile: Stm32FamilyProfile, capability: keyof Stm
  */
 const PROFILES: readonly Stm32FamilyProfile[] = [
   profile({
-    id: "STM32C0", line: "C0", core: "Cortex-M0+", target: null, firmware: "STM32Cube_FW_C0", caps: HAL_CAPS,
-    note: "openocd 0.12 没有 stm32c0x.cfg（C0 是 2023 年后的产品线，脚本还没进 0.12）",
+    id: "STM32C0", line: "C0", core: "Cortex-M0+", target: null, bundled: "stm32c0x", firmware: "STM32Cube_FW_C0", caps: HAL_CAPS,
+    note: "openocd 0.12 没有 stm32c0x.cfg（C0 是 2023 年后的产品线）：插件内置一份适配 0.12 的脚本（templates/openocd/stm32c0x.cfg）",
   }),
   profile({
     id: "STM32F0", line: "F0", core: "Cortex-M0", target: "stm32f0x", firmware: "STM32Cube_FW_F0", caps: HAL_CAPS,
@@ -218,8 +228,8 @@ const PROFILES: readonly Stm32FamilyProfile[] = [
     note: "openocd 0.12 没有 n6 目标脚本（NPU 系列，2024 年后产品）",
   }),
   profile({
-    id: "STM32U0", line: "U0", core: "Cortex-M0+", target: null, firmware: "STM32Cube_FW_U0", caps: HAL_CAPS,
-    note: "openocd 0.12 没有 u0 目标脚本",
+    id: "STM32U0", line: "U0", core: "Cortex-M0+", target: null, bundled: "stm32u0x", firmware: "STM32Cube_FW_U0", caps: HAL_CAPS,
+    note: "openocd 0.12 没有 u0 目标脚本：插件内置一份适配 0.12 的脚本（templates/openocd/stm32u0x.cfg）",
   }),
   profile({
     id: "STM32U3", line: "U3", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_U3",
@@ -318,6 +328,7 @@ export function unknownFamilyProfile(id: string): Stm32FamilyProfile {
     line: "",
     core: "",
     openocdTarget: null,
+    bundledTarget: null,
     firmwarePrefix: null,
     assetSvdDir: null,
     capabilities: NO_CAPS,
@@ -380,11 +391,33 @@ export function debugBudgetOfFamily(profile: Stm32FamilyProfile): CoreDebugBudge
 // ── openocd target 选择 ─────────────────────────────────────────────────────
 
 export interface OpenocdTargetChoice {
-  /** 相对 openocd scripts 目录的 target 配置（"target/stm32f1x.cfg"）；空串表示选不出来。 */
+  /**
+   * 传给 openocd `-f` 的 target 配置：正常是相对 openocd scripts 目录的路径
+   * （"target/stm32f1x.cfg"），插件内置脚本时是**绝对路径**；空串表示选不出来。
+   */
   readonly targetConfig: string;
   readonly note: string;
   /** 非空表示该族无法用内置 target，调用方必须拒绝（不要拿别的族硬连）。 */
   readonly error: string;
+  /** true = targetConfig 是插件自带的脚本（openocd 0.12 没这个族的脚本）。 */
+  readonly bundled: boolean;
+}
+
+/**
+ * 插件内置的 target 脚本绝对路径（C0 → templates/openocd/stm32c0x.cfg）。
+ *
+ * 为什么要内置：openocd 0.12（2023-01 的最后一个正式版）没有 stm32c0x.cfg / stm32u0x.cfg，
+ * 而这两族已经在 14 个单核族的支持范围里。上游 master 版脚本只用了 0.13 才有的
+ * `dap create ... -tap`，把它换成 0.12 认的 `-chain-position` 就能完整加载（adapter/target/flash bank
+ * 全部通过，只有没接探针时 init 会报 CMSIS-DAP CMD_INFO failed）。
+ * 文件放在插件模板目录而不是系统 openocd 目录：升级/卸载 openocd 不会把支持弄丢，
+ * 也不去改用户机器上的 openocd 安装。
+ */
+export function bundledOpenocdConfig(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed === "") return null;
+  const file = fileURLToPath(new URL("../../templates/openocd/" + trimmed + ".cfg", import.meta.url));
+  return existsSync(file) ? file : null;
 }
 
 /**
@@ -399,9 +432,30 @@ export function chooseOpenocdTarget(family: Stm32FamilyProfile | null): OpenocdT
       targetConfig: "target/stm32f1x.cfg",
       note: "工程里没有可读的 .ioc（认不出芯片族），openocd 回退 target/stm32f1x.cfg；换族请在工程里放 openocd.cfg 写死 target",
       error: "",
+      bundled: false,
     };
   }
   if (family.openocdTarget === null) {
+    // 没有官方脚本但有内置脚本（C0 / U0）：用插件自带的那份，而不是拒绝
+    if (family.bundledTarget !== null) {
+      const bundled = bundledOpenocdConfig(family.bundledTarget);
+      if (bundled !== null) {
+        return {
+          targetConfig: bundled,
+          note: family.id + " 的 target 脚本 openocd 0.12 里没有，改用插件内置的 " + bundled,
+          error: "",
+          bundled: true,
+        };
+      }
+      return {
+        targetConfig: "",
+        note: family.note,
+        error:
+          family.id + " 要靠插件内置的 target 脚本烧录/调试，但模板里没有 templates/openocd/" + family.bundledTarget +
+          ".cfg（插件安装不完整）：重新安装插件，或在工程根目录放一份 openocd.cfg 写死 target",
+        bundled: false,
+      };
+    }
     return {
       targetConfig: "",
       note: family.note,
@@ -409,12 +463,14 @@ export function chooseOpenocdTarget(family: Stm32FamilyProfile | null): OpenocdT
         "本机 openocd 没有 " + family.id + " 的 target 脚本（" + family.note + "）：" +
         "请在工程根目录放一份 openocd.cfg 写死 source [find target/xxx.cfg]，或用 openocd 的 -f 显式指定；" +
         "不要拿别的族的 target 硬连（会连不上或读错 flash 布局）",
+      bundled: false,
     };
   }
   return {
     targetConfig: "target/" + family.openocdTarget + ".cfg",
     note: "",
     error: "",
+    bundled: false,
   };
 }
 
