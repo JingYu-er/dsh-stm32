@@ -160,15 +160,36 @@ test("resolveBreakpointBudget：资源包里给了预算就用芯片的（临时
   }
 });
 
-test("resolveBreakpointBudget：资源包里没有预算字段时回退 F1 默认，并说清原因", () => {
+test("resolveBreakpointBudget：资源包里没有预算字段时按内核算（F103 → Cortex-M3 → 6/4），并说清原因", () => {
   const project = iocProject("STM32F103C8T6");
   try {
     const resolution = resolveBreakpointBudget(project, { DSH_STM32_ASSETS: FIXTURE_ASSETS });
-    assert.equal(resolution.source, "f1-default");
+    // 预算数值与老的 F1 默认一致，但来源是内核（FPB/DWT 比较器个数），族/内核变了数值要跟着变。
+    assert.equal(resolution.source, "core");
     assert.deepEqual({ ...resolution.budget }, { code: 6, data: 4 });
+    assert.match(resolution.note, /内核/u);
     assert.match(resolution.note, /没写 breakpoints\/watchpoints/u);
   } finally {
     rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("resolveBreakpointBudget：换内核就换预算（F030 Cortex-M0 → 4/2，H743 Cortex-M7 → 8/4）", () => {
+  const m0 = iocProject("STM32F030C8T6");
+  const m7 = iocProject("STM32H743ZIT6");
+  try {
+    const m0Resolution = resolveBreakpointBudget(m0, { DSH_STM32_ASSETS: FIXTURE_ASSETS });
+    assert.equal(m0Resolution.source, "core");
+    assert.deepEqual({ ...m0Resolution.budget }, { code: 4, data: 2 });
+    assert.match(m0Resolution.note, /Cortex-M0/u);
+
+    const m7Resolution = resolveBreakpointBudget(m7, { DSH_STM32_ASSETS: FIXTURE_ASSETS });
+    assert.equal(m7Resolution.source, "core");
+    assert.deepEqual({ ...m7Resolution.budget }, { code: 8, data: 4 });
+    assert.match(m7Resolution.note, /Cortex-M7/u);
+  } finally {
+    rmSync(m0, { recursive: true, force: true });
+    rmSync(m7, { recursive: true, force: true });
   }
 });
 

@@ -31,7 +31,15 @@ import { CORE_EXCEPTIONS, checkIocRules, extiIrqName } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import { auditIocKeys, iocSchemaCoverage, matchIocKey, renderIocKey } from "../data/ioc-schema.js";
 import type { IocKeyAuditContext } from "../data/ioc-schema.js";
-import { locateCubemxDb, readIpParameterNames, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
+import {
+  hasIpInstance,
+  instanceFamilyName,
+  instancesWithPins,
+  locateCubemxDb,
+  readIpParameterNames,
+  readMcuFacts,
+  resolveDbPinName,
+} from "./cubemx-db.js";
 import { loadSvdForLine, svdLineForChip } from "../data/svd.js";
 import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -39,6 +47,8 @@ import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
 import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
 import { isKnownPin } from "../data/chips.js";
+import { capabilityGap, familyProfileOf, isF1 } from "../data/family.js";
+import type { Stm32FamilyProfile } from "../data/family.js";
 
 export interface PinAddRequest {
   /** 引脚名，例如 PA0、PC13。 */
@@ -642,7 +652,7 @@ function attributeSpecId(name: string): string {
   return id;
 }
 
-function addPin(table: PinTable, request: PinAddRequest): void {
+function addPin(table: PinTable, request: PinAddRequest, profile: Stm32FamilyProfile | null): void {
   const pin = request.pin.trim();
   if (pin === "") {
     table.errors.push("pins 里有空引脚名");
@@ -719,9 +729,19 @@ function addPin(table: PinTable, request: PinAddRequest): void {
   if (exti !== undefined) table.entries.delete(renderIocKey("pin.mode", { pin }));
   if (exti !== undefined && line !== null) {
     enableExtiSharedLine(table, line);
-    // extiIrqName() 已经带 _IRQn 后缀，而 spec 模板是 NVIC.{name}_IRQn → 这里去掉后缀再渲染。
-    const irqKey = renderIocKey("nvic.vector", { name: extiIrqName(line).replace(/_IRQn$/u, "") });
-    if (!table.entries.has(irqKey)) table.entries.set(irqKey, nvicIrqValue(0, 0));
+    // NVIC 向量的名字按内核分档（M0 是 EXTI4_15、M3 是 EXTI9_5/EXTI15_10、M33 是逐线）：
+    // 拿 F1 的分组去写 C0/L0/U5 会得到一个该芯片不存在的向量名，CubeMX 静默丢弃。
+    // 没有向量（Cortex-A 的 MP1/MP2 不走这条模型）时明确告警，不写。
+    const vector = extiIrqName(line, profile);
+    if (vector === "") {
+      table.warnings.push(
+        "EXTI" + String(line) + " 没有写 NVIC 向量：" + (profile === null ? "读不到芯片族" : profile.id + " 不走 NVIC/EXTI 模型") +
+        "，中断不会被使能",
+      );
+    } else {
+      const irqKey = renderIocKey("nvic.vector", { name: vector.replace(/_IRQn$/u, "") });
+      if (!table.entries.has(irqKey)) table.entries.set(irqKey, nvicIrqValue(0, 0));
+    }
     if (pull === "none") {
       table.warnings.push("EXTI 引脚 " + pin + " 没有上/下拉：边沿触发时悬空会乱触发（常见做法是 pull=up 配 falling）");
     }
@@ -732,8 +752,58 @@ function addPin(table: PinTable, request: PinAddRequest): void {
   table.order.push(pin);
 }
 
-/** 确保 Serial Wire 调试口：PA13/PA14 用调试信号，同时清掉 VP_SYS_VS_ND（No_Debug）残留。 */
-function ensureSerialWire(table: PinTable): void {
+/**
+ * 把实例名登记进 Mcu.IP<i>（已有就什么都不做）。
+ *
+ * 真机证据（F4 板级 .ioc 往返）：只写 PA13/PA14 的 Serial_Wire 而不把 SYS 登记进 Mcu.IP<i> 时，
+ * CubeMX 会自己补一条 Mcu.IP2=SYS 并把 Mcu.IPNb 从 2 改成 3 —— 也就是"我们漏了一项"，
+ * 在 ioc_verify 里表现为 Mcu.IPNb 值被改写 + addedKeys 多一个 Mcu.IP2。补上之后往返才干净。
+ */
+function ensureIpInstance(entries: Map<string, string>, name: string): boolean {
+  const slots: Array<{ index: number; value: string }> = [];
+  for (const [key, value] of entries) {
+    const hit = matchIocKey(key);
+    if (hit === null || hit.spec.id !== "mcu.ip_index") continue;
+    slots.push({ index: Number.parseInt(hit.params.index ?? "", 10), value: value.trim() });
+  }
+  if (slots.some((slot) => slot.value.toUpperCase() === name.toUpperCase())) return false;
+  const next = slots.length;
+  entries.set(renderIocKey("mcu.ip_index", { index: next }), name);
+  entries.set(renderIocKey("mcu.ip_nb"), String(next + 1));
+  return true;
+}
+
+/**
+ * 把 DEBUG 实例登记进 `Mcu.IP<i>`（只在**本族 db 里有这个实例**且这次确实用了 `DEBUG_*` 信号时）。
+ *
+ * 真机证据（C0 板级 .ioc 往返，2026-11）：C0 的 db 把调试口单列成一个 IP 实例
+ * （`STM32C031C(4-6)Tx.xml` 里有 `<IP InstanceName="DEBUG" Name="DEBUG"/>`；F1/F4 的 db 里**没有**这个实例）。
+ * 所以只要引脚上有 `PA13.Signal=DEBUG_SWDIO`，CubeMX 回写就会插一条 `Mcu.IP1=DEBUG`（紧跟 CORTEX_M0+`,
+ * 正好是 natural 序）并把 `Mcu.IPNb` 加一。我们不写就永远差这一条：`ioc_verify` 的 `addedKeys` 里挂着它，
+ * `Mcu.IP1..IP4` 还会整排位移，看起来像"5 个键的值被改写"。
+ *
+ * 判据用 db 而不是族 id：db 里没有 DEBUG 实例的族（F1/F4）补了反而多写一个它不认的实例。
+ */
+function ensureDebugInstance(entries: Map<string, string>, facts: CubemxMcuFacts | null): boolean {
+  if (facts === null || !hasIpInstance(facts, "DEBUG")) return false;
+  const usesDebugSignal = [...entries].some(
+    ([key, value]) => key.endsWith(".Signal") && /^DEBUG_/u.test(value.trim()),
+  );
+  if (!usesDebugSignal) return false;
+  return ensureIpInstance(entries, "DEBUG");
+}
+
+/**
+ * 确保 Serial Wire 调试口：PA13/PA14 用调试信号，同时清掉 VP_SYS_VS_ND（No_Debug）残留。
+ *
+ * 脚名与信号名**不能写死 F1 的字面量**（2026-11 实测 C0 板级 .ioc 才发现的跨族 bug）：
+ *   - C0 的 db 脚名是 PA14-BOOT0（不是 PA14）→ 写 PA14 会让 R17 报"同一根脚写了两份"；
+ *   - C0 的调试信号叫 DEBUG_SWDIO / DEBUG_SWCLK，F1 叫 SYS_JTMS-SWDIO / SYS_JTCK-SWCLK
+ *     → 写 F1 的名字会被 CubeMX 丢弃（R13 也会告警"不是这根脚支持的信号"）。
+ * 所以按本机 db 的该脚信号清单挑：优先 F1 的写法，其次 C0 的写法，再按 /SWDIO|JTMS/ 兜；
+ * db 不可用时才回落到 F1 字面量（老行为，此时引脚名本来也走内置别名表）。
+ */
+function ensureSerialWire(table: PinTable, pins: PinNameResolver): void {
   const noDebugPins = table.order.filter((pin) => pin === "VP_SYS_VS_ND");
   for (const pin of noDebugPins) {
     table.order = table.order.filter((item) => item !== pin);
@@ -742,17 +812,36 @@ function ensureSerialWire(table: PinTable): void {
     }
     table.warnings.push("已删除 " + pin + "（No_Debug 会让 CubeMX 生成 __HAL_AFIO_REMAP_SWJ_DISABLE()）");
   }
-  const debugPins: { pin: string; signal: string }[] = [
-    { pin: "PA13", signal: "SYS_JTMS-SWDIO" },
-    { pin: "PA14", signal: "SYS_JTCK-SWCLK" },
+  // 调试口挂在 SYS 实例下：SYS 不在 Mcu.IP<i> 里时 CubeMX 保存会自己补，我们提前补掉（见 ensureIpInstance 注释）。
+  ensureIpInstance(table.entries, "SYS");
+  const facts = pins.facts;
+  // preferred 的顺序就是"想写成什么"的优先级；fallback 是 db 里有别名笔误时的兜底正则。
+  const debugPins: Array<{ logical: string; preferred: readonly string[]; fallback: RegExp }> = [
+    { logical: "PA13", preferred: ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"], fallback: /SWDIO|JTMS/u },
+    { logical: "PA14", preferred: ["SYS_JTCK-SWCLK", "DEBUG_SWCLK"], fallback: /SWCLK|JTCK/u },
   ];
   for (const item of debugPins) {
-    if (!table.order.includes(item.pin)) {
-      table.order.push(item.pin);
-      table.entries.set(renderIocKey("pin.locked", { pin: item.pin }), "true");
+    const pin = facts === null ? item.logical : (resolveDbPinName(facts, item.logical) ?? item.logical);
+    let signal = item.preferred[0] as string;
+    const signals = facts === null ? undefined : facts.pins.get(pin)?.signals;
+    if (signals !== undefined && signals.size > 0) {
+      const chosen =
+        item.preferred.find((name) => signals.has(name)) ??
+        [...signals.keys()].find((name) => item.fallback.test(name));
+      if (chosen === undefined) {
+        table.warnings.push(
+          "db 里 " + pin + " 没有 SWD 调试信号（该脚支持：" + [...signals.keys()].join("、") + "）：按 F1 的 " + signal + " 写入，可能被 CubeMX 丢弃",
+        );
+      } else {
+        signal = chosen;
+      }
     }
-    table.entries.set(renderIocKey("pin.mode", { pin: item.pin }), "Serial_Wire");
-    table.entries.set(renderIocKey("pin.signal", { pin: item.pin }), item.signal);
+    if (!table.order.includes(pin)) {
+      table.order.push(pin);
+      table.entries.set(renderIocKey("pin.locked", { pin }), "true");
+    }
+    table.entries.set(renderIocKey("pin.mode", { pin }), "Serial_Wire");
+    table.entries.set(renderIocKey("pin.signal", { pin }), signal);
   }
 }
 
@@ -1131,7 +1220,7 @@ function enablePeripheral(
  * - 多模式外设的引脚还得表达功能：普通外设（USART）用 `.Mode`，共享信号外设（定时器/ADC）
  *   用 `SH.<pin信号>.<n>=<IP 信号>,<IP 模式>` —— 两者都缺时 CubeMX 静默丢弃整个外设，不报错。
  */
-function validatePeripheralWiring(entries: Map<string, string>, warnings: string[]): void {
+function validatePeripheralWiring(entries: Map<string, string>, warnings: string[], facts: CubemxMcuFacts | null): void {
   let slots = 0;
   const devices = new Set<string>();
   for (const [key, value] of entries) {
@@ -1154,9 +1243,13 @@ function validatePeripheralWiring(entries: Map<string, string>, warnings: string
       pinsByDevice.set(device, list);
     }
   }
+  // db 里"这根芯片的引脚复用中出现过哪些外设族"：内核项（CORTEX_M0+）、板名（NUCLEO-C031C6）
+  // 这些本来就不该有引脚，靠这张表自动排除，而不是再堆一份黑名单（2026-11 C0 实测踩过）。
+  const chipFamilies = facts === null ? null : instancesWithPins(facts);
   for (const device of devices) {
     // 伪外设：没有自己的引脚（DMA/NVIC/RCC/SYS 以及 Cortex 内核项），不按「必须有引脚」校验。
     if (device === "" || device === "NVIC" || device === "RCC" || device === "SYS" || device === "DMA") continue;
+    if (chipFamilies !== null && !chipFamilies.has(instanceFamilyName(device))) continue;
     const pins = pinsByDevice.get(device) ?? [];
     if (pins.length === 0) {
       warnings.push(device + " 在 Mcu.IPn 里，但没有引脚的 .Signal 指向它 → CubeMX 会忽略这个外设");
@@ -1276,31 +1369,65 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const pinTable = readPinTable(after, errors, warnings);
   // 先记下原始引脚表：只有真的变了才重写 Mcu.PinN，顺序没变就一个字节都不碰。
   const originalOrder = [...pinTable.order];
+  // 芯片族先判出来：SVD 中断名校验、时钟规划、外设预设表都按族开闸（画像在 data/family.ts）。
+  // 依据是 .ioc 自己的 Mcu.Family（CubeMX 写死的族）。读不到时 familyProfile 为 null：
+  // 不静默当成 F1 放行，而是按"读不到族"处理——该告警的告警（见下面 peripherals 那段），键照写。
+  const family = (after.get(renderIocKey("mcu.family")) ?? "").trim();
+  const familyProfile = family === "" ? null : familyProfileOf(family);
+  const svdSupported = familyProfile === null || familyProfile.capabilities.svdValidation;
   // SVD 的中断表先准备好：interrupts 参数要拿它校验中断名，R20 也要用（同一个 set 复用，只读一次盘）。
   // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有资源包时 device 为 null，校验跳过。
   let interrupts: ReadonlySet<string> | null = null;
   const cpn = (after.get(renderIocKey("mcu.cpn")) ?? "").trim();
   if (cpn !== "") {
-    const line = svdLineForChip(cpn);
-    const device = line === null ? null : loadSvdForLine(line);
-    if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
+    if (svdSupported) {
+      const line = svdLineForChip(cpn);
+      const device = line === null ? null : loadSvdForLine(line);
+      if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
+    } else {
+      // 资源包里只有 F1 的 SVD：别的族查不到中断名。跳过校验而不是拿 F1 的名字硬比（那样会把对的名字判成错）。
+      notes.push("中断名/寄存器名校验跳过：" + (familyProfile === null ? family : capabilityGap(familyProfile, "svdValidation")));
+    }
   }
-  for (const pin of request.pins ?? []) addPin(pinTable, pin);
-  if (request.serialWire === true) ensureSerialWire(pinTable);
-  const family = (after.get(renderIocKey("mcu.family")) ?? "").trim();
-  if (family === "" && (request.peripherals ?? []).length > 0) {
-    warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
-  }
+  // 引脚名解析器（本机 db）先建出来：Serial Wire 要按该芯片的脚名/信号名写，
+  // 引脚表排序要 Position，外设预设要 db，都靠它。它只读 db，不改 .ioc。
   const pinNames = createPinNameResolver({ mcuName: (after.get(renderIocKey("mcu.name")) ?? "").trim(), family });
   // db 指纹写进报告：任何一条返回路径（包括"没有变化"、失败）都要带上，报 bug 时能一眼看出 db 版本差异。
   empty.dbVersion = pinNames.db?.version ?? "";
   empty.dbRoot = pinNames.db?.root ?? "";
-  if ((request.peripherals ?? []).length > 0) {
-    notes.push(pinNames.describe());
-    const pinWarning = pinNames.warning();
-    if (pinWarning !== "") warnings.push(pinWarning);
+  for (const pin of request.pins ?? []) addPin(pinTable, pin, familyProfile);
+  if (request.serialWire === true) ensureSerialWire(pinTable, pinNames);
+  // 调试口要不要单独占一个 IP 实例由本族 db 决定（C0 有 DEBUG 实例，F1/F4 没有）。
+  if (ensureDebugInstance(pinTable.entries, pinNames.facts)) {
+    notes.push("把 DEBUG 登记进 Mcu.IP<i>：本族 db 把调试口单列成实例 DEBUG，CubeMX 回写时自己会补（C0 实证）");
   }
-  for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, pinNames, notes);
+  if (familyProfile !== null && !isF1(familyProfile) && ((request.pins ?? []).length > 0 || (request.interrupts ?? []).length > 0)) {
+    warnings.push(
+      "引脚/中断的写入规则只在 F1 上做过真机往返（" + familyProfile.id + " 未验证）：键名按本族 db 生成，落地前请用 stm32_ioc_verify 复核",
+    );
+  }
+  if (family === "" && (request.peripherals ?? []).length > 0) {
+    warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
+  }
+  // 预设表是手写的 F1 键表（脚位、参数默认值、DMA 参数白名单全是 F1 实证出来的）：
+  // 换族之后同一外设的脚位/参数名/IP 实例都可能不同，套上去会写出一堆该族不认的键，
+  // 所以非 F1 直接拒绝，让调用方用 pins + entries 手写该族的键（下一步按族从 db 的 RefParameter 生成预设表）。
+  const presetsSupported = familyProfile === null || familyProfile.capabilities.iocPresets;
+  if ((request.peripherals ?? []).length > 0) {
+    if (!presetsSupported) {
+      errors.push(
+        "peripherals 参数已忽略（" + (familyProfile === null ? family : capabilityGap(familyProfile, "iocPresets")) +
+        "）：这一族请用 pins + entries 手写该族的键",
+      );
+    } else {
+      notes.push(pinNames.describe());
+      const pinWarning = pinNames.warning();
+      if (pinWarning !== "") warnings.push(pinWarning);
+    }
+  }
+  if (presetsSupported) {
+    for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, pinNames, notes);
+  }
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，
   // 不带 .Signal）。按 .Signal 过滤会把它从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*
@@ -1351,10 +1478,22 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
 
   // 时钟：.ioc 里的一段键，和 entries 一起算（不单开工具）。复用 after，所以同一调用里的
   // entries（例如 RCC.MCOSource）对时钟规划是可见的；规划出的键也是"候选文件"的一部分。
-  const clockPlan = request.clock === undefined
-    ? planClock(undefined, { entries: after })
-    : planClock(request.clock, { entries: after });
-  if (request.clock === undefined) {
+  // 时钟规划是 F1 专属实现（RCC 的 PLLMUL/APB1・2 分频键名、ADC 14 MHz 上限、SYSCLK 上限），
+  // 别的族键名完全不同（H7 是 PLL1/2/3 + DIVM/N/P/Q，U5 还有 EPOD）——拿 F1 的表去写会直接改坏 .ioc。
+  // 所以非 F1 一律不解析也不写入：请求改动就报错，只读请求就明说"没算"，不编一个数字糊弄人。
+  const clockSupported = familyProfile === null || familyProfile.capabilities.clockPlan;
+  const clockPlan = !clockSupported
+    ? emptyClockPlan((familyProfile === null ? family : capabilityGap(familyProfile, "clockPlan")) + "：clock 参数不会生效")
+    : (request.clock === undefined
+      ? planClock(undefined, { entries: after })
+      : planClock(request.clock, { entries: after }));
+  if (!clockSupported) {
+    if (request.clock === undefined) {
+      notes.push("时钟：" + clockPlan.note);
+    } else {
+      errors.push("时钟：" + clockPlan.note);
+    }
+  } else if (request.clock === undefined) {
     const achieved = clockPlan.achieved;
     notes.push(
       "时钟（只读，未请求改动）：SYSCLK " + formatHz(achieved.sysclkHz) +
@@ -1371,7 +1510,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   }
 
   // 外设接线自洽性（IPNb 条数、外设有没有引脚指向、多模式引脚缺不缺 .Mode）。
-  validatePeripheralWiring(after, warnings);
+  validatePeripheralWiring(after, warnings, pinNames.facts);
 
   // 从 CubeMX 字节码还原出来的离线规则（docs §35）：IPParameters 白名单、DMA 需要 Mcu.IP=DMA、
   // ADC Rank 一致性、NVIC 值 9 段、F1 的 ADC 时钟上限。

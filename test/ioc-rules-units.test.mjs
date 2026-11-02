@@ -408,6 +408,33 @@ test("R23：EXTI 链路齐全就不告警，四个环节各缺一处都要告警
   assert.match(badMode.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /不是合法值/u);
 });
 
+test("R23：EXTI 的 NVIC 向量按内核分档（C0 是 EXTI4_15，M3 才是 EXTI15_10）", () => {
+  const c0Chain = [
+    ["Mcu.Family", "STM32C0"],
+    ["Mcu.PinsNb", "1"],
+    ["Mcu.Pin0", "PA13"],
+    ["PA13.Signal", "GPXTI13"],
+    ["PA13.GPIO_ModeDefaultEXTI", "GPIO_MODE_IT_FALLING"],
+    ["SH.GPXTI13.0", "GPIO_EXTI13"],
+    ["SH.GPXTI13.ConfNb", "1"],
+  ];
+  const nvicValue = "true:0:0:false:false:true:true:true:true";
+
+  // 拿 M3 的分组写 C0：向量名该芯片不存在 → 必须指名要 EXTI4_15。
+  const wrongVector = checkIocRules(entries([...c0Chain, ["NVIC.EXTI15_10_IRQn", nvicValue]]));
+  const messages = wrongVector.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | ");
+  assert.match(messages, /NVIC\.EXTI4_15_IRQn/u);
+
+  // 写对了就一条 R23 都不该有。
+  const ok = checkIocRules(entries([...c0Chain, ["NVIC.EXTI4_15_IRQn", nvicValue]]));
+  assert.equal(ok.warnings.some((item) => item.rule === "R23"), false, JSON.stringify(ok.warnings));
+
+  // 同样的 PA13 在 F1（M3）上仍然是 EXTI15_10。
+  const f1Chain = c0Chain.map(([key, value]) => (key === "Mcu.Family" ? [key, "STM32F1"] : [key, value]));
+  const f1 = checkIocRules(entries([...f1Chain, ["NVIC.EXTI4_15_IRQn", nvicValue]]));
+  assert.match(f1.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /NVIC\.EXTI15_10_IRQn/u);
+});
+
 let failed = 0;
 for (const item of cases) {
   try { item.fn(); console.log("ok   " + item.name); }

@@ -7,14 +7,20 @@
  * 所以这里在设断点之前先把请求和预算对齐：超了就一次说清超了几个、删哪个、换成什么，
  * 而且这一步发生在 spawn openocd 之前（探针不动、不占用）。
  *
- * 预算来源：资源包 device/f1/chips.json 里如果给某颗芯片写了 breakpoints / watchpoints，
- * 就用芯片自己的值（资源仓库以后按型号补值，插件不用改）；没写就按 F1 实测值 6 / 4。
+ * 预算来源（优先级从高到低）：
+ *   1. 资源包 chips.json 里给这颗芯片写的 breakpoints / watchpoints；
+ *   2. 按内核的硬件上限（data/family.ts 的 debugBudgetForCore）：M0/M0+ 4/2、M3/M4 6/4、M7/M33/M55 8/4；
+ *   3. 都没有（没有 .ioc / 认不出族）→ F1 实测值 6 / 4，并在 note 里说清是兜底。
+ *
+ * 为什么不按族写死：比较器个数是**内核**属性（FPB/DWT），同族不同内核会对不上；
+ * 按内核算一次就对，也能覆盖 MPU 之外的所有 STM32。
  */
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { findChipFact } from "../data/device-facts.js";
+import { debugBudgetForCore, readProjectFamily } from "../data/family.js";
 
 /** 一颗芯片能用多少比较器。 */
 export interface BreakpointBudget {
@@ -92,20 +98,36 @@ export function readIocCpn(projectDir: string): string {
 /** 这次预算从哪来（写进报告 notes，别让用户以为 6/4 是插件瞎编的）。 */
 export interface BudgetResolution {
   readonly budget: BreakpointBudget;
-  readonly source: "chips.json" | "f1-default";
+  /** chips.json（按型号）> core（按内核）> f1-default（兜底）。 */
+  readonly source: "chips.json" | "core" | "f1-default";
   readonly chip: string;
   readonly note: string;
 }
 
-/** 工程 → 芯片 → 预算。任何一步失败都退回 F1 默认并说明原因。 */
+/** 工程 → 芯片 → 预算。任何一步失败都退回内核上限（再不行 F1 默认）并说明原因。 */
 export function resolveBreakpointBudget(projectDir: string, env: NodeJS.ProcessEnv = process.env): BudgetResolution {
   const cpn = readIocCpn(projectDir);
-  const fallback = (why: string): BudgetResolution => ({
-    budget: F1_BREAKPOINT_BUDGET,
-    source: "f1-default",
-    chip: cpn,
-    note: "断点预算按 STM32F1 默认 " + String(F1_BREAKPOINT_BUDGET.code) + " 个硬件断点 / " + String(F1_BREAKPOINT_BUDGET.data) + " 个观察点算（" + why + "）",
-  });
+  const family = readProjectFamily(projectDir);
+  // 内核预算：族画像里记的是主内核（db 的 <Core> 首个核心）；MPU（A7/A35）不走比较器模型。
+  const coreBudget = family === null || /cortex-a/i.test(family.core) ? null : debugBudgetForCore(family.core);
+  const fallback = (why: string): BudgetResolution => {
+    if (coreBudget === null) {
+      return {
+        budget: F1_BREAKPOINT_BUDGET,
+        source: "f1-default",
+        chip: cpn,
+        note: "断点预算按 STM32F1 默认 " + String(F1_BREAKPOINT_BUDGET.code) + " 个硬件断点 / "
+          + String(F1_BREAKPOINT_BUDGET.data) + " 个观察点算（" + why + "）",
+      };
+    }
+    return {
+      budget: coreBudget,
+      source: "core",
+      chip: cpn,
+      note: "断点预算按内核 " + (family === null ? "" : family.core) + " 的硬件上限："
+        + String(coreBudget.code) + " 个硬件断点 / " + String(coreBudget.data) + " 个观察点（" + why + "）",
+    };
+  };
   if (cpn === "") return fallback("工程里没找到 .ioc");
   let fact: ReturnType<typeof findChipFact> = null;
   try {

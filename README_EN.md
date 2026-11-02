@@ -1,13 +1,13 @@
 # dsh-stm32
 
-> Hand the whole **STM32F1 family** (F100/101/102/103/105/107) development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc (clocks included) → generate code → build → debug → flash.
+> Hand the whole **STM32 family** (27 families: C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3) development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc (clocks included) → generate code → build → debug → flash. The family is read from the .ioc's `Mcu.Family`: pin names, SWD debug signal names, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint/watchpoint budget all follow the family and its core. Scaffolding, clock planning, .ioc peripheral presets and SVD validation are still implemented for F1 only — other families are refused with a reason instead of silently reusing F1 tables (see [Known limitations](#known-limitations)).
 
 [中文](./README.md) · [Quick start](#quick-start-a-minimal-end-to-end-check-empty-directory-to-a-blinking-led) · [Features](#features) · [Tool reference](#tool-reference) · [Slash commands](#slash-commands) · [Design notes](#design-notes) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [Specification](docs/dsh-stm32-plugin-规格.md)
 
 [![GitHub stars](https://img.shields.io/github/stars/JingYu-er/dsh-stm32?color=4a6cf7)](https://github.com/JingYu-er/dsh-stm32)
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
-[![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#known-limitations)
+[![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.3-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 23 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
@@ -69,7 +69,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 722 offline cases in 42 suites, no board needed
+npm test                            # optional: 736 offline cases in 43 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
@@ -358,7 +358,7 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 | Limitation | Detail | Workaround |
 | --- | --- | --- |
 | Only verified on **Windows** | `stm32_generate` depends on `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`; CubeMX on Linux/macOS is not shaped like that | None yet; flash/debug/register reads may work on Linux with openocd and gdb present, but are untested |
-| **STM32F1 family** only | The part → startup file / device define / linker script maps exist for F1 only (`src/data/stm32f1.ts` + `src/engine/hal-chip.ts`, 14 density grades); the clock tree knows F1 only (HSE 8 MHz, PLL ×2..×16, SYSCLK ≤72 MHz) | Another family needs real repo names plus per-file measured sha256 (`src/data/cmsis-sources.ts`, `src/data/firmware-packages.ts`) and a clock-limit table; the pin table itself can be derived from the local CubeMX `db/mcu/*.xml` (`deriveChipPinTable`) |
+| Deeper capabilities are still **F1-only** | The family profile covers 27 families (`src/data/family.ts`): pin names, SWD debug signals, EXTI vector grouping, openocd target and breakpoint budget all follow the family and its core, and .ioc pin/interrupt/UART/EXTI round-trips are byte-clean on real F4 and C0 board files. But **scaffolding** (startup file / device define / linker script, `src/data/stm32f1.ts` + `src/engine/hal-chip.ts`, 14 density grades), **clock planning** (HSE 8 MHz, PLL ×2..×16, SYSCLK ≤72 MHz), the **.ioc peripheral presets** and **SVD validation** (the asset pack only ships `device/f1/svd`) exist for F1 only | Those capabilities are **refused with a reason** on other families (the profile's `capabilities` are false) — nothing is silently done with F1 tables. Extending them means generating presets and clock limits per family from CubeMX `db/mcu/IP/*_Modes.xml` `<RefParameter>` entries, plus SVD data per family in the asset pack |
 | Default probe is **CMSIS-DAP** | Falls back to cmsis-dap without an `openocd.cfg` | Put `interface/stlink.cfg` into `openocd.cfg` (see above) |
 | Adding a peripheral needs a **manual HAL source entry** | The plugin only relocates CubeMX's `Src/` and `Inc/` (→ `Core/Src`, `Core/Inc`); the `cmake/stm32cubemx/CMakeLists.txt` CubeMX emits is not applied. Enable a timer/UART/ADC and you must add the matching `stm32f1xx_hal_<peripheral>.c` yourself | Edit `STM32_Drivers_Src` in the project's `cmake/stm32cubemx/CMakeLists.txt`, or add a `target_sources` line in `cmake/user/CMakeLists.txt` |
 | Generation/scaffolding needs **CubeMX + the F1 firmware package** | Package version defaults to `STM32Cube_FW_F1_V1.8.7` | Pass another version via `firmwarePackage` |
@@ -388,20 +388,20 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 42 offline suites, 722 cases; no board, CubeMX, or toolchain needed
+npm test                 # 43 offline suites, 736 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **722 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **736 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 
 | Where | What | Size |
 | --- | --- | --- |
-| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 117 files / 550.0 KB packed, 1747.8 KB unpacked; `templates/**` alone is 66.4 KB |
+| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 118 files / 573.1 KB packed, 1816.6 KB unpacked; `templates/**` alone is 66.4 KB |
 | Git only, not packed | `src/**`, `test/**`, `scripts/**`, `docs/diagrams/**` (two interactive HTML pages) | diagrams are 2 MB raw / 891 KB gz; `files` in `package.json` narrows `docs` to `docs/*.md` |
 | Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages; the **device-facts asset pack** (`device/f1/chips.json` with 9 fields, .ioc templates, .ld, SVD — 29 files ≈ 197 KiB for the core profile, 69 files for `full`, which is where the SVDs, startup files and headers live — the plugin ships no chip table, the first run needs one online `stm32_assets refresh` and it is offline afterwards) | manage the caches with `stm32_cache list/verify/purge` and `stm32_assets list/verify/prune` |
 | Rendered on the spot | `.ioc` content (`renderIoc`), `.ld` MEMORY (`renderLinkerScript`), the cmake source list | rendered per part, never stored as a template |

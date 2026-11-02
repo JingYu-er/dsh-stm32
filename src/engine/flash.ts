@@ -9,6 +9,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
+import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
+import type { Stm32FamilyProfile } from "../data/family.js";
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
@@ -182,9 +184,17 @@ export function quoteForDisplay(item: string): string {
   return item.includes('"') ? "'" + item + "'" : '"' + item + '"';
 }
 
-export function defaultConfigs(): { interfaceConfig: string; targetConfig: string } {
-  // 只支持 CMSIS-DAP + STM32F1（规格 §13 已定：探针只 CMSIS-DAP，芯片只 F103C8T6）。
-  return { interfaceConfig: "interface/cmsis-dap.cfg", targetConfig: "target/stm32f1x.cfg" };
+/**
+ * 内置兜底配置：探针只 CMSIS-DAP（规格 §13），target 按芯片族取。
+ *
+ * family 省略/null 时保持历史行为回退 stm32f1x。真正的"按族选 target + 选不出来就拒绝"
+ * 走 chooseOpenocdTarget（data/family.ts）——这里只负责拼相对路径。
+ */
+export function defaultConfigs(
+  family?: Pick<Stm32FamilyProfile, "openocdTarget"> | null,
+): { interfaceConfig: string; targetConfig: string } {
+  const target = family === undefined || family === null ? "stm32f1x" : (family.openocdTarget ?? "stm32f1x");
+  return { interfaceConfig: "interface/cmsis-dap.cfg", targetConfig: "target/" + target + ".cfg" };
 }
 
 export function findProjectConfig(projectDir: string, explicit?: string): string | null {
@@ -312,9 +322,24 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   if (projectConfig !== null) {
     configs.push(toOpenOcdPath(projectConfig));
   } else {
-    const fallback = defaultConfigs();
-    configs.push(request.interfaceConfig ?? fallback.interfaceConfig, request.targetConfig ?? fallback.targetConfig);
+    // 按 .ioc 的 Mcu.Family 选 target：F1 仍是 stm32f1x，换了族不会再拿 F1 的脚本硬连。
+    const family = readProjectFamily(projectDir);
+    const choice = chooseOpenocdTarget(family);
+    if (choice.error !== "") {
+      return {
+        ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
+        durationMs: Date.now() - startedAt, programmed: false, verified: false,
+        probeError: null,
+        errors: [choice.error],
+        message: "没烧：" + (family === null ? "认不出芯片族" : "本机 openocd 没有 " + family.id + " 的 target 脚本"),
+        logTail: "",
+        notes,
+      };
+    }
+    configs.push(request.interfaceConfig ?? "interface/cmsis-dap.cfg", request.targetConfig ?? choice.targetConfig);
     notes.push("工程里没有 openocd 配置文件，回退到 " + configs.join(" + "));
+    if (family !== null) notes.push("芯片族按 .ioc 判定：" + family.id + "（内核 " + family.core + "）");
+    if (choice.note !== "") notes.push(choice.note);
   }
 
   const args: string[] = [openOcd];

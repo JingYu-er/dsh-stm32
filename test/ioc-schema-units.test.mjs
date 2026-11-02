@@ -188,6 +188,12 @@ test("auditIocKeys：六种 verdict 各按上下文判", () => {
     ["inactive-instance"],
     "db 里有这个实例但 Mcu.IPn 没启用",
   );
+  assert.deepEqual(
+    verdicts(["GPIO.groupedBy"], { dbInstances: ["GPIO", "USART1"] }),
+    ["ok"],
+    "GPIO 是伪命名空间：db 里有 IP 但 CubeMX 从不写进 Mcu.IP<i>（504 份板级 .ioc 里 0 次）",
+  );
+  assert.deepEqual(verdicts(["GPIO.groupedBy"], { instances: ["GPIO"] }), ["ok"], "就算真被启用了也放行");
   assert.deepEqual(verdicts(["ProjectManager.ProjectName"]), ["ok"], "已知命名空间放行");
   assert.deepEqual(verdicts(["RIF.Whatever"]), ["unknown-namespace"], "既不是实例也不是引脚");
   assert.deepEqual(verdicts(["Dma.ADC1.0.Instance"]), ["ok"]);

@@ -15,7 +15,8 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
 import { usbDiagnosis } from "./doctor.js";
-import { defaultConfigs, findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
+import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
+import { findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
 import { collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
 import { classifyProbeFailure, firstProblemLine, probeMissingLines, usbNoteFor } from "./probe-error.js";
@@ -264,9 +265,24 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
   if (projectConfig !== null) {
     openOcdArgs.push("-f", toOpenOcdPath(projectConfig));
   } else {
-    const fallback = defaultConfigs();
-    openOcdArgs.push("-f", request.interfaceConfig ?? fallback.interfaceConfig, "-f", request.targetConfig ?? fallback.targetConfig);
-    notes.push("工程里没有 openocd 配置文件，回退到 CMSIS-DAP + stm32f1x");
+    // 按 .ioc 的 Mcu.Family 选 target：换族之后不能再用 F1 的脚本硬连。
+    const family = readProjectFamily(projectDir);
+    const choice = chooseOpenocdTarget(family);
+    if (choice.error !== "") {
+      errors.push(choice.error);
+      return {
+        ...empty,
+        elfPath,
+        message: "没调试：" + (family === null ? "认不出芯片族" : "本机 openocd 没有 " + family.id + " 的 target 脚本"),
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    const interfaceConfig = request.interfaceConfig ?? "interface/cmsis-dap.cfg";
+    const targetConfig = request.targetConfig ?? choice.targetConfig;
+    openOcdArgs.push("-f", interfaceConfig, "-f", targetConfig);
+    notes.push("工程里没有 openocd 配置文件，回退到 " + interfaceConfig + " + " + targetConfig);
+    if (family !== null) notes.push("芯片族按 .ioc 判定：" + family.id + "（内核 " + family.core + "）");
+    if (choice.note !== "") notes.push(choice.note);
   }
   if (request.adapterSpeed !== undefined) openOcdArgs.push("-c", "adapter speed " + String(request.adapterSpeed));
   openOcdArgs.push("-c", "gdb_port " + String(port));

@@ -27,6 +27,33 @@ function writeFakeCubeMxDb(root, mcuName, pins) {
   const mcuXml = '<Mcu Family="STM32F1" Package="LQFP48" RefName="' + mcuName + '">' + "\n" + body + "\n</Mcu>\n";
   writeFileSync(join(root, "db", "mcu", mcuName + ".xml"), mcuXml, "utf8");
 }
+
+/**
+ * 带信号清单的假 db（writeFakeCubeMxDb 的加强版）：pins = [[脚名, [信号名…]], …]。
+ * ips = 本族 db 的外设实例名（写进 <IP InstanceName=…/>）：它决定 hasIpInstance()，
+ * 也就是"这一族有没有 DEBUG/SYS 这类实例"，跟着真实 db 的差异来（C0 有 DEBUG，F1/F4 没有）。
+ */
+function writeFakeCubeMxDbSignals(root, mcuName, pins, ips = []) {
+  mkdirSync(join(root, "db", "mcu"), { recursive: true });
+  writeFileSync(join(root, "db", "package.xml"), '<PackDescription Release="DB.6.0.150"/>' + "\n", "utf8");
+  const body = pins
+    .map(([pin, signals], index) => {
+      const inner = signals
+        .map((signal) => '    <Signal Name="' + signal + '" IOModes="Input,Output"/>')
+        .join("\n");
+      return '  <Pin Name="' + pin + '" Position="' + String(index + 1) + '" Type="I/O">' + "\n" + inner + "\n  </Pin>";
+    })
+    .join("\n");
+  const ipBody = ips
+    .map((name) => '  <IP InstanceName="' + name + '" Name="' + name + '" Version="x_Cube"/>')
+    .join("\n");
+  writeFileSync(
+    join(root, "db", "mcu", mcuName + ".xml"),
+    '<Mcu Family="STM32C0" Package="LQFP48" RefName="' + mcuName + '">' + "\n" + ipBody + "\n" + body + "\n</Mcu>\n",
+    "utf8",
+  );
+}
+
 /** 临时切环境变量跑 fn，跑完还原（这些开关是全局的，不能漏）。 */
 function withEnv(pairs, fn) {
   const saved = {};
@@ -185,6 +212,10 @@ test("serialWire：清掉 No_Debug 遗留并补上 PA13/PA14", () => {
   assert.ok(keys.includes("PA14.Signal"));
   assert.ok(keys.includes("VP_SYS_VS_ND.Mode") && plan.changes.find((c) => c.key === "VP_SYS_VS_ND.Mode")?.after === null);
   assert.equal(plan.summaryAfter?.debug.serialWire, true);
+  // 调试口挂在 SYS 实例下：Mcu.IP<i> 里没有 SYS 时要补一条，否则 CubeMX 保存时会自己加（F4 真机实测）
+  const changeOf = (key) => plan.changes.find((change) => change.key === key);
+  assert.equal(changeOf("Mcu.IP0")?.after, "SYS", "补了 SYS");
+  assert.equal(changeOf("Mcu.IPNb")?.after, "1", "槽位数跟着改");
   const applied = applyIocPlan({ projectDir: TMP, planId: plan.planId });
   assert.equal(applied.ok, true, applied.message);
 });
@@ -905,6 +936,51 @@ test("Mcu.Pin 排序：没有 db 时保持原序（只把虚拟脚挪到最后�
   const expectedTail = beforeOrder.filter((pin) => !pin.startsWith("VP_"));
   assert.deepEqual(order.slice(0, expectedTail.length), expectedTail, "原有脚顺序不能乱");
   assert.equal(order[order.length - 1], "VP_SYS_VS_Systick");
+});
+
+
+test("serialWire 跨族：脚名与调试信号名都按 db 写（C0：PA14-BOOT0 / DEBUG_SWDIO）", () => {
+  rmSync(TMP, { recursive: true, force: true });
+  mkdirSync(TMP, { recursive: true });
+  writeFileSync(join(TMP, "c0.ioc"), [
+    "Mcu.CPN=STM32C031C6T3",
+    "Mcu.Family=STM32C0",
+    "Mcu.Name=STM32C031C(4-6)Tx",
+    "Mcu.PinsNb=1",
+    "Mcu.Pin0=PC13",
+    "PC13.Signal=GPIO_Output",
+    "ProjectManager.TargetToolchain=CMake",
+    "ProjectManager.KeepUserCode=true",
+  ].join("\n"), "utf8");
+  const dbRoot = join(TMP, "fake-cubemx-c0");
+  // C0 的真实写法：PA14 在 db 里叫 PA14-BOOT0，调试信号叫 DEBUG_SWDIO/DEBUG_SWCLK（不是 F1 的 SYS_JTMS-*）。
+  // C0 的 db 把调试口单列成实例 DEBUG（F1/F4 没有）：不补 Mcu.IP<i>=DEBUG，CubeMX 回写时会自己插一条。
+  writeFakeCubeMxDbSignals(
+    dbRoot,
+    "STM32C031C(4-6)Tx",
+    [
+      ["PC13", ["GPIO", "EXTI13"]],
+      ["PA13", ["GPIO", "DEBUG_SWDIO", "USART2_RX"]],
+      ["PA14-BOOT0", ["GPIO", "DEBUG_SWCLK"]],
+    ],
+    ["DEBUG", "SYS"],
+  );
+  const plan = withEnv(
+    { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir: TMP, serialWire: true }),
+  );
+  assert.equal(plan.ok, true, plan.message);
+  const after = (key) => plan.changes.find((change) => change.key === key)?.after;
+  assert.equal(after("PA13.Signal"), "DEBUG_SWDIO");
+  assert.equal(after("PA14-BOOT0.Signal"), "DEBUG_SWCLK");
+  assert.equal(after("PA13.Mode"), "Serial_Wire");
+  // 不能再写逻辑名 PA14（那会和 PA14-BOOT0 撞成"同一根脚写了两份"，C0 真机验收就死在这里）。
+  assert.equal(after("PA14.Signal"), undefined);
+  assert.doesNotMatch(plan.errors.join(" "), /多份/u);
+  // DEBUG 实例：本族 db 有它就补进 Mcu.IP<i>，CubeMX 回写才不会再插一条（C0 真机验收差的就是这条）。
+  const ipSlots = plan.changes.filter((change) => /^Mcu\.IP\d+$/u.test(change.key)).map((change) => change.after);
+  assert.ok(ipSlots.includes("DEBUG"), "Mcu.IP<i> 里要有 DEBUG 实例，实际：" + ipSlots.join(","));
+  assert.ok(ipSlots.includes("SYS"), "Mcu.IP<i> 里要有 SYS 实例，实际：" + ipSlots.join(","));
 });
 
 let failed = 0;

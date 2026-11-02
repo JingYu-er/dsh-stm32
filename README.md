@@ -1,15 +1,15 @@
 # dsh-stm32
 
-> 让 DSH 接管 **STM32F1 全系**（F100/101/102/103/105/107）的整条开发链：探测工具链 → 建工程 → 改 .ioc（含时钟） → 生成代码 → 编译 → 调试 → 烧录。
+> 让 DSH 接管 **STM32 全系列**（27 个族：C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3）的整条开发链：探测工具链 → 建工程 → 改 .ioc（含时钟） → 生成代码 → 编译 → 调试 → 烧录。族画像从 `.ioc` 的 `Mcu.Family` 判定：引脚名、SWD 调试信号名、EXTI 的 NVIC 向量分组、openocd target、硬件断点/观察点预算都随族与内核走；建工程、时钟规划、.ioc 外设预设、SVD 校验这些按族实现的深层能力目前仍只有 F1 跑通 —— 其它族会**明确拒绝并说明原因**，不会悄悄套 F1 的表（见[已知限制](#已知限制)）。
 
-**English:** STM32F1 toolchain (F100/101/102/103/105/107) for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it.
+**English:** STM32 across 27 families (C0 / F0 / F1 / … / WL3) for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it. Pin names, SWD debug signals, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint budget all follow the family and its core; scaffolding, clock planning, .ioc peripheral presets and SVD validation are still F1-only and are refused explicitly elsewhere instead of silently reusing F1 tables.
 
 [English](./README_EN.md) · [快速开始](#快速开始最小验证空目录到灯在闪) · [功能一览](#功能一览) · [工具参考](#工具参考) · [斜杠命令](#斜杠命令) · [设计要点](#设计要点) · [已知限制](#已知限制) · [排错](#排错) · [规格书](docs/dsh-stm32-plugin-规格.md)
 
 [![GitHub stars](https://img.shields.io/github/stars/JingYu-er/dsh-stm32?color=4a6cf7)](https://github.com/JingYu-er/dsh-stm32)
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
-[![MCU](https://img.shields.io/badge/MCU-STM32F1xx-4a6cf7)](#已知限制)
+[![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.3-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 23 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
@@ -70,7 +70,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：497 个离线用例、34 个套件，不需要板子
+npm test                            # 可选：736 个离线用例、43 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
 npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
@@ -361,7 +361,7 @@ source [find target/stm32f1x.cfg]
 | 限制 | 说明 | 有没有办法 |
 | --- | --- | --- |
 | 只在 **Windows** 上验证 | `stm32_generate` 依赖 `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`，Linux/macOS 上的 CubeMX 不是这个形态 | 暂无；烧录/调试/读寄存器在 Linux 上若 openocd 与 gdb 齐全可能可用，但未验证 |
-| 只覆盖 **STM32F1 全系** | 型号 → 启动文件 / 设备宏 / 链接脚本的映射只做了 F1（`src/data/stm32f1.ts` + `src/engine/hal-chip.ts`，14 个容量档）；时钟树也只认 F1（HSE 8 MHz、PLL ×2..×16、SYSCLK ≤72 MHz） | 加其它族要补真实仓库名与逐文件实测 sha256（`src/data/cmsis-sources.ts`、`src/data/firmware-packages.ts`）并补一份时钟上限表；引脚表可由本机 CubeMX `db/mcu/*.xml` 派生（`deriveChipPinTable`） |
+| 深层能力仍只按 **F1** 实现 | 族画像已覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走，`.ioc` 的引脚/中断/串口/EXTI 往返在 F4 与 C0 上真机零 diff；但**建工程**（启动文件 / 设备宏 / 链接脚本，`src/data/stm32f1.ts` + `src/engine/hal-chip.ts`，14 个容量档）、**时钟规划**（HSE 8 MHz、PLL ×2..×16、SYSCLK ≤72 MHz）、**.ioc 外设预设表**、**SVD 校验**（资源包只有 `device/f1/svd`）仍只有 F1 | 这些能力在非 F1 族上会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false），不会悄悄套 F1 表；扩族下一步是按族从 CubeMX `db/mcu/IP/*_Modes.xml` 的 `<RefParameter>` 生成预设与时钟上限，并给资源包补各族的 SVD |
 | 默认探针是 **CMSIS-DAP** | 没有 `openocd.cfg` 时回退 cmsis-dap | 用 `openocd.cfg` 换 `interface/stlink.cfg`（见上） |
 | 新增外设要**手工补 HAL 源** | 插件只落位 CubeMX 的 `Src/` 与 `Inc/`（→ `Core/Src`、`Core/Inc`），CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 不搬；开了定时器/串口/ADC 之后要自己把 `stm32f1xx_hal_<外设>.c` 加进源清单 | 改工程里 `cmake/stm32cubemx/CMakeLists.txt` 的 `STM32_Drivers_Src`，或写进 `cmake/user/CMakeLists.txt` 的 `target_sources` |
 | 生成/建工程需要 **CubeMX + F1 固件包** | 固件包版本默认 `STM32Cube_FW_F1_V1.8.7` | 换版本传 `firmwarePackage` |
@@ -391,20 +391,20 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 42 个离线套件、722 个用例；不需要板子、CubeMX、工具链
+npm test                 # 43 个离线套件、736 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **722 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **736 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 
 | 放哪 | 内容 | 量级 |
 | --- | --- | --- |
-| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 117 个文件 / 550.0 KB，解包 1747.8 KB；其中 `templates/**` 66.4 KB |
+| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 118 个文件 / 573.1 KB，解包 1816.6 KB；其中 `templates/**` 66.4 KB |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
 | 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（`device/f1/chips.json` 9 个字段 + .ioc 模板 + .ld + SVD，core 29 个文件约 197 KiB、full 69 个文件——SVD / startup / headers 都在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |

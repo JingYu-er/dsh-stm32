@@ -1018,6 +1018,13 @@ export function describeIocKey(key: string): string {
  *   - ip 是已知伪命名空间（ProjectManager/CAD/…）→ 放行；
  *   - 三者都不是 → 「疑似拼错」，这是我们唯一能凭空判错的一类。 */
 
+/**
+ * 这些前缀在 db 里是 IP 实例、但 CubeMX 从不把它们登记进 Mcu.IP<i>，键直接挂在伪命名空间下。
+ * 目前只有 GPIO：504 份板级 .ioc 里 Mcu.IPn=GPIO 出现 0 次，GPIO.groupedBy 实测只有
+ * "Group By Peripherals"(110) / "Show All"(8) 两种值。加新前缀前先给语料计数。
+ */
+export const IOC_VIRTUAL_NAMESPACES: ReadonlySet<string> = new Set(["GPIO"]);
+
 export interface IocKeyAuditContext {
   /** Mcu.IP<i> 的值：真正启用的外设实例（USART1、TIM3…）。比较时忽略大小写。 */
   readonly instances?: Iterable<string>;
@@ -1097,6 +1104,13 @@ export function auditIocKeys(
       const ip = (hit.params.ip ?? "").trim();
       const name = hit.params.name ?? "";
       const upper = ip.toUpperCase();
+      // GPIO 是"伪实例"：db 里确实有 IP InstanceName="GPIO"，但 CubeMX 从不把它写进 Mcu.IP<i>
+      // （504 份板级 .ioc 里 Mcu.IPn=GPIO 出现 0 次），它的 <pin>.GPIO_* 走引脚名、GPIO.groupedBy 走面板设置。
+      // 所以必须先判伪命名空间，否则会被判成"有实例但没启用"，把一个合法键报成错误。
+      if (IOC_VIRTUAL_NAMESPACES.has(upper) && !instances.has(upper)) {
+        findings.push({ ...base, verdict: "ok", detail: ip + " 是面板/全局设置用的伪命名空间（CubeMX 不把它列进 Mcu.IP<i>）" });
+        continue;
+      }
       if (instances.has(upper)) {
         const names = context.paramNamesOf?.(upper) ?? null;
         if (names !== null && !parameterNameKnown(name, names)) {

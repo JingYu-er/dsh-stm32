@@ -13,6 +13,8 @@
 
 import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
 import { readIpModeNames, resolveDbPinName } from "./cubemx-db.js";
+import type { Stm32FamilyProfile } from "../data/family.js";
+import { extiVectorNameOf, familyProfileOf } from "../data/family.js";
 
 export interface IocRuleIssue {
   rule: string;
@@ -195,8 +197,12 @@ function checkNvicValues(entries: Map<string, string>, report: IocRuleReport): v
     if (fields.length < 6) {
       report.warnings.push({
         rule: "R3",
+        // 实测（CubeMX 6.15 往返 F4 板级 .ioc）：4 段的旧值不会被"按默认值覆盖"，
+        // 而是被补齐成 9 段、前 N 段语义保留（true:0:0:false → true:0:0:false:false:true:true:true:false）。
+        // 所以这里只提示"会被补齐"，不再吓唬人说值会丢。
         message: "NVIC." + String(match[1]) + " 的值只有 " + String(fields.length) +
-          " 段（应为 Enable:Preempt:Sub:Configurable:System:IrqHandlerGenerated 共 9 段），CubeMX 会按默认值覆盖",
+          " 段（CubeMX 6.x 写 9 段：Enable:Preempt:Sub:Configurable:System:IrqHandlerGenerated…）：CubeMX 会补齐成 9 段，前 " +
+          String(fields.length) + " 段语义保留",
       });
       continue;
     }
@@ -454,6 +460,11 @@ function checkPinModes(entries: Map<string, string>, facts: CubemxMcuFacts, db: 
       continue;
     }
     const instance = instanceFromSignal(item.signal);
+    // SYS 跳过：db 里 SYS 的 Modes.xml 列的是 TIM/TIM1… 这类时基复用，根本没有调试口的模式名，
+    // 拿它校验 <pin>.Mode 必然误报。504 份板级 .ioc 的实测取值是 Serial_Wire(149)/Serial-Wire(44)/
+    // Trace_Asynchronous_SW(33)/Serial-WireDebug(18)/JTAG_5_pins(5)/SYS_WakeUp*(20) —— 全部不在 db 名单里，
+    // 而 CubeMX 自己保存时就是这么写的（F4 板级文件 4→9 段往返实测：PA13.Mode=Serial_Wire 原样保留）。
+    if (instance === "SYS") continue;
     if (instance === "" || db === null || !facts.ips.has(instance)) continue;
     const modes = readIpModeNames(db, facts, instance);
     if (modes.length === 0) continue;
@@ -517,8 +528,16 @@ function checkClockCeiling(entries: Map<string, string>, facts: CubemxMcuFacts, 
  * Cortex-M 内核异常：永远合法，但 SVD 的 <interrupt> 只列"器件外设"中断，内核异常不在里面。
  * 不白名单化会在每份 .ioc 上刷 9 条假警报（真机实测：BusFault/HardFault/PendSV/SysTick… 全被误报）。
  */
-/** EXTI 线号 → 中断向量名：0–4 独占一条线，5–9 与 10–15 各自成组（F1/F0/F3/F4/F7 一致）。 */
-export function extiIrqName(line: number): string {
+/**
+ * EXTI 线号 → 中断向量名（不带 _IRQn）。**分组是按内核定的，不是全族一张表**：
+ *   M3/M4/M7（F1/F4/G4…）→ EXTI0..EXTI4 逐线、EXTI9_5（5-9）、EXTI15_10（10-15）
+ *   M0/M0+（C0/F0/G0/L0…）→ EXTI0_1、EXTI2_3、EXTI4_15
+ *   M33/M55（U5/WBA/L5/H5/N6…）→ 16 条线全部逐线
+ * 表在 data/family.ts 的 extiVectorsOf()（证据：504 份板级 .ioc 的实测分布）。
+ * 不传 profile 时保持老行为（M3 分组），供不了解族的调用方用。
+ */
+export function extiIrqName(line: number, profile?: Stm32FamilyProfile | null): string {
+  if (profile !== undefined) return extiVectorNameOf(line, profile);
   if (line <= 4) return "EXTI" + String(line);
   if (line <= 9) return "EXTI9_5";
   return "EXTI15_10";
@@ -581,7 +600,7 @@ const EXTI_TOKENS = new Set(["GPIO_MODE_IT_RISING", "GPIO_MODE_IT_FALLING", "GPI
  * 真机证据（2026-11-02）：链路齐全时 CubeMX 逐字保留、不补任何键；而 NVIC 那条它**从不自动补**——
  * 缺了 EXTI 边沿照样能触发标志位，但中断服务永远进不去，.ioc 里也看不出来。
  */
-function checkExtiChains(entries: Map<string, string>, report: IocRuleReport): void {
+function checkExtiChains(entries: Map<string, string>, profile: Stm32FamilyProfile | null, report: IocRuleReport): void {
   for (const [key, value] of entries) {
     const match = /^(P[A-Z][0-9]{1,2}(?:-[A-Za-z0-9_]+)?)[.]Signal$/u.exec(key);
     if (match === null) continue;
@@ -609,8 +628,14 @@ function checkExtiChains(entries: Map<string, string>, report: IocRuleReport): v
         message: "缺 SH.GPXTI" + String(line) + ".0=GPIO_EXTI" + String(line) + "（共享信号块）：CubeMX 靠它把 EXTI 归属还原出来",
       });
     }
-    const irq = extiIrqName(line);
-    if (!entries.has("NVIC." + irq + "_IRQn")) {
+    // 该族没有 EXTI 向量表（Cortex-A 的 MP1/MP2）时 extiIrqName 返回空串：不写也告不了警。
+    const irq = extiIrqName(line, profile);
+    if (irq === "") {
+      report.warnings.push({
+        rule: "R23",
+        message: pin + ".Signal=GPXTI" + String(line) + " 但 " + (profile?.id ?? "该芯片") + " 没有 EXTI<线> 的 NVIC 向量（Cortex-A 不走 NVIC/EXTI 模型）",
+      });
+    } else if (!entries.has("NVIC." + irq + "_IRQn")) {
       report.warnings.push({
         rule: "R23",
         message: "有 EXTI" + String(line) + " 却没有 NVIC." + irq + "_IRQn：中断不会使能（CubeMX 不会自动补这一条）",
@@ -635,7 +660,8 @@ export function checkIocRules(entries: Map<string, string>, context: IocRuleCont
   checkModeSignalPairs(entries, report);
   checkIpInstanceKeys(entries, report);
   checkGpioParameterCoverage(entries, report);
-  checkExtiChains(entries, report);
+  // EXTI 的 NVIC 向量分组按内核不同（M0/M3/M33 三档），所以这条规则要族画像。
+  checkExtiChains(entries, family === "" ? null : familyProfileOf(family), report);
   // db 类规则：没有 db 就整体跳过（查不到 ≠ 写错了）。
   const facts = context.facts ?? null;
   if (facts !== null) {

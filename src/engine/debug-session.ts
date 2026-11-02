@@ -40,7 +40,8 @@ import {
   watchState,
 } from "./watch.js";
 import type { WatchEntry, WatchKind } from "./watch.js";
-import { defaultConfigs, findProjectConfig, toOpenOcdPath } from "./flash.js";
+import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
+import { findProjectConfig, toOpenOcdPath } from "./flash.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
 import { waitForListening } from "./debug.js";
@@ -461,8 +462,16 @@ export class DebugSessionManager {
     if (projectConfig !== null) {
       argv.push("-f", toOpenOcdPath(projectConfig));
     } else {
-      const fallback = defaultConfigs();
-      argv.push("-f", fallback.interfaceConfig, "-f", fallback.targetConfig);
+      // 按 .ioc 的 Mcu.Family 选 target（与 stm32_flash / stm32_debug_run 同一套规则）。
+      const family = readProjectFamily(projectDir);
+      const choice = chooseOpenocdTarget(family);
+      if (choice.error !== "") {
+        return emptyReport(
+          [choice.error],
+          "没开会话：" + (family === null ? "认不出芯片族" : "本机 openocd 没有 " + family.id + " 的 target 脚本"),
+        );
+      }
+      argv.push("-f", "interface/cmsis-dap.cfg", "-f", choice.targetConfig);
     }
     if (request.adapterSpeed !== undefined) argv.push("-c", "adapter speed " + String(request.adapterSpeed));
     argv.push("-c", "gdb_port " + String(port));

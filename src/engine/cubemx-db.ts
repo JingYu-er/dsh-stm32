@@ -43,6 +43,21 @@ export interface CubemxMcuFacts {
   packageName: string;
   /** MHz。 */
   frequencyMhz: number;
+  /**
+   * 族（db 的 Family 属性，例如 STM32F1 / STM32L4+）。空串 = 老版本 db 没有这个属性
+   * 或者文件里没写，调用方不要拿它猜型号。
+   */
+  family: string;
+  /** 产品线（db 的 Line 属性，例如 STM32F103）。 */
+  line: string;
+  /** 主内核（&lt;Core&gt;，例如 Arm Cortex-M3；双核器件是 "Arm Cortex-M7/ARM Cortex-M7" 这种）。 */
+  core: string;
+  /** RAM 总量（KiB）。 */
+  ramKb: number;
+  /** Flash 容量档（KiB，可能多档：同一 XML 覆盖多个容量）；空数组 = db 没写。 */
+  flashKb: number[];
+  /** 封装上引脚总数（db 的 IONb）。 */
+  ioNb: number;
   pins: Map<string, CubemxPinFact>;
   ips: Map<string, CubemxIpFact>;
 }
@@ -95,6 +110,18 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
   const packageName = /Package="([^"]+)"/u.exec(attrs)?.[1] ?? "";
   const frequency = Number.parseInt(/<Frequency>(\d+)<\/Frequency>/u.exec(text)?.[1] ?? "", 10);
 
+  // 族/产品线/内核/容量：db 3.0 之后才有，老 db 可能缺；缺就是空串/0，不猜。
+  const family = /Family="([^"]+)"/u.exec(attrs)?.[1] ?? "";
+  const line = /Line="([^"]+)"/u.exec(attrs)?.[1] ?? "";
+  const core = /<Core>([^<]+)<\/Core>/u.exec(text)?.[1]?.trim() ?? "";
+  const ramKb = Number.parseInt(/<Ram>(\d+)<\/Ram>/u.exec(text)?.[1] ?? "", 10);
+  const ioNb = Number.parseInt(/<IONb>(\d+)<\/IONb>/u.exec(text)?.[1] ?? "", 10);
+  const flashKb: number[] = [];
+  for (const flash of text.matchAll(/<Flash>(\d+)<\/Flash>/gu)) {
+    const size = Number.parseInt(flash[1] ?? "", 10);
+    if (Number.isFinite(size) && !flashKb.includes(size)) flashKb.push(size);
+  }
+
   const pins = new Map<string, CubemxPinFact>();
   // 两种写法都要认：自闭合 <Pin ... />（如 BOOT0）与带子节点的 <Pin ...> … </Pin>；
   // 属性顺序不固定（有的 Pin 把 Type 放前面），所以先抓整段属性再取字段。
@@ -133,7 +160,19 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
   }
 
   if (pins.size === 0) return null;
-  return { name, packageName, frequencyMhz: Number.isFinite(frequency) ? frequency : 0, pins, ips };
+  return {
+    name,
+    packageName,
+    frequencyMhz: Number.isFinite(frequency) ? frequency : 0,
+    family,
+    line,
+    core,
+    ramKb: Number.isFinite(ramKb) ? ramKb : 0,
+    flashKb,
+    ioNb: Number.isFinite(ioNb) ? ioNb : 0,
+    pins,
+    ips,
+  };
 }
 
 /** 读某个芯片的 MCU XML。mcuName 就是 .ioc 里的 Mcu.Name，例如 STM32F103C(8-B)Tx。 */
@@ -208,3 +247,40 @@ export function readIpParameterNames(db: CubemxDb, facts: CubemxMcuFacts, instan
   IP_PARAM_CACHE.set(file, unique);
   return [...unique];
 }
+
+/**
+ * 这颗芯片上「真的有引脚」的外设族（USART / TIM / ADC / SPI …）。
+ *
+ * 用途：.ioc 的 Mcu.IPn 里除了真外设，还会出现内核项（CORTEX_M0+）、板名（NUCLEO-C031C6）、
+ * SYS / DEBUG 这类没有引脚的东西。判断「进了 Mcu.IPn 却没有脚指向它 → CubeMX 会忽略」时，
+ * 必须先排除它们——它们本来就不该有脚。db 的 <Pin><Signal Name=…> 是权威来源：
+ * 芯片真实的引脚复用里出现过哪些外设族，就只校验这些族。
+ *
+ * 实测（2026-11，DB.6.0.150）：C0 的 STM32C031C(4-6)Tx.xml 的引脚信号里没有 CORTEX_M0+、
+ * 也没有板名，而 USART2_TX / TIM3_CH1 / ADC1_IN13 都在 → 用它做判据不会误报内核项。
+ */
+export function instancesWithPins(facts: CubemxMcuFacts): Set<string> {
+  const out = new Set<string>();
+  for (const pin of facts.pins.values()) {
+    for (const signal of pin.signals.keys()) {
+      const name = signal.startsWith("S_") ? signal.slice(2) : signal;
+      const head = (name.split("_")[0] ?? "").trim().toUpperCase();
+      if (head === "") continue;
+      // 同时收实例名（USART1）与族名（USART）：调用方拿 Mcu.IPn 里的实例名去比，
+      // 而名字的粒度两边不一定一样（引脚信号里常带实例号：USART1_TX、TIM3_CH1）。
+      out.add(head);
+      const base = head.replace(/[0-9]+$/u, "");
+      if (base !== "") out.add(base);
+      // ADCx_IN1 / DACx_OUT1：共享信号的名字里没有实例号，只有族名 ADCx → 归到 ADC。
+      if (/^ADCX?$/u.test(head)) out.add("ADC");
+      if (/^DACX?$/u.test(head)) out.add("DAC");
+    }
+  }
+  return out;
+}
+
+/** Mcu.IPn 里的实例名 → 族名（USART1 → USART、TIM3 → TIM；不接数字的原样大写）。 */
+export function instanceFamilyName(instanceName: string): string {
+  return instanceName.trim().toUpperCase().replace(/[0-9]+$/u, "");
+}
+

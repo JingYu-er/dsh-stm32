@@ -4184,3 +4184,233 @@ RCC.BogusParam=1      Foo.BarParam=2      PA5.BogusAttr=1
 `node test/run-units.mjs` → **722 pass / 0 fail**（42 个套件）；
 `node scripts/pack-size.mjs` → 包体 **558.2 KB**（上限 1171.9 KB，117 个文件，解包 1772.9 KB），
 模板 66.4 KB，运行时资产 16.4 KB / 7 个。
+
+## 62. 从「只支持 F1」扩到 STM32 全系列（第一步：族画像 + 按族接线）
+
+这一节的起因是一句需求：「现在将单片机种类从 f1 系列扩展到 stm32 全系列」。
+先把「全系列」拆成可验证的东西：**哪些事只用型号就能决定，哪些事必须真的按族算**。
+结论是新增一层**族画像**（`src/data/family.ts`），并让所有族相关的地方从这里取值 —— 而不是把
+F1 的字面量复制 26 份。
+
+### 62.1 为什么是「族画像」而不是「按族补表」
+
+把 F1 的假设按命中数排了一遍（`grep -c` 全 src）：`cmsis-sources.ts` 67 处、`clock-plan.ts` 48、`hal-chip.ts` 32、
+`firmware-packages.ts` 28、`stm32f1.ts` 21、`register-*.ts` 各 20、`ioc-plan.ts` 16、`device-facts.ts` 14…
+也就是说「F1 假设」不是一处开关，而是散在十几个模块里的事实。
+
+同时 CubeMX 的 db（本机 `DB.6.0.150`）已经把**一半**事实给全了，而且是族无关的：
+`db/mcu/` 有 2019 个 MCU xml，根元素直接带族与内核（`<Mcu ClockTree="" DBVersion="V3.0" Family="STM32F1"
+HasPowerPad="false" IOType="" Line="STM32F103" Package="LQFP48" RefName="STM32F103C(8-B)Tx">`），
+另有 `<Core>Arm Cortex-M3</Core>`、`<Frequency>72</Frequency>`、`<Ram>20</Ram>`、`<IONb>37</IONb>`、
+多个 `<Flash>64</Flash>`（容量档）、引脚/信号表、`db/mcu/IP/*_Modes.xml` 的 `<RefParameter DefaultValue=…>`。
+
+所以划分是：
+
+| 事实 | 来源 | 谁负责 |
+| --- | --- | --- |
+| 族 id / line / 内核 / 最高频 / Flash 档 / RAM / 引脚数 / 引脚信号表 / 外设参数默认值 | **CubeMX db**（按型号读） | `src/engine/cubemx-db.ts` 的 `parseMcuXml` / `readMcuFacts` |
+| openocd target 脚本名、固件包前缀、SVD 目录、按内核的硬件断点预算、能力闸门 | **db 里没有** | `src/data/family.ts`（27 条画像） |
+
+`parseMcuXml` 因此扩了 6 个字段（`family` / `line` / `core` / `ramKb` / `flashKb`（去重数组）/ `ioNb`）。
+这个接口只有 `parseMcuXml` 一处构造，加必填字段不会破别处。
+
+### 62.2 27 个族（实测 `db/mcu` 的 2019 个 xml）
+
+| 族 | 型号数 | 内核 | 最高频 | 族 | 型号数 | 内核 | 最高频 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| C0 | 84 | M0+ | 48 | L4+ | 64 | M4 | 120 |
+| F0 | 89 | M0 | 48 | L5 | 32 | M33 | 110 |
+| F1 | 58 | M3 | 72 | MP1 | 84 | A7 | — |
+| F2 | 16 | M3 | 120 | MP2 | 148 | A35 | — |
+| F3 | 53 | M4 | 72 | N6 | 24 | M55 | — |
+| F4 | 116 | M4 | 180 | U0 | 48 | M0+ | 56 |
+| F7 | 90 | M7 | 216 | U3 | 48 | M33 | — |
+| G0 | 98 | M0+ | 64 | U5 | 162 | M33 | 160 |
+| G4 | 118 | M4 | 170 | WB | 22 | M4 | 64 |
+| H5 | 75 | M33 | 250 | WB0 | 10 | M0+ | — |
+| H7 | 175 | M7 | 600 | WBA | 35 | M33 | 100 |
+| L0 | 113 | M0+ | 32 | WL | 17 | M4 | 48 |
+| L1 | 90 | M3 | 32 | WL3 | 18 | M0+ | — |
+| L4 | 129 | M4 | 80 | | | | |
+
+（另有 3 个没有 `Family` 属性的老文件，不进画像表；H5/H7 的 `<Core>` 是双核写法
+`Arm Cortex-M33/ARM Cortex-M33`，C0 写全大写 `ARM Cortex-M0+` —— 所以内核匹配一律用 `/cortex-mXX/i`。）
+
+**型号 → 族**（`familyIdOfPart`）不靠猜前缀字母数：遍历画像表，取「族段最长且族段后紧跟非字母」的那条。
+两个踩过的坑写在注释里：① 早期用 `/^STM32([A-Z]{2}[0-9])/` 直接认不出 `STM32WBA55CG`（三段族）；
+② 比较时**必须比族段长度**（"WBA"）而不是族 id 长度（"STM32WB" 有 8 个字符，会赢过 "WB0"）。
+`STM32L4[PQRS]` 单独判成 `STM32L4+`（L4+ 在 db 里是独立 Family）。
+
+### 62.3 openocd target 矩阵
+
+本机 openocd 0.12.0 的 `share/openocd/scripts/target` 里一共 24 个 stm32 相关 cfg。画像表把
+「哪一族有脚本」钉死，**没有脚本时明确拒绝而不是拿别的族硬连**：
+
+| 有专用脚本 | target | 没有专用脚本 | 处理 |
+| --- | --- | --- | --- |
+| F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H7 / L0 / L1 / L4 / L4+ / L5 / U5 / WB / WL | `target/stm32f0x.cfg` … `target/stm32wlx.cfg`（L4 与 L4+ 都用 `stm32l4x.cfg`） | C0 / H5 / MP2 / N6 / U0 / U3 / WBA / WB0 / WL3 | `openocdTarget: null` |
+
+（H7 的 `stm32h7x.cfg` 之外还有 `stm32h7x_dual_bank.cfg`，画像里只钉单 bank，双 bank 由工程自己的
+`openocd.cfg` 写死 —— 这类判断不该由插件替用户做。MP1 用 `stm32mp15x.cfg`；另有 `stm32x5x_common.cfg`
+只是公共片段，没有 h5x 包装，所以 H5 也归「没有脚本」。）
+
+接线点：`src/engine/flash.ts`、`debug.ts`、`debug-session.ts`、`regs.ts` 原来的 `defaultConfigs()` 改成
+`defaultConfigs(family)`，并且**只在工程里没有自己的 `openocd.cfg` 时**才走这个回退；
+`chooseOpenocdTarget(family)` 返回 `{targetConfig, note, error}`，`error` 非空就整条命令不跑、报告里说清
+「本机 openocd 没有 <族> 的 target 脚本：请在工程根目录放一份 `openocd.cfg` 写死 `source [find target/xxx.cfg]`，
+不要拿别的族的 target 硬连（会连不上或读错 flash 布局）」。工程里没有可读的 `.ioc` 时（认不出族）仍回退
+`target/stm32f1x.cfg` 并在 notes 里说明 —— 这是刻意的向后兼容。
+
+**族从哪来**：`.ioc` 里本来就有 `Mcu.Family`（demo.ioc 的 `Mcu.Family=STM32F1`），`readIocFamilyId()`
+优先读它，没有再退 `Mcu.CPN` 走 `familyIdOfPart`。**不查 db** —— 少一次 2019 文件的定位，也不会因为
+db 版本不同判出不同族。
+
+### 62.4 硬件断点预算按内核，不按族
+
+`src/engine/breakpoints.ts` 原来的三级回退是「资源包 `chips.json` → F1 默认 6/4」。问题是比较器个数是
+**内核属性**（Cortex-M0 只有 4 个 FPB 比较器、DWT 2 个观察点），同族不同内核就会对不上，跨族更是全错。
+现在改成：
+
+| 内核 | 硬件断点 | 观察点 |
+| --- | --- | --- |
+| Cortex-M0 / M0+ | 4 | 2 |
+| Cortex-M3 / M4 | 6 | 4 |
+| Cortex-M7 / M33 / M55 | 8 | 4 |
+| Cortex-A（MP1/MP2） | `null` | `null` |
+
+顺序有讲究：`/cortex-m0/i` → `/cortex-m7|cortex-m33|cortex-m55/i` → `/cortex-m3|cortex-m4/i`。
+**M33 含 "m3" 子串**，第一版把 M33 判成了 6/4，被 `family-units` 抓出来。
+`BudgetResolution.source` 因此多一个 `"core"`，notes 写明「断点预算按内核 <core> 的硬件上限：N 个硬件断点 /
+M 个观察点」。内核为空（认不出族）或 Cortex-A 仍回退 F1 字面量并在 note 里说清为什么算不出。
+
+### 62.5 能力闸门：不支持的参数要**明确拒绝**，不能悄悄用 F1 的表
+
+族画像里 `Stm32FamilyCapabilities` 五个布尔：`halScaffold` / `registerScaffold` / `iocPresets` /
+`clockPlan` / `svdValidation`。现在**只有 F1 五项全 true**，其余 26 族全 false —— 因为模板、启动文件、
+链接脚本、`.ioc` 预设表、时钟上限表、SVD 这些都是按 F1 实现的。
+
+闸门落在 `src/engine/ioc-plan.ts`，每处都用 `capabilityGap(profile, capability)` 拼一句**短**理由
+（早期把整段族 note 拼进 errors，一条报错 300+ 字，用户看不出是哪一项挡住了参数）：
+
+| 不支持的能力 | 行为 |
+| --- | --- |
+| `svdValidation` | 跳过中断名/寄存器名校验，`notes` 说明「中断名/寄存器名校验跳过：<族>：要该族的 SVD，资源包目前只有 F1」 |
+| `iocPresets` | `peripherals` 参数**不执行**：`errors.push`「peripherals 参数已忽略（<族>：.ioc 外设预设表目前只有 F1）：这一族请用 pins + entries 手写该族的键」 |
+| `clockPlan` | 用 `emptyClockPlan()` 顶替，**一个 RCC 键都不写**；只读请求进 `notes`，请求改动进 `errors` |
+| `halScaffold` / `registerScaffold` | 由 `stm32_project_create` / `stm32_generate` 侧拒绝（下一步接线） |
+
+`pins` / `interrupts` 在非 F1 上**放行**，但带一条 warning：「引脚/中断的写入规则只在 F1 上做过真机往返
+（<族> 未验证）：键名按本族 db 生成，落地前请用 `stm32_ioc_verify` 复核」。理由：键名与形状现在都从 db 与
+真值表来，不去卡死比乱猜更安全；但没验证过就必须说出来。
+
+### 62.6 EXTI 的 NVIC 向量按内核分档（C0 逼出来的）
+
+`extiIrqName(line)` 原来是 F1 专用：0–4 → `EXTI<line>`、5–9 → `EXTI9_5`、10–15 → `EXTI15_10`。
+拿 C0 板级文件跑验收时，让它把 `PA0` 配成下降沿，我们写的是 `NVIC.EXTI0_IRQn`，而 C0 只有
+`NVIC.EXTI0_1_IRQn` —— 中断根本不会被使能。
+
+语料统计（`.dsh-stm32/exti-irq-by-family.mjs`，504 份官方板级 `.ioc`）：
+
+| 内核档 | 向量分组 | 实测族 |
+| --- | --- | --- |
+| M0 / M0+ | `EXTI0_1`(0–1) / `EXTI2_3`(2–3) / `EXTI4_15`(4–15) | C0、L0 |
+| M3 / M4 / M7 | `EXTI0`…`EXTI4` 逐线 + `EXTI9_5`(5–9) + `EXTI15_10`(10–15) | F1、F4、G4、L4、WB |
+| M33 / M55 | 逐线 `EXTI0`…`EXTI15` | U5、WBA、N6 |
+| Cortex-A | 空（不走 NVIC/EXTI 模型） | MP1、MP2 |
+
+落成 `ExtiVectorSpec {name, from, to}` + `extiVectorsOf(profile)` + `extiVectorNameOf(line, profile)`；
+`extiIrqName(line, profile?)` 加可选第二参（不传保持老行为，调用点全部显式传）；`R23`（`checkExtiChains`）
+也按画像取向量名，Cortex-A 上改成「<族> 没有 EXTI<线> 的 NVIC 向量」而不是报「缺 NVIC 键」。
+注意判断顺序：M33/M55 必须早于 M3/M4 —— 与 62.4 是同一个坑。
+
+### 62.7 Serial Wire 跨族：脚名与调试信号名都要问 db
+
+`ensureSerialWire` 原来写死 F1 的两个脚：`PA13/SYS_JTMS-SWDIO`、`PA14/SYS_JTCK-SWCLK`。
+C0 的 db 里这不成立：脚名是 `PA14-BOOT0`，信号名是 `DEBUG_SWDIO` / `DEBUG_SWCLK`
+（语料实测 `Signal=DEBUG_SWDIO` **只在 C0 出现**，其余族是 `SYS_JTMS-SWDIO`）。结果 C0 验收直接报
+`[R17] 同一个物理引脚写了多份：PA14-BOOT0、PA14`。
+
+现在：脚名走 `resolveDbPinName(facts, "PA13"/"PA14")`；信号名按「首选清单 → 正则兜底」从
+`facts.pins.get(dbPin).signals` 里挑（SWDIO：`SYS_JTMS-SWDIO` → `DEBUG_SWDIO` → `/SWDIO|JTMS/`；
+SWCLK：`SYS_JTCK-SWCLK` → `DEBUG_SWCLK` → `/SWCLK|JTCK/`）；都没命中就退回 F1 字面量并 warning
+「db 里 <脚> 没有 SWD 调试信号…可能被 CubeMX 丢弃」。没有 db 时行为与以前完全一致。
+`Mode=Serial_Wire` 两族都合法（C0 语料里有 6 份 `DEBUG_SWDIO` + `Mode=Serial_Wire`）。
+
+顺带还修了两个漏写的 IP 实例（都是「CubeMX 回写时自己补了一条，说明我们少写」这一手证据逼出来的）：
+
+- **SYS**（F4 往返）：报文里出现 `Mcu.IP2=SYS` + `Mcu.IPNb` 2→3。开 Serial Wire 时 `SYS` 本来该进外设表
+  → `ensureIpInstance(entries, "SYS")` 无条件补（F1 的 demo.ioc 里本来就有 `Mcu.IP2=SYS`）。
+- **DEBUG**（C0 往返）：C0 的 db 把调试口**单列成一个 IP 实例**（`STM32C031C(4-6)Tx.xml` 里有
+  `<IP InstanceName="DEBUG" Name="DEBUG"/>`，F1/F4 的 db 没有）。所以第一次 C0 验收虽然
+  `plan ok=true`、写进去的键一个没丢，但 `ioc_verify` 的 `addedKeys` 里挂着 `Mcu.IP5`、
+  `changedValues` 有 5 条 `Mcu.IP1..IP4` 整排位移（CubeMX 把 DEBUG 插在 `CORTEX_M0+` 之后，正好是
+  natural 序），`benign=false`。补法是 db 驱动而不是按族写死：`ensureDebugInstance(entries, facts)` 只在
+  **本族 db 有 DEBUG 实例**且这次确实写了 `DEBUG_*` 信号时才补 —— 判据用 db 是因为在 F1/F4 上补反而会
+  多写一个它们不认的实例。补完 C0 的 `addedKeys` / `changedValues` 都空了。
+
+两个实例都走同一个 `ensureIpInstance(entries, name)`：按 `mcu.ip_index` 形状扫槽位（不拼字符串），
+没有就追加并更新 `Mcu.IPNb`；顺序交给后面的 `sortIpSlots`（CubeMX 的 natural 序 + 板名置尾）。
+
+### 62.8 `instancesWithPins`：谁「应该有引脚」要问 db
+
+`validatePeripheralWiring` 有一条自洽检查：「进了 `Mcu.IPn` 却没有引脚的 `.Signal` 指向它」。
+C0 板级文件里 `Mcu.IPn` 含 `CORTEX_M0+` 和板名 `NUCLEO-C031C6`（这两者本来就不该有引脚），
+原来的黑名单只有 `""/NVIC/RCC/SYS/DMA`，于是假阳性两条。
+
+修法是 db 驱动：`instancesWithPins(facts)` 遍历 `facts.pins` 的每个 signal 名，去 `S_` 前缀取第一段
+（`USART1_TX` → `USART1`），**同时收 `USART`** 这一级（`Mcu.IPn` 里写的是实例名还是族名各文件不一，
+第一版只收 `USART1` 就让两条真检查失效了）；`ADCx_IN1`/`DACx_OUT1` 额外收 `ADC`/`DAC`。
+`validatePeripheralWiring` 里 `if (chipFamilies !== null && !chipFamilies.has(instanceFamilyName(device))) continue;`
+—— 内核项、板名自动跳过，而「USART1 在 `Mcu.IPn` 里但没有任何脚指向它」仍然告警。没有 db 时行为不变。
+
+### 62.9 真机验收（CubeMX 6.15.0 无头 / db `DB.6.0.150`）
+
+脚本 `.dsh-stm32/family-verify2.mjs <tag> <src.ioc> <输出脚> <EXTI脚>`，两段式：
+① 先用 CubeMX `config load`+`config save` **原地规范化**源文件（消掉「老版本 .ioc 升级噪声」，
+F4 那份是 MxCube 4.13.0 / DB.4.0.130 的老文件：115 → 153 键，C0：117 → 149 键）；
+② 再 `plan` → `apply` → `ioc_verify`，并把 candidate 与 snapshot **逐键**比对（我们写的键有没有被丢/被改）。
+
+**F4 通过**（`A40_Nucleo_NUCLEO-F401RE_STM32F401RE_Board.ioc`，CPN=`STM32F401RET6`）：
+族判定 `STM32F4 / Cortex-M4 / target/stm32f4x.cfg`、能力全 false；计划 28 个键变化
+（PB0 输出 + PA0-WKUP EXTI 下降沿 + Serial Wire + GPIO.groupedBy）；
+`ioc_verify` **benign=true**（`durationMs=109110`：dropped / addedKeys / removedKeys / changedValues /
+signalRewrites / orderOnly 六桶全空），28 个键逐字保留。闸门同场验过：`clock:{targetHz:84000000}` +
+`peripherals:[{name:"USART1"}]` → `ok=false`，两条短理由，`clockPlan.entries` 为空。
+
+**C0 通过**（`M44_Nucleo_NUCLEO-C031C6_STM32C031C6_Board.ioc`，CPN=`STM32C031C6T3`，
+db 名 `STM32C031C(4-6)Tx`）：族判定 `STM32C0 / Cortex-M0+ / target ""`（本机 openocd 没有 `stm32c0x.cfg`，
+`chooseOpenocdTarget` 返回 error）；`plan ok=true`、31 个键变化，写出 `PA13.Signal=DEBUG_SWDIO`、
+`PA14-BOOT0.Signal=DEBUG_SWCLK`（62.7）、`NVIC.EXTI0_1_IRQn`（62.6）、`Mcu.IP<i>` 里的 `DEBUG`（62.7）；
+`ioc_verify` **benign=true**（`durationMs=108048`，六桶全空），31 个键逐字保留。
+
+这一轮 C0 的教训值得单独记一笔：**`benign=false` 之前的两版都是"我们少写了一条"，不是"CubeMX 乱改"**。
+第一版死在 `PA14-BOOT0`/`PA14` 重复（62.7），第二版死在缺 DEBUG 实例。真机往返的价值就在这：
+`plan ok=true` + 键没丢**不等于**配置对了，只有 CubeMX 回写逐键比对才能看出"差的那一条"。
+
+这两族能跑通的含义要说清：**C0 的 openocd target 为 null 只影响烧录/调试，不影响 `.ioc` 往返**；
+烧录能力与 `.ioc` 能力是两条独立的线。
+
+### 62.10 单测与包体
+
+`test/family-units.test.mjs` 新增 11 例并加入 `test/run-units.mjs` 的 suites 清单（**手写清单，不是 glob**）：
+27 族齐全且只有 F1 五项全 true、`familyIdOfPart` 15 个真实型号（含 `STM32L4R5ZIT6`→`STM32L4+`、
+`STM32WBA55CG`→`STM32WBA`、`STM32WB05KZV6`→`STM32WB0`、`STM32WL30K8V6`→`STM32WL3`）、
+`familyProfileOf("F4")`、9 个无脚本族的 null + note、`debugBudgetForCore` 7 种内核 + 双核写法 + 空串、
+`debugBudgetOfFamily(MP1)=null`、`chooseOpenocdTarget` 四种输入、`readIocFamilyId`/`readProjectFamily`、
+`parseMcuXml` 新字段、`extiVectorsOf` 按内核分档、`instancesWithPins`。
+`breakpoints-units` 加两条（F103→6/4、F030→4/2、H743→8/4），`ioc-rules-units` 加一条（R23 分档），
+`ioc-plan-units` 加一条（C0 的 Serial Wire 按假 db 写 `PA14-BOOT0`/`DEBUG_SWDIO`）。
+
+`node test/run-units.mjs` → **736 pass / 0 fail**（43 个套件）；
+`node scripts/pack-size.mjs` → 包体 **573.1 KB**（上限 1171.9 KB，118 个文件，解包 1816.6 KB），
+模板 66.4 KB，运行时资产 16.4 KB / 7 个。
+
+### 62.11 这一步**没有**做什么（别当成已支持）
+
+- **只有 F1 能建工程**：`stm32_project_create` 的 HAL 路线（模板 / 启动文件 / 链接脚本 / 设备宏）与
+  寄存器路线（`src/data/stm32f1.ts` 14 个容量档）仍是 F1 专用；非 F1 族会明确拒绝，不给半成品工程。
+- **只有 F1 有 `.ioc` 预设表**：`USART1` / `TIM2` / `ADC1` 这些内建预设名是 F1 的表。下一步按族从
+  `db/mcu/IP/*_Modes.xml` 的 `<RefParameter DefaultValue=…>` **生成**（db 里参数默认值是现成的，不必手写）。
+- **只有 F1 有时钟规划**：`clock-plan.ts` 的 RCC/PLL 上限表只覆盖 F1；其它族 `clock` 参数会被拒。
+- **只有 F1 有 SVD**：资源包 `device/f1/svd`，中断名/寄存器名校验扩族要先给资源包加数据。
+- **C0 / H5 / N6 / U0 / U3 / WBA / WB0 / WL3 / MP2 不能烧录**：本机 openocd 0.12 没有对应 target 脚本。
