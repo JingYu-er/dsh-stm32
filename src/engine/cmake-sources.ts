@@ -20,6 +20,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { defineSuffix } from "../data/device-facts.js";
 import { readTextFile } from "./text-file.js";
 
 /** ST 的 CMake 布局里那份「CubeMX 生成」的源清单。 */
@@ -73,9 +74,19 @@ export function startupStem(file: string): string {
   return basename(file).replace(/^startup_/iu, "").replace(/\.s$/iu, "").toLowerCase();
 }
 
-/** stm32f103xb → STM32F103xB（就是 CMSIS 头里那个宏，也是 cmake 源清单里那一行）。 */
+/**
+ * stm32f103xb → STM32F103xB（就是 CMSIS 头里那个宏，也是 cmake 源清单里那一行）。
+ *
+ * 不能简单"大写后把倒数第二个 X 换小写"：那条规则只对 xb/xc/xe 这种「x + 容量字母」成立，
+ * 对 xx 档（startup_stm32f407xx.s）会把 STM32F407xx 写成 **STM32F407xX** → CMSIS 头认不出设备，
+ * 编译期报「Please select first the target STM32F4xx device」。对 cx/rx 这种「按封装分档」的
+ * （startup_stm32f410cx.s → STM32F410Cx）更是大小写相反。尾缀规则统一由 defineSuffix 决定。
+ */
 export function deviceDefineFromStartup(file: string): string {
-  return startupStem(file).toUpperCase().replace(/X(?=.$)/u, "x");
+  const stem = startupStem(file);
+  // 太短的名字没尾缀可拆（例如 startup_stm32.s）：原样大写，别在这里瞎猜。
+  if (stem.length < 8) return stem.toUpperCase();
+  return stem.slice(0, -2).toUpperCase() + defineSuffix(stem.slice(-2));
 }
 
 export interface FamilyTokens {

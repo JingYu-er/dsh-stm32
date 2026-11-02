@@ -90,11 +90,12 @@ test("familyProfileOf：族 id、型号、缩写都认；认不出的族返回�
   assert.equal(familyProfileOf("STM32H743ZIT6").openocdTarget, "stm32h7x");
   assert.equal(familyProfileOf("STM32F103C8T6").capabilities.clockPlan, true);
 
-  // 非 F1：能力全 false（诚实降级），但 target 该有的有。
+  // 非 F1：HAL 建工程已按族实现（增量 1：固件包按族找、启动文件/设备宏/链接脚本从芯片表来），
+  // 但预设表与时钟规划仍然只有 F1 —— 诚实降级的是这两项，不是 halScaffold。
   const f4 = familyProfileOf("STM32F4");
   assert.equal(f4.capabilities.iocPresets, false);
   assert.equal(f4.capabilities.clockPlan, false);
-  assert.equal(f4.capabilities.halScaffold, false);
+  assert.equal(f4.capabilities.halScaffold, true);
   assert.equal(isF1(f4), false);
 
   const unknown = familyProfileOf("STM32ZZ9");

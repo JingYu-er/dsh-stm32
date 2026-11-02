@@ -21,6 +21,8 @@
  */
 
 import { resolveF1Chip, type F1Chip } from "../data/stm32f1.js";
+import { findChipFact, type DeviceFactsChip } from "../data/device-facts.js";
+import { familyIdOfPart, familyProfileOf } from "../data/family.js";
 
 /** HAL 路线不给型号时按蓝丸（STM32F103C8T6）建，与历史行为一致。 */
 export const DEFAULT_HAL_MCU = "STM32F103C8T6";
@@ -80,6 +82,10 @@ export interface HalChipFacts {
   readonly ramBytes: number;
   /** 链接脚本文件名（= deviceId + _FLASH.ld）。 */
   readonly linkerScript: string;
+  /** 族 id（STM32F4 / STM32L0 …）：模板目录、CMSIS 目录、系统文件、SVD 都按它取。 */
+  readonly familyId: string;
+  /** 族段（F4 / L0 / L4+）：拼固件包名与资源包路径用。 */
+  readonly familyLine: string;
   /** 是否还要顺带写旧名 STM32F103XX_FLASH.ld（只有蓝丸 C8T6 需要）。 */
   readonly keepLegacyLinkerScript: boolean;
   /** 需要提醒用户的话（例如 db 里没有分组名、按具体型号名兜底）。 */
@@ -106,6 +112,15 @@ const PART_PATTERN = /^STM32F(\d{3})([A-Z])([0-9A-G])([A-Z])?([0-9])?$/u;
 export function resolveHalChip(input?: string): HalChipResolution {
   const raw = (input ?? "").trim();
   const mcu = raw.length === 0 ? DEFAULT_HAL_MCU : raw.toUpperCase();
+  const familyId = familyIdOfPart(mcu);
+  if (familyId === "") {
+    return {
+      facts: null,
+      reason: "认不出 " + mcu + " 属于哪个 STM32 族：型号要以 STM32 开头并带完整封装后缀，例如 STM32F103C8T6 / STM32G431CBT6 / STM32L071CBT6",
+    };
+  }
+  // F1 走原来那条实测过千万次的路径（手写 RAM 表 + db 分组名），其它族走资源包的芯片表。
+  if (familyId !== "STM32F1") return resolveFamilyHalChip(mcu, familyId);
   const resolved = resolveF1Chip(mcu);
   if (resolved.chip === null) {
     return {
@@ -182,8 +197,62 @@ export function resolveHalChip(input?: string): HalChipResolution {
       flashBytes,
       ramBytes,
       linkerScript: deviceId + "_FLASH.ld",
+      familyId: "STM32F1",
+      familyLine: "F1",
       // 旧名只有蓝丸（C8T6 的 64K Flash / 20K RAM）对得上；别的芯片写旧名 = 一份骗人的内存布局。
       keepLegacyLinkerScript: deviceId === "STM32F103C8Tx" && flashBytes === 64 * 1024 && ramBytes === 20 * 1024,
+      notes,
+    },
+    reason: "",
+  };
+}
+
+/**
+ * 非 F1 族：事实全部来自资源包的 device/<族>/chips.json（每个字段都是生成器在固件包里
+ * existsSync 验过的文件名），插件不再内置任何分组表。
+ *
+ * 为什么不在插件里推名字：F4 的 F410/F412 启动文件按**封装**分档（startup_stm32f410cx.s），
+ * L4+ 的 line 是 4P5 —— 这些规则只要有一族特殊，猜就是错的；让生成器把实测结果写进表里最省事。
+ */
+function resolveFamilyHalChip(mcu: string, familyId: string): HalChipResolution {
+  const profile = familyProfileOf(familyId);
+  const fact: DeviceFactsChip | null = findChipFact(mcu);
+  if (fact === null) {
+    return {
+      facts: null,
+      reason:
+        profile.id + " 的芯片表里没有 " + mcu + "：资源包要含 device/" + profile.line.toLowerCase().replace("+", "") +
+        "/chips.json（先跑 stm32_assets refresh 更新资源包）。芯片表由资源仓库按族从 CubeMX db 与固件包生成，插件不内置",
+    };
+  }
+  const notes: string[] = [];
+  if (fact.flashBytes <= 0 || fact.ramBytes <= 0) {
+    return {
+      facts: null,
+      reason: mcu + " 的 Flash/RAM 在芯片表里是 0（db 里缺 <Flash>/<Ram>）：链接脚本的内存长度不能猜，先在资源仓库补这一档",
+    };
+  }
+  let mcuName = fact.mcuName;
+  if (mcuName === "") {
+    mcuName = fact.deviceId;
+    notes.push("芯片表里没有 db 分组名（Mcu.Name），按具体型号名写 " + fact.deviceId + "（CubeMX 打不开就换同档常见型号）");
+  }
+  return {
+    facts: {
+      mcu,
+      deviceId: fact.deviceId,
+      mcuName,
+      packageName: fact.packageName,
+      pinCount: fact.pinCount,
+      startup: fact.startup,
+      deviceDefine: fact.deviceDefine,
+      deviceHeader: fact.deviceHeader,
+      flashBytes: fact.flashBytes,
+      ramBytes: fact.ramBytes,
+      linkerScript: fact.linkerScript === "" ? fact.deviceId + "_FLASH.ld" : fact.linkerScript,
+      familyId: profile.id,
+      familyLine: profile.line,
+      keepLegacyLinkerScript: false,
       notes,
     },
     reason: "",
@@ -271,6 +340,47 @@ export function pointLinkerFlagAt(text: string, facts: HalChipFacts): string {
     throw new Error("工具链 cmake 文件里找不到 -T …" + LEGACY_LINKER_SCRIPT + "（模板被改过？）");
   }
   return text.split(LEGACY_LINKER_SCRIPT).join(facts.linkerScript);
+}
+
+/**
+ * cmake/stm32cubemx/CMakeLists.txt 按族 + 芯片替换。
+ *
+ * 这份文件里有三类族相关的字面量（都是 ST 的 CubeMX 用 F1 生成的骨架带来的）：
+ *   - 目录名：Drivers/STM32F1xx_HAL_Driver、CMSIS/Device/ST/STM32F1xx、Core/Inc/stm32f1xx_hal_conf.h
+ *   - 设备宏：STM32F103xB（只对 C8T6 成立，别的芯片编不过）
+ *   - 启动文件：startup_stm32f103xb.s
+ * 少了第一步，非 F1 工程会去 include 一个不存在的 STM32F1xx 目录（cmake 不报错、编译期才发现）。
+ * 驱动源清单（STM32_Drivers_Src）故意不在这里改：它是"这个工程真用到哪些模块"的产物，
+ * 由 refreshCubemxCmakeLists 在 CubeMX 生成之后按 hal_conf.h 重算。
+ */
+export function renderCmakeLists(text: string, facts: HalChipFacts): string {
+  const upper = "STM32" + facts.familyLine.replace("+", "") + "xx";
+  const lower = "stm32" + facts.familyLine.replace("+", "").toLowerCase() + "xx";
+  let out = text;
+  // 先换最具体的（设备宏/启动文件），否则 STM32F103xB 会被 "STM32F1xx" 的替换漏掉。
+  out = renderStartupAndDefine(out, facts);
+  out = out.split("STM32F1xx").join(upper);
+  out = out.split("stm32f1xx").join(lower);
+  return out;
+}
+
+/**
+ * openocd.cfg / .vscode/launch.json 里的 target 脚本按族替换（模板里写的是 stm32f1x）。
+ *
+ * 不认识的族返回原文并给 note：宁可让用户看到"还是 F1 的 target"，也不猜一个别的族的脚本
+ * ——连错了不是连不上，是能连上但 flash 布局读错。
+ */
+export function renderOpenocdTarget(text: string, facts: HalChipFacts): { text: string; note: string } {
+  const target = familyProfileOf(facts.familyId).openocdTarget;
+  if (target === null || target === "") {
+    return {
+      text,
+      note:
+        facts.familyId + " 没有 openocd target 脚本（见 stm32_family 报告的 note）：工程里的 openocd.cfg 仍指向 " +
+        "target/stm32f1x.cfg，烧录/调试前请自己改成该族的脚本，或把 transport 改成 hla_swd 走 ST-Link",
+    };
+  }
+  return { text: text.split("target/stm32f1x.cfg").join("target/" + target + ".cfg"), note: "" };
 }
 
 /** cmake/stm32cubemx/CMakeLists.txt 里的设备宏与启动文件名按芯片替换。 */

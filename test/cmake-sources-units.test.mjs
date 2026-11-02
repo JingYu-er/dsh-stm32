@@ -93,6 +93,13 @@ test("deviceDefineFromStartup / familyTokensFromStartup：按文件名反推，�
   assert.equal(deviceDefineFromStartup("startup_stm32f103xe.s"), "STM32F103xE");
   assert.equal(deviceDefineFromStartup("startup_stm32f107xc.s"), "STM32F107xC");
   assert.equal(deviceDefineFromStartup("startup_stm32f100xb.s"), "STM32F100xB");
+  // xx 档：两个 x 都小写（旧实现会写成 STM32F407xX，CMSIS 头直接 #error 认不出设备）
+  assert.equal(deviceDefineFromStartup("startup_stm32f407xx.s"), "STM32F407xx");
+  assert.equal(deviceDefineFromStartup("startup_stm32g431xx.s"), "STM32G431xx");
+  // 按封装分档（F410/F412）：STM32F410Cx —— 与 xb 的大小写方向相反
+  assert.equal(deviceDefineFromStartup("startup_stm32f410cx.s"), "STM32F410Cx");
+  // L4+ 的 line 带字母（4P5），文件名小写但宏里 line 原样大写
+  assert.equal(deviceDefineFromStartup("startup_stm32l4p5xx.s"), "STM32L4P5xx");
   assert.deepEqual(familyTokensFromStartup("startup_stm32f103xb.s"), { token: "stm32f1xx", upper: "STM32F1xx" });
   assert.equal(familyTokensFromStartup("startup_stm32f407vg.s").upper, "STM32F4xx");
   assert.equal(familyTokensFromStartup("startup_nonsense.s"), null);

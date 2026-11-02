@@ -28,12 +28,15 @@ import {
   LEGACY_LINKER_SCRIPT,
   pointLinkerFlagAt,
   renderIoc,
+  renderCmakeLists,
   renderLinkerScript,
+  renderOpenocdTarget,
   renderStartupAndDefine,
   resolveHalChip,
   type HalChipFacts,
 } from "./hal-chip.js";
 import { describeDroppedPlaceholder, detectVscodeFill, fillVscodeTemplate } from "./vscode-config.js";
+import { readLocalManifest } from "./assets.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
 export const SCAFFOLD_PROJECT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -174,11 +177,11 @@ export function cleanupAfterFailure(targetDir: string, targetExistedBefore: bool
  * 用它当判据等于「不是 C8T6 的工程就别想建」。具体型号要哪个启动文件由
  * createProjectScaffold 按芯片查（缺了会列出包里真实带的那些）。
  */
-function isUsableFirmwareRoot(candidate: string): boolean {
+function isUsableFirmwareRoot(candidate: string, deviceLine = "F1"): boolean {
   return (
-    fs.existsSync(path.join(candidate, "Drivers", "STM32F1xx_HAL_Driver")) &&
+    fs.existsSync(path.join(candidate, "Drivers", "STM32" + deviceLine + "xx_HAL_Driver")) &&
     fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Include")) &&
-    fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx", "Source", "Templates", "gcc"))
+    fs.existsSync(path.join(candidate, "Drivers", "CMSIS", "Device", "ST", "STM32" + deviceLine + "xx", "Source", "Templates", "gcc"))
   );
 }
 
@@ -193,6 +196,7 @@ export function resolveFirmwareRoot(
   cubeMxRoots: string[],
   packageName = DEFAULT_FIRMWARE_PACKAGE,
   extraDirs: readonly FirmwareExtraDir[] = [],
+  deviceLine = "F1",
 ): { root?: string; checked: string[] } {
   const checked: string[] = [];
   for (const cubeRoot of cubeMxRoots) {
@@ -200,7 +204,7 @@ export function resolveFirmwareRoot(
     for (const parent of ["Repository", DSH_FIRMWARE_DIR_NAME]) {
       const candidate = path.join(cubeRoot, parent, packageName);
       checked.push(candidate);
-      if (isUsableFirmwareRoot(candidate)) return { root: candidate, checked };
+      if (isUsableFirmwareRoot(candidate, deviceLine)) return { root: candidate, checked };
     }
   }
   for (const extra of extraDirs) {
@@ -208,10 +212,77 @@ export function resolveFirmwareRoot(
     const candidates = path.basename(extra.dir) === packageName ? [extra.dir] : [path.join(extra.dir, packageName)];
     for (const candidate of candidates) {
       checked.push(candidate);
-      if (isUsableFirmwareRoot(candidate)) return { root: candidate, checked };
+      if (isUsableFirmwareRoot(candidate, deviceLine)) return { root: candidate, checked };
     }
   }
   return { checked };
+}
+
+/**
+ * 按族找固件包：STM32Cube_FW_<族>_V<version> 的最高已装版本（官方 Repository 优先，其次 dsh-firmware、再其次下载缓存）。
+ *
+ * 为什么不能沿用 resolveFirmwareRoot 的固定包名：F1 的默认包名是写死的 V1.8.7，而其它族的版本号
+ * 取决于用户装了哪一版；写死任何一个都会在用户装的是别的版本时误报"找不到固件包"。
+ * 显式给了 firmwarePackage 就仍旧按精确名找（用户可强制某个版本）。
+ */
+export function resolveFamilyFirmwareRoot(
+  familyLine: string,
+  cubeMxRoots: string[],
+  extraDirs: readonly FirmwareExtraDir[] = [],
+  explicitPackage = "",
+): { root?: string; packageName: string; checked: string[] } {
+  const deviceLine = familyLine.replace("+", "");
+  const prefix = "STM32Cube_FW_" + deviceLine;
+  if (explicitPackage !== "") {
+    const exact = resolveFirmwareRoot(cubeMxRoots, explicitPackage, extraDirs, deviceLine);
+    return {
+      ...(exact.root === undefined ? {} : { root: exact.root }),
+      packageName: explicitPackage,
+      checked: exact.checked,
+    };
+  }
+  const checked: string[] = [];
+  const parents = cubeMxRoots.flatMap((root) => [path.join(root, "Repository"), path.join(root, DSH_FIRMWARE_DIR_NAME)]);
+  parents.push(...extraDirs.map((extra) => extra.dir));
+  const pattern = new RegExp("^" + prefix + "_V(\\d+)\\.(\\d+)\\.(\\d+)$", "u");
+  const found: Array<{ root: string; packageName: string; version: readonly number[] }> = [];
+  for (const parent of parents) {
+    checked.push(parent);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(parent);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const match = pattern.exec(name);
+      if (match === null) continue;
+      const candidate = path.join(parent, name);
+      if (!isUsableFirmwareRoot(candidate, deviceLine)) continue;
+      found.push({ root: candidate, packageName: name, version: [Number(match[1]), Number(match[2]), Number(match[3])] });
+    }
+  }
+  found.sort((left, right) => left.version[0]! - right.version[0]! || left.version[1]! - right.version[1]! || left.version[2]! - right.version[2]!);
+  const best = found.pop();
+  if (best === undefined) return { packageName: prefix, checked };
+  return { root: best.root, packageName: best.packageName, checked };
+}
+
+/**
+ * 非 F1 族的 .ioc 模板：资源包里的 ioc/family/<族>.ioc（CubeMX 6.15 无头 config save 出来的认证配置）。
+ *
+ * 为什么不能套 F1 的模板：.ioc 的时钟树/IP 列表是逐族的（RCC 键名、PLL 参数、Mcu.IP 清单全不同），
+ * 拿 F1 的骨架改成 F4 的型号，CubeMX 打开就会报配置不一致。
+ */
+export function assetsFamilyIocText(familyLine: string): string | null {
+  const state = readLocalManifest();
+  if (state.versionDir === "") return null;
+  const file = path.join(state.versionDir, "ioc", "family", familyLine.toUpperCase() + ".ioc");
+  try {
+    return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface TargetPreflightRequest {
@@ -315,7 +386,12 @@ function templateTargets(tpl: string, projectName: string): Map<string, string> 
 
 /** 被模板/固件包直接覆盖的工程文件（Drivers/ 整棵树不在内：那是 ST 源码，不是用户文件）。 */
 function overwriteTargetsFor(writtenRels: readonly string[], facts: HalChipFacts): string[] {
-  return [...writtenRels, facts.startup, "Core/Src/system_stm32f1xx.c", facts.linkerScript];
+  return [...writtenRels, facts.startup, systemFileRel(facts), facts.linkerScript];
+}
+
+/** 固件包里的系统文件在本工程里的相对路径（F1 → Core/Src/system_stm32f1xx.c）。 */
+function systemFileRel(facts: HalChipFacts): string {
+  return "Core/Src/system_stm32" + facts.familyLine.replace("+", "").toLowerCase() + "xx.c";
 }
 
 /** 备份说明（写进 warnings，卡片上第一眼就能看到原件在哪）。 */
@@ -331,7 +407,6 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   const startedAt = Date.now();
   const targetDir = path.resolve(request.targetDir);
   const projectName = request.projectName ?? path.basename(targetDir);
-  const firmwarePackage = request.firmwarePackage ?? DEFAULT_FIRMWARE_PACKAGE;
   // 芯片事实先算出来：连失败报告都要说清"本来是按哪款芯片建"。
   const chip = resolveHalChip(request.mcu);
   const facts = chip.facts;
@@ -362,17 +437,23 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   const tpl = templateDir();
   if (!fs.existsSync(tpl)) return fail("插件模板目录缺失：" + tpl + "（重新安装插件）");
 
-  const firmware = resolveFirmwareRoot(request.cubeMxRoots ?? [], firmwarePackage, firmwareExtraDirs());
+  // 固件包按族找（F1 的默认版本仍是 V1.8.7；其它族取本机已装的最高版本，用户也可显式指定包名）。
+  // F1 不给包名时仍按历史默认（V1.8.7）：同一台机器上装了 1.8.4/1.8.5 时，"最高版本"会让老工程换基线。
+  const explicitPackage = request.firmwarePackage ?? (facts.familyLine === "F1" ? DEFAULT_FIRMWARE_PACKAGE : "");
+  const firmware = resolveFamilyFirmwareRoot(facts.familyLine, request.cubeMxRoots ?? [], firmwareExtraDirs(), explicitPackage);
+  const firmwarePackage = firmware.packageName;
   if (firmware.root === undefined) {
+    // 显式给了包名就报那个名字；没给就说明找的是该族任意版本（_V*）。
+    const wanted = explicitPackage === "" ? firmwarePackage + "_V*" : firmwarePackage;
     return fail(
-      "找不到 CubeMX 固件包 " + firmwarePackage + "（找过：" + firmware.checked.join("；") + "）。" +
-        "固件包是 Drivers/ 与 startup 的唯一合法来源，插件不内嵌 ST 代码。",
+      "找不到 " + facts.familyId + " 的 CubeMX 固件包 " + wanted + "（找过：" + firmware.checked.join("；") + "）。" +
+        "固件包是 Drivers/ 与 startup 的唯一合法来源，插件不内嵌 ST 代码；先用 CubeMX 的包管理器装这个族的固件包。",
     );
   }
 
   // 2) 固件包里必须真有这款芯片的启动文件与设备头：认不出就停在这里，别建出个编译不过的工程
   //    （startup 是 copy 进工程的，设备头随 Drivers/ 整树拷过来，所以只校验存在性）。
-  const deviceDir = path.join(firmware.root, "Drivers", "CMSIS", "Device", "ST", "STM32F1xx");
+  const deviceDir = path.join(firmware.root, "Drivers", "CMSIS", "Device", "ST", "STM32" + facts.familyLine.replace("+", "") + "xx");
   const templatesDir = path.join(deviceDir, "Source", "Templates");
   const gccDir = path.join(templatesDir, "gcc");
   const startupSource = path.join(gccDir, facts.startup);
@@ -393,19 +474,34 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     );
   }
 
+  // 非 F1 族的 .ioc 模板来自资源包（逐族的时钟树 / Mcu.IP 清单 / RCC 键名）；没有就拒绝，
+  // 绝不拿 F1 的骨架改个型号名——CubeMX 打开会报配置不一致（那是"看起来建成了但打不开"的工程）。
+  let familyIocText: string | null = null;
+  if (facts.familyLine !== "F1") {
+    familyIocText = assetsFamilyIocText(facts.familyLine);
+    if (familyIocText === null) {
+      return fail(
+        "资源包里没有 " + facts.familyLine + " 的 .ioc 模板（ioc/family/" + facts.familyLine.toUpperCase() + ".ioc）：" +
+          "先跑 stm32_assets refresh 更新资源包；F1 之外的族不能套 F1 的模板（时钟树与外设清单逐族不同）。",
+      );
+    }
+  }
+
   // 3) 模板全部读进内存并按芯片渲染好——这一步一个字节都不写：
   //    渲染失败只可能是模板被改过，宁可在动手前拒绝，也不留下一半 C8T6 一半新芯片的工程。
   const vscodeFill = detectVscodeFill(request.binDirs ?? []);
   const droppedVscode = new Set<string>();
   const written: Array<{ rel: string; text: string }> = [];
   let linkerScriptText = "";
+  let openocdNote = "";
   try {
     // 链接脚本按芯片渲染；模板里那份（C8T6 的 64K/20K）只作渲染源 + 蓝丸的兼容副本。
     linkerScriptText = renderLinkerScript(fs.readFileSync(path.join(tpl, LEGACY_LINKER_SCRIPT), "utf8"), facts);
     for (const [source, destRel] of templateTargets(tpl, projectName)) {
       // 旧名的链接脚本只在蓝丸上留一份：别的芯片写旧名 = 一份骗人的内存布局。
       if (destRel === LEGACY_LINKER_SCRIPT && !facts.keepLegacyLinkerScript) continue;
-      let text = fs.readFileSync(source, "utf8");
+      // .ioc 用族模板（非 F1）或插件模板（F1）；其余文件仍从模板目录读。
+      let text = destRel === projectName + ".ioc" && familyIocText !== null ? familyIocText : fs.readFileSync(source, "utf8");
       if (destRel !== ".gitignore" && destRel !== LEGACY_LINKER_SCRIPT) {
         text = text.split("__PROJECT_NAME__").join(projectName);
       }
@@ -413,7 +509,13 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
       if (destRel === "cmake/gcc-arm-none-eabi.cmake" || destRel === "cmake/starm-clang.cmake") {
         text = pointLinkerFlagAt(text, facts);
       }
-      if (destRel === "cmake/stm32cubemx/CMakeLists.txt") text = renderStartupAndDefine(text, facts);
+      // Cmake 与 openocd 配置里的族相关字面量（STM32F1xx / stm32f1x）都按芯片换掉。
+      if (destRel === "cmake/stm32cubemx/CMakeLists.txt") text = renderCmakeLists(text, facts);
+      if (destRel === "openocd.cfg" || destRel === ".vscode/launch.json") {
+        const rendered = renderOpenocdTarget(text, facts);
+        text = rendered.text;
+        if (rendered.note !== "") openocdNote = rendered.note;
+      }
       if (destRel.startsWith(".vscode/")) {
         const filled = fillVscodeTemplate(text, vscodeFill);
         text = filled.text;
@@ -464,7 +566,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     // 2) 固件包：Drivers 全量 + 本芯片的 startup + system（与 GUI 新工程逐字节一致）
     driverFiles = copyTreeLong(path.join(firmware.root, "Drivers"), path.join(targetDir, "Drivers"), DRIVER_SKIP_PREFIXES, createdDirs);
     copyFileLong(startupSource, path.join(targetDir, facts.startup));
-    copyFileLong(path.join(templatesDir, "system_stm32f1xx.c"), path.join(targetDir, "Core", "Src", "system_stm32f1xx.c"));
+    copyFileLong(path.join(templatesDir, path.basename(systemFileRel(facts))), path.join(targetDir, ...systemFileRel(facts).split("/")));
   } catch (error) {
     const cleanup = cleanupAfterFailure(targetDir, targetExistedBefore, createdDirs);
     return fail(
@@ -491,6 +593,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     );
   }
   for (const token of droppedVscode) warnings.push(describeDroppedPlaceholder(token));
+  if (openocdNote !== "") warnings.push(openocdNote);
   warnings.push(
     "没有生成 .mxproject：那是 CubeMX GUI 的工程元数据，插件不伪造；用 GUI 打开并生成一次即可补上。",
     "Core/ 下的 main.c 等还没生成：接着调 stm32_generate（3–4 分钟，需要 CubeMX 全权限）。",

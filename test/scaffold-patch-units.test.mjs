@@ -492,7 +492,9 @@ test("B15 hal 路线不再要 CubeMX 启动器：缺 CubeMX 时报「找不到�
   assert.equal(value.report.ok, false);
   // 拷 CMake 文件 / Drivers 不需要 STM32CubeMX.exe 与它的 JRE，所以门禁不该以 generate 能力拦人；
   // 真正缺的是固件包，由 scaffold 自己报（并列出找过的路径）。
-  assert.match(value.message, /找不到 CubeMX 固件包/u, value.message);
+  // 报错文案带族名（F1 之外要能一眼看出缺哪个族的包），所以别再用老的字面量锚
+  assert.match(value.message, /找不到 .*CubeMX 固件包/u, value.message);
+  assert.match(value.message, /STM32Cube_FW_F1_V1\.8\.7/u, "显式包名要原样报出来（不加 _V*）：" + value.message);
   assert.ok(!value.message.includes("缺 STM32CubeMX"), "拷文件不需要 CubeMX 启动器：" + value.message);
   assert.ok(!fs.existsSync(path.join(dir, "CMakeLists.txt")), "失败时不该留下半成品");
   fs.rmSync(dir, { recursive: true, force: true });

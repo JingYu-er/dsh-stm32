@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "family": "STM32F4",
+  "generatedBy": "scripts/build-assets.mjs",
+  "source": "夹具：从 dsh-stm32-assets device/f4/chips.json 摘了 4 颗（单测只验读取与命名，不追求覆盖全族）",
+  "count": 4,
+  "notes": [
+    "夹具不是完整族表：只留 4 颗真实 CPN（407VGT6 / 410CBT6 按封装分档 / 401CCU6 按容量分档 / 411CEU6）。",
+    "字段与资源仓库生成器一致：启动文件、设备头、设备宏都由生成器在固件包上 existsSync 验过。"
+  ],
+  "chips": [
+    {
+      "cpn": "STM32F401CCU6",
+      "line": "401",
+      "group": "xc",
+      "packageName": "UFQFPN48",
+      "pinCount": 48,
+      "flashBytes": 262144,
+      "ramBytes": 65536,
+      "deviceId": "STM32F401CCUx",
+      "mcuName": "STM32F401C(B-C)Ux",
+      "startup": "startup_stm32f401xc.s",
+      "deviceHeader": "stm32f401xc.h",
+      "deviceDefine": "STM32F401xC"
+    },
+    {
+      "cpn": "STM32F407VGT6",
+      "line": "407",
+      "group": "xx",
+      "packageName": "LQFP100",
+      "pinCount": 100,
+      "flashBytes": 1048576,
+      "ramBytes": 131072,
+      "deviceId": "STM32F407VGTx",
+      "mcuName": "STM32F407V(E-G)Tx",
+      "startup": "startup_stm32f407xx.s",
+      "deviceHeader": "stm32f407xx.h",
+      "deviceDefine": "STM32F407xx"
+    },
+    {
+      "cpn": "STM32F410CBT6",
+      "line": "410",
+      "group": "cx",
+      "packageName": "LQFP48",
+      "pinCount": 48,
+      "flashBytes": 131072,
+      "ramBytes": 32768,
+      "deviceId": "STM32F410CBTx",
+      "mcuName": "STM32F410C(8-B)Tx",
+      "startup": "startup_stm32f410cx.s",
+      "deviceHeader": "stm32f410cx.h",
+      "deviceDefine": "STM32F410Cx"
+    },
+    {
+      "cpn": "STM32F411CEU6",
+      "line": "411",
+      "group": "xe",
+      "packageName": "UFQFPN48",
+      "pinCount": 48,
+      "flashBytes": 524288,
+      "ramBytes": 131072,
+      "deviceId": "STM32F411CEUx",
+      "mcuName": "STM32F411C(C-E)Ux",
+      "startup": "startup_stm32f411xe.s",
+      "deviceHeader": "stm32f411xe.h",
+      "deviceDefine": "STM32F411xE"
+    }
+  ]
+}

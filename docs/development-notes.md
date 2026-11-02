@@ -4411,10 +4411,154 @@ db 名 `STM32C031C(4-6)Tx`）：族判定 `STM32C0 / Cortex-M0+ / target ""`（�
 
 ### 62.11 这一步**没有**做什么（别当成已支持）
 
-- **只有 F1 能建工程**：`stm32_project_create` 的 HAL 路线（模板 / 启动文件 / 链接脚本 / 设备宏）与
+- **只有 F1 能建工程**（§63 起 HAL 路线已扩到 14 个单核族，仍只有 F1 的是寄存器路线）：`stm32_project_create` 的 HAL 路线（模板 / 启动文件 / 链接脚本 / 设备宏）与
   寄存器路线（`src/data/stm32f1.ts` 14 个容量档）仍是 F1 专用；非 F1 族会明确拒绝，不给半成品工程。
 - **只有 F1 有 `.ioc` 预设表**：`USART1` / `TIM2` / `ADC1` 这些内建预设名是 F1 的表。下一步按族从
   `db/mcu/IP/*_Modes.xml` 的 `<RefParameter DefaultValue=…>` **生成**（db 里参数默认值是现成的，不必手写）。
 - **只有 F1 有时钟规划**：`clock-plan.ts` 的 RCC/PLL 上限表只覆盖 F1；其它族 `clock` 参数会被拒。
 - **只有 F1 有 SVD**：资源包 `device/f1/svd`，中断名/寄存器名校验扩族要先给资源包加数据。
 - **C0 / H5 / N6 / U0 / U3 / WBA / WB0 / WL3 / MP2 不能烧录**：本机 openocd 0.12 没有对应 target 脚本。
+
+## 63. 全系列第二步：HAL 建工程按族实现（14 个单核族）
+
+### 63.1 先把范围钉死
+
+用户定的范围是「**14 个单核族**：C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / L0 / L1 / L4 / L4+ / U0，先不包含 H7、
+WB0、WL3」，双核（WB/WL）、M33/M55（H5/L5/U3/U5/N6/WBA）、MPU（MP1/MP2）一律**明确拒绝**。
+拒绝这件事本身要有代价可控：族画像（`src/data/family.ts`）已经给了 `capabilities` 闸门，这一步只是把
+`halScaffold` 从「只有 F1 为 true」改成「14 个单核族为 true」，其余四项（registerScaffold / iocPresets /
+clockPlan / svdValidation）继续留在 F1 —— 一步只开一条线，别的线照旧拒绝，不会出现「看着支持其实半截」的族。
+
+### 63.2 芯片事实改成资源包按族发文件
+
+原来是 `device/f1/chips.json` 一个文件 + 插件里手写 F1 的分组名表。这一步的做法是：**资源仓库按族生成
+`device/<族>/chips.json`**（`dsh-stm32-assets/scripts/family-assets.mjs`），插件只负责读。理由有三条：
+
+1. 启动文件/设备头/设备宏不是「按族一条规则」，而是「按容量档 / 按封装档 / 按 line」的笛卡尔积。
+   F410/F412 的启动文件按**封装**分档（`startup_stm32f410cx.s`），F401/F411 按**容量**分档
+   （`startup_stm32f401xc.s` / `startup_stm32f411xe.s`），L4+ 的 line 直接带字母（`4P5`）。
+   这些规则只要有一族特殊，插件里「猜」就是错的 —— 让生成器在**固件包上 existsSync 验过**再写进表里，
+   插件读到的每个文件名都真的存在。
+2. 装了什么族一目了然：某族的 chips.json 不在，就是没装这个族的资源，插件给「先 stm32_assets refresh」，
+   而不是拿一个大而全的文件假装全支持。
+3. 内存字段只有一个来源：非 F1 族的官方固件包**不带 gcc 链接脚本**，RAM 只能取 CubeMX db 的 `<Ram>`；
+   生成器把这条写进 chips.json 的 notes，插件不再自己算。
+
+命名规则两侧必须逐字一致（`scripts/family-assets.mjs` 的 `namingOf` 与插件 `src/data/device-facts.ts` 的
+`namingFrom`）：族字母取自型号（`STM32F407VGTx` → F），**line 与 group 拼进文件名时全小写**
+（`startup_stm32l4p5xx.s`），设备宏里 line 原样大写、尾缀按 `defineSuffix`：
+`xx → xx`（`STM32F407xx`）、`xb → xB`（`STM32F103xB`）、`cx → Cx`（`STM32F410Cx`）。
+
+### 63.3 型号解析按族分发，F1 的老路径一个字节都不动
+
+`resolveHalChip()` 先 `familyIdOfPart()` 判族，然后分两条：
+
+- **F1** 继续走 `resolveF1Chip()`（手写 RAM 表 + db 分组名，蓝丸 C8T6 还留旧名链接脚本兼容副本）——
+  老行为零变化，`hal-route-units` 里那些 F1 断言一个都没改。
+- **非 F1** 走新的 `resolveFamilyHalChip()`：全部字段来自 chips.json；`flashBytes/ramBytes` 为 0 直接拒绝
+  （链接脚本的内存长度不能猜）；`mcuName` 缺失时按具体型号名写并加一条 note。
+
+`HalChipFacts` 加了两条字段 `familyId` / `familyLine`：以后所有「按族取东西」的地方（固件包、CMSIS 目录、
+system 文件、cmake 目录名、openocd target、SVD）都从这两条派生，不再各自正则。
+
+读文件也按族分了：`loadFamilyDeviceFacts(familyId, env)` 按 `familyFactsRelOf()` 拼路径
+（`STM32L4+ → device/l4/chips.json`），缓存从「一个全局 cache」改成「按文件路径的 Map」，否则装了 F4 再查 F1
+会互相顶掉。
+
+### 63.4 模板参数化：三处 F1 字面量都按族替换
+
+脚手架模板 `templates/scaffold/` 是 F1 工程的快照，里面有三种 F1 痕迹，过去对非 F1 族是直接拒绝：
+
+| F1 痕迹 | 出现在 | 这一步怎么处理 |
+| --- | --- | --- |
+| `STM32F1xx` / `stm32f1xx`（CMSIS 目录、HAL 目录、hal_conf 名） | `cmake/stm32cubemx/CMakeLists.txt` | `renderCmakeLists()`：先换设备宏/启动文件，再按族换目录名 |
+| `STM32F103xB` / `startup_stm32f103xb.s` | 同上 | `renderStartupAndDefine()`（原有） |
+| `target/stm32f1x.cfg` | `openocd.cfg`、`.vscode/launch.json` | `renderOpenocdTarget()`：按族画像的 openocdTarget 换；**族没有脚本时原样保留并告警**，绝不猜别的族 |
+
+`.ioc` 也不能拿 F1 的骨架改型号：时钟树、RCC 键名、`Mcu.IP` 清单逐族不同，改个型号名 CubeMX 打开就报配置不一致。
+所以资源包按族发 `ioc/family/<族>.ioc`（CubeMX 6.15 无头 `config load` + `config save` 认证过的最小配置，
+只留 SWD 两脚），插件用 `assetsFamilyIocText()` 取；取不到就**拒绝建工程**，不留半成品。
+
+固件包按族找（`resolveFamilyFirmwareRoot()`）：`<CubeMX>/Repository/STM32Cube_FW_<族>_V*` 取本机已装的最高版本，
+`L4+` 与 `L4` 共用 `STM32Cube_FW_L4`。**F1 仍然是默认 `V1.8.7`**（显式包名优先）——否则同一台机器上装了
+1.8.4/1.8.5 的时候，「最高版本」会把老工程悄悄换基线。
+
+### 63.5 踩到的真坑：`STM32F407xX`
+
+F4 第一轮验收：create ok、generate ok（`STM32Cube_FW_F4_V1.28.3`，6 个文件落位），**build 挂**：
+
+```
+stm32f4xx.h:174:2: error: #error "Please select first the target STM32F4xx device used in your application"
+stm32f4xx_hal_rcc_ex.h:47:3: error: unknown type name 'uint32_t'
+```
+
+根因不在芯片表，在 `src/engine/cmake-sources.ts` 的老规则 `deviceDefineFromStartup()`：
+
+```ts
+// 旧实现：upper 之后把「倒数第二个 X」换小写
+return startupStem(file).toUpperCase().replace(/X(?=.$)/u, "x");
+```
+
+这条规则只对 `xb/xc/xe`（x + 容量字母）成立。对 xx 档 `startup_stm32f407xx.s`，upper 得到 `STM32F407XX`，
+替换第一个 X 得到 **`STM32F407xX`** —— CMSIS 头里没有这个宏，于是 `#error` 连锁导致 `uint32_t` 都没定义。
+对「按封装分档」的 `startup_stm32f410cx.s` 更糟：要的是 `STM32F410Cx`（大小写与 xb 相反）。
+
+修法是让尾缀规则只有一个出处：`deviceDefineFromStartup()` 拆出尾缀交给 `defineSuffix()`，
+`stem.slice(0,-2).toUpperCase() + defineSuffix(stem.slice(-2))`，并在 `cmake-sources-units` 补四条
+（`f407xx → STM32F407xx`、`g431xx`、`f410cx → STM32F410Cx`、`l4p5xx → STM32L4P5xx`）。
+
+教训写在这里：**「设备宏」这种东西错了不会在生成期暴露**，CubeMX 照样 `Code succesfully generated`，
+只有真编一次才看得见；所以按族扩支持必须带「建工程 → 生成 → 编译」三段的真机验收，只验前两段等于没验。
+
+### 63.6 六族真机验收（create → generate → build）
+
+`demo/.dsh-stm32/accept-family.mjs`（仓库外）逐族跑：`createProjectScaffold` → `runGenerate`（`skipIfUnchanged:false`，
+强制真跑 CubeMX）→ `runBuild`，工具链 `D:/app/msys64/ucrt64/bin`（arm-none-eabi-gcc 13.3.0 / newlib 4.5.0），
+CubeMX `D:/app/STM32CubeMX`。
+
+| 族 | 芯片 | 启动文件 / 设备宏 | 固件包 | 结果 | elf |
+| --- | --- | --- | --- | --- | --- |
+| C0 | STM32C031C6T6 | `startup_stm32c031xx.s` / `STM32C031xx` | `STM32Cube_FW_C0_V1.4.1` | create+generate+build **ok** | 558388 B（RAM 12.89% / FLASH 8.91%） |
+| F0 | STM32F030C8T6 | `startup_stm32f030x8.s` / `STM32F030x8` | `STM32Cube_FW_F0_V1.11.6` | **ok** | 449716 B（RAM 19.34% / FLASH 5.4%） |
+| F1 | STM32F103C8T6 | `startup_stm32f103xb.s` / `STM32F103xB` | `STM32Cube_FW_F1_V1.8.7` | **ok**（老路径零变化） | 654432 B（RAM 7.73% / FLASH 7.18%） |
+| F4 | STM32F407VGT6 | `startup_stm32f407xx.s` / `STM32F407xx` | `STM32Cube_FW_F4_V1.28.3` | **ok**（修 63.5 之后） | 962396 B（RAM 1.21%） |
+| G4 | STM32G431CBT6 | `startup_stm32g431xx.s` / `STM32G431xx` | `STM32Cube_FW_G4_V1.6.2` | **ok** | 883292 B（RAM 4.83% / FLASH 3.68%） |
+| L0 | STM32L071CBT6 | `startup_stm32l071xx.s` / `STM32L071xx` | `STM32Cube_FW_L0_V1.12.4` | **ok** | 536728 B（RAM 7.73% / FLASH 3.05%） |
+
+六族全部 **0 warning**，CubeMX 一次生成成功（`verdict.errors` 空）。C0 的 create 会多一条告警：
+openocd 0.12 没有 `stm32c0x.cfg`，工程里的 `openocd.cfg` 仍指向 `stm32f1x` —— 这正是「烧录能力 ≠ 建工程能力」，
+下一步内置 C0/U0 的 target 脚本时消掉。
+
+### 63.7 资源包构建（含 G4 族模板重做）
+
+`node scripts/build-assets.mjs --families C0,F0,F4,G4,L0` →
+
+- C0 78 颗 / F0 111 / F4 209 / G4 168 / L0 177（F1 老管线 111 颗仍在），**79 个资产 / 13.85 MB**，manifest 版本未变（`2026.11.01-1`）。
+- G4 的 `templates/family/G4.ioc` 第一版是坏的（150 s 超时，只回写出 22 个键、没有时钟树）：
+  重跑 `probe-family-template.mjs G4 "STM32G431C(6-B)Tx" STM32G431CBT6 LQFP48 STM32G431CBTx` →
+  148866 ms、exit 0、**109 键**、SYSCLK 16 MHz。族模板这种「一次 2–3 分钟」的活必须看退出码 + 键数，
+  超时被杀也可能留下半份文件。
+- skip 23 条：F1 老问题 14 条（F100 没有 x4/x6 档、F105/F107 没有 x8/xb 档）+ **G4A1 9 条**
+  （`line 4A1` 在 G4 固件包里没有匹配的启动文件档位，待查是否真缺 `startup_stm32g4a1xx.s`）。
+
+### 63.8 单测与包体
+
+- 新 `test/family-facts-units.test.mjs`（11 例，已进 `test/run-units.mjs` 清单）：
+  `familyFactsRelOf` 四种输入、`defineSuffix`、`namingFrom`（F4 407 / 410cx / L4+ 4P5 / 坏 group 全空串）、
+  按族读表互不干扰、`findChipFact` 分发、`resolveHalChip` 五型、`renderCmakeLists`（含模板缺键抛错）、
+  `renderOpenocdTarget`（F4 换 / F1 保持 / C0 原样 + note）、`resolveFamilyFirmwareRoot`（假 Cube 根取最高版本 /
+  显式包名 / 缺失 / L4+）、`assetsFamilyIocText`、14 族 halScaffold 放行与 6 族拒绝。
+- 按新行为改了三处老断言：`family-units` 的 `f4.capabilities.halScaffold` 由 false 改 true（并注明预设/时钟仍 false）、
+  `hal-route-units` 的「F407 必须被拒」换成 `STM32H743ZIT6`（族外/资源包没装）、`scaffold-patch-units` 的
+  「找不到 CubeMX 固件包」文案锚点（现在文案带族名，显式包名原样报、不追加 `_V*`）。
+- `cmake-sources-units` 补 4 条 `deviceDefineFromStartup`（63.5）。
+
+### 63.9 这一步**没有**做什么（别当成已支持）
+
+- **时钟规划、.ioc 外设预设、SVD 校验、寄存器版模板仍然只有 F1**：非 F1 族照旧明确拒绝（`capabilities` 为 false）。
+- **C0 / U0 还不能烧录/调试**：本机 openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`；内置适配版脚本是下一步
+  （上游 master 版用 0.13 语法 `dap create ... -tap`，把 `-tap` 换成 `-chain-position` 后 0.12 能完整加载）。
+- **F2 / F3 / F7 / G0 / L1 / L4 / L4+ / U0 没有真机验收**：本机 CubeMX Repository 里只有 C0/F0/F1/F4/G4/L0 六族固件包，
+  其余族要先用 CubeMX 包管理器装包（插件的 `stm32_firmware_install` 目前只能下 F1）。
+- **链接脚本仍是「F1 模板改尺寸」**：F4 的 CCMRAM（0x10000000）没有 `.ccmram` 段；不用 CCM 时无影响，
+  要用 CCM 就得按族给真模板。
