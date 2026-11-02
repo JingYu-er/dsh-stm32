@@ -50,7 +50,15 @@ export interface CubemxMcuFacts {
   family: string;
   /** 产品线（db 的 Line 属性，例如 STM32F103）。 */
   line: string;
-  /** 主内核（&lt;Core&gt;，例如 Arm Cortex-M3；双核器件是 "Arm Cortex-M7/ARM Cortex-M7" 这种）。 */
+  /**
+ * 主内核（`<Core>`，例如 `Arm Cortex-M3`）。
+ *
+ * 实测 db `DB.6.0.150` 的 2019 个 MCU xml：**没有任何一个带 "/" 的双核写法**，只有大小写两种
+ * （`Arm Cortex-M4` 362 / `ARM Cortex-M4` 157、`Arm Cortex-M7` 168 / `ARM Cortex-M7` 97、
+ * `Arm Cortex-M33` 5 / `ARM Cortex-M33` 347；C0 是 `ARM Cortex-M0+`），且**只写主核**
+ * （MP1 只写 `ARM Cortex-A7`、MP2 只写 `ARM Cortex-A35`，协处理核不出现）。另有 2 个老文件没有
+ * `<Core>` 节点 → 内核为空串，调用方必须当成"不知道内核"处理，别猜。
+ */
   core: string;
   /** RAM 总量（KiB）。 */
   ramKb: number;

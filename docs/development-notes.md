@@ -4233,8 +4233,12 @@ HasPowerPad="false" IOType="" Line="STM32F103" Package="LQFP48" RefName="STM32F1
 | L1 | 90 | M3 | 32 | WL3 | 18 | M0+ | — |
 | L4 | 129 | M4 | 80 | | | | |
 
-（另有 3 个没有 `Family` 属性的老文件，不进画像表；H5/H7 的 `<Core>` 是双核写法
-`Arm Cortex-M33/ARM Cortex-M33`，C0 写全大写 `ARM Cortex-M0+` —— 所以内核匹配一律用 `/cortex-mXX/i`。）
+（另有 3 个没有 `Family` 属性的老文件，不进画像表。db 的 `<Core>` 只有大小写两种写法、**没有双核写法**：
+`Arm Cortex-M4` 362 / `ARM Cortex-M4` 157、`Arm Cortex-M7` 168 / `ARM Cortex-M7` 97、
+`Arm Cortex-M33` 5 / `ARM Cortex-M33` 347、C0 写全大写 `ARM Cortex-M0+` —— 所以内核匹配一律用
+`/cortex-mXX/i`；而且它**只写主核**（MP1 只写 `ARM Cortex-A7`、MP2 只写 `ARM Cortex-A35`，
+协处理核不出现），另有 2 个老文件没有 `<Core>` 节点，内核对它们就是空串 —— 断点预算这时回退并说明原因，
+不猜。）
 
 **型号 → 族**（`familyIdOfPart`）不靠猜前缀字母数：遍历画像表，取「族段最长且族段后紧跟非字母」的那条。
 两个踩过的坑写在注释里：① 早期用 `/^STM32([A-Z]{2}[0-9])/` 直接认不出 `STM32WBA55CG`（三段族）；
