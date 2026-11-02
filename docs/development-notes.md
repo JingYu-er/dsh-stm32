@@ -5017,3 +5017,39 @@ L4 那条是这一步最值得记的：它的 SYSCLK 输出不是 PLLP 而是 **
   不能 create→generate→build；它们的族模板也还没进资源仓（`build-assets.mjs` 的 family 循环要求固件包，会跳过）。
 - **F2 / F3 / G0 / L1 / L4+ / C0 的时钟仍是拒绝**：缺「核过的总线上限 / VCO 区间」，db 事实已能读，只差规格表。
 - `RCC.<IP>Freq_Value` 这类派生键仍不写（CubeMX 自己补，导致 `RCC.IPParameters` 有一次差异，见 §66.7）。
+
+## 71. 固件包装配扩到 9 族：自己下载、自己装、逐族验收
+
+### 71.1 装配表扩族
+
+`src/data/firmware-packages.ts` 的 `FIRMWARE_FAMILIES` 原来只有 F1，现在 9 族：
+F1 1.8.7 / F2 1.9.3 / F3 1.11.5 / F7 1.17.4 / G0 1.6.2 / L1 1.10.6 / L4 1.18.2 / U0 1.2.0 / C0 1.4.1。
+每族写清 HAL 仓库（`stm32<f>xx-hal-driver`）、CMSIS 设备仓库（`cmsis-device-<f>`）、主仓库（`STM32Cube<F>`）与内核头集合；
+**分支按仓库真实默认分支**：F2/F3/F7/G0/L1/L4 是 `master`，U0/C0 是 `main`（16 个仓库都用 GitHub API 核过）。
+
+### 71.2 三个真坑
+
+1. **每文件 30 s 的超时不够**：F7/L4 的 `device.tgz` 三个源全超时。`firmware-install.ts` 的 FetchOptions 现在是
+   `timeoutMs: request.timeoutMs ?? 240_000`；改完 F3/L1/U0 也一次装成。
+2. **M0+ 的内核头缺一个文件**：G0/U0 构建报 `core_cm0plus.h:1005: fatal error: mpu_armv7.h: No such file or directory` ——
+   `core_cm0plus.h` 在 `__MPU_PRESENT=1` 时会 include 它。装配表的 G0/U0/C0 coreHeaders 已补 `mpu_armv7.h`，重装后两族都能编。
+3. **资源仓看不见插件装的包**：`family-assets.mjs` 的 `findFirmwareRoot` 只搜 `Repository`，而插件把包装在并列的 `dsh-firmware` ——
+   F7/L4 因此被跳过、生成不出 `chips.json`。现在两处都搜。
+
+### 71.3 13 族 create→generate→build（全部 0 warning）
+
+```text
+C0  558,388 B    F0  449,716 B    F1  654,432 B    F2  925,072 B
+F3  623,532 B    F4  962,396 B    F7 1,168,148 B    G0  615,704 B
+G4  883,292 B    L0  536,728 B    L1  597,352 B    L4 1,134,232 B
+U0  761,912 B
+```
+
+资源包同时扩到 12 族模板 + 13 族芯片表（91 个资产 / 14.05 MB，`--check` 与生成结果一致）。
+
+### 71.4 遗留
+
+- **G0 模板只留下 PA13、U0 模板 pins 全空**：这两族的 db 引脚名/信号名与生成脚本的假设不同，需要按 `readMcuFacts` 的真实键名重生成
+  （不影响编译，只影响工程自带调试口）。
+- F2/F3/F7/G0/L1/L4/U0 的包在 `dsh-firmware`（插件装的），不在 CubeMX 官方 `Repository`；CubeMX GUI 打开这类工程可能提示缺包，
+  走插件的 `stm32_generate` 没问题（它用 `setCustomFWPath` 指过去）。

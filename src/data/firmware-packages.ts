@@ -208,7 +208,7 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
     coreRepo: "STM32CubeG0",
     coreRef: "master",
     coreIncludeDir: "Drivers/CMSIS/Include",
-    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "core_cm0plus.h"],
+    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "core_cm0plus.h"],
     archives: [
       {
         id: "hal",
@@ -313,7 +313,7 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
     coreRepo: "STM32CubeU0",
     coreRef: "main",
     coreIncludeDir: "Drivers/CMSIS/Include",
-    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "core_cm0plus.h"],
+    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "core_cm0plus.h"],
     archives: [
       {
         id: "hal",
@@ -348,7 +348,7 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
     coreRepo: "STM32CubeC0",
     coreRef: "main",
     coreIncludeDir: "Drivers/CMSIS/Include",
-    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "core_cm0plus.h"],
+    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "core_cm0plus.h"],
     archives: [
       {
         id: "hal",
