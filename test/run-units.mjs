@@ -25,6 +25,7 @@ const suites = [
   "stm32f1-units.test.mjs",
   "hal-route-units.test.mjs",
   "clock-units.test.mjs",
+  "clock-db-units.test.mjs",
   "doctor-chip-units.test.mjs",
   "cmake-sources-units.test.mjs",
   "commands-units.test.mjs",

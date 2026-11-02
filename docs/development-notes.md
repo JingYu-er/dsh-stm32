@@ -4745,3 +4745,64 @@ verify: benign=true；droppedPeripherals / signalRewrites / valueChanged / missi
 
 结论：真正值得下一步动的只有两件 —— **时钟规划改成从 `RCC-*_Modes.xml` 的枚举 + `<Frequency>` 派生**（收益最大），
 以及 `PIN_COUNT_BY_PACKAGE` / `MCU_NAME_GROUPS` / 每族 `core` 这三处小表（都已有现成真源，删掉即可）。
+
+## 66. 全系列第四步：时钟事实从 db 派生（pllmul 模型先落地，F1 零回归）
+
+### 66.1 为什么连时钟表也不该手抄
+
+`src/data/clock-f1.ts` 里的 `F1_PLL_MULS`（×2..×16）、`F1_APB_DIVS`（÷1/2/4/8/16）、`F1_ADC_DIVS`（÷2/4/6/8）、
+`F1_PLL_SOURCES` 与 `F1_CLOCK_LIMITS` 全是**某个 db 版本枚举值的手抄快照**。db 里恰好都有：
+`db/mcu/<Mcu.Name>.xml` 的 `<Frequency>` 就是该型号的 SYSCLK 上限；`db/mcu/IP/RCC-*.xml`（Modes）里
+`<RefParameter Name="PLLMUL" Type="list">` 的 `<PossibleValue Value="RCC_PLL_MUL2" Comment="2"/>` 就是倍频枚举。
+抄快照的代价在 §65 已经算过一次（`S_TIM2_CH1_ETR` 是旧版本名），时钟表同理。
+
+### 66.2 新层：`ClockFacts` + `readClockDbFacts`
+
+- `src/data/clock-f1.ts` 新增 `ClockFacts { muls, sources, apbDivs, adcDivs, limits, usb, peripheralClocks, baudList }`
+  与 `F1_FACTS`（由现有 F1 常量拼成，**只作没有 db 时的兜底**）；`pllSourceById(id, sources = F1_PLL_SOURCES)` 收源列表；
+  `PllSourceFact` 加 `divider?`（PLL 输入前的固定分频，见 66.5）。
+- 新 `src/data/clock-db.ts`：`readClockDbFacts(db, facts)` 用 RCC 实例的 `ipModesPath()` 找到该族的 Modes 文件
+  （RCC 的 `Version` 属性本身就是族专属文件名，例如 F103 → `RCC-STM32F102_rcc_v1_0_Modes.xml`），解析出：
+  `model`（有 `PLLMUL` → `pllmul`；有 `PLLM`/`PLLN` → `pllmn`；都没有 → `unknown`）、`sysclkMaxHz`、`muls`、`sources`、
+  `apbDivs`（APB1CLKDivider 枚举）、`adcDivs`（ADCPresc 枚举）、`pllM`/`pllN`(Min/Max)/`pllP`。
+- `clockFactsFromDb(dbFacts, familyId)` 把 db 事实 + 该族总线上限合成 `ClockFacts`；`pllmn`/`unknown`/上限未建档一律返回 null。
+
+### 66.3 planClock 参数化（F1 输出零变化）
+
+`clock-plan.ts` 里 35 处 `F1_*` 引用改成读模块级 `activeFacts`（`planClock` 入口 `activeFacts = ctx.clockFacts ?? F1_FACTS`；
+planClock 是同步单线程，入口赋值即可），新增 `activeHsiHz`（从 `.ioc` 的 `RCC.HSI_VALUE` 读，缺省 8 MHz）与
+`pllInHzOf(source, hseHz)`。`ClockPlanContext` 加 `clockFacts?: ClockFacts`。
+**F1 的 14 个 clock 单测一条都没改、全绿**，说明参数化没动行为。
+
+### 66.4 db 里没有的（仍然手写，别以为这一层能替）
+
+| 事实 | 为什么 db 给不出 | 现在的做法 |
+| --- | --- | --- |
+| APB1 / APB2 / ADC 频率上限 | 数据手册规格，db 只给引脚与枚举 | `BUS_LIMITS` 只收**核过的族**（F1 36/72/14、F0 48/48/14、L0 32/32/16），没建档的族直接拒绝规划 |
+| USB 48 MHz 规则 | 各族来源不同（F1 要 PLL=72 再 ÷1.5；F0/L0 是 PLL=48） | 非 F1 标成「未建模」（`requiresPllClkHz = 0`）→ 报告里说 USB 不可用，不套 F1 的规则 |
+| 外设挂哪条总线 | db 不写 | 沿用 F1 的 kind 映射（这几个族的分配相同），未覆盖的族后续按手册补 |
+
+### 66.5 踩到的坑：F0 的 `RCC_PLLSOURCE_HSI` 是 HSI÷2
+
+第一版 F0 规划 48 MHz 时选了「HSI ×6」（8 MHz×6），交给 CubeMX 回写后**全部变成 24 MHz**：
+F0 的 `RCC_PLLSOURCE_HSI` 在硬件上就是 HSI÷2 进 PLL（这类族没有单独的 `HSI_DIV2` 枚举值）。
+修法：`readClockDbFacts` 发现「有 `hsi` 但没有 `hsi-div2`」时给该源标 `divider: 2`，
+`pllInHzOf` 按 `activeHsiHz / divider` 算输入频率；重跑后计划变成「HSI ×12」，CubeMX 回写**频率全部保持 48 MHz**。
+
+### 66.6 真机验收
+
+- **F1**（72 MHz，db 派生的时钟事实）：`plan → apply → CubeMX 回写` → **`benign=true`**，值差异全空。
+  notes「目标 72 MHz 可达：HSE（外部晶振）×9」，写入 `RCC.PLLMUL=RCC_PLL_MUL9`、`APB1CLKDivider=RCC_HCLK_DIV2` 等。
+- **F0**（48 MHz，非 F1 的 pllmul 族）：计划「HSI ×12 → 48 MHz」；CubeMX 回写后 `SYSCLKFreq_VALUE / HCLK / APB1 / PLLCLK`
+  **全部保持 48 MHz**，唯一差异是 `RCC.IPParameters` 里多了一项 `USART1Freq_Value` —— CubeMX 给已启用的 USART1 补了
+  派生频率键，而我们的计划不写这类「按外设逐个生成」的 `RCC.<IP>Freq_Value`。频率数值零差异，这一条记在 §66.7。
+
+### 66.7 没做什么
+
+- **`pllmn` 模型（PLLM/PLLN/PLLP：F2/F4/F7/G4/L4）还没实现**：db 侧已经把 `PLLM` 枚举、`PLLN` 的 Min/Max、`PLLP` 枚举读出来了
+  （F407：PLLM 2/4/6/8、PLLN 50..432、PLLP 2/4/6/8），只差规划器那一步；现在对这些族的 `clock` 参数明确拒绝。
+- **`unknown` 模型（H7 的分相 PLL、U5 的 EPOD）**：拒绝，理由写在 note 里。
+- **`RCC.<IP>Freq_Value` 这类派生键不写**：CubeMX 会自己补（F0 实测多出 `USART1Freq_Value`），
+  所以逐键比对会看到 `RCC.IPParameters` 变化一次；要消掉它得按外设实例枚举总线，留作下一步。
+- **F0 的族模板缺 SWD 两脚**：`ioc/family/F0.ioc` 是 `PinsNb=0`，直接用会被「没有 Serial Wire」的安全闸拦下，
+  验收时是显式加 `serialWire: true` 过的；资源包里这一份模板要重做（C0/F4/L0 都带 PA13/PA14）。

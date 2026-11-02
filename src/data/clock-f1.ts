@@ -22,6 +22,8 @@ export interface PllSourceFact {
   defaultHz: number;
   /** 能不能当 PLL 输入。 */
   selectable: boolean;
+  /** PLL 输入前的固定分频（F0/L0 的 RCC_PLLSOURCE_HSI 硬件上就是 HSI/2；缺省 1）。 */
+  divider?: number;
   note: string;
 }
 
@@ -52,8 +54,8 @@ export const F1_PLL_SOURCES: readonly PllSourceFact[] = [
   },
 ];
 
-export function pllSourceById(id: string): PllSourceFact | null {
-  return F1_PLL_SOURCES.find((source) => source.id === id) ?? null;
+export function pllSourceById(id: string, sources: readonly PllSourceFact[] = F1_PLL_SOURCES): PllSourceFact | null {
+  return sources.find((source) => source.id === id) ?? null;
 }
 
 /** PLL 倍频：×2..×16（RCC_CFGR.PLLMUL，值料号没有 ×6.5/×8 之外的半档）。 */
@@ -168,3 +170,32 @@ export const F1_PERIPHERAL_CLOCKS: readonly PeripheralClockFact[] = [
 
 /** UART 波特率整除误差默认算这几档（F1 值料号常用档）。 */
 export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 115200, 230400];
+
+/**
+ * 一套完整的「时钟事实」：planClock 只认这一层，不再直接读 F1_* 常量。
+ *
+ * F1_FACTS 是兜底（没有 CubeMX db 时用它），正常情况下由 src/data/clock-db.ts 从
+ * db/mcu/<型号>.xml 与 db/mcu/IP/RCC-*.xml 现算出一份同形状的事实。
+ * busLimits（APB1/APB2/ADC 上限）db 里没有 —— 那是数据手册规格，仍按族手写。
+ */
+export interface ClockFacts {
+  muls: readonly PllMulFact[];
+  sources: readonly PllSourceFact[];
+  apbDivs: readonly DividerFact[];
+  adcDivs: readonly DividerFact[];
+  limits: { sysclkHz: number; apb1Hz: number; apb2Hz: number; adcHz: number };
+  usb: { hz: number; requiresPllClkHz: number; iocValue: string };
+  peripheralClocks: readonly PeripheralClockFact[];
+  baudList: readonly number[];
+}
+
+export const F1_FACTS: ClockFacts = {
+  muls: F1_PLL_MULS,
+  sources: F1_PLL_SOURCES,
+  apbDivs: F1_APB_DIVS,
+  adcDivs: F1_ADC_DIVS,
+  limits: F1_CLOCK_LIMITS,
+  usb: F1_USB_PRESCALER,
+  peripheralClocks: F1_PERIPHERAL_CLOCKS,
+  baudList: F1_BAUD_LIST,
+};
