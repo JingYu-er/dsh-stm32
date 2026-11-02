@@ -1,7 +1,7 @@
 // stm32_ioc_verify 的纯函数单测：node test/ioc-verify-units.test.mjs
 import assert from "node:assert/strict";
 
-import { diffIocForVerify, plannedFunctionOf } from "../lib/engine/ioc-verify.js";
+import { diffIocForVerify, isIocValueNormalized, misorderedKeysOf, plannedFunctionOf } from "../lib/engine/ioc-verify.js";
 
 const cases = [];
 function test(name, fn) {
@@ -116,6 +116,72 @@ test("diff：functionlistsort 被删条目（不是纯追加）→ 仍然报 cha
   const diff = diffIocForVerify(before, after);
   assert.deepEqual(diff.autoAddedFunctions, []);
   assert.deepEqual(diff.changedValues.map((item) => item.key), ["ProjectManager.functionlistsort"]);
+});
+
+test("归因：键序被重排、值不变 → 只算 orderOnly，benign 为真", () => {
+  const before = "A.x=1\nB.y=2\nC.z=3\nD.w=4\n";
+  const after = "D.w=4\nC.z=3\nB.y=2\nA.x=1\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.changedValues, [], "值没变");
+  assert.deepEqual(diff.attribution.valueChanged, []);
+  assert.ok(diff.attribution.orderOnly.length >= 3, "被重排的键要能看见：" + JSON.stringify(diff.attribution.orderOnly));
+  assert.equal(diff.misorderedKeys.length, diff.attribution.orderOnly.length);
+  assert.equal(diff.attribution.benign, true, "只有行序不同算零实质差异");
+});
+
+test("归因：键序没动但行序无损（只是插了新键）→ 不算 orderOnly", () => {
+  const before = "A.x=1\nC.z=3\n";
+  const after = "A.x=1\nB.y=2\nC.z=3\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.attribution.orderOnly, []);
+  assert.deepEqual(diff.attribution.addedKeys, ["B.y"]);
+  assert.equal(diff.attribution.benign, false, "多写了它不认的键要算实质差异");
+});
+
+test("归因：值只是成员顺序被规范化（语义不变）→ valueNormalized，benign 为真", () => {
+  const before = "PA6.GPIOParameters=GPIO_Mode,PinState\n";
+  const after = "PA6.GPIOParameters=PinState,GPIO_Mode\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.changedValues.map((item) => item.key), ["PA6.GPIOParameters"]);
+  assert.deepEqual(diff.attribution.valueNormalized.map((item) => item.key), ["PA6.GPIOParameters"]);
+  assert.deepEqual(diff.attribution.valueChanged, []);
+  assert.equal(diff.attribution.benign, true);
+});
+
+test("归因：值真被改（数字变了）→ valueChanged，benign 为假", () => {
+  const before = "RCC.SYSCLKFreq_VALUE=72000000\n";
+  const after = "RCC.SYSCLKFreq_VALUE=64000000\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.attribution.valueChanged.map((item) => item.key), ["RCC.SYSCLKFreq_VALUE"]);
+  assert.deepEqual(diff.attribution.valueNormalized, []);
+  assert.equal(diff.attribution.benign, false);
+});
+
+test("归因：missingKeys/addedKeys/droppedPeripherals 与旧字段一致", () => {
+  const diff = diffIocForVerify(BEFORE, AFTER_DROPPED);
+  assert.deepEqual(diff.attribution.missingKeys, diff.removedKeys);
+  assert.deepEqual(diff.attribution.addedKeys, diff.addedKeys);
+  assert.deepEqual(diff.attribution.droppedPeripherals, diff.droppedPeripherals);
+  assert.equal(diff.attribution.benign, false, "外设被丢 + 信号被改写都不是良性的");
+});
+
+test("isIocValueNormalized：空白折叠算规范化，单值不同不算", () => {
+  assert.equal(isIocValueNormalized("Channel-PWM Generation1 CH1", "Channel-PWM  Generation1  CH1"), true);
+  assert.equal(isIocValueNormalized("1,2,3", "3,1,2"), true);
+  assert.equal(isIocValueNormalized("1,2,3", "1,2,3,4"), false);
+  assert.equal(isIocValueNormalized("true:0:0:false", "false:0:0:true"), false);
+});
+
+test("提示：中断所属外设未被认（Mcu.IPn 里没有）→ 说明为什么 NVIC 键被删", () => {
+  const before = "Mcu.IP0=NVIC\nMcu.IP1=RCC\nMcu.IPNb=2\nNVIC.USART1_IRQn=true:0:0:false:false:true:true:true:true\n";
+  const after = "Mcu.IP0=NVIC\nMcu.IP1=RCC\nMcu.IPNb=2\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.attribution.missingKeys, ["NVIC.USART1_IRQn"]);
+  const text = diff.hints.join(" ");
+  assert.match(text, /NVIC\.USART1_IRQn 被 CubeMX 删掉了：USART1 不在它认的外设表里/u);
+  // EXTI 向量是例外，不能误报
+  const exti = diffIocForVerify("Mcu.IPNb=0\nNVIC.EXTI9_5_IRQn=true:0:0:false:false:true:true:true:true\n", "Mcu.IPNb=0\n");
+  assert.deepEqual(exti.hints, []);
 });
 
 let failed = 0;

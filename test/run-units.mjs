@@ -33,6 +33,7 @@ const suites = [
   "generate-cache-units.test.mjs",
   "ioc-plan-units.test.mjs",
   "ioc-verify-units.test.mjs",
+  "ioc-schema-units.test.mjs",
   "ioc-rules-units.test.mjs",
   "cubemx-db-units.test.mjs",
   "gdb-mi-units.test.mjs",

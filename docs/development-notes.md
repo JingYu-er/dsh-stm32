@@ -3815,3 +3815,136 @@ interface IocPlanRequest {
 - **AF 脚的开漏（`GPIO_MODE_AF_OD`）仍写不出**，是已知限制：`pins[].signal` 只有 `input`/`output`，`outputType: od` 只在
   `signal !== "input"` 时写 `GPIO_MODE_OUTPUT_OD`（`ioc-plan.ts:599-601`），没有「AF 信号 + 开漏」这条路径。
   需要时用 `entries` 直写 `<pin>.GPIO_Mode=GPIO_MODE_AF_OD` **并**把 `GPIO_Mode` 加进该脚的 `GPIOParameters`（R22），否则会被静默删。
+
+## 61. S5 第一步：.ioc 真值表（schema）+ `ioc_verify` 差异归因（2026-11-02）
+
+### 61.1 动机：从「猜格式」到「按表渲染」
+
+生成器一直是「按我们理解的 .ioc 格式逐键拼字符串」（`ioc-plan.ts` 里 39 处 `entries.set` 大多是字面量），
+正确性只有一个证伪手段：`stm32_ioc_verify` 让 CubeMX 回写再 diff。这条路有三个结构性毛病：
+
+1. **只能证伪不能证明**：diff 空了只说明「这一种组合没被丢」，换一个外设/引脚/版本还得再跑一轮。
+2. **一次 25–40 s**：真机往返太贵，逼得人一批一批塞键，出错时又分不清是哪一条。
+3. **差异归因不清**：同一个「非零 diff」可能来自行序、CubeMX 的规范化，或我们写错——原来的报告只给 `removedKeys`/`addedKeys`，
+   人得自己去副本里逐行看。
+
+所以这一步的产物不是「又修了几个键」，而是**真值表**：实体 → 键名（含索引拼接）→ 写序 → 值编码 → 触发条件 → 证据。
+生成器写键名从此只有一条路：`renderIocKey(id, params)`。
+
+### 61.2 三源证据 + 版本绑定
+
+每条 spec 的 `evidence` 都指向这三源之一（真值表不写「我觉得」）：
+
+| 源 | 取到的东西 | 落在哪 |
+| --- | --- | --- |
+| 反编译（exe 核心 + 插件 jar） | 序列化类里 `ldc` 的键字面量、写键顺序、条件分支 | `demo/.dsh-stm32/cubemx-re/jar.md`（318 行，带行号引用） |
+| 真机回写（无头 `config load` + `config save`） | 值编码是否逐字保留、哪些键会被静默删 | docs §58/§60 + 本轮 §61.8 |
+| 504 份板级语料（`db/plugins/boardmanager/boards`） | 键出现率、成员序、索引连续性、值 token 全集 | docs §60.3 |
+
+**版本绑定写进文件头注释**：CubeMX 6.15.0 / DB.6.0.150 / STM32CubeFW_F1_V1.8.7。换版本要重跑语料统计与探针，
+否则「真值表」就是过期的真值表（这是比没有表更危险的状态）。
+
+### 61.3 表的结构：48 条 spec
+
+`src/data/ioc-schema.ts`（约 24 KB）：类型 → `SPECS`（48 条 JSON 字面量）→ 编译与查询函数。
+
+- 三个枚举：`entity`（mcu / pin / shared-signal / nvic / dma / peripheral / rcc / project）、
+  `valueKind`（count / index / bool / enum / csv / nvic9 / hz / text）、
+  `order`（dictionary / insertion / sorted-members / index / sequence）。
+- 占位符：`{pin}`、`{index}`、`{ip}`、`{name}`、`{n}`、`{signal}` 按值取参；`{*}` 是**命名空间兜底**（不取参）。
+- 对外 API：`compileIocKeyTemplate`、`IOC_SCHEMA`、`iocSpecById`、`matchIocKey`、`renderIocKey`、
+  `iocSchemaCoverage`、`describeIocKey`。
+
+**匹配优先级（踩过坑）**：一开始只按「`{name}` 最宽、`{*}` 次之」排序，结果 `RCC.IPParameters` 被
+`{ip}.{name}`（`periph.parameter`）抢走了——键形状一样，归因就错了。改成三条一起排：
+
+0. 以字面量开头、没有 catch-all（`Mcu.Pin{index}`、`NVIC.{name}_IRQn`、`{pin}.Signal` 之外都是）；
+1. 以字面量开头、带 catch-all 的命名空间兜底（`RCC.{*}`）；
+2. 以占位符开头的通配模板（`{ip}.{name}`、`{pin}.Signal`、`{ip}.IPParameters`）。
+
+同级再按**字面量字符数降序**：`RCC.IPParameters`（16）压住 `{ip}.IPParameters`（13），
+而 `USART1.IPParameters` 根本匹配不上 `RCC.IPParameters`，自然落到 `{ip}.IPParameters`。
+
+**时钟派生键不抄一遍**：`RCC.*Freq_Value` 有几十个，且由 `clock-plan.ts` 计算，逐条登记只会让表迅速过期。
+用一条 `rcc.derived`（`RCC.{*}`）兜住，值仍由 `clock-plan` 负责。
+
+### 61.4 生成器接线 + 覆盖率闸门
+
+`ioc-plan.ts` 里所有写键名的地方改成 `renderIocKey(...)`：引脚表（`Mcu.Pin{i}`/`Mcu.PinsNb`）、`addPin()` 的
+`GPIOParameters` 与各属性键（经 `PIN_ATTRIBUTE_SPEC` 白名单，未登记属性名直接抛错）、`pin.Locked/.Signal/.Mode`、
+`ensureSerialWire()`、`applyInterrupts()`、`enableSharedSignal()` / `enableExtiSharedLine()`、`enablePeripheral()`
+（`Mcu.IP{i}`/`Mcu.IPNb`、DMA 三件套、`IPParameters`、`RCC.ADCFreqValue`/`RCC.IPParameters`）。
+
+计划生成后再跑一道**覆盖率闸门**：`iocSchemaCoverage(after.keys())` 有未覆盖键就 push 一条 `[SCHEMA]` 告警
+（「N 个键不在 .ioc schema 真值表里……拼错的键会被 CubeMX 静默忽略，确认后请补进 `src/data/ioc-schema.ts`」）。
+
+**为什么只告警不失败**：老工程模板里常带着上一代 CubeMX 的键，硬失败会让「只想改一根引脚」的调用直接卡死；
+硬闸门放在单测里（`test/ioc-schema-units.test.mjs` 断言夹具 `demo.ioc` 与 plan 产物 0 未覆盖）。
+
+### 61.5 已知盲区（写下来，免得下一轮当成新发现）
+
+覆盖率闸门只能拦**形状上不可能存在**的键。任何带点号的键都会被 `{ip}.{name}` 兜住——
+比如拼错的 `TIM3.IPParamters` 会被认成「TIM3 的一个普通参数」，覆盖率 100%。
+这类错误只能靠真机 `ioc_verify` 的 `removedKeys` / `addedKeys` 暴露（CubeMX 回写时把它删掉）。
+这也是为什么归因升级（§61.6）和 schema 必须同期做：一个负责「写对」，一个负责「证明写对了」。
+
+### 61.6 `ioc_verify` 差异归因
+
+`IocVerifyDiff` 新增 `misorderedKeys` 与 `attribution`：
+
+| 桶 | 含义 | 判据 |
+| --- | --- | --- |
+| `orderOnly` | 值相同、行序不同（CubeMX 按自己的顺序重排） | 两边都有的键按 after 位置求**最长保序子序列**，不在子序列里的就是被重排的（共同键 >1500 时退化为位置比较） |
+| `valueNormalized` | 值只是成员顺序/空白被规范化，语义不变 | 空白折叠相等，或逗号切分后排序集合相等（≥2 个成员） |
+| `valueChanged` | 值真被改 | 上面两条都不成立 |
+| `missingKeys` / `addedKeys` / `droppedPeripherals` / `autoAddedFunctions` | 与旧字段一致，只是并到一个对象里 | — |
+| `benign` | 零实质差异 | `dropped===0 && removed===0 && added===0 && valueChanged===0 && signalRewrites===0` |
+
+配套改动：
+- `message` 拆成四个后缀（真改写 / 仅重排成员序 / 仅行序 / 它自己补的清单），不再把三者糊成一句「值被改写」。
+- 工具 `format()` 末尾加结论行：**「结论：零实质差异（只有行序/成员序的规范化）」** 或「结论：有实质差异，见上面各条」。
+- 新增提示：`removedKeys` 里有 `NVIC.<IP>_IRQn` 且该 IP 不在 CubeMX 认的外设表（`Mcu.IPn`）里时，明说
+  「先启用外设再开它的中断，否则中断键会被静默丢弃」（`EXTI*` 向量例外，不提示）。这是 §61.8 第一次真机跑出来的坑。
+
+### 61.7 模板化当晚就抓到两个真 bug
+
+1. **`NVIC.EXTI0_IRQn_IRQn`**：`nvic.vector` 的模板是 `NVIC.{name}_IRQn`，而 `extiIrqName(line)` 返回的名字**自带** `_IRQn`
+   → 渲染出双后缀。这是把字面量换成模板时最典型的错，而当时真机探针**抓不到**它：探针里写的是字面量字符串。
+   现在 `test/ioc-schema-units.test.mjs` 有一条回归：plan 产物里任何键都不许匹配 `/_IRQn_IRQn/u`。
+2. **`renderIocKey("rcc.derived")` 渲染出 `"RCC."`**：catch-all 只该用于识别，不该用于渲染。改成直接抛错。
+
+教训写进流程：**「把字面量改成模板」这类重构，必须配一条「产物形状自查」测试**（0 未覆盖 + 禁止双后缀），
+只靠真机往返验不出来——它在真机上同样会「静默丢弃」，看起来只是又一个零 diff。
+
+### 61.8 真机验收（CubeMX 6.15.0 无头，`demo/.dsh-stm32/s5-verify.mjs`）
+
+两轮，第二轮才是正确用法：
+
+1. **只给 `interrupts: ["USART1"]`、不给 `peripherals`** → `removedKeys=["NVIC.USART1_IRQn"]`、
+   `dropped=[]`、`benign=false`。原因：USART1 不在 `Mcu.IPn` 里，CubeMX 把它的中断向量静默删了。
+   → 顺手把这个因果做成了 `hints`（§61.6），并补了单测。
+2. **`peripherals:[{name:"USART1"}]` + `interrupts:["USART1"]` + `pins`：`PA6`（开漏 + 初始高 + 标签 `led2`）、
+   `PA0-WKUP`（上拉 + `interrupt: falling`）+ `serialWire: true`** →
+   `plan` 33 个键改动、`durationMs=44036`、
+   **`addedKeys=[]`、`removedKeys=[]`、`changedValues=[]`、`signalRewrites=[]`、`orderOnly=[]`、`valueNormalized=[]`**，
+   `autoAddedFunctions` 1 条（它自己的 `3-MX_USART1_UART_Init-USART1-false-HAL-true`），`benign=true`。
+
+第二轮同时证明了 §60 的 `Mcu.Pin<i>` db-Position 排序是对的（`orderOnly` 为空 = 行序与它一致）。
+
+### 61.9 单测与包体
+
+- 新增 `test/ioc-schema-units.test.mjs` 8 例：表形状（48 条、id 唯一、三个枚举合法、证据/写者齐全）、
+  `compileIocKeyTemplate`、`matchIocKey` 具体优先、`renderIocKey` 四种拼错抛错、覆盖率分层、
+  夹具 `demo.ioc` 0 未覆盖、真 plan 产物 0 未覆盖 + 无双后缀 + schema 键真的落地。
+- `ioc-verify-units` 9 → 16 例（`orderOnly`、纯插入不算重排、`valueNormalized`、`valueChanged`、
+  三个旧字段与新桶一致、`isIocValueNormalized` 边界、中断被删提示 + EXTI 不误报）。
+- `node test/run-units.mjs` → **708 pass / 0 fail**（41 → 42 个套件）；`node scripts/pack-size.mjs` →
+  包体 550.0 KB（上限 1171.9 KB，117 个文件，解包 1747.8 KB），运行时资产 16.4 KB / 7 个（上限 40.0 KB）。
+
+### 61.10 判过但不动 / 下一步
+
+- **DMA 参数键与 `Mcu.IPn` 正则仍留字面量**：`Dma.<ip>.<n>.<name>` 是 `prefix` 拼的、`/^Mcu\.IP\d+$/u` 是形状扫描（不是写键）。
+  它们被覆盖率闸门兜住，改动收益低于风险，留到下一增量一起收拾。
+- **差异样本仍截 60 条**（`KEY_SAMPLE_LIMIT`）：归因也只是分类，不打算把 500 行差异全吐给模型。
+- **不新增规则编号**：schema 覆盖率用 `[SCHEMA]` 前缀，而不是编成 R24——它描述的是「我们的表」，不是 CubeMX 的行为约束。
+- S5 的剩余部分（`ioc-plan` 全量 schema 化收尾）留到用户开启的下一阶段。

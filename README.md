@@ -173,8 +173,9 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_ioc_inspect` | 解析 MCU 型号、引脚/信号/标签、外设与中断、时钟树、工程设置；会报「没开 Serial Wire 会生成 `SWJ_DISABLE`」这类致命风险 |
-| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO（上下拉/速度/开漏 `outputType: od`/初始电平 `initial`/`interrupt` 一次写全 EXTI 链路 + 中断组）、`interrupts` 使能外设中断（写 9 段 NVIC 值并按 db/SVD 校验中断名）、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率） |
+| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO（上下拉/速度/开漏 `outputType: od`/初始电平 `initial`/`interrupt` 一次写全 EXTI 链路 + 中断组）、`interrupts` 使能外设中断（写 9 段 NVIC 值并按 db/SVD 校验中断名）、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率）。键名按 `src/data/ioc-schema.ts` 的 `.ioc` 真值表（48 条 spec）渲染；产出键不在表里会给 `[SCHEMA]` 警告（多半是拼错——拼错的键 CubeMX 静默忽略） |
 | `stm32_ioc_apply` | 必须带 `planId`；写盘前再核 SHA（中途被手改就拒绝），备份后原子替换，写完重新解析校验，不过自动回滚。支持 `rollbackFrom` |
+| `stm32_ioc_verify` | 让 CubeMX 自己说「它认了什么」：把 `.ioc` 复制到 `.dsh-stm32/verify/<stamp>/`，无头 `config load` + `config save` 回写后逐键 diff（约 25–40 s，工程 `.ioc` 一个字节不动）。报 `droppedPeripherals` / `plannedFunctions` / `signalRewrites` / `removedKeys` / `addedKeys` / `changedValues`，以及归因 `attribution`：`orderOnly`（值相同、行序不同）/ `valueNormalized`（只是成员顺序被规范化）/ `valueChanged`（值真被改）/ `benign`——**`benign: true` 就是零实质差异**，可以放心去 `stm32_generate` |
 
 ### 代码与构建
 
@@ -390,20 +391,20 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 34 个离线套件、497 个用例；不需要板子、CubeMX、工具链
+npm test                 # 42 个离线套件、708 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上是 **495 pass + 2 skipped**，开发机上是 497 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **708 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 
 | 放哪 | 内容 | 量级 |
 | --- | --- | --- |
-| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 99 个文件 / 525.7 KB，解包 1538.3 KB；其中 `templates/**` 38.5 KB |
+| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 117 个文件 / 550.0 KB，解包 1747.8 KB；其中 `templates/**` 66.4 KB |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
 | 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（`device/f1/chips.json` 9 个字段 + .ioc 模板 + .ld + SVD，core 29 个文件约 197 KiB、full 69 个文件——SVD / startup / headers 都在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |

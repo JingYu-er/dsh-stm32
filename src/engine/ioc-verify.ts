@@ -37,6 +37,33 @@ export interface IocValueChange {
   after: string;
 }
 
+/**
+ * 归因分类：把每一处差异装进一个明确的桶，避免「零 diff」变成一句空话。
+ *
+ * 为什么需要：原来的对比只回答「键集合与值是否相等」，回答不了三件更要紧的事——
+ *   ① 键一模一样、只是行序被重排（Mcu.PinN 与 IPParameters 的顺序对 CubeMX 有语义）；
+ *   ② 值「变了」但只是 CSV 成员被重排/空白被规范化（CubeMX 在维护自己的名单顺序）；
+ *   ③ 这个键是我们多写的（它不认 → 我们错）还是它自己补的（我们没有 → 缺口）。
+ */
+export interface IocVerifyAttribution {
+  /** 值相同、只是行序与 CubeMX 回写不同（不在最长保序子序列里的键，截断后）。 */
+  orderOnly: string[];
+  /** 值变了，但只是成员顺序/空白规范化（CSV 集合相等）：不算我们写错。 */
+  valueNormalized: IocValueChange[];
+  /** 值真变了：多半是我们写的不等于它按不变量重算的结果。 */
+  valueChanged: IocValueChange[];
+  /** 我们写了它没认、被删掉的键（abc-diff 的 B 类：可疑键）。 */
+  missingKeys: string[];
+  /** 它补了、我们没有的键（abc-diff 的 C 类：缺口候选）。 */
+  addedKeys: string[];
+  /** 整个外设被丢弃（比单键更严重）。 */
+  droppedPeripherals: string[];
+  /** 初始化清单的纯追加：CubeMX 自己维护，不算差异。 */
+  autoAddedFunctions: string[];
+  /** 只剩「无害」差异（只重排/只规范化/只自动补清单）时为 true —— 这才是可交付的零 diff。 */
+  benign: boolean;
+}
+
 export interface IocVerifyDiff {
   /** CubeMX 认定激活的外设（after 的 Mcu.IPn）。 */
   afterPeripherals: string[];
@@ -69,6 +96,10 @@ export interface IocVerifyDiff {
    * 结构差异仍然为 0，但不假装是我们写对了。
    */
   autoAddedFunctions: string[];
+  /** 值相同、但行序与 CubeMX 回写不同的键（截断后）；原来的实现完全看不见这一类。 */
+  misorderedKeys: string[];
+  /** 把上面所有差异按成因归类。 */
+  attribution: IocVerifyAttribution;
   /** 人话诊断：每个被丢的外设缺什么。 */
   hints: string[];
 }
@@ -109,6 +140,71 @@ function pinSignals(entries: Map<string, string>): Map<string, string> {
     result.set(pin, value.trim());
   }
   return result;
+}
+
+/**
+ * 两边的值是否只差「CSV 成员顺序 / 空白」——CubeMX 维护自己的名单顺序（如 GPIOParameters、
+ * functionlistsort）时会这样改，语义不变，不该算我们写错。
+ */
+export function isIocValueNormalized(before: string, after: string): boolean {
+  if (before === after) return true;
+  if (before.replace(/\s+/gu, " ").trim() === after.replace(/\s+/gu, " ").trim()) return true;
+  const split = (text: string): string[] => text.split(",").map((item) => item.trim()).filter((item) => item !== "");
+  const left = split(before);
+  const right = split(after);
+  if (left.length < 2 || left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((item, index) => item === sortedRight[index]);
+}
+
+/**
+ * 两边都有、但相对顺序变了的键（不在最长保序子序列里的那些）。
+ *
+ * 为什么需要：.ioc 的行序对 CubeMX 是有语义的（Mcu.PinN 决定引脚表顺序，IPParameters 是插入序），
+ * 所以「零 diff」必须同时是「零 reorder」；只比键集合会把这个盲区放过。
+ */
+export function misorderedKeysOf(before: Map<string, string>, after: Map<string, string>): string[] {
+  const commonSet = new Set<string>();
+  const common: string[] = [];
+  for (const key of before.keys()) {
+    if (!after.has(key)) continue;
+    commonSet.add(key);
+    common.push(key);
+  }
+  if (common.length < 2) return [];
+  const rank = new Map<string, number>();
+  let position = 0;
+  for (const key of after.keys()) {
+    if (!commonSet.has(key)) continue;
+    rank.set(key, position);
+    position += 1;
+  }
+  const sequence = common.map((key) => rank.get(key) ?? 0);
+  if (sequence.length > 1500) {
+    // 超大文件不走 O(n^2)：只报「位置变小」的键，够定位问题。
+    return common.filter((_key, index) => sequence[index] !== index).slice(0, KEY_SAMPLE_LIMIT);
+  }
+  const best = new Array<number>(sequence.length).fill(1);
+  const prev = new Array<number>(sequence.length).fill(-1);
+  for (let i = 0; i < sequence.length; i += 1) {
+    for (let j = 0; j < i; j += 1) {
+      if ((sequence[j] as number) < (sequence[i] as number) && (best[j] as number) + 1 > (best[i] as number)) {
+        best[i] = (best[j] as number) + 1;
+        prev[i] = j;
+      }
+    }
+  }
+  let end = 0;
+  for (let i = 1; i < sequence.length; i += 1) {
+    if ((best[i] as number) > (best[end] as number)) end = i;
+  }
+  const keep = new Set<number>();
+  for (let cursor = end; cursor >= 0; cursor = prev[cursor] as number) {
+    keep.add(cursor);
+    if ((prev[cursor] as number) < 0) break;
+  }
+  return common.filter((_key, index) => !keep.has(index));
 }
 
 function listedPins(entries: Map<string, string>): Set<string> {
@@ -227,7 +323,44 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
     }
   }
 
+  // 归因：键序变化 + 值规范化，各自单独成桶（见 IocVerifyAttribution 的三条动机）。
+  const misordered = misorderedKeysOf(before, after);
+  const valueNormalized: IocValueChange[] = [];
+  const valueChanged: IocValueChange[] = [];
+  for (const item of changedValues) {
+    const bucket = isIocValueNormalized(item.before, item.after) ? valueNormalized : valueChanged;
+    bucket.push(item);
+  }
+  const attribution: IocVerifyAttribution = {
+    orderOnly: misordered.slice(0, KEY_SAMPLE_LIMIT),
+    valueNormalized: valueNormalized.slice(0, KEY_SAMPLE_LIMIT),
+    valueChanged: valueChanged.slice(0, KEY_SAMPLE_LIMIT),
+    missingKeys: removedKeys.slice(0, KEY_SAMPLE_LIMIT),
+    addedKeys: addedKeys.slice(0, KEY_SAMPLE_LIMIT),
+    droppedPeripherals: dropped,
+    autoAddedFunctions,
+    benign:
+      dropped.length === 0 &&
+      removedKeys.length === 0 &&
+      addedKeys.length === 0 &&
+      valueChanged.length === 0 &&
+      signalRewrites.length === 0,
+  };
+
   const hints: string[] = [];
+  // 实测（6.15.0）：中断所属外设没在 Mcu.IPn 里时，NVIC.<IP>_IRQn 会被静默删掉——
+  // 用户看到的现象是「开了中断但生成代码里没有」，这里把因果说清楚。
+  for (const key of removedKeys) {
+    const vector = /^NVIC\.([A-Za-z0-9_]+?)_IRQn$/u.exec(key);
+    if (vector === null) continue;
+    const ip = vector[1] ?? "";
+    if (ip === "" || ip.startsWith("EXTI")) continue;
+    if (peripheralsOf(after).includes(ip)) continue;
+    hints.push(
+      key + " 被 CubeMX 删掉了：" + ip + " 不在它认的外设表里（Mcu.IPn）——" +
+        "先启用外设（peripherals）再开它的中断，否则中断键会被静默丢弃",
+    );
+  }
   for (const device of dropped) {
     const pins = pinsPointingAt(before, device);
     if (pins.length === 0) {
@@ -273,6 +406,8 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
     removedKeys: removedKeys.slice(0, KEY_SAMPLE_LIMIT),
     addedKeys: addedKeys.slice(0, KEY_SAMPLE_LIMIT),
     changedValues: changedValues.slice(0, KEY_SAMPLE_LIMIT),
+    misorderedKeys: misordered.slice(0, KEY_SAMPLE_LIMIT),
+    attribution,
     autoAddedFunctions,
     hints,
   };
@@ -374,9 +509,15 @@ export async function runIocVerify(
       notes.push("日志里没看到保存完成的行，结论可能不完整；原始日志末尾：" + log.trim().split(/\r?\n/u).slice(-3).join(" | "));
     }
     const dropped = diff.droppedPeripherals;
-    const valueSuffix = diff.changedValues.length === 0
+    const valueSuffix = diff.attribution.valueChanged.length === 0
       ? ""
-      : "；另有 " + String(diff.changedValues.length) + " 个键的值被改写（键还在，值不一样）";
+      : "；另有 " + String(diff.attribution.valueChanged.length) + " 个键的值真被改写（键还在，值不一样）";
+    const normalizedSuffix = diff.attribution.valueNormalized.length === 0
+      ? ""
+      : "；另有 " + String(diff.attribution.valueNormalized.length) + " 个键的值只是成员顺序被规范化（语义不变）";
+    const orderSuffix = diff.attribution.orderOnly.length === 0
+      ? ""
+      : "；另有 " + String(diff.attribution.orderOnly.length) + " 个键的值相同但行序不同（CubeMX 按自己的顺序重排）";
     const autoSuffix = diff.autoAddedFunctions.length === 0
       ? ""
       : "；它另外自己补了 " + String(diff.autoAddedFunctions.length) + " 条初始化清单（functionlistsort，不影响生成正确性）";
@@ -390,7 +531,8 @@ export async function runIocVerify(
       message:
         (dropped.length === 0
           ? "CubeMX 认了全部 " + String(diff.afterPeripherals.length) + " 个外设；计划生成 " + String(diff.plannedFunctions.length) + " 个初始化函数"
-          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") + valueSuffix + autoSuffix,
+          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") +
+        valueSuffix + normalizedSuffix + orderSuffix + autoSuffix,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

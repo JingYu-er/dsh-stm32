@@ -19,6 +19,16 @@ import { resolveProjectDir } from "./project-dir.js";
 
 export const IOC_VERIFY_TOOL = "stm32_ioc_verify";
 
+const valueChangeList: JsonSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: { key: { type: "string" }, before: { type: "string" }, after: { type: "string" } },
+    required: ["key", "before", "after"],
+  },
+};
+
 const diffSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -48,21 +58,33 @@ const diffSchema: JsonSchema = {
     },
     removedKeys: { type: "array", items: { type: "string" } },
     addedKeys: { type: "array", items: { type: "string" } },
-    changedValues: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: { key: { type: "string" }, before: { type: "string" }, after: { type: "string" } },
-        required: ["key", "before", "after"],
+    changedValues: valueChangeList,
+    misorderedKeys: { type: "array", items: { type: "string" } },
+    attribution: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        orderOnly: { type: "array", items: { type: "string" } },
+        valueNormalized: valueChangeList,
+        valueChanged: valueChangeList,
+        missingKeys: { type: "array", items: { type: "string" } },
+        addedKeys: { type: "array", items: { type: "string" } },
+        droppedPeripherals: { type: "array", items: { type: "string" } },
+        autoAddedFunctions: { type: "array", items: { type: "string" } },
+        benign: { type: "boolean" },
       },
+      required: [
+        "orderOnly", "valueNormalized", "valueChanged", "missingKeys", "addedKeys",
+        "droppedPeripherals", "autoAddedFunctions", "benign",
+      ],
     },
     autoAddedFunctions: { type: "array", items: { type: "string" } },
     hints: { type: "array", items: { type: "string" } },
   },
   required: [
     "afterPeripherals", "droppedPeripherals", "addedPeripherals", "plannedFunctions", "plannedFunctionsRaw",
-    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "changedValues", "autoAddedFunctions", "hints",
+    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "changedValues", "misorderedKeys",
+    "attribution", "autoAddedFunctions", "hints",
   ],
 };
 
@@ -106,9 +128,23 @@ function format(report: IocVerifyReport): string[] {
   for (const block of diff.sharedSignals) {
     lines.push("共享信号块：SH." + block.key + " → " + block.entries.join("  "));
   }
-  for (const change of diff.changedValues) {
+  for (const change of diff.attribution.valueChanged) {
     lines.push("值被改写： " + change.key + "  " + change.before + " → " + change.after);
   }
+  for (const change of diff.attribution.valueNormalized) {
+    lines.push("值仅重排（语义不变）： " + change.key + "  " + change.before + " → " + change.after);
+  }
+  if (diff.attribution.orderOnly.length > 0) {
+    lines.push(
+      "行序不同（值相同，CubeMX 按自己的顺序重排）：" + diff.attribution.orderOnly.join("、"),
+    );
+  }
+  lines.push(
+    diff.attribution.benign
+      ? "结论：零实质差异" + (diff.attribution.orderOnly.length > 0 || diff.attribution.valueNormalized.length > 0
+        ? "（只有行序/成员序的规范化）" : "")
+      : "结论：有实质差异，见上面各条",
+  );
   if (diff.autoAddedFunctions.length > 0) {
     lines.push(
       "CubeMX 自己补的初始化清单（我们没写，它保存时按既有编号追加；不影响生成正确性）：" +
@@ -150,7 +186,11 @@ export function registerIocVerify(ctx: DshContext): void {
         message: "", notes: [], errors: [], diff: {
           afterPeripherals: [], droppedPeripherals: [], addedPeripherals: [], plannedFunctions: [],
           plannedFunctionsRaw: [], signalRewrites: [], sharedSignals: [], removedKeys: [], addedKeys: [],
-          changedValues: [], autoAddedFunctions: [], hints: [],
+          changedValues: [], misorderedKeys: [], autoAddedFunctions: [], hints: [],
+          attribution: {
+            orderOnly: [], valueNormalized: [], valueChanged: [], missingKeys: [], addedKeys: [],
+            droppedPeripherals: [], autoAddedFunctions: [], benign: true,
+          },
         },
       };
       if (subprocess === undefined) {
