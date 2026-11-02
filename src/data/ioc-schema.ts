@@ -61,7 +61,7 @@ export interface IocKeyMatch {
   readonly params: Readonly<Record<string, string>>;
 }
 
-/** 真值表本体（41 条，按匹配优先级排列：先匹配到的生效）。 */
+/** 真值表本体（49 条，按匹配优先级排列：先匹配到的生效——具体模板放前面，`{ip}.{name}` 这类兜底模板放最后）。 */
 export const SPECS: readonly IocKeySpec[] = [
   {
     "id": "mcu.cpn",
@@ -637,10 +637,10 @@ export const SPECS: readonly IocKeySpec[] = [
   {
     "id": "rcc.derived",
     "entity": "rcc",
-    "key": "RCC.{*}",
+    "key": "RCC.{member}",
     "valueKind": "text",
-    "valueNote": "时钟树派生键（SYSCLKFreq_VALUE、PLLMUL、APB1Freq_Value…）。",
-    "trigger": "由 clock-plan.ts 按 RCC 树逐项重算；这里只兜底，避免覆盖率检查把它们当未知键。",
+    "valueNote": "时钟树派生键（SYSCLKFreq_VALUE、PLLMUL、APB1Freq_Value…）。成员名是 [A-Za-z0-9_]+，取值由 RCC 树决定。",
+    "trigger": "由 clock-plan.ts 按 RCC 树逐项重算；这里兜住全部成员名，避免覆盖率检查把它们当未知键。S5 收尾把原来的 {*} 全通配收成 {member}：既能渲染键名（renderIocKey 现在拼得出 RCC.SYSCLKFreq_VALUE），也把「RCC.」这个命名空间本身钉住（RCCF.X 不再命中）。",
     "order": "dictionary",
     "evidence": [
       "jar.md:118-121（RCCService 自己写）",
@@ -659,6 +659,20 @@ export const SPECS: readonly IocKeySpec[] = [
     "evidence": [
       "jar.md:212",
       "真机 2026-11-02 两轮：只追加 1 条、格式正确"
+    ],
+    "writer": null
+  },
+  {
+    "id": "project.manager_key",
+    "entity": "project",
+    "key": "ProjectManager.{name}",
+    "valueKind": "text",
+    "valueNote": "工程管理项：ProjectName、TargetToolchain、KeepUserCode、HeapSize、MainLocation、DeviceId…（成员名就是 CubeMX 的字段名）。",
+    "trigger": "我们不写（只在 apply 前读 ProjectManager.KeepUserCode 做安全闸）；CubeMX 每次保存都会写一整组。以前这些键被 {ip}.{name} 兜成 periph.parameter，等于把工程配置误记成外设参数——分出来之后，{ip}.{name} 命中时才能按「是不是真外设」判拼错。",
+    "order": "dictionary",
+    "evidence": [
+      "语料 65 行 / 2 份 board 级文件（34 个不同成员）",
+      "demo.ioc 41 个 ProjectManager.* 键（真工程文件里的主导形态）"
     ],
     "writer": null
   },
@@ -776,6 +790,7 @@ const PLACEHOLDER_PATTERN: Readonly<Record<string, string>> = {
   name: ".+?",
   n: "\\d+",
   signal: ".+?",
+  member: "[A-Za-z0-9_]+",
   "*": ".*",
 };
 
@@ -892,13 +907,82 @@ export function renderIocKey(id: string, params: Readonly<Record<string, string 
   return rendered;
 }
 
-/** 覆盖率检查：生成器实际产出的键里，有没有 schema 不认识的。 */
+/* ─────────────────── 覆盖率分层 + 键形状审计（S5 收尾） ───────────────────
+ *
+ * 为什么必须分层：{ip}.{name} 这条模板会把**任何**带点的键都兜住——ProjectManager.ProjectName、
+ * PA9.随便什么、TIM3.Parameter 拼成 TIM3.Paramter，全都算「覆盖」。于是原来那句「覆盖率 100%」
+ * 并不能说明键名写对了，闸门只在形状上拦得住「没有点号」的键。
+ *
+ * 这里把命中强度分三档（由模板形状自动推导，不在表里加字段，避免 49 条各写一遍）：
+ *   exact     —— 模板里没有占位符（Mcu.PinsNb / NVIC.PriorityGroup）：键名逐字比对。
+ *   shape     —— 占位符都带边界，或末尾还有字面量段（Mcu.Pin{index} / {pin}.Signal / Dma.{ip}.{n}.RequestParameters）：
+ *                键名里「哪一段是什么」被核对过了，剩下的只是数值/名字。
+ *    namespace —— 含自由文本占位符且以它结尾（{ip}.{name} / SH.{signal}.{n} / Dma.{ip}.{n}.{name}）：
+ *                只证明了「是「前缀.某东西」这个形状」，一个拼错的键也能命中。
+ *
+ * 所以闸门分两道：exact/shape 直接算 covered；namespace 级的键还要过 auditIocKeys()，
+ * 按上下文（Mcu.IP<i> 里真实启用的实例 / db 引脚名 / db 参数清单）逐条判。 */
+
+export type IocKeyTier = "exact" | "shape" | "namespace";
+
+/** 这些占位符填的是自由文本（任意字符），填什么都能匹配上。 */
+const FREE_FORM_PLACEHOLDERS: readonly string[] = ["pin", "name", "signal"];
+
+const TIER_CACHE = new Map<string, IocKeyTier>();
+
+/** 由键模板形状推导命中强度（纯函数，结果按 spec id 缓存）。 */
+export function iocKeyTier(spec: IocKeySpec): IocKeyTier {
+  const cached = TIER_CACHE.get(spec.id);
+  if (cached !== undefined) return cached;
+  const placeholders = [...spec.key.matchAll(placeholderRegex())].map((match) => match[1] ?? "");
+  let tier: IocKeyTier;
+  if (placeholders.length === 0) {
+    tier = "exact";
+  } else if (placeholders.includes("*")) {
+    tier = "namespace";
+  } else if (!placeholders.some((token) => FREE_FORM_PLACEHOLDERS.includes(token))) {
+    tier = "shape";
+  } else {
+    // 自由文本占位符后面还有字面量（{pin}.Signal 的 ".Signal"、NVIC.{name}_IRQn 的 "_IRQn"）→ 属性/后缀被核对过。
+    const tail = spec.key.slice(spec.key.lastIndexOf("}") + 1);
+    tier = /[A-Za-z0-9_]/u.test(tail) ? "shape" : "namespace";
+  }
+  TIER_CACHE.set(spec.id, tier);
+  return tier;
+}
+
+/**
+ * 已知的「伪命名空间」：它们不是外设实例，但确实会以 `前缀.成员` 的形状出现。
+ * 目的是让 auditIocKeys 别把这些报成拼错。计数来自 504 份 board 级语料（键出现行数）。
+ */
+export const IOC_NAMESPACE_PREFIXES: readonly string[] = [
+  "ProjectManager",     // 65 行 / 2 份（工程配置组；真工程 demo.ioc 里 41 个键）
+  "CAD",                // 624 行 / 208 份（引脚分配图视图状态）
+  "File",               // 504 份均带 File.Version
+  "MxDb",               // 501 份均带 MxDb.Version
+  "PinOutPanel",        // 501 份（RotationAngle / Zoom）
+  "GPIO",               // 179 份（GPIO.groupedBy）
+  "Mcu",                // 1376 行（Mcu.ThirdPartyNb / Mcu.UserConstants 等）
+  "STMicroelectronics", // 313 行（IDE 版本键）
+  "RCC",                // 时钟树键的命名空间
+  "NVIC",               // 中断控制器键的命名空间
+  "Dma",                // DMA 键的命名空间
+  "SH",                 // 共享信号块
+];
+
+/** 覆盖率检查：生成器实际产出的键里，有没有 schema 不认识的（按命中强度分层）。 */
 export function iocSchemaCoverage(keys: Iterable<string>): {
   readonly covered: readonly string[];
+  /** exact / shape 命中：键名形状被真正核对过。 */
+  readonly strong: readonly string[];
+  /** namespace 命中：只证明了「前缀.某东西」，拼错也能命中，要再过 auditIocKeys。 */
+  readonly weak: readonly string[];
   readonly uncovered: readonly string[];
   readonly specIds: readonly string[];
 } {
   const covered: string[] = [];
+  const strong: string[] = [];
+  const weak: string[] = [];
   const uncovered: string[] = [];
   const specIds = new Set<string>();
   for (const key of keys) {
@@ -909,8 +993,10 @@ export function iocSchemaCoverage(keys: Iterable<string>): {
     }
     covered.push(key);
     specIds.add(hit.spec.id);
+    if (iocKeyTier(hit.spec) === "namespace") weak.push(key);
+    else strong.push(key);
   }
-  return { covered, uncovered, specIds: [...specIds] };
+  return { covered, strong, weak, uncovered, specIds: [...specIds] };
 }
 
 /** 人读描述：命中哪条 spec、占位符取值是什么。 */
@@ -921,4 +1007,139 @@ export function describeIocKey(key: string): string {
     .map(([name, value]) => name + "=" + value)
     .join(", ");
   return key + " → " + hit.spec.id + (params === "" ? "" : " (" + params + ")");
+}
+
+/* ─────────────────────── namespace 级键的上下文审计 ───────────────────────
+ *
+ * 闸门第二道：光命中 {ip}.{name} 不算数，还要看占位符填进来的东西是不是真的存在。
+ * 三个判据都来自现场（.ioc 里的 Mcu.IP<i> 列表、本机 db 的引脚表与参数清单），不是猜：
+ *   - ip 是已启用的外设实例 → 成员名必须在 db 给这个 IP 的 RefParameter 清单里（拼错 Baudrate 会被抓）；
+ *   - ip 是 db 里的引脚名 → 说明写的是「引脚属性」，但引脚属性必须逐条登记进表（否则 CubeMX 丢掉它）；
+ *   - ip 是已知伪命名空间（ProjectManager/CAD/…）→ 放行；
+ *   - 三者都不是 → 「疑似拼错」，这是我们唯一能凭空判错的一类。 */
+
+export interface IocKeyAuditContext {
+  /** Mcu.IP<i> 的值：真正启用的外设实例（USART1、TIM3…）。比较时忽略大小写。 */
+  readonly instances?: Iterable<string>;
+  /** db 引脚名（PA0-WKUP、PB4(NJRST)…）。 */
+  readonly pins?: Iterable<string>;
+  /** db 里这个芯片有的 IP 实例（含未启用的）：用来区分「拼错实例名」和「有实例但没进 Mcu.IPn」。 */
+  readonly dbInstances?: Iterable<string>;
+  /** 额外认作命名空间的前缀（默认就是 IOC_NAMESPACE_PREFIXES）。 */
+  readonly namespaces?: Iterable<string>;
+  /** 某个实例在 db 里的参数名清单；返回 null = 查不到，这一条就不校验。 */
+  readonly paramNamesOf?: (instance: string) => readonly string[] | null;
+  /** Dma.<IP>.<n>.<name> 里合法的参数名（DMA_PARAM_ORDER 那种白名单）；不给就不校验。 */
+  readonly dmaParamNames?: Iterable<string>;
+}
+
+export type IocKeyVerdict =
+  | "ok"
+  | "unregistered"
+  | "unknown-namespace"
+  | "pin-attribute"
+  | "inactive-instance"
+  | "unknown-parameter"
+  | "unknown-dma-parameter";
+
+export interface IocKeyAuditFinding {
+  readonly key: string;
+  /** 命中的 spec id；没登记时为空串。 */
+  readonly specId: string;
+  readonly tier: IocKeyTier | "none";
+  readonly verdict: IocKeyVerdict;
+  /** 人读说明（已含占位符取值），可直接拼进告警。 */
+  readonly detail: string;
+}
+
+function upperSet(values: Iterable<string> | undefined): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const value of values ?? []) set.add(value.trim().toUpperCase());
+  return set;
+}
+
+/** 逐键审计：形状命中 → 再看上下文。返回的 finding 顺序与输入一致（含 ok 项，便于测试断言）。 */
+export function auditIocKeys(
+  keys: Iterable<string>,
+  context: IocKeyAuditContext = {},
+): readonly IocKeyAuditFinding[] {
+  const instances = upperSet(context.instances);
+  const pins = upperSet(context.pins);
+  const dbInstances = upperSet(context.dbInstances);
+  const namespaces = upperSet([...IOC_NAMESPACE_PREFIXES, ...(context.namespaces ?? [])]);
+  const dmaParams = context.dmaParamNames === undefined ? null : new Set(context.dmaParamNames);
+  const findings: IocKeyAuditFinding[] = [];
+  for (const key of keys) {
+    const hit = matchIocKey(key);
+    if (hit === null) {
+      findings.push({ key, specId: "", tier: "none", verdict: "unregistered", detail: "真值表里没有这个键的形状" });
+      continue;
+    }
+    const tier = iocKeyTier(hit.spec);
+    const base = { key, specId: hit.spec.id, tier };
+    if (tier !== "namespace") {
+      findings.push({ ...base, verdict: "ok", detail: hit.spec.id });
+      continue;
+    }
+    if (hit.spec.id === "periph.parameter") {
+      const ip = (hit.params.ip ?? "").trim();
+      const name = hit.params.name ?? "";
+      const upper = ip.toUpperCase();
+      if (instances.has(upper)) {
+        const names = context.paramNamesOf?.(upper) ?? null;
+        if (names !== null && !names.includes(name)) {
+          findings.push({
+            ...base,
+            verdict: "unknown-parameter",
+            detail: ip + " 的 db 参数清单里没有 " + name + "（CubeMX 只认清单里的参数，拼错的键会被静默丢弃）",
+          });
+          continue;
+        }
+        findings.push({ ...base, verdict: "ok", detail: ip + " 是已启用实例，参数 " + name + (names === null ? "（无 db 清单，未校验）" : "）") });
+        continue;
+      }
+      if (dbInstances.has(upper)) {
+        findings.push({
+          ...base,
+          verdict: "inactive-instance",
+          detail: ip + " 在这颗芯片的 db 里有，但 Mcu.IP<i> 里没启用：这些参数键没有接收方，先启用外设（peripherals）",
+        });
+        continue;
+      }
+      if (pins.has(upper)) {
+        findings.push({
+          ...base,
+          verdict: "pin-attribute",
+          detail: ip + " 是引脚名，" + name + " 是引脚属性；引脚属性必须逐条登记进真值表（否则 CubeMX 会丢掉它）",
+        });
+        continue;
+      }
+      if (namespaces.has(upper)) {
+        findings.push({ ...base, verdict: "ok", detail: ip + " 是已知命名空间" });
+        continue;
+      }
+      findings.push({
+        ...base,
+        verdict: "unknown-namespace",
+        detail: ip + " 既不是已启用的外设实例，也不是 db 引脚名或已知命名空间",
+      });
+      continue;
+    }
+    if (hit.spec.id === "dma.request_group") {
+      const ip = (hit.params.ip ?? "").trim();
+      const name = hit.params.name ?? "";
+      if (dmaParams !== null && !dmaParams.has(name)) {
+        findings.push({
+          ...base,
+          verdict: "unknown-dma-parameter",
+          detail: "Dma." + ip + " 的 " + name + " 不在 DMA 参数白名单里（写进去会被静默忽略）",
+        });
+        continue;
+      }
+      findings.push({ ...base, verdict: "ok", detail: "Dma." + ip + " 的参数 " + name });
+      continue;
+    }
+    findings.push({ ...base, verdict: "ok", detail: hit.spec.id + "（命名空间级匹配，值未校验）" });
+  }
+  return findings;
 }

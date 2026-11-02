@@ -29,8 +29,9 @@ import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
 import { CORE_EXCEPTIONS, checkIocRules, extiIrqName } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
-import { iocSchemaCoverage, renderIocKey } from "../data/ioc-schema.js";
-import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
+import { auditIocKeys, iocSchemaCoverage, matchIocKey, renderIocKey } from "../data/ioc-schema.js";
+import type { IocKeyAuditContext } from "../data/ioc-schema.js";
+import { locateCubemxDb, readIpParameterNames, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
 import { loadSvdForLine, svdLineForChip } from "../data/svd.js";
 import type { CubemxDb, CubemxMcuFacts } from "./cubemx-db.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -463,6 +464,27 @@ const DMA_PARAM_ORDER = [
   "Instance", "Direction", "PeriphInc", "MemInc", "PeriphDataAlignment", "MemDataAlignment",
   "Mode", "Priority", "FIFOMode", "SignalID", "Polarity", "RequestNumber",
 ];
+
+/**
+ * 解析 `Dma.<IP>.<n>.<参数>` 的分组（`Dma.{ip}.{n}.{name}` 这条 spec 的三段占位符）。
+ * 不走手写正则：键名的形状全部由 src/data/ioc-schema.ts 的真值表定义，这里只取它的参数。
+ * 返回 null 表示不是 DMA 请求参数键（含 Dma.RequestParameters 本身）。返回的 name 就是参数名。
+ */
+function dmaGroupOf(key: string): { ip: string; n: string; name: string } | null {
+  const hit = matchIocKey(key);
+  if (hit === null || hit.spec.id !== "dma.request_group") return null;
+  const ip = hit.params.ip ?? "";
+  const n = hit.params.n ?? "";
+  const name = hit.params.name ?? "";
+  if (ip === "" || n === "" || name === "") return null;
+  return { ip, n, name };
+}
+
+/** 这个键算不算 DMA 家族的键（`Dma.<IP>.<n>…` 或 `Dma.Request<i>` 等）。 */
+function isDmaKey(key: string): boolean {
+  const hit = matchIocKey(key);
+  return hit !== null && hit.spec.id.startsWith("dma.");
+}
 
 interface PinTable {
   /** 按 Mcu.PinN 顺序的引脚名。 */
@@ -950,23 +972,20 @@ function enablePeripheral(
   //   语料 504 份里含 DMA 的 17 份全部三件套齐全，richhal.ioc:30-32 是 F1 的实物证据；
   //   另有 64/64 的 Dma.Request<i> 值等于同号 Dma.<IP>.<n> 的 IP 名，且 RequestParameters 列出的
   //   名字与真的写了的键一一对应（0 处不符）。
-  const dmaGroups = new Map<string, { ip: string }>();
+  const dmaGroups = new Map<string, { ip: string; n: string }>();
   for (const key of table.entries.keys()) {
-    const match = /^Dma\.([A-Za-z0-9_]+)\.([0-9]+)\.([A-Za-z0-9_]+)$/u.exec(key);
-    if (match === null) continue;
-    if ((match[3] as string) === "RequestParameters") continue;
-    dmaGroups.set((match[1] as string) + "." + (match[2] as string), { ip: match[1] as string });
+    const group = dmaGroupOf(key);
+    if (group === null) continue;
+    dmaGroups.set(group.ip + "." + group.n, group);
   }
-  if (dmaGroups.size > 0 || (preset.rawEntries ?? []).some((raw) => raw.key.startsWith("Dma."))) {
+  if (dmaGroups.size > 0 || (preset.rawEntries ?? []).some((raw) => isDmaKey(raw.key))) {
     let request = 0;
-    for (const [group, info] of dmaGroups) {
-      const prefix = "Dma." + group + ".";
+    for (const info of dmaGroups.values()) {
       const present: string[] = [];
       for (const key of table.entries.keys()) {
-        if (!key.startsWith(prefix)) continue;
-        const name = key.slice(prefix.length);
-        if (name === "RequestParameters" || name.includes(".")) continue;
-        present.push(name);
+        const group = dmaGroupOf(key);
+        if (group === null || group.ip !== info.ip || group.n !== info.n) continue;
+        present.push(group.name);
       }
       present.sort((left, right) => {
         const a = DMA_PARAM_ORDER.indexOf(left);
@@ -976,12 +995,12 @@ function enablePeripheral(
         if (b < 0) return -1;
         return a - b;
       });
-      table.entries.set(prefix + "RequestParameters", present.join(","));
+      table.entries.set(renderIocKey("dma.request_parameters", { ip: info.ip, n: info.n }), present.join(","));
       table.entries.set(renderIocKey("dma.request_index", { n: request }), info.ip);
       // CubeMX 见到 DMA 通道就顺手打开它的中断（实测 6.15.0 + F1：加一条 ADC1 DMA 后
       // 保存，diff 里唯一多出来的键就是 NVIC.DMA1_Channel1_IRQn，值固定这一串）。
       // 我们不补它的话，每次回写都要多一条 added-key 噪声；只在缺失时补，用户设过的不覆盖。
-      const instance = (table.entries.get(prefix + "Instance") ?? "").trim();
+      const instance = (table.entries.get(renderIocKey("dma.request_group", { ip: info.ip, n: info.n, name: "Instance" })) ?? "").trim();
       const channelIrq = renderIocKey("nvic.vector", { name: instance });
       if (/^DMA[12]_Channel[0-9]$/u.test(instance) && !table.entries.has(channelIrq)) {
         table.entries.set(channelIrq, "true:0:0:false:false:true:false:true:true");
@@ -990,8 +1009,9 @@ function enablePeripheral(
     }
     table.entries.set(renderIocKey("dma.requests_nb"), String(request));
     for (const key of [...table.entries.keys()]) {
-      const match = /^Dma\.Request([0-9]+)$/u.exec(key);
-      if (match !== null && Number.parseInt(match[1] as string, 10) >= request) table.entries.delete(key);
+      const hit = matchIocKey(key);
+      if (hit === null || hit.spec.id !== "dma.request_index") continue;
+      if (Number.parseInt(hit.params.n ?? "", 10) >= request) table.entries.delete(key);
     }
   }
 
@@ -999,7 +1019,7 @@ function enablePeripheral(
   const paramsKey = renderIocKey("periph.ip_parameters", { ip: preset.ip });
   const names = (table.entries.get(paramsKey) ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
   for (const param of preset.parameters) {
-    table.entries.set(preset.ip + "." + param.name, request.parameters?.[param.name] ?? param.value);
+    table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name: param.name }), request.parameters?.[param.name] ?? param.value);
     if (!names.includes(param.name)) names.push(param.name);
     if (overrodePins && request.parameters?.[param.name] === undefined && param.name.startsWith("Channel-")) {
       table.warnings.push(
@@ -1011,7 +1031,7 @@ function enablePeripheral(
   for (const [name, value] of Object.entries(request.parameters ?? {})) {
     if (names.includes(name)) continue;
     names.push(name);
-    table.entries.set(preset.ip + "." + name, value);
+    table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name }), value);
   }
   if (names.length > 0) table.entries.set(paramsKey, names.join(","));
 
@@ -1021,19 +1041,23 @@ function enablePeripheral(
   // 2) 改了 ADCPresc 就得同步 RCC.ADCFreqValue：否则 .ioc 自相矛盾（÷6 却还写着 ÷2 的 36 MHz）。
   //    语料里 4 份带 ADCPresc 的文件全部满足 ADCFreqValue == APB2/分频 → 这是 CubeMX 自己维护的不变量。
   const extraRcc: string[] = [];
+  const rccDerivedPrefix = renderIocKey("rcc.derived", { member: "" });
   for (const extra of preset.extraEntries ?? []) {
     table.entries.set(extra.key, extra.value);
-    if (extra.key.startsWith("RCC.")) extraRcc.push(extra.key.slice("RCC.".length));
+    if (extra.key.startsWith(rccDerivedPrefix)) extraRcc.push(extra.key.slice(rccDerivedPrefix.length));
   }
   if (extraRcc.length > 0) {
-    const adcDiv = adcPrescalerDiv(table.entries.get("RCC.ADCPresc") ?? "");
-    const apb2 = Number(table.entries.get("RCC.APB2Freq_Value") ?? table.entries.get("RCC.APB2TimFreq_Value") ?? "");
+    const adcDiv = adcPrescalerDiv(table.entries.get(renderIocKey("rcc.adc_presc")) ?? "");
+    const apb2 = Number(
+      table.entries.get(renderIocKey("rcc.derived", { member: "APB2Freq_Value" })) ??
+        table.entries.get(renderIocKey("rcc.derived", { member: "APB2TimFreq_Value" })) ?? "",
+    );
     if (adcDiv !== null && Number.isFinite(apb2) && apb2 > 0) {
       table.entries.set(renderIocKey("rcc.adc_freq"), String(Math.round(apb2 / adcDiv)));
       if (!extraRcc.includes("ADCFreqValue")) extraRcc.push("ADCFreqValue");
     }
     const names = new Set<string>();
-    for (const part of (table.entries.get("RCC.IPParameters") ?? "").split(",")) {
+    for (const part of (table.entries.get(renderIocKey("rcc.ip_parameters")) ?? "").split(",")) {
       const trimmed = part.trim();
       if (trimmed !== "") names.add(trimmed);
     }
@@ -1200,7 +1224,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   // SVD 的中断表先准备好：interrupts 参数要拿它校验中断名，R20 也要用（同一个 set 复用，只读一次盘）。
   // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有资源包时 device 为 null，校验跳过。
   let interrupts: ReadonlySet<string> | null = null;
-  const cpn = (after.get("Mcu.CPN") ?? "").trim();
+  const cpn = (after.get(renderIocKey("mcu.cpn")) ?? "").trim();
   if (cpn !== "") {
     const line = svdLineForChip(cpn);
     const device = line === null ? null : loadSvdForLine(line);
@@ -1208,11 +1232,11 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   }
   for (const pin of request.pins ?? []) addPin(pinTable, pin);
   if (request.serialWire === true) ensureSerialWire(pinTable);
-  const family = (after.get("Mcu.Family") ?? "").trim();
+  const family = (after.get(renderIocKey("mcu.family")) ?? "").trim();
   if (family === "" && (request.peripherals ?? []).length > 0) {
     warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
   }
-  const pinNames = createPinNameResolver({ mcuName: (after.get("Mcu.Name") ?? "").trim(), family });
+  const pinNames = createPinNameResolver({ mcuName: (after.get(renderIocKey("mcu.name")) ?? "").trim(), family });
   // db 指纹写进报告：任何一条返回路径（包括"没有变化"、失败）都要带上，报 bug 时能一眼看出 db 版本差异。
   empty.dbVersion = pinNames.db?.version ?? "";
   empty.dbRoot = pinNames.db?.root ?? "";
@@ -1294,25 +1318,13 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   // 外设接线自洽性（IPNb 条数、外设有没有引脚指向、多模式引脚缺不缺 .Mode）。
   validatePeripheralWiring(after, warnings);
 
-  // schema 覆盖率闸门：写出来的每个键都要在 src/data/ioc-schema.ts 里找得到 spec。
-  // 这里只告警、不硬失败——老工程模板可能带我们没登记的键，卡死 plan 比漏报更糟；
-  // 真正的闸门在单测里（schema 覆盖率 0 uncovered + 每类写键点都有 spec）。
-  const coverage = iocSchemaCoverage(after.keys());
-  if (coverage.uncovered.length > 0) {
-    warnings.push(
-      "[SCHEMA] " + String(coverage.uncovered.length) + " 个键不在 .ioc schema 真值表里（" +
-        coverage.uncovered.slice(0, 5).join("、") + "）：可能是 CubeMX 新版本加的键，也可能是我们拼错了键名" +
-        "——拼错的键会被 CubeMX 静默忽略，确认后请补进 src/data/ioc-schema.ts",
-    );
-  }
-
   // 从 CubeMX 字节码还原出来的离线规则（docs §35）：IPParameters 白名单、DMA 需要 Mcu.IP=DMA、
   // ADC Rank 一致性、NVIC 值 9 段、F1 的 ADC 时钟上限。
   // C6：把 entries 直接写进去的 <IP>.<标量键> 自动补进 <IP>.IPParameters。
   // CubeMX 只认白名单里的参数（R7 检查的就是这件事），漏写会被静默丢弃——这里主动补齐，而不是只告警。
   const instances = new Set<string>();
   for (const [key, value] of after) {
-    if (/^Mcu[.]IP[0-9]+$/u.test(key)) instances.add(value.trim());
+    if (matchIocKey(key)?.spec.id === "mcu.ip_index") instances.add(value.trim());
   }
   for (const ip of instances) {
     // 只补真外设实例（ADC1/TIM3/USART1…）。NVIC / RCC / SYS / DMA 这些是"伪实例"，
@@ -1333,6 +1345,48 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     after.set(ip + ".IPParameters", [...listed, ...added].join(","));
     notes.push("自动补 " + ip + ".IPParameters：" + added.join("、") + "（不补会被 CubeMX 静默丢弃）");
   }
+  // schema 覆盖率闸门（两道，S5 收尾）。放在 C6 之后：自动补 IPParameters 会新增一个键，它同样要受审。
+  // 第一道：键形状必须在真值表里（uncovered 就是"完全没登记的形状"）。
+  // 第二道：namespace 级命中（{ip}.{name} / Dma.{ip}.{n}.{name} 这类模板）只证明了"前缀.某东西"，
+  // 拼错的键也能命中；所以要按上下文逐条判——是不是 Mcu.IP<i> 里真实启用的实例、参数名在不在
+  // db 的 RefParameter 清单里、ip 位写的是不是引脚名、Dma 参数在不在白名单里。
+  // 只审"这次计划写或改的键"：文件里原有的键是 CubeMX 自己写的，审了只会误报。
+  // 仍然只告警、不硬失败——老工程模板可能带我们没登记的键，卡死 plan 比漏报更糟；
+  // 真正的闸门在单测里（schema 覆盖率 0 uncovered + 每类写键点都有 spec）。
+  const touched = [...after.keys()].filter((key) => after.get(key) !== before.get(key)).sort(compareIocKeys);
+  const coverage = iocSchemaCoverage(touched);
+  if (coverage.uncovered.length > 0) {
+    warnings.push(
+      "[SCHEMA] " + String(coverage.uncovered.length) + " 个键不在 .ioc schema 真值表里（" +
+        coverage.uncovered.slice(0, 5).join("、") + "）：可能是 CubeMX 新版本加的键，也可能是我们拼错了键名" +
+        "——拼错的键会被 CubeMX 静默忽略，确认后请补进 src/data/ioc-schema.ts",
+    );
+  }
+  if (coverage.weak.length > 0) {
+    const db = pinNames.db;
+    const facts = pinNames.facts;
+    const auditContext: IocKeyAuditContext = {
+      instances,
+      pins: facts === null ? [] : [...facts.pins.keys()],
+      dbInstances: facts === null ? [] : [...facts.ips.keys()],
+      // 没有 db 时返回 null：这条不校验，而不是"查不到就报错"。
+      paramNamesOf: (instance: string): readonly string[] | null => {
+        if (db === null || facts === null) return null;
+        const names = readIpParameterNames(db, facts, instance);
+        return names.length === 0 ? null : names;
+      },
+      dmaParamNames: DMA_PARAM_ORDER,
+    };
+    const findings = auditIocKeys(coverage.weak, auditContext).filter((finding) => finding.verdict !== "ok");
+    if (findings.length > 0) {
+      warnings.push(
+        "[SCHEMA] " + String(findings.length) + " 个键名形状对但上下文不对：" +
+          findings.slice(0, 5).map((finding) => finding.key + "（" + finding.detail + "）").join("；") +
+          "——这种键 CubeMX 会静默忽略，改键名或补进 src/data/ioc-schema.ts",
+      );
+    }
+  }
+
   // R20 用的中断表就是上面那份（interrupts 参数校验时已经读过一次盘，这里复用）。
   const ruleReport = checkIocRules(after, { db: pinNames.db, facts: pinNames.facts, interrupts });
   for (const issue of ruleReport.errors) errors.push("[" + issue.rule + "] " + issue.message);

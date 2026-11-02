@@ -184,3 +184,27 @@ export function readIpModeNames(db: CubemxDb, facts: CubemxMcuFacts, instanceNam
   for (const match of text.matchAll(/<RefMode\b[^>]*Name="([^"]+)"/gu)) names.push(match[1] as string);
   return [...new Set(names)];
 }
+
+/**
+ * 读某个 IP 实例的合法参数名（Modes 文件里的 <RefParameter Name="…">），例如 USART1 的
+ * BaudRate / WordLength / Parity。.ioc 里 `<IP>.<参数>` 的键名必须逐字等于这些名字，
+ * 拼错就会被 CubeMX 静默丢弃——所以覆盖率闸门用它校验「形状对、名字错」。
+ *
+ * F1 系列有个坑：参数名不在 `db/mcu/<Mcu>.xml`（那里只有 <IP> 的实例清单，RefParameter 为 0），
+ * 而在 `db/mcu/IP/<Name>-<Version>_Modes.xml` 里，所以要按 ipModesPath 再走一次。
+ * 返回空数组表示「查不到，别据此判错」（调用方据此跳过校验）。
+ */
+const IP_PARAM_CACHE = new Map<string, readonly string[]>();
+
+export function readIpParameterNames(db: CubemxDb, facts: CubemxMcuFacts, instanceName: string): string[] {
+  const file = ipModesPath(db, facts, instanceName);
+  if (file === null) return [];
+  const cached = IP_PARAM_CACHE.get(file);
+  if (cached !== undefined) return [...cached];
+  const text = readFileSync(file, "utf8");
+  const names: string[] = [];
+  for (const match of text.matchAll(/<RefParameter\b[^>]*\bName="([^"]+)"/gu)) names.push(match[1] as string);
+  const unique = [...new Set(names)];
+  IP_PARAM_CACHE.set(file, unique);
+  return [...unique];
+}

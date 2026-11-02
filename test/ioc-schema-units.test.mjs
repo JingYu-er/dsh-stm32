@@ -8,13 +8,17 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 
 import {
+  IOC_NAMESPACE_PREFIXES,
   IOC_SCHEMA,
+  auditIocKeys,
   compileIocKeyTemplate,
+  iocKeyTier,
   iocSchemaCoverage,
   iocSpecById,
   matchIocKey,
   renderIocKey,
 } from "../lib/data/ioc-schema.js";
+import { readIpParameterNames } from "../lib/engine/cubemx-db.js";
 import { planIocChanges } from "../lib/engine/ioc-plan.js";
 import { parseIocEntries } from "../lib/engine/ioc.js";
 
@@ -46,7 +50,7 @@ const VALUE_KINDS = ["count", "index", "bool", "enum", "csv", "nvic9", "hz", "te
 const ORDERS = ["dictionary", "insertion", "sorted-members", "index", "sequence"];
 
 test("schema 形状：id 唯一、enum 字段合法、证据与写者齐全", () => {
-  assert.equal(IOC_SCHEMA.length, 48, "spec 条数变了就要同步改这个数字（它是表的规模声明）");
+  assert.equal(IOC_SCHEMA.length, 49, "spec 条数变了就要同步改这个数字（它是表的规模声明）");
   const ids = new Set();
   for (const spec of IOC_SCHEMA) {
     assert.match(spec.id, /^[a-z_]+\.[a-z0-9_]+$/u, "id 形状： domain.name → " + spec.id);
@@ -124,7 +128,93 @@ test("renderIocKey：正常渲染 + 四种拼错都要抛错", () => {
   assert.throws(() => renderIocKey("不存在"), /未知 spec id/u);
   assert.throws(() => renderIocKey("nvic.vector", {}), /缺少占位符 \{name\}/u);
   assert.throws(() => renderIocKey("mcu.pins_nb", { index: 1 }), /不接受占位符 \{index\}/u);
-  assert.throws(() => renderIocKey("rcc.derived"), /catch-all/u);
+  // rcc.derived 从 RCC.{*} 收窄成 RCC.{member}：现在拼得出键名，缺占位符就抛错（S5 收尾）。
+  assert.equal(renderIocKey("rcc.derived", { member: "SYSCLKFreq_VALUE" }), "RCC.SYSCLKFreq_VALUE");
+  assert.throws(() => renderIocKey("rcc.derived"), /缺少占位符 \{member\}/u);
+  assert.equal(renderIocKey("project.manager_key", { name: "ProjectName" }), "ProjectManager.ProjectName");
+});
+
+test("iocKeyTier：命中强度由模板形状自动推导（exact / shape / namespace）", () => {
+  const tier = (id) => iocKeyTier(iocSpecById(id));
+  // 没有占位符 → 键名逐字比对
+  assert.equal(tier("mcu.pins_nb"), "exact");
+  assert.equal(tier("rcc.ip_parameters"), "exact");
+  // 占位符带边界，或自由文本后面还跟字面量 → 形状被核对过
+  assert.equal(tier("mcu.pin_index"), "shape", "{index} 只吃数字");
+  assert.equal(tier("pin.signal"), "shape", "{pin}.Signal 的 .Signal 钉住了属性名");
+  assert.equal(tier("nvic.vector"), "shape", "NVIC.{name}_IRQn 的 _IRQn 钉住了后缀");
+  assert.equal(tier("dma.request_parameters"), "shape");
+  // 自由文本占位符结尾 → 只证明了「前缀.某东西」
+  assert.equal(tier("periph.parameter"), "namespace");
+  assert.equal(tier("dma.request_group"), "namespace");
+  assert.equal(tier("rcc.derived"), "shape", "收窄成 {member} 之后不再是全通配");
+});
+
+test("iocSchemaCoverage：strong / weak 分层，weak 只算「形状命中」", () => {
+  const coverage = iocSchemaCoverage([
+    "Mcu.Pin3", "NVIC.TIM2_IRQn", "RCC.ADCPresc", "TIM3.Prescaler", "KeepUserPlacement", "WeirdKeyWithoutDot",
+  ]);
+  assert.deepEqual(coverage.uncovered, ["WeirdKeyWithoutDot"]);
+  assert.equal(coverage.covered.length, 5);
+  assert.deepEqual(coverage.weak, ["TIM3.Prescaler"], "只有 periph.parameter 那条是 namespace 级");
+  assert.equal(coverage.strong.length, 4);
+  assert.ok(coverage.specIds.includes("nvic.vector"));
+  assert.deepEqual(iocSchemaCoverage(["Custom.NewKey"]).weak, ["Custom.NewKey"], "拼错的点号键也是 weak（要靠审计）");
+});
+
+test("auditIocKeys：六种 verdict 各按上下文判", () => {
+  const context = {
+    instances: ["USART1", "TIM3"],
+    pins: ["PA9", "PB4(NJRST)"],
+    paramNamesOf: (instance) => (instance === "USART1" ? ["Instance", "BaudRate"] : null),
+    dmaParamNames: ["Instance", "Direction"],
+  };
+  const verdicts = (keys, extra = {}) =>
+    auditIocKeys(keys, { ...context, ...extra }).map((item) => item.verdict);
+  assert.deepEqual(verdicts(["Mcu.Pin3"], { instances: [] }), ["ok"], "exact 级不需要上下文");
+  assert.deepEqual(verdicts(["USART1.BaudRate"]), ["ok"], "实例 + 合法参数");
+  assert.deepEqual(verdicts(["USART1.Baudrate"]), ["unknown-parameter"], "拼错的参数名");
+  assert.deepEqual(verdicts(["TIM3.Whatever"]), ["ok"], "查不到 db 清单时不判错");
+  assert.deepEqual(verdicts(["PA9.BaudRate"]), ["pin-attribute"], "ip 位写的是引脚名");
+  assert.deepEqual(
+    verdicts(["USART1.BaudRate"], { instances: [], dbInstances: ["USART1"] }),
+    ["inactive-instance"],
+    "db 里有这个实例但 Mcu.IPn 没启用",
+  );
+  assert.deepEqual(verdicts(["ProjectManager.ProjectName"]), ["ok"], "已知命名空间放行");
+  assert.deepEqual(verdicts(["RIF.Whatever"]), ["unknown-namespace"], "既不是实例也不是引脚");
+  assert.deepEqual(verdicts(["Dma.ADC1.0.Instance"]), ["ok"]);
+  assert.deepEqual(verdicts(["Dma.ADC1.0.Bogus"]), ["unknown-dma-parameter"]);
+  assert.deepEqual(verdicts(["WeirdKeyWithoutDot"]), ["unregistered"]);
+  // finding 带人读说明，可以直接拼进告警
+  const finding = auditIocKeys(["USART1.Baudrate"], context)[0];
+  assert.equal(finding.specId, "periph.parameter");
+  assert.match(finding.detail, /Baudrate/u);
+  // 未给 context 时：没有任何实例/引脚信息，点号键只能判成拼错
+  assert.deepEqual(auditIocKeys(["USART1.BaudRate"]).map((item) => item.verdict), ["unknown-namespace"]);
+  assert.ok(IOC_NAMESPACE_PREFIXES.includes("ProjectManager"));
+});
+
+test("readIpParameterNames：从 db 的 IP Modes 文件读 RefParameter 清单", () => {
+  const root = join(TMP, "fakedb");
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(join(root, "mcu", "IP"), { recursive: true });
+  writeFileSync(
+    join(root, "mcu", "IP", "USART-sci2_v1_0_Cube_Modes.xml"),
+    '<IP Name="USART"><RefParameter Name="Instance"/><RefParameter Name="BaudRate"/><RefParameter Name="BaudRate"/>' +
+      '<RefParameter Name="WordLength"/></IP>',
+  );
+  const db = { root, version: "6.0.150" };
+  const facts = {
+    name: "STM32F103C(8-B)Tx",
+    packageName: "LQFP48",
+    frequencyMhz: 72,
+    pins: new Map(),
+    ips: new Map([["USART1", { name: "USART", version: "sci2_v1_0_Cube", configFile: "" }]]),
+  };
+  assert.deepEqual(readIpParameterNames(db, facts, "usart1"), ["Instance", "BaudRate", "WordLength"]);
+  assert.deepEqual(readIpParameterNames(db, facts, "USART2"), [], "查不到的实例给空数组（调用方据此跳过校验）");
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("iocSchemaCoverage：认识的全部算覆盖，不认识的单独列出来", () => {

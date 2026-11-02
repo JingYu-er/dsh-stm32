@@ -3844,9 +3844,9 @@ interface IocPlanRequest {
 **版本绑定写进文件头注释**：CubeMX 6.15.0 / DB.6.0.150 / STM32CubeFW_F1_V1.8.7。换版本要重跑语料统计与探针，
 否则「真值表」就是过期的真值表（这是比没有表更危险的状态）。
 
-### 61.3 表的结构：48 条 spec
+### 61.3 表的结构：48 条 spec（§61.11 收尾后 49 条）
 
-`src/data/ioc-schema.ts`（约 24 KB）：类型 → `SPECS`（48 条 JSON 字面量）→ 编译与查询函数。
+`src/data/ioc-schema.ts`（约 30 KB）：类型 → `SPECS`（48 条 JSON 字面量；§61.11 收尾后 49 条）→ 编译与查询函数。
 
 - 三个枚举：`entity`（mcu / pin / shared-signal / nvic / dma / peripheral / rcc / project）、
   `valueKind`（count / index / bool / enum / csv / nvic9 / hz / text）、
@@ -3938,7 +3938,7 @@ interface IocPlanRequest {
   夹具 `demo.ioc` 0 未覆盖、真 plan 产物 0 未覆盖 + 无双后缀 + schema 键真的落地。
 - `ioc-verify-units` 9 → 16 例（`orderOnly`、纯插入不算重排、`valueNormalized`、`valueChanged`、
   三个旧字段与新桶一致、`isIocValueNormalized` 边界、中断被删提示 + EXTI 不误报）。
-- `node test/run-units.mjs` → **708 pass / 0 fail**（41 → 42 个套件）；`node scripts/pack-size.mjs` →
+- `node test/run-units.mjs` → **708 pass / 0 fail**（41 → 42 个套件；§61.11 收尾后 712）；`node scripts/pack-size.mjs` →
   包体 550.0 KB（上限 1171.9 KB，117 个文件，解包 1747.8 KB），运行时资产 16.4 KB / 7 个（上限 40.0 KB）。
 
 ### 61.10 判过但不动 / 下一步
@@ -3948,3 +3948,85 @@ interface IocPlanRequest {
 - **差异样本仍截 60 条**（`KEY_SAMPLE_LIMIT`）：归因也只是分类，不打算把 500 行差异全吐给模型。
 - **不新增规则编号**：schema 覆盖率用 `[SCHEMA]` 前缀，而不是编成 R24——它描述的是「我们的表」，不是 CubeMX 的行为约束。
 - S5 的剩余部分（`ioc-plan` 全量 schema 化收尾）留到用户开启的下一阶段。
+
+### 61.11 S5 收尾：字面量清零 + 覆盖率闸门分层（同日续）
+
+§61.5 和 §61.10 记的两个盲区，这一轮一起收了：生成器里残留的手拼键名，以及「覆盖率 100% 却证明不了键名对」。
+
+**为什么原来的覆盖率闸门证不了事**（先把话说透，不然下一轮又会把绿钩当成证据）：
+`{ip}.{name}` 这条模板会把**任何**带点的键都兜住。实测把 `demo.ioc` 的 112 个键按命中强度分层，
+namespace 级占了 **59 个**（exact 15 / shape 38 / namespace 59），构成是 `ProjectManager.*` 41 个、
+`RCC.*` 19 个，加上 `CAD.formats`/`CAD.pinconfig`/`CAD.provider`/`File.Version`/`GPIO.groupedBy`/
+`Mcu.ThirdPartyNb`/`Mcu.UserConstants`/`MxDb.Version`/`PinOutPanel.RotationAngle`。同一条模板同时冒充了
+三种东西：「IP 参数」「工程配置组」「未知引脚属性」。504 份 board 级语料也印证了这一点：
+`{ip}.{name}` 的 ip 位有 276 种不同前缀，除了 RIF/PCC/Mcu/DDR_CTRL_PHY/NVIC1/ADC1 这些真实例，
+**引脚名也出现在 ip 位**（PB9 30 行、PB6 28、PB7 28、PC12 20、PE0 19）——未知引脚属性同样落进 `periph.parameter`。
+
+**表的变化（48 → 49 条）**：
+
+- `rcc.derived`：`RCC.{*}` → `RCC.{member}`（`{member}` = `[A-Za-z0-9_]+`）。两个好处：
+  `renderIocKey("rcc.derived", { member: "SYSCLKFreq_VALUE" })` 现在拼得出键名，生成器不必再手写 `"RCC." + x`；
+  且「RCC.」这个命名空间本身被钉住（`RCCF.X` 不再命中）。代价是原来「全通配不会缺占位符」的行为没了，
+  单测里那条 `assert.throws(… /catch-all/)` 改成断言缺 `{member}` 抛错 + 渲染正确。
+- 新增 `project.manager_key` = `ProjectManager.{name}`（writer `null`）：把工程配置组从 `periph.parameter` 里分出来，
+  否则「这个前缀是不是真外设」这个判据永远被 ProjectManager 污染。证据：语料 65 行 / 2 份（34 个不同成员），
+  真工程 `demo.ioc` 里 41 个键。
+
+**命中强度由模板形状自动推导**（不加表字段——49 条各写一遍 `tier` 一定会写漏）：
+
+| tier | 判据 | 例子 |
+| --- | --- | --- |
+| `exact` | 模板里没有占位符 | `Mcu.PinsNb`、`RCC.IPParameters` |
+| `shape` | 占位符都带边界（`index`/`n`/`ip`/`member`），或自由文本占位符后面还有字面量 | `Mcu.Pin{index}`、`{pin}.Signal`、`NVIC.{name}_IRQn`、`Dma.{ip}.{n}.RequestParameters` |
+| `namespace` | 自由文本占位符（`{pin}`/`{name}`/`{signal}`）且以它结尾 | `{ip}.{name}`、`Dma.{ip}.{n}.{name}`、`SH.{signal}.{n}` |
+
+于是闸门分两道：`iocSchemaCoverage` 返回 `{covered, strong, weak, uncovered, specIds}`（strong = exact/shape，
+weak = namespace）；weak 的键再过 `auditIocKeys(keys, context)` 按上下文逐条判，六种 verdict：
+
+1. `ok`：真外设 + 参数名在 db 的 `<RefParameter>` 清单里 / 已知伪命名空间 / exact·shape 级；
+2. `unknown-parameter`：实例是真的，参数名不在清单里（`USART1.Baudrate`）；
+3. `inactive-instance`：db 里这颗芯片有这个实例，但 `Mcu.IP<i>` 没启用（键没有接收方）；
+4. `pin-attribute`：ip 位写的是引脚名（`PA9.BaudRate`）——引脚属性必须逐条登记进表；
+5. `unknown-namespace`：三者都不是，唯一能凭空判「拼错」的一类（`USART9.BaudRate`、`RIF.Whatever`）；
+6. `unknown-dma-parameter`：`Dma.<IP>.<n>.<name>` 的 name 不在 `DMA_PARAM_ORDER` 白名单里；
+   另有 `unregistered`（表中完全没有的形状）。
+
+参数清单从哪来：F1 的 `db/mcu/<Mcu>.xml` 里 `RefParameter` 是 **0 条**（只有 `<IP>` 实例清单），
+真名在 `db/mcu/IP/<Name>-<Version>_Modes.xml`：USART1 86 条（Instance/VirtualMode/BaudRate/WordLength/…/Parity）、
+TIM3 256 条、ADC1 77 条、SPI1 27 条、GPIO 15 条。所以新增 `readIpParameterNames(db, facts, instance)`
+（`src/engine/cubemx-db.ts`，复用 `ipModesPath`，按文件路径缓存）；查不到返回空数组，调用方据此返回 `null` = 不校验，
+而不是「查不到就判错」。
+
+**只审「这次计划写或改的键」**（`after.get(k) !== before.get(k)`）：文件里原有的键是 CubeMX 自己写的，
+审了只会误报（真工程光 `ProjectManager`/`CAD` 就有几十个）。闸门也从 C6 之前**移到 C6 之后**——
+自动补 `<IP>.IPParameters` 会新增一个键，它同样该受审。
+
+**生成器去字面量**（`src/engine/ioc-plan.ts`）：`<IP>.<参数>`（两处）、`RCC.ADCPresc`、`RCC.APB2Freq_Value`/
+`RCC.APB2TimFreq_Value`、`RCC.IPParameters`、`Mcu.CPN`/`Mcu.Family`/`Mcu.Name`、DMA 段的三条手写正则
+（`/^Dma.([\w]+).(d+).([\w]+)$/`、`/^Dma.Request(d+)$/`、`prefix + "RequestParameters"`、`prefix + "Instance"`）
+与 `/^Mcu[.]IP[0-9]+$/` 全部改成 `renderIocKey(...)` / `matchIocKey(...)`。DMA 分组解析抽成
+`dmaGroupOf(key)`（取 `dma.request_group` 的三个占位符）与 `isDmaKey(key)`（`spec.id` 以 `dma.` 开头）。
+
+**实测（本机 db `DB.6.0.150`，`STM32F103C(8-B)Tx`）**：
+
+- 正例：`demo.ioc` + `USART1`（PA9/PA10）+ `PA6` 开漏 + `interrupts:["USART1"]` → `ok=true`，**0 条 `[SCHEMA]`**，
+  只有既有的 `R5`（缺 `RCC.ADCPresc`）。说明审计对真生成器产物不误报。
+- 反例（`entries` 手写五条）：
+  `Dma.ADC1.0.Bogus` → `unknown-dma-parameter`；`PA9.BaudRate` → `pin-attribute`；
+  `USART1.Baudrate`/`USART1.BaudRate` 在未启用 USART1 时报 `inactive-instance`，**启用后**报 `unknown-parameter`
+  （`USART1.Baudrate` 被点名，`USART1.BaudRate` 通过）；`USART9.BaudRate` → `unknown-namespace`。
+  五条合并成一条 `[SCHEMA]` 告警（前缀 5 条 + 说明），仍然只告警不硬失败。
+
+**真机往返（`demo/.dsh-stm32/s5-verify.mjs`，CubeMX 6.15.0 无头，`durationMs=63072`）**：plan 33 个键
+（`PA6` 开漏 + 初始高、`PA0-WKUP` 下降沿 EXTI + 上拉、`USART1`、`interrupts:["USART1"]`、Serial Wire）
+→ apply → `config load` + `config save`：`addedKeys`/`removedKeys`/`changedValues`/`signalRewrites`/
+`orderOnly` **全空**，`benign=true`，`dropped=[]`，只有它自己追加的 `3-MX_USART1_UART_Init-USART1-false-HAL-true`。
+即：去字面量之后键名与 CubeMX 写回来的**逐字节一致**，且计划阶段 0 条 `[SCHEMA]`。
+
+**单测与包体**：`test/ioc-schema-units.test.mjs` 8 → 12 例（新增 `iocKeyTier` 推导表、strong/weak 分层、
+`auditIocKeys` 六种 verdict、`readIpParameterNames` 用临时目录造假 db）；
+`node test/run-units.mjs` → **712 pass / 0 fail**（42 个套件）；`node scripts/pack-size.mjs` →
+包体 **554.0 KB**（上限 1171.9 KB，117 个文件，解包 1759.9 KB），模板 66.4 KB，运行时资产 16.4 KB / 7 个。
+
+**仍未做**：F4/F7 族的 db 表（`clock-plan.ts`/`chips.ts` 是另一条工作流，需用户开启）；`ioc_verify` 的输出
+还没把审计结论并进 `attribution`（目前两边独立，计划阶段告警 / 回写阶段归类）。
