@@ -34,6 +34,8 @@ export interface F1Chip {
   readonly deviceHeader: string;
   /** 封装引脚数，例如 48。 */
   readonly pinCount: number | null;
+  /** CubeMX db 的分组名（Mcu.Name），例如 STM32F103C(8-B)Tx；资源包没给时是空串。 */
+  readonly mcuName: string;
   /** Flash 字节。 */
   readonly flashBytes: number | null;
   /** RAM 字节。 */
@@ -157,6 +159,7 @@ function chipFromFact(fact: DeviceFactsChip): F1Chip {
     deviceDefine: fact.deviceDefine,
     deviceHeader: fact.deviceHeader,
     pinCount: fact.pinCount,
+    mcuName: fact.mcuName,
     flashBytes: fact.flashBytes,
     ramBytes: fact.ramBytes,
     notes: [],

@@ -4806,3 +4806,42 @@ F0 的 `RCC_PLLSOURCE_HSI` 在硬件上就是 HSI÷2 进 PLL（这类族没有�
   所以逐键比对会看到 `RCC.IPParameters` 变化一次；要消掉它得按外设实例枚举总线，留作下一步。
 - **F0 的族模板缺 SWD 两脚**：`ioc/family/F0.ioc` 是 `PinsNb=0`，直接用会被「没有 Serial Wire」的安全闸拦下，
   验收时是显式加 `serialWire: true` 过的；资源包里这一份模板要重做（C0/F4/L0 都带 PA13/PA14）。
+
+## 67. ② 清掉手抄小表：hal-chip 的封装脚数与 F1 分组名
+
+### 67.1 删了什么、凭什么
+
+`src/engine/hal-chip.ts` 里有两张纯手抄表，都是 db 的转述：
+
+| 删掉的 | 原来的用途 | 现在的真源 |
+| --- | --- | --- |
+| `PIN_COUNT_BY_PACKAGE`（T/C/R/V/Z → 36/48/64/100/144） | F1 路径算 `pinCount` 与封装名（`LQFP48`） | 资源包 `device/f1/chips.json` 的 `pinCount`（生成器按 db 的 `<Package>` + `<Pin>` 数出来） |
+| `MCU_NAME_GROUPS` + `GROUP_LETTERS` + `grouped` 判定 | 用 line + 封装字母 + 容量字母拼出 db 分组名（`STM32F103R(C-D-E)Tx`） | 同一个 `chips.json` 的 `mcuName`（生成器直接抄 db 的 `RefName`） |
+
+顺带给 `src/data/stm32f1.ts` 的 `F1Chip` 加了 `mcuName` 字段（`chipFromFact` 从 `DeviceFactsChip.mcuName` 透传），
+hal-chip 的 F1 分支现在是 `const pinCount = chip.pinCount;` 与 `chip.mcuName !== "" ? chip.mcuName : deviceId`，
+空名时仍保留原来那句 note（「资源包里没有 … 的分组名，按具体型号名写」）。
+
+为什么可以放心删：这两张表本来就只在 `resolveF1Chip` 之后做兜底 —— chips.json 一定有 `pinCount`/`mcuName` 两个字段，
+而表里那些值是 db 某一版的手抄；db 换版本（或换族）时表和真源就会分叉，与 §65 的 `S_TIM2_CH1_ETR` 是同一类问题。
+
+### 67.2 验证
+
+删表后逐套件：`hal-route-units` 13 / `stm32f1-units` 18 / `scaffold-patch-units` 24 / `doctor-chip-units` 15，全绿；
+`npx tsc` 干净。这些套件正好覆盖「C8T6 名字与链接脚本不变」「RCT6/F107 的启动文件/设备宏按芯片算」「渲染 .ioc 五个键」，
+也就是说删表没有改变任何对外可见的事实。
+
+### 67.3 第三项（每族 `core`）还没做，原因与下一步
+
+`src/data/family.ts` 里每个族的 `core`（`Cortex-M3`/`Cortex-M4`…）其实 db 里就有（MCU xml 的 `<Core>`），
+但现在**读不到**：`src/engine/cubemx-db.ts` 的 `parseMcuXml` 只取了 `RefName`/`Package`/`Frequency`/引脚/IP，
+没有 `<Core>` 字段。所以这一步要按顺序做：
+
+1. `cubemx-db.ts`：`CubemxMcuFacts` 加 `core: string`，`parseMcuXml` 里 `/<Core>([^<]+)<\/Core>/u` 取值（db 里只有
+   `Arm Cortex-M3` / `ARM Cortex-M0` 这种写法，MP1/MP2 分别写 `Cortex-A7`/`Cortex-A35`，2 个老文件没有这个节点 → 空串）；
+2. `breakpoints.ts` 的预算解析：读得到 db 时用 `facts.core` 走 `debugBudgetForCore()`，读不到才退回 `debugBudgetOfFamily(profile)`；
+3. `family.ts` 的 `core` 字段保留为「没有 db 时的兜底」，并在注释里写清这一点；
+4. 补 `cubemx-db-units` 的 `<Core>` 解析用例 + `breakpoints-units` 一条「db 的 core 优先」。
+
+没有顺手做掉的原因：它要改 `CubemxMcuFacts` 的形状（缓存、假 db 夹具、若干测试都跟着动），
+和「删两张表」不是同一量级的改动，混在一个提交里会让回归定位变难。

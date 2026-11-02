@@ -37,34 +37,6 @@ export const LEGACY_LINKER_SCRIPT = "STM32F103XX_FLASH.ld";
 const TEMPLATE_DEVICE_DEFINE = "STM32F103xB";
 const TEMPLATE_STARTUP = "startup_stm32f103xb.s";
 
-/** 封装字母 → 引脚数（与 CubeMX db/mcu 的 LQFP48/64/100/144 对应）。 */
-const PIN_COUNT_BY_PACKAGE: Readonly<Record<string, number>> = { T: 36, C: 48, R: 64, V: 100, Z: 144 };
-
-/**
- * 型号 → CubeMX db/mcu 分组名用的「容量档分组」表。
- * 键：line（三位数字）→ 封装字母 → 该封装在 db 里真实出现过的分组（升序，靠前的先命中）。
- * 只收 Tx/Ux/Yx 这种带封装后缀的条目；特殊单型号（STM32F103C6Ux、STM32F107VCHx 之类）
- * 走「退回具体型号名」的兜底，不在这里硬编。
- */
-const MCU_NAME_GROUPS: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
-  "100": { C: ["4-6", "8-B"], R: ["4-6", "8-B", "C-D-E"], V: ["8-B", "C-D-E"], Z: ["C-D-E"] },
-  "101": { C: ["4-6", "8-B"], R: ["4-6", "8-B", "C-D-E", "F-G"], T: ["4-6", "8-B"], V: ["8-B", "C-D-E", "F-G"], Z: ["C-D-E", "F-G"] },
-  "102": { C: ["4-6", "8-B"], R: ["4-6", "8-B"] },
-  "103": { C: ["4-6", "8-B"], R: ["4-6", "8-B", "C-D-E", "F-G"], T: ["4-6", "8-B"], V: ["8-B", "C-D-E", "F-G"], Z: ["C-D-E", "F-G"] },
-  "105": { R: ["8-B-C"], V: ["8-B-C"] },
-  "107": { R: ["B-C"], V: ["B-C"] },
-};
-
-/** 分组标签 → 它覆盖的容量字母。 */
-const GROUP_LETTERS: Readonly<Record<string, readonly string[]>> = {
-  "4-6": ["4", "6"],
-  "8-B": ["8", "B"],
-  "C-D-E": ["C", "D", "E"],
-  "F-G": ["F", "G"],
-  "B-C": ["B", "C"],
-  "8-B-C": ["8", "B", "C"],
-};
-
 export interface HalChipFacts {
   /** 归一化后的完整型号，例如 STM32F103RCT6。 */
   readonly mcu: string;
@@ -162,24 +134,16 @@ export function resolveHalChip(input?: string): HalChipResolution {
   }
 
   const notes: string[] = [];
-  const pinCount = chip.pinCount ?? PIN_COUNT_BY_PACKAGE[packageLetter] ?? null;
+  // 封装脚数与 db 分组名都从资源包的 chips.json 来（DeviceFactsChip.pinCount / mcuName）：
+  // 插件不再自己维护「封装字母 → 脚数」「line → 分组名」两张表 —— 那只是 db 的 Package/RefName 的手抄快照，
+  // 换族、换 db 版本就失真（§65 已经为预设表栽过一次）。
+  const pinCount = chip.pinCount;
   const deviceId = chip.prefix + packageLetter + chip.densityLetter + suffixLetter + "x";
-  // db/mcu 的分组名只在「该封装 + 该后缀确实按分组收录」时成立：
-  // Tx 全是分组名；Ux 只有 T 封装分组（STM32F103T(8-B)Ux），C 封装是单型号（STM32F103C6Ux）；
-  // Yx 只有 R 封装分组（STM32F103R(C-D-E)Yx）。
-  const grouped =
-    suffixLetter === "T" || (suffixLetter === "U" && packageLetter === "T") || (suffixLetter === "Y" && packageLetter === "R");
-  let mcuName = deviceId;
-  if (grouped) {
-    const groups = MCU_NAME_GROUPS[code]?.[packageLetter] ?? [];
-    const hit = groups.find((entry) => (GROUP_LETTERS[entry] ?? []).includes(chip.densityLetter));
-    if (hit === undefined) {
-      notes.push(
-        "CubeMX 的 db/mcu 里没有 " + deviceId + " 这一分组名，Mcu.Name 按具体型号名写（CubeMX 打不开 .ioc 的话把型号换成同容量档的常见型号）",
-      );
-    } else {
-      mcuName = chip.prefix + packageLetter + "(" + hit + ")" + suffixLetter + "x";
-    }
+  const mcuName = chip.mcuName !== "" ? chip.mcuName : deviceId;
+  if (chip.mcuName === "") {
+    notes.push(
+      "资源包里没有 " + deviceId + " 的 db 分组名（Mcu.Name），按具体型号名写（CubeMX 打不开 .ioc 的话把型号换成同容量档的常见型号）",
+    );
   }
   const packageKind = suffixLetter === "U" ? "VFQFPN" : suffixLetter === "Y" ? "WLCSP" : "LQFP";
   const packageName = pinCount === null ? packageKind : packageKind + String(pinCount);
