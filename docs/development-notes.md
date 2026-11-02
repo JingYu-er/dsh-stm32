@@ -4845,3 +4845,15 @@ hal-chip 的 F1 分支现在是 `const pinCount = chip.pinCount;` 与 `chip.mcuN
 
 没有顺手做掉的原因：它要改 `CubemxMcuFacts` 的形状（缓存、假 db 夹具、若干测试都跟着动），
 和「删两张表」不是同一量级的改动，混在一个提交里会让回归定位变难。
+
+### 67.4 一个 CI-only 失败：测试不该绑死在「本机有没有 CubeMX」
+
+GitHub 的 runner 上没有装 CubeMX，`ioc-plan-units` 里那条 TIM2 用例直接断言了 db 派生的共享信号名 `S_TIM2_CH1`，
+于是 CI 上走手写表兜底（`S_TIM2_CH1_ETR`）就红了 —— 本地全绿、CI 红，正是这类断言的典型症状。
+
+改法是断言**关系**而不是字面量：`PA0-WKUP.Signal` 必须匹配 `S_TIM2_CH1(_ETR)?`，且 `SH.<该名字>.0` 必须等于
+`TIM2_CH1,PWM Generation1 CH1`、`ConfNb=1`。两种来源都是 CubeMX 认的名字（`S_TIM2_CH1_ETR` 只是旧 db 的合并名），
+测试要证明的是「名字与 SH 块自洽」，不是「我这台机器上的 db 长什么样」。
+
+验证方式：把 `STM32_CUBEMX_ROOT` 指到一个不存在的目录再跑同一套件（等价于 runner 上没有 CubeMX）：
+改前 fail=1，改后 52/52 通过。
