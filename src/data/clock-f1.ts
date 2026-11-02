@@ -186,6 +186,10 @@ export interface ClockFacts {
   pllM?: readonly DividerFact[];
   pllN?: { min: number; max: number } | null;
   pllP?: readonly DividerFact[];
+  /** L4 这类族 SYSCLK 走 PLLR（PLLP 是 PLLSAI1 的输出）。 */
+  pllR?: readonly DividerFact[];
+  /** 用哪个 PLL 输出当 SYSCLK：P（F2/F4/F7/G4）或 R（L4）。缺省 P。 */
+  sysclkOutput?: "P" | "R";
   sources: readonly PllSourceFact[];
   apbDivs: readonly DividerFact[];
   adcDivs: readonly DividerFact[];

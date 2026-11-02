@@ -74,7 +74,10 @@ export function planClockPllmn(input: PllmnPlanInput): ClockPlan {
   const { request, entries, facts, familyId } = input;
   const vcoLimits = PLL_VCO_LIMITS[familyId.trim().toUpperCase()];
   const pllM = facts.pllM ?? [];
-  const pllP = facts.pllP ?? [];
+  // L4 这类族的 SYSCLK 输出是 PLLR（PLLP 属于 PLLSAI1，只有 DIV7/DIV17）
+  const useR = facts.sysclkOutput === "R";
+  const pllP = (useR ? (facts.pllR ?? []) : (facts.pllP ?? []));
+  const outputKey = useR ? "RCC.PLLR" : "RCC.PLLP";
   const pllN = facts.pllN ?? null;
   if (vcoLimits === undefined) {
     return emptyClockPlan(familyId + " 的 PLLM/PLLN/PLLP 模型已从 db 读到，但 VCO 允许区间还没按手册核对：clock 参数不会生效");
@@ -183,7 +186,7 @@ export function planClockPllmn(input: PllmnPlanInput): ClockPlan {
   draft.set("RCC.PLLSourceVirtual", (pllSourceById(best.source, facts.sources) as { iocValue: string }).iocValue);
   draft.set("RCC.PLLM", mFact.iocValue);
   draft.set("RCC.PLLN", String(best.n));
-  draft.set("RCC.PLLP", pFact.iocValue);
+  draft.set(outputKey, pFact.iocValue);
   draft.set("RCC.SYSCLKSource", "RCC_SYSCLKSOURCE_PLLCLK");
   draft.set("RCC.AHBCLKDivider", apbDivValue(1));
   draft.set("RCC.APB1CLKDivider", apbDivValue(apb1Div));
@@ -255,7 +258,7 @@ export function planClockPllmn(input: PllmnPlanInput): ClockPlan {
     peripherals,
     bauds: [],
     entries: [...draft.entries()].map(([key, value]) => ({ key, value })),
-    unset: ["RCC.PLLMUL", "RCC.PLLMCOFreq_Value", "RCC.USBPrescaler"],
+    unset: ["RCC.PLLMUL", "RCC.PLLMCOFreq_Value", "RCC.USBPrescaler", useR ? "RCC.PLLP" : "RCC.PLLR"],
     warnings: [],
     errors: [],
   };

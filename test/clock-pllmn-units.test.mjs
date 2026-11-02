@@ -58,7 +58,8 @@ test("pllmn：目标不可达时给最接近的一档并写进 note（不静默�
 });
 
 test("pllmn：没有 VCO 区间（族没核过）或事实不全 → 空计划 + 说清原因", () => {
-  const noVco = planClockPllmn({ request: { targetHz: 168_000_000 }, entries, facts: f4Facts(), familyId: "STM32G4" });
+  // G4 现在有 VCO 区间了（96–344 MHz），改用还没建档的族（L4+）验证拒绝分支
+  const noVco = planClockPllmn({ request: { targetHz: 168_000_000 }, entries, facts: f4Facts(), familyId: "STM32L4+" });
   assert.equal(noVco.ok, false);
   assert.match(noVco.note, /VCO/u);
   const noPllN = planClockPllmn({ request: { targetHz: 168_000_000 }, entries, facts: f4Facts({ pllN: null }), familyId: "STM32F4" });

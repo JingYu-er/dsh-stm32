@@ -191,22 +191,32 @@ export function readMcuFacts(db: CubemxDb, mcuName: string): CubemxMcuFacts | nu
 }
 
 /**
- * 逻辑引脚名 → db 引脚名：先精确匹配，再按「去掉 -XXX 后缀」匹配，
- * 最后按 Position 最近的同端口引脚兜底（PA0 → PA0-WKUP、PC13 → PC13-TAMPER-RTC）。
+ * 逻辑引脚名 → db 引脚名：先精确匹配，再按「去掉后缀」匹配。
+ *
+ * db 里同一根脚的写法逐族不同（实测）：
+ *   F1/F0:  `PA0-WKUP`、`PC13-TAMPER-RTC`（连字符后缀）
+ *   F7/L4:  `PA13 (JTMS-SWDIO)`（空格 + 括号里的复用功能）
+ * 两种都要能对上，否则写进 .ioc 的键名 CubeMX 不认、整根脚被静默丢掉（L4 实测丢过 PA13/PA14）。
  */
 export function resolveDbPinName(facts: CubemxMcuFacts, logical: string): string | null {
   if (facts.pins.has(logical)) return logical;
   const wanted = logical.trim().toUpperCase();
   for (const name of facts.pins.keys()) {
-    const base = name.split("-")[0] as string;
-    if (base.toUpperCase() === wanted) return name;
+    if (pinBaseOf(name) === wanted) return name;
   }
   return null;
 }
 
-/** 反查：db 引脚名 → 逻辑名（PA0-WKUP → PA0、PC13-TAMPER-RTC → PC13）。 */
+/** db 引脚名去掉后缀（`PA0-WKUP` → PA0；`PA13 (JTMS-SWDIO)` → PA13）。 */
+export function pinBaseOf(dbName: string): string {
+  const trimmed = dbName.trim();
+  const bySpace = trimmed.split(/\s+/u)[0] ?? trimmed;
+  return bySpace.split("-")[0] ?? bySpace;
+}
+
+/** 反查：db 引脚名 → 逻辑名（PA0-WKUP → PA0、PA13 (JTMS-SWDIO) → PA13）。 */
 export function logicalPinName(dbName: string): string {
-  return dbName.split("-")[0] ?? dbName;
+  return pinBaseOf(dbName);
 }
 
 /** 该芯片是否有这个 IP 实例（TIM3、ADC1…）。 */

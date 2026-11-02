@@ -1,7 +1,8 @@
 // CubeMX db 查询层单测：node test/cubemx-db-units.test.mjs
 import assert from "node:assert/strict";
 
-import { hasIpInstance, ipModesPath, locateCubemxDb, logicalPinName, parseMcuXml, readIpModeNames, readMcuFacts, resolveDbPinName } from "../lib/engine/cubemx-db.js";
+import {
+  pinBaseOf, hasIpInstance, ipModesPath, locateCubemxDb, logicalPinName, parseMcuXml, readIpModeNames, readMcuFacts, resolveDbPinName } from "../lib/engine/cubemx-db.js";
 
 const cases = [];
 function test(name, fn) { cases.push({ name, fn }); }
@@ -97,3 +98,22 @@ for (const item of cases) {
 console.log("---");
 console.log("tests " + String(cases.length) + " / fail " + String(failed));
 if (failed > 0) process.exit(1);
+test("引脚名后缀两种写法都要能对上（PA0-WKUP 与 PA13 (JTMS-SWDIO)）", () => {
+  // F1 的 db 用连字符后缀，L4 用「空格 + 括号里的复用功能」；两种都得能反查到逻辑名，
+  // 否则写进 .ioc 的键名 CubeMX 不认、整根脚被静默丢掉（L4 实测丢过 PA13/PA14）。
+  assert.equal(pinBaseOf("PA0-WKUP"), "PA0");
+  assert.equal(pinBaseOf("PA13 (JTMS-SWDIO)"), "PA13");
+  assert.equal(pinBaseOf("PC14-OSC32_IN"), "PC14");
+
+  const facts = {
+    name: "FAKE", packageName: "LQFP64", frequencyMhz: 80, family: "STM32L4", line: "STM32L476",
+    core: "Arm Cortex-M4", ramKb: 128, flashKb: [512], ioNb: 64,
+    pins: new Map([
+      ["PA13 (JTMS-SWDIO)", { name: "PA13 (JTMS-SWDIO)", position: 1, signals: new Map() }],
+      ["PA0-WKUP", { name: "PA0-WKUP", position: 2, signals: new Map() }],
+    ]),
+    ips: new Map(),
+  };
+  assert.equal(resolveDbPinName(facts, "PA13"), "PA13 (JTMS-SWDIO)");
+  assert.equal(resolveDbPinName(facts, "PA0"), "PA0-WKUP");
+});

@@ -4971,3 +4971,49 @@ Cancel 会让 CubeMX 继续停在旧工程上，脚本仍然不会前进。点�
 `test/cubemx-guard-units.test.mjs` 4 例：认出 `STM32CubeMX.exe` 并报 PID、只有 `java.exe` 时返回空、
 `tasklist` 退出码非 0 / spawn 报错时返回空（不拦生成）、冲突文案包含"单实例""关掉 CubeMX""模态框"。
 全量 `node test/run-units.mjs` → **770 pass / 0 fail（48 套件）**，pack-size 护栏通过。
+
+## 70. pllmn 时钟扩到 F7/G4/L4 + 内核改从 db 读
+
+### 70.1 三个族的 pllmn 事实（都从 db 来，规格表按手册建档）
+
+| 族 | PLL 事实（db） | 总线上限（手册） | VCO 区间（手册） | 验证 |
+| --- | --- | --- | --- | --- |
+| F7 | PLLM integer 2..63、PLLN 50..432、PLLP DIV2/4/6/8 | APB1 ≤54 MHz、APB2 ≤108 MHz、ADC ≤36 MHz | 100–432 MHz，输入 1–2 MHz | 216 MHz（HSE ÷25 ×432 ÷2）**benign=true** |
+| G4 | PLLM DIV1..16、PLLN 8..127、PLLP DIV2..31 | APB1/APB2 = 170 MHz、ADC 走 ADC12CLockSelection（不用 RCC 预分频） | 96–344 MHz，输入 2.66–16 MHz | 170 MHz（HSE ÷2 ×85 ÷2）**benign=true** |
+| L4 | PLLM integer、PLLN 8..86、**PLLR DIV2/4/6/8**（PLLP 是 PLLSAI1 的 DIV7/DIV17） | APB1/APB2 = 80 MHz、ADC 来自 PLLSAI1 | 64–344 MHz，输入 4–16 MHz | 80 MHz（HSE ÷1 ×20 ÷2）**benign=true** |
+
+L4 那条是这一步最值得记的：它的 SYSCLK 输出不是 PLLP 而是 **PLLR**。db 里 `PLLP` 只有 `DIV7`/`DIV17` 两档 —— 那是 PLLSAI1 的输出。
+所以 `readClockDbFacts` 现在会判 `sysclkOutput`：`PLLP` 全是 DIV7/DIV17 且存在 `PLLR` 枚举时，用 PLLR 当 SYSCLK 输出，
+规划器相应写 `RCC.PLLR` 而不是 `RCC.PLLP`，并把另一个键放进 `unset`（模型切换时清理）。
+
+### 70.2 引脚名后缀的第二种写法：`PA13 (JTMS-SWDIO)`
+
+之前只处理了 F1 的连字符后缀（`PA0-WKUP`）。L4/F7 的 db 里同一根脚写成 **空格 + 括号里的复用功能**，
+`resolveDbPinName` 认不出就会把键写成 `PA13.Signal=…`（CubeMX 不认这个键名 → 整根脚被静默丢掉）。
+新增 `pinBaseOf(dbName)`（先按空白切、再按连字符切），`resolveDbPinName` 与 `logicalPinName` 都改用它；
+实测 L476 `PA13 → PA13 (JTMS-SWDIO)`、F103 `PA0 → PA0-WKUP`、F767 `PA13 → PA13`。
+
+### 70.3 内核（core）改从 db 读
+
+`src/engine/breakpoints.ts` 的预算解析现在优先用**本机 CubeMX db 里这颗芯片的 `<Core>`**：
+从 `.ioc` 的 `Mcu.Name` 查 `db/mcu/<Name>.xml`，读到就用它算硬件断点/观察点预算，
+读不到（没装 CubeMX、db 里没这颗、老文件没 Core 节点）才退回族画像的 `core`；
+报告里会注明来源是「本机 CubeMX db 的 `<Core>`」还是「族画像兜底」。
+族画像的 `core` 因此降级为兜底值，与 `F1_FACTS`、`PIN_DB_ALIASES` 的处理方式一致。
+
+### 70.4 验证
+
+- **F7**：族模板（101 键，含 PA13/PA14 SWD、`CORTEX_M7`）→ plan「HSE ÷25 ×432 ÷2 = 216 MHz（VCO 432）」→ apply → verify **benign=true**。
+- **L4**：族模板（92 键，引脚名 `PA13 (JTMS-SWDIO)`）→ plan「HSE ÷1 ×20 ÷2 = 80 MHz」+ 写 `RCC.PLLR=RCC_PLLR_DIV2` → verify **benign=true**。
+- **G4**：真实脚手架工程（本机装了 STM32Cube_FW_G4_V1.6.2）→ plan「HSE ÷2 ×85 ÷2 = 170 MHz」+ `RCC.PLLM=RCC_PLLM_DIV2 / RCC.PLLN=85 / RCC.PLLP=RCC_PLLP_DIV2` → verify **benign=true**。
+- 单测：clock-db 5 例、clock-pllmn 4 例、clock 14 例、breakpoints 18 例全绿；cubemx-db 新增括号引脚名一例。
+
+教训仍要记：**用手搓的最小 .ioc 验时钟会得到假失败** —— CubeMX 会把 `Mcu.IP*`、引脚名、`RCC.IPParameters` 整体规范化
+（`Mcu.IP0: SYS -> CORTEX_M7`、`PA13 -> PA13 (JTMS-SWDIO)`）；必须用 CubeMX 规范化过的族模板或真实脚手架工程。
+
+### 70.5 仍然没做的
+
+- **F7 / L4 没有固件包**（本机只装了 C0/F0/F1/F4/G4/L0），所以只能用「族模板 + 时钟往返」验证，
+  不能 create→generate→build；它们的族模板也还没进资源仓（`build-assets.mjs` 的 family 循环要求固件包，会跳过）。
+- **F2 / F3 / G0 / L1 / L4+ / C0 的时钟仍是拒绝**：缺「核过的总线上限 / VCO 区间」，db 事实已能读，只差规格表。
+- `RCC.<IP>Freq_Value` 这类派生键仍不写（CubeMX 自己补，导致 `RCC.IPParameters` 有一次差异，见 §66.7）。

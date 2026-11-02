@@ -41,6 +41,9 @@ export interface ClockDbFacts {
   pllM: DividerFact[];
   pllN: { min: number; max: number } | null;
   pllP: DividerFact[];
+  /** L4 的 SYSCLK 输出是 PLLR（PLLP 属于 PLLSAI1，值只有 DIV7/DIV17）。 */
+  pllR: DividerFact[];
+  sysclkOutput: "P" | "R";
   /** 读不到/推不出的地方，原样报给用户。 */
   notes: string[];
   /** 这份事实是从哪个 RCC Modes 文件读的（排查用）。 */
@@ -140,12 +143,19 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
   if (pllMRange !== null) {
     for (let div = pllMRange.min; div <= pllMRange.max; div += 1) pllM.push({ div, iocValue: String(div) });
   }
+  const pllR: DividerFact[] = enumOf(text, "PLLR")
+    .map((entry) => ({ div: entry.num ?? 0, iocValue: entry.value }))
+    .filter((item) => item.div >= 1 && item.iocValue !== "")
+    .sort((left, right) => left.div - right.div);
   const pllP: DividerFact[] = enumOf(text, "PLLP")
     .map((entry) => ({ div: entry.num ?? 0, iocValue: entry.value }))
     .filter((item) => item.div >= 1 && item.iocValue !== "")
     .sort((left, right) => left.div - right.div);
   const pllN = rangeOf(text, "PLLN");
 
+  // PLLP 只有 DIV7/DIV17 = 那是 PLLSAI1 的输出，SYSCLK 走 PLLR（L4 的 RCC-STM32L4*）。
+  const pllPIsSai = pllP.length > 0 && pllP.every((item) => item.div === 7 || item.div === 17);
+  const sysclkOutput: "P" | "R" = pllPIsSai && pllR.length > 0 ? "R" : "P";
   const model: ClockModel = muls.length > 0 ? "pllmul" : pllM.length > 0 || pllN !== null ? "pllmn" : "unknown";
   if (model === "unknown") {
     notes.push("db 的 RCC Modes 里既没有 PLLMUL 也没有 PLLM/PLLN：这一族的 PLL 模型不在已实现的两种之内（H7/U5 这类分相 PLL 需要单独实现）");
@@ -199,6 +209,8 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
     pllM,
     pllN,
     pllP,
+    pllR,
+    sysclkOutput,
     notes,
     sourceFile: path ?? "",
   };
@@ -218,6 +230,12 @@ export interface BusLimits {
 export const BUS_LIMITS: Readonly<Record<string, BusLimits>> = {
   // RM0090（F4）：APB1 ≤42 MHz、APB2 ≤84 MHz、ADC ≤36 MHz（ADC 走 APB2 再分频）
   STM32F4: { apb1Hz: 42_000_000, apb2Hz: 84_000_000, adcHz: 36_000_000 },
+  // RM0385/RM0410（F7）：APB1 ≤54 MHz、APB2 ≤108 MHz、ADC ≤36 MHz
+  STM32F7: { apb1Hz: 54_000_000, apb2Hz: 108_000_000, adcHz: 36_000_000 },
+  // RM0440（G4）：APB1/APB2 都能跑到 SYSCLK；ADC 时钟不走 RCC 预分频（由 ADC12CLockSelection 选）
+  STM32G4: { apb1Hz: 170_000_000, apb2Hz: 170_000_000, adcHz: 60_000_000 },
+  // RM0351（L4）：APB1/APB2 = AHB（≤80 MHz）；ADC 时钟来自 PLLSAI1 或 SYSCLK
+  STM32L4: { apb1Hz: 80_000_000, apb2Hz: 80_000_000, adcHz: 80_000_000 },
   // RM0008（F1）：APB1 ≤36 MHz、APB2 = SYSCLK、ADC ≤14 MHz
   STM32F1: { apb1Hz: 36_000_000, apb2Hz: 72_000_000, adcHz: 14_000_000 },
   // RM0091（F0）：APB1 = AHB（F0 的 APB1 不再二分频）、ADC ≤14 MHz
@@ -237,6 +255,12 @@ export interface PllVcoLimits {
 export const PLL_VCO_LIMITS: Readonly<Record<string, PllVcoLimits>> = {
   // RM0090：VCO 输出 100–432 MHz，PLL 输入 1–2 MHz
   STM32F4: { minHz: 100_000_000, maxHz: 432_000_000, inMinHz: 1_000_000, inMaxHz: 2_000_000 },
+  // RM0385/RM0410（F7）：同 F4 的 PLL 结构
+  STM32F7: { minHz: 100_000_000, maxHz: 432_000_000, inMinHz: 1_000_000, inMaxHz: 2_000_000 },
+  // RM0440（G4）：PLL 输入 2.66–16 MHz，VCO 96–344 MHz
+  STM32G4: { minHz: 96_000_000, maxHz: 344_000_000, inMinHz: 2_660_000, inMaxHz: 16_000_000 },
+  // RM0351（L4）：PLL 输入 4–16 MHz，VCO 64–344 MHz
+  STM32L4: { minHz: 64_000_000, maxHz: 344_000_000, inMinHz: 4_000_000, inMaxHz: 16_000_000 },
 };
 
 /**
@@ -266,8 +290,18 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
   };
   if (facts.model === "pllmn") {
     if (PLL_VCO_LIMITS[family] === undefined) return null;
-    if (facts.pllM.length === 0 || facts.pllP.length === 0 || facts.pllN === null) return null;
-    return { ...base, model: "pllmn", muls: [], pllM: facts.pllM, pllN: facts.pllN, pllP: facts.pllP };
+    const outputDivs = facts.sysclkOutput === "R" ? facts.pllR : facts.pllP;
+    if (facts.pllM.length === 0 || outputDivs.length === 0 || facts.pllN === null) return null;
+    return {
+      ...base,
+      model: "pllmn",
+      muls: [],
+      pllM: facts.pllM,
+      pllN: facts.pllN,
+      pllP: facts.pllP,
+      pllR: facts.pllR,
+      sysclkOutput: facts.sysclkOutput,
+    };
   }
   if (facts.model !== "pllmul") return null;
   if (facts.muls.length === 0) return null;

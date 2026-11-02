@@ -48,8 +48,8 @@ test("clockFactsFromDb：pllmn / unknown / 未核上限的族一律 null（不�
   // F4 现在是「pllmn + 上限与 VCO 都核过」的族：事实齐全时应当放行（见下一条）；
   // 但把 pllmn 的事实掏空（没有 PLLM/PLLN）仍然要拒。
   assert.equal(clockFactsFromDb(dbFacts({ model: "pllmn" }), "STM32F4"), null);
-  // 完全没建档的族（F7 既没有总线上限也没有 VCO 区间）→ 拒
-  assert.equal(clockFactsFromDb(dbFacts(), "STM32F7"), null);
+  // 完全没建档的族（G0 既没有总线上限也没有 VCO 区间）→ 拒
+  assert.equal(clockFactsFromDb(dbFacts(), "STM32G0"), null);
   // 上限表里有、但枚举为空（db 读残了）→ 也拒
   assert.equal(clockFactsFromDb(dbFacts({ muls: [] }), "STM32F0"), null);
 });

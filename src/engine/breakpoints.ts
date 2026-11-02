@@ -21,6 +21,8 @@ import { join } from "node:path";
 
 import { findChipFact } from "../data/device-facts.js";
 import { debugBudgetForCore, readProjectFamily } from "../data/family.js";
+import { locateCubemxDb, readMcuFacts } from "./cubemx-db.js";
+import { resolveSearchConfig } from "../data/search-roots.js";
 
 /** 一颗芯片能用多少比较器。 */
 export interface BreakpointBudget {
@@ -105,11 +107,43 @@ export interface BudgetResolution {
 }
 
 /** 工程 → 芯片 → 预算。任何一步失败都退回内核上限（再不行 F1 默认）并说明原因。 */
+/**
+ * `.ioc` 里的 `Mcu.Name`（db 分组名，例如 STM32F103C(8-B)Tx）；读不到返回空串。
+ *
+ * 用它去查本机 CubeMX db 的 `<Core>`：族画像里的 core 是"手写兜底"，db 才是逐型号的真源
+ * （同一族里 MPU/双核/单核写法不同，见 cubemx-db.ts 里 CubemxMcuFacts.core 的注释）。
+ */
+function readIocMcuName(projectDir: string): string {
+  let names: string[];
+  try {
+    names = readdirSync(projectDir);
+  } catch {
+    return "";
+  }
+  for (const name of names.filter((item) => item.toLowerCase().endsWith(".ioc")).sort()) {
+    try {
+      const matched = /^Mcu\.Name=(.+)$/mu.exec(readFileSync(join(projectDir, name), "utf8"));
+      const value = (matched?.[1] ?? "").trim();
+      if (value !== "") return value;
+    } catch {
+      // 读不了就试下一个
+    }
+  }
+  return "";
+}
+
 export function resolveBreakpointBudget(projectDir: string, env: NodeJS.ProcessEnv = process.env): BudgetResolution {
   const cpn = readIocCpn(projectDir);
   const family = readProjectFamily(projectDir);
-  // 内核预算：族画像里记的是主内核（db 的 <Core> 首个核心）；MPU（A7/A35）不走比较器模型。
-  const coreBudget = family === null || /cortex-a/i.test(family.core) ? null : debugBudgetForCore(family.core);
+  // 内核优先取本机 CubeMX db 里这颗芯片的 <Core>（逐型号真源），读不到才退回族画像的 core。
+  const db = locateCubemxDb(resolveSearchConfig(env).cubeMxRoots);
+  const mcuName = db === null ? "" : readIocMcuName(projectDir);
+  const dbFacts = db === null || mcuName === "" ? null : readMcuFacts(db, mcuName);
+  const coreFromDb = (dbFacts?.core ?? "").trim();
+  const coreText = coreFromDb !== "" ? coreFromDb : (family?.core ?? "");
+  const coreSource = coreFromDb !== "" ? "db" : "profile";
+  // 内核预算：MPU（A7/A35）不走比较器模型。
+  const coreBudget = coreText === "" || /cortex-a/i.test(coreText) ? null : debugBudgetForCore(coreText);
   const fallback = (why: string): BudgetResolution => {
     if (coreBudget === null) {
       return {
@@ -124,7 +158,7 @@ export function resolveBreakpointBudget(projectDir: string, env: NodeJS.ProcessE
       budget: coreBudget,
       source: "core",
       chip: cpn,
-      note: "断点预算按内核 " + (family === null ? "" : family.core) + " 的硬件上限："
+      note: "断点预算按内核 " + coreText + "（" + (coreSource === "db" ? "本机 CubeMX db 的 <Core>" : "族画像兜底") + "）的硬件上限："
         + String(coreBudget.code) + " 个硬件断点 / " + String(coreBudget.data) + " 个观察点（" + why + "）",
     };
   };
