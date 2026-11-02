@@ -460,7 +460,7 @@ function adcPrescalerDiv(token: string): number | null {
  * 后面几个是 F4/H7 才有的字段，留在这里是为了让我们写到它们时顺序仍然对。
  * 实测依据：richhal.ioc:30（F1，8 个字段）与语料里 F4 的 9 字段版本（多一个 FIFOMode）。
  */
-const DMA_PARAM_ORDER = [
+export const DMA_PARAM_ORDER = [
   "Instance", "Direction", "PeriphInc", "MemInc", "PeriphDataAlignment", "MemDataAlignment",
   "Mode", "Priority", "FIFOMode", "SignalID", "Polarity", "RequestNumber",
 ];

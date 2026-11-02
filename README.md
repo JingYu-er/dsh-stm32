@@ -175,7 +175,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ioc_inspect` | 解析 MCU 型号、引脚/信号/标签、外设与中断、时钟树、工程设置；会报「没开 Serial Wire 会生成 `SWJ_DISABLE`」这类致命风险 |
 | `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO（上下拉/速度/开漏 `outputType: od`/初始电平 `initial`/`interrupt` 一次写全 EXTI 链路 + 中断组）、`interrupts` 使能外设中断（写 9 段 NVIC 值并按 db/SVD 校验中断名）、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率）。键名按 `src/data/ioc-schema.ts` 的 `.ioc` 真值表（49 条 spec）渲染。覆盖率闸门分两层：不在表里的键给 `[SCHEMA]` 警告；`{ip}.{name}` 这类只证「形状」的命中再按现场审计（db 的 `RefParameter` 参数名、`Mcu.IP<i>` 是否启用、Dma 参数白名单），拼错参数名/实例名同样报出来——拼错的键 CubeMX 静默忽略。启用外设时把 `Mcu.IP<i>` 按 CubeMX 自己的 natural 序重排（`TIM2…TIM4,TIM15`，板名等伪实例置尾），否则每次启用字典序靠前的外设，回写都会冒出几条假 diff |
 | `stm32_ioc_apply` | 必须带 `planId`；写盘前再核 SHA（中途被手改就拒绝），备份后原子替换，写完重新解析校验，不过自动回滚。支持 `rollbackFrom` |
-| `stm32_ioc_verify` | 让 CubeMX 自己说「它认了什么」：把 `.ioc` 复制到 `.dsh-stm32/verify/<stamp>/`，无头 `config load` + `config save` 回写后逐键 diff（约 25–40 s，工程 `.ioc` 一个字节不动）。报 `droppedPeripherals` / `plannedFunctions` / `signalRewrites` / `removedKeys` / `addedKeys` / `changedValues`，以及归因 `attribution`：`orderOnly`（值相同、行序不同）/ `valueNormalized`（只是成员顺序被规范化）/ `valueChanged`（值真被改）/ `benign`——**`benign: true` 就是零实质差异**，可以放心去 `stm32_generate` |
+| `stm32_ioc_verify` | 让 CubeMX 自己说「它认了什么」：把 `.ioc` 复制到 `.dsh-stm32/verify/<stamp>/`，无头 `config load` + `config save` 回写后逐键 diff（约 25–40 s，工程 `.ioc` 一个字节不动）。报 `droppedPeripherals` / `plannedFunctions` / `signalRewrites` / `removedKeys` / `addedKeys` / `changedValues`，以及归因 `attribution`：`orderOnly`（值相同、行序不同）/ `valueNormalized`（只是成员顺序被规范化）/ `valueChanged`（值真被改）/ `ipOrderOnly`（只有 `Mcu.IP<i>` 换位、外设集合不变，不算实质差异）/ `droppedReasons` 与 `addedVerdicts`（**逐键给「为什么它不认」**：外设没进 `Mcu.IP<i>`、参数名不在 db 的 `RefParameter` 清单里、把引脚属性写成了外设参数、前缀纯拼错）/ `benign`——**`benign: true` 就是零实质差异**，可以放心去 `stm32_generate` |
 
 ### 代码与构建
 
@@ -391,14 +391,14 @@ source [find target/stm32f1x.cfg]
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 42 个离线套件、714 个用例；不需要板子、CubeMX、工具链
+npm test                 # 42 个离线套件、722 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **714 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **722 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 

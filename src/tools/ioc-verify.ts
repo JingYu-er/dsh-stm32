@@ -29,6 +29,20 @@ const valueChangeList: JsonSchema = {
   },
 };
 
+const explanationList: JsonSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      key: { type: "string" },
+      verdict: { type: "string" },
+      detail: { type: "string" },
+    },
+    required: ["key", "verdict", "detail"],
+  },
+};
+
 const diffSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -71,11 +85,15 @@ const diffSchema: JsonSchema = {
         addedKeys: { type: "array", items: { type: "string" } },
         droppedPeripherals: { type: "array", items: { type: "string" } },
         autoAddedFunctions: { type: "array", items: { type: "string" } },
+        droppedReasons: explanationList,
+        addedVerdicts: explanationList,
+        ipOrderOnly: { type: "array", items: { type: "string" } },
         benign: { type: "boolean" },
       },
       required: [
         "orderOnly", "valueNormalized", "valueChanged", "missingKeys", "addedKeys",
-        "droppedPeripherals", "autoAddedFunctions", "benign",
+        "droppedPeripherals", "autoAddedFunctions", "droppedReasons", "addedVerdicts",
+        "ipOrderOnly", "benign",
       ],
     },
     autoAddedFunctions: { type: "array", items: { type: "string" } },
@@ -139,6 +157,16 @@ function format(report: IocVerifyReport): string[] {
       "行序不同（值相同，CubeMX 按自己的顺序重排）：" + diff.attribution.orderOnly.join("、"),
     );
   }
+  if (diff.attribution.ipOrderOnly.length > 0) {
+    lines.push(
+      "外设槽位重排（Mcu.IP<i> 换位置但外设集合相同，语义不变）：" + diff.attribution.ipOrderOnly.join("、"),
+    );
+  }
+  // 每一条被丢的键都给一句「它为什么不认」——这才是排查时真正要的答案。
+  for (const reason of diff.attribution.droppedReasons) {
+    if (reason.verdict === "ok") continue;
+    lines.push("被丢键：" + reason.key + "  " + reason.detail);
+  }
   lines.push(
     diff.attribution.benign
       ? "结论：零实质差异" + (diff.attribution.orderOnly.length > 0 || diff.attribution.valueNormalized.length > 0
@@ -189,7 +217,8 @@ export function registerIocVerify(ctx: DshContext): void {
           changedValues: [], misorderedKeys: [], autoAddedFunctions: [], hints: [],
           attribution: {
             orderOnly: [], valueNormalized: [], valueChanged: [], missingKeys: [], addedKeys: [],
-            droppedPeripherals: [], autoAddedFunctions: [], benign: true,
+            droppedPeripherals: [], autoAddedFunctions: [], droppedReasons: [], addedVerdicts: [],
+            ipOrderOnly: [], benign: true,
           },
         },
       };

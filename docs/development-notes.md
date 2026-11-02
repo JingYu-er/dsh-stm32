@@ -4103,4 +4103,84 @@ after   IP0=ADC1 IP1=DMA IP2=NVIC IP3=RCC IP4=SYS      （benign=false，其余 
 
 **边界（别当成已解决）**：双核/TrustZone 族（H7/H5/U5/U3/N6/L5/WBA/MP1/WL）的 `Mcu.IP<i>` 仍是另一套插入序 ——
 我们按 natural 序写会在这些族上继续产生 `changedValues` 噪音（功能不受影响：键值集合一致，CubeMX 只是重排），
-所以「零 diff」的结论只对单核族成立，本项目当前范围是 F1。`ioc_verify` 也还没把审计结论并进 `attribution`。
+所以「零 diff」的结论只对单核族成立，本项目当前范围是 F1。（下一节把这件遗留补上：审计结论并进 `attribution`。）
+
+### 61.13 `ioc_verify` 的归因补上「为什么它不认」：droppedReasons / addedVerdicts / ipOrderOnly
+
+§61.11–§61.12 把「键名形状」这层管住了，但 `ioc_verify` 的产物一直有个说不出口的地方：
+它只告诉你**哪些键没了**（`removedKeys` / `missingKeys`），说不出**为什么没了**。
+同一个「键被 CubeMX 丢掉」的现象，成因至少有四种，处置完全不同：
+
+| 现象 | 真实成因 | 该改谁 |
+| --- | --- | --- |
+| `NVIC.TIM2_IRQn` 被删 | 外设没进 `Mcu.IP<i>` —— 参数/中断没有接收方 | 生成器：启用外设的顺序 / `pins` API |
+| `USART1.BaudRate` 被删 | 参数名拼错，db 的 `RefParameter` 清单里没有它 | 生成器：参数名 |
+| `PA5.PinState` 被删 | 引脚属性写成了「外设参数」，没登记进 `<pin>.GPIOParameters` | 生成器：属性键必须双向登记（R22） |
+| `Foo.Bar` 被删 | 前缀既不是实例也不是引脚名/命名空间，纯拼错 | 人：键根本写错 |
+
+所以在真值表之外再补一层：把**审计结论**（§61.11 的 `auditIocKeys`）并进 `attribution`。
+
+**三个新字段**（`src/engine/ioc-verify.ts` 的 `IocVerifyAttribution`）
+
+- `droppedReasons: Array<{ key, verdict, detail }>` —— 对 `removedKeys` 逐条给判据。
+  `verdict` 复用真值表的 `IocKeyVerdict`：`unregistered` / `unknown-namespace` / `pin-attribute` /
+  `unknown-parameter` / `unknown-dma-parameter` / `inactive-instance` / `ok`。`detail` 是人话。
+- `addedVerdicts` —— 对 `addedKeys`（CubeMX 自己补的键）同样跑一遍，用来区分
+  「形状登记过、它自己补的（例如 `ProjectManager.functionlistsort`）」与「我们连 spec 都没有的缺口」。
+- `ipOrderOnly: string[]` —— `changedValues` 里只有 `Mcu.IP<i>` 换位、且**外设集合完全没变**时，
+  这些键单独成桶，并从 `benign` 的计算里排除。动机：§61.12 说过槽位重排是语义不变的重排，
+  它混在 `valueChanged` 里会把 `benign` 打成 `false`，让人误以为写错了键。
+  实现上先比 `beforeIps`/`afterIps` 排序后拼接是否相等，再把 `spec.id === "mcu.ip_index"` 的
+  `changedValues` 逐条 `splice` 出来；`orderOnly` 里同步排除这些键，两桶不重复计数
+  （否则一次重排会同时报「行序变了」和「槽位变了」）。
+
+**上下文怎么进去**：`diffIocForVerify(beforeText, afterText, audit?)` 的第三个参数是**可选**的，
+纯函数不碰文件系统；db 上下文由 `runIocVerify` 里的 `buildAuditInput()` 造：
+
+1. 从 before 文本读 `Mcu.Name`（CubeMX 的 db 分组名，例如 `STM32F103C(8-B)Tx` —— 传型号 `STM32F103C8Tx` 是查不到的）；
+2. `locateCubemxDb()` 定位本机 db，`readMcuFacts()` 读引脚表与 IP 实例表；
+3. `paramNamesOf(instance)` 走 `readIpParameterNames()`（`db/mcu/IP/<Name>-<Version>_Modes.xml` 的 `<RefParameter Name>`），
+   `dmaParamNames` 用 `DMA_PARAM_ORDER` 白名单（它在 `src/engine/ioc-plan.ts` 里改为导出，
+   `ioc-plan` 不反向依赖 `ioc-verify`，没有循环依赖）。
+
+**三条降级路径**（都不误报，只降级）：
+
+| 情况 | 行为 |
+| --- | --- |
+| 没有 CubeMX db / 读不到 `Mcu.Name` | `audit = null`，`droppedReasons` 每条 `verdict: ""` + 「这次没有 db 上下文…」，诊断照跑 |
+| 某个实例在 db 的 IP 模式文件里没有 `RefParameter` | `paramNamesOf` 返回 `null` → 该实例的参数名**不校验**（宁可漏报不误报） |
+| `verdict === "ok"` 但键照样被丢 | `detail` 明确写「几何已登记、上下文也没问题，但它仍然被丢：这类键的生效条件只能靠真机实验确认」，**不假装判过** |
+
+`inactive-instance` 还有一条特别的补白：如果这个 ip 在 before 文本的 `Mcu.IP<i>` 里本来**有**，
+说明不是「我们没启用外设」，而是 CubeMX 回写时把整个外设删了 —— `detail` 会点明这一点。
+`ioc_verify` 的 `message` 末尾也按 verdict 计数拼一句成因摘要
+（「它丢掉的键里 1 个前缀既不认识也不是已启用实例、1 个把引脚属性写成了外设参数（没登记进 GPIOParameters）」）。
+
+**真机证据**（`demo/.dsh-stm32/attrib-verify.mjs`，`durationMs=108087`，CubeMX 6.15.0 无头 / db `DB.6.0.150`）：
+往 demo.ioc 副本里故意注入三个坏键
+
+```
+RCC.BogusParam=1      Foo.BarParam=2      PA5.BogusAttr=1
+```
+
+回写后三条全在 `removedKeys`，`droppedReasons` 分别是：
+
+| 键 | verdict | detail 要点 |
+| --- | --- | --- |
+| `Foo.BarParam` | `unknown-namespace` | Foo 既不是已启用实例，也不是 db 引脚名或已知命名空间 |
+| `PA5.BogusAttr` | `pin-attribute` | PA5 是引脚名，BogusAttr 是引脚属性；必须逐条登记进真值表 |
+| `RCC.BogusParam` | `ok` | 命中 `rcc.derived` 形状，但成员名不校验 → 只能真机确认 |
+
+`addedVerdicts` / `ipOrderOnly` 空、`dropped=[]`、`benign=false`；`notes` 里多一条上下文来源说明。
+
+**边界（别当成已解决）**：`RCC.{member}` 是**形状级**命中，成员名不校验 —— 504 份官方板级 `.ioc` 里
+`RCC.*` 有 **847 个不同成员名**（`IPParameters` 504、`FamilyName` 482、`SYSCLKFreq_VALUE` 433、`HSE_VALUE` 428…），
+跨族列不出白名单，所以 `RCC.BogusParam` 这种拼错只能靠真机往返抓。要收窄得先做
+「db `RefParameter` ∪ 分族语料表」，未做。
+
+**单测与包体**：`ioc-verify-units` 16 → 24 例（无上下文只报键名 / `unknown-parameter` /
+`inactive-instance` 两态 / `pin-attribute` 且已登记 `PinState` 判 ok / `addedVerdicts` 的 ok 与 unregistered /
+`ipOrderOnly` 良性 / 槽位重排但集合真变了仍 `valueChanged` / ok-but-dropped 文案）；
+`node test/run-units.mjs` → **722 pass / 0 fail**（42 个套件）；
+`node scripts/pack-size.mjs` → 包体 **558.2 KB**（上限 1171.9 KB，117 个文件，解包 1772.9 KB），
+模板 66.4 KB，运行时资产 16.4 KB / 7 个。
