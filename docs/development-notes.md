@@ -4799,8 +4799,8 @@ F0 的 `RCC_PLLSOURCE_HSI` 在硬件上就是 HSI÷2 进 PLL（这类族没有�
 
 ### 66.7 没做什么
 
-- **`pllmn` 模型（PLLM/PLLN/PLLP：F2/F4/F7/G4/L4）还没实现**：db 侧已经把 `PLLM` 枚举、`PLLN` 的 Min/Max、`PLLP` 枚举读出来了
-  （F407：PLLM 2/4/6/8、PLLN 50..432、PLLP 2/4/6/8），只差规划器那一步；现在对这些族的 `clock` 参数明确拒绝。
+- **`pllmn` 模型（PLLM/PLLN/PLLP）已实现，但只对 F4 开放**（§68）：F2/F7/G4/L4 的总线上限与 VCO 区间还没按手册核过，
+  对这些族的 `clock` 参数仍然明确拒绝（db 侧事实已经读得到，缺的是"核过的规格表"）。
 - **`unknown` 模型（H7 的分相 PLL、U5 的 EPOD）**：拒绝，理由写在 note 里。
 - **`RCC.<IP>Freq_Value` 这类派生键不写**：CubeMX 会自己补（F0 实测多出 `USART1Freq_Value`），
   所以逐键比对会看到 `RCC.IPParameters` 变化一次；要消掉它得按外设实例枚举总线，留作下一步。
@@ -4857,3 +4857,54 @@ GitHub 的 runner 上没有装 CubeMX，`ioc-plan-units` 里那条 TIM2 用例�
 
 验证方式：把 `STM32_CUBEMX_ROOT` 指到一个不存在的目录再跑同一套件（等价于 runner 上没有 CubeMX）：
 改前 fail=1，改后 52/52 通过。
+## 68. pllmn 时钟模型（F4 打通）+ 族模板自带的 SWD 两脚
+
+### 68.1 pllmn：源 ÷ PLLM × PLLN ÷ PLLP
+
+`src/engine/clock-pllmn.ts` 新增 `planClockPllmn({ request, entries, facts, familyId })`，输出与 pllmul 完全同形状的
+`ClockPlan`，所以 ioc-plan 只是按 `facts.model` 分派、后面的写键逻辑不分叉：
+
+- **事实**：`PLLM`/`PLLN`/`PLLP` 从 db 的 RCC Modes 读；**VCO 允许区间** db 不写（数据手册规格），按族放 `PLL_VCO_LIMITS`（目前只有 `STM32F4`：100–432 MHz，输入 1–2 MHz），没核过的族直接拒绝；
+- **搜索**：源 × PLLM × PLLN（50..432 全扫）× PLLP，过滤 VCO 越界与 SYSCLK 超上限，取距目标最近的一档；同分优先用户指定的源、再优先 P 小的（VCO 高=抖动小）；
+- **写键**：`RCC.PLLM/PLLN/PLLP`（F4 的 PLLM 是 **integer 字符串** `25`，PLLP 才是枚举 `RCC_PLLP_DIV2`），同时把 `RCC.PLLMUL` 放进 `unset`（模型切换时清理旧键），并合并 `RCC.IPParameters`。
+
+### 68.2 一个解析 bug：`PLLM` 在 db 里是 integer，不是 list
+
+F4 的 db 写的是 `<RefParameter Name="PLLM" Type="integer" Max="63" Min="2" DefaultValue="16"/>`（自闭合）。
+第一版 `enumOf()` 用 `<RefParameter[^>]*Name="PLLM"[^>]*>([\s\S]*?)</RefParameter>` 抓块，自闭合标签没有 children，
+于是它**吞掉了下一个块**，把 `PLLP` 的枚举名（`RCC_PLLP_DIV4`）当成了 PLLM 的值 —— 真机往返居然也被 CubeMX 接受
+（因为它把 DIV4 当成 M=4），但写出来的键是错的、换个值就会炸。
+
+修法两条：`enumOf` 先看开标签是不是 `/>`（integer 型直接返回空列表）；`pllM` 在 integer 型时用 `Min..Max` 生成
+`{ div, iocValue: String(div) }`。修完后 F4 写出的就是 `RCC.PLLM=25`（HSE 8 MHz ÷25 = 320 kHz 输入，×336 = VCO 336 MHz，÷2 = 168 MHz）。
+
+### 68.3 真机验收（F4，pllmn）
+
+```text
+plan  : 目标 168 MHz 可达：HSE（外部晶振）÷25 ×336 ÷2 → SYSCLK 168 MHz（VCO 336 MHz）
+写键  : RCC.PLLM=25 / RCC.PLLN=336 / RCC.PLLP=RCC_PLLP_DIV2 / APB1CLKDivider=RCC_HCLK_DIV4（APB1 42 MHz）
+verify: benign=true；valueChanged / missingKeys / addedKeys 全空
+```
+
+同一次验收里 F0（pllmul）也跑了：模板现在自带 SWD 两脚，**不再需要显式传 `serialWire: true`**；
+计划写完后 CubeMX 保留全部频率值，唯一差异仍是 `RCC.IPParameters` 里多出 `USART1Freq_Value`（见 §66.7 最后一条）。
+
+### 68.4 族模板的 SWD 信号名逐族不同（F0/L0 之前是空的）
+
+生成族模板的脚本（`demo/.dsh-stm32/probe-family-template.mjs`）原来写死 F1/F4 的 `SYS_JTMS-SWDIO`/`SYS_JTCK-SWCLK`。
+F0/L0 的 db 里这两根脚叫 **`SYS_SWDIO` / `SYS_SWCLK`** —— 名字不匹配，CubeMX 就静默地把两根脚连同 SYS 实例一起丢掉，
+于是 F0/L0 的族模板是 `PinsNb=0` 的空配置（建出来的工程没有调试口，必须显式 `serialWire: true` 兜）。
+
+现在脚本从 db 现查：`swdSignal("PA13", "SWDIO")` / `swdSignal("PA14", "SWCLK")`，写进 .ioc 的就是该族真实信号名。
+重做后 F0 = 70 键 / L0 = 91 键，两份都带 `PA13.Signal=SYS_SWDIO`、`PA14.Signal=SYS_SWCLK`；
+资源仓按新模板重新生成 `ioc/family/{F0,L0}.ioc`，`--check` 通过。
+
+### 68.5 现在的能力边界
+
+| 族 | 时钟模型 | 能不能规划 |
+| --- | --- | --- |
+| F1 | pllmul | ✅ 真机 benign=true（72 MHz，HSE×9） |
+| F0 / L0 | pllmul | ✅（F0 48 MHz 真机验收；L0 有总线上限、尚未单独往返） |
+| F4 | pllmn | ✅ 真机 benign=true（168 MHz，÷25×336÷2） |
+| F2 / F7 / G4 / L4 / L4+ / C0 / G0 / F3 / L1 / F2 | pllmul / pllmn | ❌ 缺「核过的总线上限 / VCO 区间」，拒绝并说明 |
+| H5 / U5 / H7 等 | unknown（分相 PLL） | ❌ 拒绝 |

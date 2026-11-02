@@ -179,7 +179,13 @@ export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 11520
  * busLimits（APB1/APB2/ADC 上限）db 里没有 —— 那是数据手册规格，仍按族手写。
  */
 export interface ClockFacts {
+  /** PLL 模型：pllmul（源 × PLLMUL）或 pllmn（源 ÷ PLLM × PLLN ÷ PLLP）。缺省按 pllmul。 */
+  model?: "pllmul" | "pllmn";
   muls: readonly PllMulFact[];
+  /** pllmn 模型才用得到：PLLM 分频枚举、PLLN 范围、PLLP 分频枚举。 */
+  pllM?: readonly DividerFact[];
+  pllN?: { min: number; max: number } | null;
+  pllP?: readonly DividerFact[];
   sources: readonly PllSourceFact[];
   apbDivs: readonly DividerFact[];
   adcDivs: readonly DividerFact[];

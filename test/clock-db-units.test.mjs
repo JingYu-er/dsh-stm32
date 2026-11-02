@@ -45,8 +45,11 @@ test("clockFactsFromDb：pllmul + 已核上限的族 → 合成 ClockFacts（sys
 test("clockFactsFromDb：pllmn / unknown / 未核上限的族一律 null（不拿 F1 的表硬套）", () => {
   assert.equal(clockFactsFromDb(dbFacts({ model: "pllmn" }), "STM32F0"), null);
   assert.equal(clockFactsFromDb(dbFacts({ model: "unknown" }), "STM32F0"), null);
-  // F4 是 pllmn 且上限表里也没有它 → 两种理由都该拒
-  assert.equal(clockFactsFromDb(dbFacts(), "STM32F4"), null);
+  // F4 现在是「pllmn + 上限与 VCO 都核过」的族：事实齐全时应当放行（见下一条）；
+  // 但把 pllmn 的事实掏空（没有 PLLM/PLLN）仍然要拒。
+  assert.equal(clockFactsFromDb(dbFacts({ model: "pllmn" }), "STM32F4"), null);
+  // 完全没建档的族（F7 既没有总线上限也没有 VCO 区间）→ 拒
+  assert.equal(clockFactsFromDb(dbFacts(), "STM32F7"), null);
   // 上限表里有、但枚举为空（db 读残了）→ 也拒
   assert.equal(clockFactsFromDb(dbFacts({ muls: [] }), "STM32F0"), null);
 });
@@ -87,7 +90,10 @@ test("真 db：F407 判定为 pllmn 并给出 PLLM/PLLN/PLLP 范围；G431 的 P
   const derived = readClockDbFacts(db, f4);
   assert.notEqual(derived, null);
   assert.equal(derived.model, "pllmn");
-  assert.deepEqual(derived.pllM.map((item) => item.div), [2, 4, 6, 8]);
+  // F4 的 PLLM 在 db 里是 Type="integer" Min=2 Max=63（不是枚举），所以是 2..63 的连续档
+  assert.equal(derived.pllM[0]?.div, 2);
+  assert.equal(derived.pllM[derived.pllM.length - 1]?.div, 63);
+  assert.equal(derived.pllM.every((item) => item.iocValue === String(item.div)), true);
   assert.deepEqual(derived.pllN, { min: 50, max: 432 });
   assert.deepEqual(derived.pllP.map((item) => item.div), [2, 4, 6, 8]);
   assert.equal(derived.sysclkMaxHz, 168_000_000);

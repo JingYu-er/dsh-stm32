@@ -79,12 +79,16 @@ function numberOf(text: string): number | null {
 
 /** 取某个 list 型 RefParameter 的 PossibleValue（属性顺序不固定，按名字各取）。 */
 function enumOf(text: string, parameterName: string): EnumEntry[] {
-  const block = new RegExp(
-    '<RefParameter[^>]*Name="' + parameterName + '"[^>]*>([\\s\\S]*?)</RefParameter>',
-    "u",
-  ).exec(text);
-  const body = block?.[1];
-  if (body === undefined) return [];
+  const open = new RegExp('<RefParameter[^>]*Name="' + parameterName + '"[^>]*>', "u").exec(text);
+  if (open === null) return [];
+  // 自闭合 = integer 型（PLLM/PLLN 在 F4 上就是 Min=2 Max=63 这种），没有 PossibleValue。
+  // 不挡住的话正则会把**下一个** RefParameter 的块当成它的 children —— F4 的 PLLM 曾因此拿到 PLLP 的枚举名。
+  if (open[0].trimEnd().endsWith("/>")) return [];
+  const from = (open.index ?? 0) + open[0].length;
+  const close = text.indexOf("</RefParameter>", from);
+  const block = close < 0 ? null : text.slice(from, close);
+  const body = block;
+  if (body === null) return [];
   const out: EnumEntry[] = [];
   for (const matched of body.matchAll(/<PossibleValue([^>]*)\/?>/gu)) {
     const attrs = matched[1] ?? "";
@@ -128,10 +132,14 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
     .map((entry) => ({ mul: entry.num ?? 0, iocValue: entry.value }))
     .filter((item) => item.mul >= 2 && item.iocValue !== "")
     .sort((left, right) => left.mul - right.mul);
-  const pllM: DividerFact[] = enumOf(text, "PLLM")
+  const pllMRange = rangeOf(text, "PLLM");
+  const pllM: DividerFact[] = pllMRange !== null ? [] : enumOf(text, "PLLM")
     .map((entry) => ({ div: entry.num ?? 0, iocValue: entry.value }))
     .filter((item) => item.div >= 1 && item.iocValue !== "")
     .sort((left, right) => left.div - right.div);
+  if (pllMRange !== null) {
+    for (let div = pllMRange.min; div <= pllMRange.max; div += 1) pllM.push({ div, iocValue: String(div) });
+  }
   const pllP: DividerFact[] = enumOf(text, "PLLP")
     .map((entry) => ({ div: entry.num ?? 0, iocValue: entry.value }))
     .filter((item) => item.div >= 1 && item.iocValue !== "")
@@ -208,6 +216,8 @@ export interface BusLimits {
 }
 
 export const BUS_LIMITS: Readonly<Record<string, BusLimits>> = {
+  // RM0090（F4）：APB1 ≤42 MHz、APB2 ≤84 MHz、ADC ≤36 MHz（ADC 走 APB2 再分频）
+  STM32F4: { apb1Hz: 42_000_000, apb2Hz: 84_000_000, adcHz: 36_000_000 },
   // RM0008（F1）：APB1 ≤36 MHz、APB2 = SYSCLK、ADC ≤14 MHz
   STM32F1: { apb1Hz: 36_000_000, apb2Hz: 72_000_000, adcHz: 14_000_000 },
   // RM0091（F0）：APB1 = AHB（F0 的 APB1 不再二分频）、ADC ≤14 MHz
@@ -216,15 +226,51 @@ export const BUS_LIMITS: Readonly<Record<string, BusLimits>> = {
   STM32L0: { apb1Hz: 32_000_000, apb2Hz: 32_000_000, adcHz: 16_000_000 },
 };
 
+/** VCO 允许区间（数据手册规格，db 不写）。只收核过手册 + 做过真机往返的族。 */
+export interface PllVcoLimits {
+  minHz: number;
+  maxHz: number;
+  inMinHz?: number;
+  inMaxHz?: number;
+}
+
+export const PLL_VCO_LIMITS: Readonly<Record<string, PllVcoLimits>> = {
+  // RM0090：VCO 输出 100–432 MHz，PLL 输入 1–2 MHz
+  STM32F4: { minHz: 100_000_000, maxHz: 432_000_000, inMinHz: 1_000_000, inMaxHz: 2_000_000 },
+};
+
 /**
  * db 事实 + 该族总线上限 → planClock 认的 ClockFacts。
  * 返回 null 表示这一族还不能规划（没有总线上限、或 PLL 模型不是 pllmul）。
  */
 export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFacts | null {
-  if (facts.model !== "pllmul") return null;
-  const limits = BUS_LIMITS[familyId.trim().toUpperCase()];
+  const family = familyId.trim().toUpperCase();
+  const limits = BUS_LIMITS[family];
   if (limits === undefined) return null;
-  if (facts.muls.length === 0 || facts.sources.length === 0) return null;
+  if (facts.sources.length === 0) return null;
+  const base = {
+    sources: facts.sources,
+    apbDivs: facts.apbDivs,
+    adcDivs: facts.adcDivs.length > 0 ? facts.adcDivs : [{ div: 1, iocValue: "" }],
+    limits: {
+      sysclkHz: facts.sysclkMaxHz > 0 ? facts.sysclkMaxHz : limits.apb2Hz,
+      apb1Hz: limits.apb1Hz,
+      apb2Hz: limits.apb2Hz,
+      adcHz: limits.adcHz,
+    },
+    // USB 规则：db 不写，且各族的 48 MHz 来源不同（F1 要 PLL=72 再 ÷1.5；F0/L0 直接 PLL=48）。
+    // 这里给「未建模」（requiresPllClkHz = 0 ⇒ planClock 认为 USB 不可用，不会写 RCC.USBPrescaler）。
+    usb: { hz: 48_000_000, requiresPllClkHz: 0, iocValue: "" },
+    peripheralClocks: F1_PERIPHERAL_CLOCKS,
+    baudList: F1_BAUD_LIST,
+  };
+  if (facts.model === "pllmn") {
+    if (PLL_VCO_LIMITS[family] === undefined) return null;
+    if (facts.pllM.length === 0 || facts.pllP.length === 0 || facts.pllN === null) return null;
+    return { ...base, model: "pllmn", muls: [], pllM: facts.pllM, pllN: facts.pllN, pllP: facts.pllP };
+  }
+  if (facts.model !== "pllmul") return null;
+  if (facts.muls.length === 0) return null;
   return {
     muls: facts.muls,
     sources: facts.sources,

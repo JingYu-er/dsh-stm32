@@ -47,6 +47,7 @@ import { resolveSearchConfig } from "../data/search-roots.js";
 import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
 import { clockFactsFromDb, readClockDbFacts } from "../data/clock-db.js";
+import { planClockPllmn } from "./clock-pllmn.js";
 import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
 import { isKnownPin } from "../data/chips.js";
 import { capabilityGap, familyProfileOf, isF1 } from "../data/family.js";
@@ -1504,15 +1505,19 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
       (clockDb === null
         ? "；也没读到本机 CubeMX db 的 RCC Modes（装 CubeMX 后重试）"
         : clockDb.model === "pllmn"
-          ? "；这一族的 PLL 是 PLLM/PLLN/PLLP 模型，规划器还没实现"
+          ? "；这一族的 PLL 是 PLLM/PLLN/PLLP 模型，但 VCO 允许区间还没按手册核对"
           : clockDb.model === "unknown"
             ? "；这一族的 PLL 模型不在已实现的两种之内"
             : "；这一族的 APB1/APB2/ADC 频率上限还没核过（db 不写这些）");
+  // 两种 PLL 模型各走各的规划器（pllmul：源 × PLLMUL；pllmn：源 ÷ PLLM × PLLN ÷ PLLP），
+  // 但输出同一种 ClockPlan，后面的写键逻辑不分叉。
   const clockPlan = !clockSupported
     ? emptyClockPlan(clockRefusal + "：clock 参数不会生效")
-    : (request.clock === undefined
-      ? planClock(undefined, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }) })
-      : planClock(request.clock, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }) }));
+    : clockDbFacts !== null && clockDbFacts.model === "pllmn"
+      ? planClockPllmn({ request: request.clock, entries: after, facts: clockDbFacts, familyId: family })
+      : (request.clock === undefined
+        ? planClock(undefined, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }), ...(family === "" ? {} : { familyId: family }) })
+        : planClock(request.clock, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }), ...(family === "" ? {} : { familyId: family }) }));
   if (!clockSupported) {
     if (request.clock === undefined) {
       notes.push("时钟：" + clockPlan.note);

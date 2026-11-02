@@ -71,6 +71,10 @@ export interface ClockChainInfo {
   pllSourceLabel: string;
   pllInHz: number;
   pllMul: number;
+  /** pllmn 模型的 M / N / P（pllmul 族留空）。 */
+  pllM?: number;
+  pllN?: number;
+  pllP?: number;
   pllClkHz: number;
   sysclkHz: number;
   hclkHz: number;
@@ -173,6 +177,8 @@ export interface ClockPlanContext {
    * 缺省用 F1_FACTS（没有 db 的离线场景）。
    */
   clockFacts?: ClockFacts;
+  /** 族 id（STM32F4…）：pllmn 规划要看 VCO 区间。 */
+  familyId?: string;
 }
 
 const ZERO_CHAIN: ClockChainInfo = {
