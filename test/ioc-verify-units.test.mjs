@@ -102,6 +102,22 @@ test("diff：键还在但值被 CubeMX 改写 → 必须报 changedValues（零 
   assert.deepEqual(diff.addedKeys, []);
 });
 
+test("diff：functionlistsort 只被 CubeMX 追加 MX_*_Init → 单独归到 autoAddedFunctions，不算值改写", () => {
+  const before = BEFORE + "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,2-MX_GPIO_Init-GPIO-false-HAL-true\n";
+  const after = BEFORE + "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,2-MX_GPIO_Init-GPIO-false-HAL-true,3-MX_USART1_UART_Init-USART1-false-HAL-true\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.autoAddedFunctions, ["3-MX_USART1_UART_Init-USART1-false-HAL-true"]);
+  assert.deepEqual(diff.changedValues, [], "纯追加不该再算成值被改写");
+});
+
+test("diff：functionlistsort 被删条目（不是纯追加）→ 仍然报 changedValues", () => {
+  const before = BEFORE + "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,2-MX_GPIO_Init-GPIO-false-HAL-true\n";
+  const after = BEFORE + "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.autoAddedFunctions, []);
+  assert.deepEqual(diff.changedValues.map((item) => item.key), ["ProjectManager.functionlistsort"]);
+});
+
 let failed = 0;
 for (const item of cases) {
   try {

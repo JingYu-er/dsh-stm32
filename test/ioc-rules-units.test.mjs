@@ -361,6 +361,53 @@ test("R20：NVIC 的中断名必须在 SVD 中断表里；没给中断表就不�
   assert.equal(noSvd.warnings.some((item) => item.rule === "R20"), false);
 });
 
+test("R22：引脚属性键没列进 GPIOParameters → 告警（实测 CubeMX 会静默删）", () => {
+  const bad = checkIocRules(entries([
+    ["PC13-TAMPER-RTC.GPIOParameters", "GPIO_Label"],
+    ["PC13-TAMPER-RTC.GPIO_Label", "led"],
+    ["PC13-TAMPER-RTC.PinState", "GPIO_PIN_SET"],
+  ]));
+  const r22 = bad.warnings.filter((item) => item.rule === "R22");
+  assert.equal(r22.length, 1);
+  assert.match(r22[0].message, /PinState/u);
+  assert.match(r22[0].message, /静默删/u);
+
+  const good = checkIocRules(entries([
+    ["PA5.GPIOParameters", "GPIO_Label,PinState,GPIO_Mode"],
+    ["PA5.GPIO_Label", "led"],
+    ["PA5.PinState", "GPIO_PIN_SET"],
+    ["PA5.GPIO_Mode", "GPIO_MODE_OUTPUT_OD"],
+  ]));
+  assert.equal(good.warnings.some((item) => item.rule === "R22"), false, JSON.stringify(good.warnings));
+});
+
+test("R23：EXTI 链路齐全就不告警，四个环节各缺一处都要告警", () => {
+  const full = [
+    ["PA5.Signal", "GPXTI5"],
+    ["PA5.GPIO_ModeDefaultEXTI", "GPIO_MODE_IT_FALLING"],
+    ["SH.GPXTI5.0", "GPIO_EXTI5"],
+    ["SH.GPXTI5.ConfNb", "1"],
+    ["NVIC.EXTI9_5_IRQn", "true:0:0:false:false:true:true:true:true"],
+  ];
+  const ok = checkIocRules(entries(full));
+  assert.equal(ok.warnings.some((item) => item.rule === "R23"), false, JSON.stringify(ok.warnings));
+
+  const noMode = checkIocRules(entries(full.filter(([key]) => key !== "PA5.GPIO_ModeDefaultEXTI")));
+  assert.match(noMode.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /没有 PA5\.GPIO_ModeDefaultEXTI/u);
+
+  const noShared = checkIocRules(entries(full.filter(([key]) => !key.startsWith("SH."))));
+  assert.match(noShared.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /缺 SH\.GPXTI5\.0/u);
+
+  const noNvic = checkIocRules(entries(full.filter(([key]) => !key.startsWith("NVIC."))));
+  assert.match(noNvic.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /中断不会使能/u);
+
+  const wrongLine = checkIocRules(entries([["PA5.Signal", "GPXTI6"]]));
+  assert.match(wrongLine.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /线号与引脚号不一致/u);
+
+  const badMode = checkIocRules(entries([...full.filter(([key]) => key !== "PA5.GPIO_ModeDefaultEXTI"), ["PA5.GPIO_ModeDefaultEXTI", "GPIO_MODE_OUTPUT_PP"]]));
+  assert.match(badMode.warnings.filter((item) => item.rule === "R23").map((item) => item.message).join(" | "), /不是合法值/u);
+});
+
 let failed = 0;
 for (const item of cases) {
   try { item.fn(); console.log("ok   " + item.name); }

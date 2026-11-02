@@ -3708,3 +3708,110 @@ db/boardmanager 语料（504 份 .ioc 实测分布）、现有生成器（我们
   再往前一步就得有完整 schema（真值表）才能判「这个键 CubeMX 认不认」，现在加只会造噪声——打错的键由 R7（IPParameters 白名单）和 R20（NVIC 名）兜住。
 - **DMA 通道 NVIC 的 9 段值**与真机一致（`true:0:0:false:false:true:false:true:true`，§58.3.3 实测回写零 diff），B8 不动。
 - **`<IP>.IPParameters` 成员序推不出来**（jar 的 U2：35% 与任何推导都不符，`LinkedHashMap` 插入序取决于 db 加载与改参历史），只能照抄用户给的顺序；B5 不修，留作已知限制。
+
+## 60. 补 C 表的两个功能缺口 + 表达力缺口：中断、EXTI、开漏/初始电平（2026-11-02）
+
+§59 之后 abc-diff 的 C 表还剩 11 条（CubeMX 会写、我们不写）。其中 2 条是功能缺口、1 条是表达力缺口，
+其余是键序/自动补全这类不影响生成正确性的边角。本轮按「先把缺的功能补上」处理这三条 + 一条必须修的真 diff：
+
+- **C1：非 DMA 外设的 `NVIC.<IP>_IRQn` 从来不自动写**。以前想开 USART1 中断只能自己往 `entries` 里手拼 9 段值，
+  拼错就是静默不使能（R3 只能事后抓「段数不对」，抓不到「值合法但语义错」）。
+- **C10：`pins` 完全写不出 EXTI 链路**。EXTI 不是一个键，是四件套 + 按线号选中断组：
+  `<pin>.GPIOParameters` 里要有 `GPIO_ModeDefaultEXTI`、`<pin>.GPIO_ModeDefaultEXTI=GPIO_MODE_IT_FALLING`、
+  `<pin>.Signal=GPXTI<line>`、`SH.GPXTI<line>.0=GPIO_EXTI<line>` + `SH.GPXTI<line>.ConfNb=1`、`NVIC.EXTI*_IRQn`。
+- **C13：`pins` 写不出开漏与初始电平**（`GPIO_Mode=GPIO_MODE_OUTPUT_OD`、`PinState=GPIO_PIN_SET/RESET`）。
+- **Mcu.Pin 排序错**：以前新脚一律追加到尾部，而 CubeMX 按 db 的 `<Pin Position>` 升序插、`VP_*` 恒在最后。
+
+### 60.1 新 API（`src/engine/ioc-plan.ts`）
+
+```ts
+interface PinAddRequest {
+  pin: string;
+  signal?: "input" | "output";
+  label?: string;
+  pull?: "none" | "up" | "down";
+  speed?: "low" | "medium" | "high";
+  outputType?: "pp" | "od";              // 新增：od 写 GPIO_MODE_OUTPUT_OD（C13）
+  initial?: "low" | "high";              // 新增：high 写 PinState=GPIO_PIN_SET（C13）
+  interrupt?: "rising" | "falling" | "both"; // 新增：一次写全 EXTI 四件套 + NVIC（C10）
+}
+interface IocPlanRequest {
+  // …
+  interrupts?: string[];                 // 新增：["USART1:2:0", "EXTI9_5"]（C1）
+}
+```
+
+默认值一律不写（这是「非默认才写」的一贯口径，不是省事）：`outputType` 缺省即 pp → 不写 `GPIO_Mode`；
+`initial` 缺省即 low → 不写 `PinState`。理由在 §60.2 的第 1 条：CubeMX 自己也不给普通输入脚写 `GPIO_MODE_INPUT`。
+
+**`interrupts` 的值格式** `<name>:<preempt>:<sub>`（`2:0` 就是 preempt=2、sub=0，可省成 `USART1`→`true:0:0:…`），
+渲染成 R3 要求的 9 段：`true:<preempt>:<sub>:false:false:true:true:true:true`。`<name>` 必须是本机 db 里该 MCU 的实例名
+（`USART1` 可以，`USART1:1` 是另一套「预设名」写法、不在这里用）。`EXTI<n>` 这种写法由 `pins[].interrupt` 按线号自动选组（`EXTI0`/`EXTI1`/`EXTI2`/`EXTI3`/`EXTI4`/`EXTI9_5`/`EXTI15_10`），不要手写组名——线号与组对不上 R23 会告警。
+
+### 60.2 真机取证（CubeMX 6.15.0 无头 `config load` + `config save`，逐轮 50–77 s）
+
+四轮探针（脚本在 `demo/.dsh-stm32/`，每轮都是「改副本 → 让 CubeMX 回写 → 逐键 diff」）：
+
+1. **`pins` 不把脚列进 `Mcu.PinN` 时，写在脚上的键全被删**。第一轮只往 `entries` 里塞 18 个引脚键（不给 `pins`），
+   回写后 18 个键**一个不剩**——CubeMX 只保留引脚表里存在的脚。这解释了为什么以前「手拼引脚键」偶尔像生效、偶尔完全没反应。
+2. **输入脚不写 `GPIO_Mode`，CubeMX 不会替我们补 `GPIO_MODE_INPUT`**（`PA1` 回写只剩 `GPIOParameters=GPIO_PuPd`、
+   `GPIO_PuPd=GPIO_PULLUP`、`Locked`、`Signal=GPIO_Input`）。所以「默认不写」与真值一致，不是漏写。
+3. **`PinState` / `GPIO_MODE_OUTPUT_OD` 逐字保留**（`PA6`、`PA3` 都验过）→ C13 两个字段真能表达，且 CubeMX 不规范化。
+4. **写在脚上的 `GPIO_*` 属性键必须同时列进该脚的 `GPIOParameters`，否则被静默丢弃**。反例：`PC13-TAMPER-RTC.PinState=…`
+   而 `PC13-TAMPER-RTC.GPIOParameters` 只列了 `GPIO_Label` → `PinState` 被删。这条现在是规则 **R22**。
+5. **EXTI 四件套 + `NVIC.EXTI*_IRQn` 全部逐字保留、`addedKeys=[]`**（`PA0→GPXTI0`（`EXTI0`）、`PA5→GPXTI5`（`EXTI9_5`）、
+   `PA10→GPXTI10`（`EXTI15_10`）三组都验过，含优先级）→ C10 与「线号→中断组」映射成立。完整性检查是规则 **R23**。
+6. **`NVIC.USART1_IRQn=true:0:0:false:false:true:true:true:true` 逐字保留**（`dropped=[]`）→ C1 的 9 段编码被真机确认。
+7. **`Mcu.Pin<i>` 的顺序 = db `<Pin Position>` 升序，`VP_*` 恒最后**。四轮回写后的顺序都一致：
+   `PC13-TAMPER-RTC, PC14-OSC32_IN, PC15-OSC32_OUT, PD0-OSC_IN, PD1-OSC_OUT, PA1, PA3, PA5, PA10, PA13, PA14, VP_SYS_VS_Systick`。
+   db 里 `PA1@11, PA3@13, PA5@15`（`STM32F103C(8-B)Tx.xml`），`Position` 本来就在 `readMcuFacts()` 的 `facts.pins` 里，
+   所以 `sortPinsByPosition()` 不需要新解析，只是把「追加」换成「按 Position 插入」。
+
+### 60.3 `GPIOParameters` 的成员顺序：靠语料定，不靠猜
+
+同一组属性，CubeMX 写出来的顺序是 `GPIO_Speed → PinState → GPIO_PuPd → GPIO_Label → GPIO_ModeDefault* → GPIO_Mode`，
+和我们原来写的（`GPIO_Label` 打头）不同。这个顺序不能从 jar 里读出来（`LinkedHashMap` 插入序取决于 db 加载与改参历史），
+所以改用**语料统计**（脚本 `demo/.dsh-stm32/gpio-param-order-v6.mjs`）：扫 `<CubeMX>/db/plugins/boardmanager/boards` 下 504 份板级 `.ioc`，
+按 `MxCube.Version` 分组——**只有 6.x 的 266 份（11808 条 `GPIOParameters`）能当权威**，4.x 的 238 份顺序不同（`GPIO_Label` 在前），
+把两代混在一起统计会得到自相矛盾的全序。6.x 里两两先后计数全是 0 反例（如 `GPIO_Speed<GPIO_PuPd` 376/0、`GPIO_PuPd<GPIO_Label` 694/0、
+`GPIO_Label<PinAttribute` 3608/0），才敢定成全序写进 `PIN_ATTRIBUTE_ORDER`。
+
+教训：**凡是「键名对、值对、但 CubeMX 回写不一致」的差异，先怀疑顺序/规范化，再去语料里按版本分层统计**；
+拿真机一轮 70 s 去试顺序，性价比极低（一轮只能证伪一种排列）。
+
+### 60.4 `autoAddedFunctions`：把「它自己补的」和「我们写错的」分开
+
+真机回写里唯一无法消除的差异是 `ProjectManager.functionlistsort`：CubeMX 保存时会给新使能的外设追加
+`3-MX_USART1_UART_Init-USART1-false-HAL-true`。**决定不写这个键**——它给每个外设的初始化函数名后缀并不统一
+（`USART1→MX_USART1_UART_Init`，`TIM2→MX_TIM2_Init`），猜错会把生成顺序写坏，而它自己补的格式永远正确。
+
+所以 `ioc-verify` 增了 `autoAddedFunctions`：只有当 `functionlistsort` 的变化是**纯追加**
+（前缀条目逐字相同、新条目全部匹配 `/^[0-9]+-MX_[A-Za-z0-9_]+_Init-[^,]*$/u`）时，才把它从 `changedValues` 摘出来单独报；
+删条目、改值仍然留在 `changedValues` 里当差异。这样「零 diff」的判据不会被一条我们故意不写的键长期污染，
+也不会因此掩盖真差异。
+
+### 60.5 验收（真机，`demo/.dsh-stm32/accept-exti.mjs`）
+
+输入：`pins` = `PA6`（开漏 + 初始高 + 标签 `led_od`）、`PA5`（上拉输入 + `interrupt: falling` + 标签 `btn`）；
+`peripherals` = `USART1`；`interrupts` = `["USART1:2:0", "EXTI9_5"]`。
+
+- 第一次跑（`durationMs=68084`，顺序修复前）：`removedKeys/addedKeys/droppedPeripherals/addedPeripherals/signalRewrites` 全空，
+  只剩 3 条值差异 —— 两条 `GPIOParameters` 顺序 + 一条 `functionlistsort`。`Mcu.Pin` 顺序此时已与 db 一致。
+- 第二次跑（`durationMs=74852`，顺序 + `autoAddedFunctions` 修复后）：**`removedKeys=[]`、`addedKeys=[]`、`changedValues=[]`、
+  `signalRewrites=[]`、`droppedPeripherals=[]`、`addedPeripherals=[]`**，`autoAddedFunctions` 1 条（它自己的）。
+  回写快照里 `PA5.GPIOParameters=GPIO_PuPd,GPIO_Label,GPIO_ModeDefaultEXTI`、`PA6.GPIOParameters=PinState,GPIO_Label,GPIO_Mode`、
+  `PA6.GPIO_Mode=GPIO_MODE_OUTPUT_OD`、`PA6.PinState=GPIO_PIN_SET`、`PA5.Signal=GPXTI5`、`SH.GPXTI5.0=GPIO_EXTI5`、
+  `SH.GPXTI5.ConfNb=1`、`NVIC.EXTI9_5_IRQn=true:0:0:false:false:true:true:true:true`、
+  `NVIC.USART1_IRQn=true:2:0:false:false:true:true:true:true`、`Mcu.Pin5..11=PA5,PA6,PA9,PA10,PA13,PA14,VP_SYS_VS_Systick`。
+- 单测：`npm run typecheck` 0 错、`npm run build` 通过、`npm test` → **693 pass / 0 fail**（691 + `autoAddedFunctions` 2 条）。
+
+### 60.6 判过但不动
+
+- **`ProjectManager.functionlistsort` 不写**（理由见 60.4）。它是已知且已单独报告的差异，不是缺口。
+- **`outputType: pp` / `initial: low` 不写键**：语料里 `GPIO_MODE_OUTPUT_PP` 116/2657 个输出脚、`GPIO_MODE_OUTPUT_OD` 0 个
+  （开漏只能靠真机验，语料给不出证据——这也是本次必须上真机的原因），CubeMX 自己只在非默认时写。
+- **AF 脚不写 `GPIO_Mode`**：1265 个 AF 脚里只有 5 个带 `GPIO_Mode=GPIO_MODE_AF_PP`、23 个带 `GPIO_ModeDefaultPP`，
+  默认一律不写（与 CubeMX 一致）。
+- **AF 脚的开漏（`GPIO_MODE_AF_OD`）仍写不出**，是已知限制：`pins[].signal` 只有 `input`/`output`，`outputType: od` 只在
+  `signal !== "input"` 时写 `GPIO_MODE_OUTPUT_OD`（`ioc-plan.ts:599-601`），没有「AF 信号 + 开漏」这条路径。
+  需要时用 `entries` 直写 `<pin>.GPIO_Mode=GPIO_MODE_AF_OD` **并**把 `GPIO_Mode` 加进该脚的 `GPIOParameters`（R22），否则会被静默删。

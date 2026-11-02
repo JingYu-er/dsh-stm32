@@ -58,6 +58,17 @@ export interface IocVerifyDiff {
   addedKeys: string[];
   /** 值被改写（截断后）：键存在性对比看不出的那类差异。 */
   changedValues: IocValueChange[];
+  /**
+   * CubeMX 保存时自己往 ProjectManager.functionlistsort 追加的 MX_*_Init 条目。
+   *
+   * 为什么不写：这一列是「生成 main.c 时按什么顺序调初始化」的清单，条目形如
+   * `3-MX_USART1_UART_Init-USART1-false-HAL-true`。实测（2026-11-02，6.15.0）我们启用 USART1
+   * 后不写它，CubeMX 会在保存时按同样的格式、接着现有编号自己补上，回写结果正确；
+   * 而它给每个外设用的函数名后缀并不统一（USART1→MX_USART1_UART_Init，TIM2→MX_TIM2_Init），
+   * 我们猜错反而会把生成顺序写坏。所以这里只是把它从 changedValues 里摘出来单独报告：
+   * 结构差异仍然为 0，但不假装是我们写对了。
+   */
+  autoAddedFunctions: string[];
   /** 人话诊断：每个被丢的外设缺什么。 */
   hints: string[];
 }
@@ -195,6 +206,27 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
   }
   changedValues.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
 
+  // functionlistsort 的「纯追加 MX_*_Init」不算差异：那是 CubeMX 保存时自己维护的一列。
+  // 只有「只追加、不删条目、不改已有条目的值」才这么处理；删条目/改值仍然留在 changedValues 里。
+  const autoAddedFunctions: string[] = [];
+  const listSortIndex = changedValues.findIndex((item) => item.key === "ProjectManager.functionlistsort");
+  if (listSortIndex >= 0) {
+    const change = changedValues[listSortIndex] as IocValueChange;
+    const beforeItems = change.before.split(",").map((item) => item.trim()).filter((item) => item !== "");
+    const afterItems = change.after.split(",").map((item) => item.trim()).filter((item) => item !== "");
+    const appended = afterItems.slice(beforeItems.length);
+    const keptPrefix = afterItems.slice(0, beforeItems.length);
+    const onlyAppended =
+      keptPrefix.length === beforeItems.length &&
+      keptPrefix.every((item, index) => item === beforeItems[index]) &&
+      appended.length > 0 &&
+      appended.every((item) => /^[0-9]+-MX_[A-Za-z0-9_]+_Init-[^,]*$/u.test(item));
+    if (onlyAppended) {
+      autoAddedFunctions.push(...appended);
+      changedValues.splice(listSortIndex, 1);
+    }
+  }
+
   const hints: string[] = [];
   for (const device of dropped) {
     const pins = pinsPointingAt(before, device);
@@ -241,6 +273,7 @@ export function diffIocForVerify(beforeText: string, afterText: string): IocVeri
     removedKeys: removedKeys.slice(0, KEY_SAMPLE_LIMIT),
     addedKeys: addedKeys.slice(0, KEY_SAMPLE_LIMIT),
     changedValues: changedValues.slice(0, KEY_SAMPLE_LIMIT),
+    autoAddedFunctions,
     hints,
   };
 }
@@ -344,6 +377,9 @@ export async function runIocVerify(
     const valueSuffix = diff.changedValues.length === 0
       ? ""
       : "；另有 " + String(diff.changedValues.length) + " 个键的值被改写（键还在，值不一样）";
+    const autoSuffix = diff.autoAddedFunctions.length === 0
+      ? ""
+      : "；它另外自己补了 " + String(diff.autoAddedFunctions.length) + " 条初始化清单（functionlistsort，不影响生成正确性）";
     return {
       ...base,
       ok: true,
@@ -354,7 +390,7 @@ export async function runIocVerify(
       message:
         (dropped.length === 0
           ? "CubeMX 认了全部 " + String(diff.afterPeripherals.length) + " 个外设；计划生成 " + String(diff.plannedFunctions.length) + " 个初始化函数"
-          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") + valueSuffix,
+          : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") + valueSuffix + autoSuffix,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

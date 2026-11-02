@@ -57,11 +57,12 @@ const diffSchema: JsonSchema = {
         required: ["key", "before", "after"],
       },
     },
+    autoAddedFunctions: { type: "array", items: { type: "string" } },
     hints: { type: "array", items: { type: "string" } },
   },
   required: [
     "afterPeripherals", "droppedPeripherals", "addedPeripherals", "plannedFunctions", "plannedFunctionsRaw",
-    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "changedValues", "hints",
+    "signalRewrites", "sharedSignals", "removedKeys", "addedKeys", "changedValues", "autoAddedFunctions", "hints",
   ],
 };
 
@@ -108,6 +109,12 @@ function format(report: IocVerifyReport): string[] {
   for (const change of diff.changedValues) {
     lines.push("值被改写： " + change.key + "  " + change.before + " → " + change.after);
   }
+  if (diff.autoAddedFunctions.length > 0) {
+    lines.push(
+      "CubeMX 自己补的初始化清单（我们没写，它保存时按既有编号追加；不影响生成正确性）：" +
+        diff.autoAddedFunctions.join("、"),
+    );
+  }
   for (const hint of diff.hints) lines.push("* " + hint);
   lines.push("副本：" + report.snapshotPath + "（工程 .ioc 未改动）");
   return lines;
@@ -143,7 +150,7 @@ export function registerIocVerify(ctx: DshContext): void {
         message: "", notes: [], errors: [], diff: {
           afterPeripherals: [], droppedPeripherals: [], addedPeripherals: [], plannedFunctions: [],
           plannedFunctionsRaw: [], signalRewrites: [], sharedSignals: [], removedKeys: [], addedKeys: [],
-          changedValues: [], hints: [],
+          changedValues: [], autoAddedFunctions: [], hints: [],
         },
       };
       if (subprocess === undefined) {

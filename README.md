@@ -173,7 +173,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_ioc_inspect` | 解析 MCU 型号、引脚/信号/标签、外设与中断、时钟树、工程设置；会报「没开 Serial Wire 会生成 `SWJ_DISABLE`」这类致命风险 |
-| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率） |
+| `stm32_ioc_plan` | 改 `.ioc` 的第一步：算出逐键 diff 与源 SHA-256，返回 `planId`，**不动源文件**。支持改键、删键、按引脚表加 GPIO（上下拉/速度/开漏 `outputType: od`/初始电平 `initial`/`interrupt` 一次写全 EXTI 链路 + 中断组）、`interrupts` 使能外设中断（写 9 段 NVIC 值并按 db/SVD 校验中断名）、一键补 Serial Wire、按目标频率改时钟（`clock: { targetHz }`，就近取档 + 派生键重算 + 逐外设频率） |
 | `stm32_ioc_apply` | 必须带 `planId`；写盘前再核 SHA（中途被手改就拒绝），备份后原子替换，写完重新解析校验，不过自动回滚。支持 `rollbackFrom` |
 
 ### 代码与构建

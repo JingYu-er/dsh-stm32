@@ -172,7 +172,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Tool | What it does |
 | --- | --- |
 | `stm32_ioc_inspect` | Parses MCU part, pins/signals/labels, peripherals and interrupts, clock tree, project settings; reports fatal risks such as "no Serial Wire means a generated `SWJ_DISABLE`" |
-| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table, one-shot Serial Wire repair, and retargeting clocks to the nearest reachable frequency (`clock: { targetHz }`, derived keys recomputed, per-peripheral frequencies reported) |
+| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table (pull/speed, open-drain `outputType: od`, initial level `initial`, and `interrupt` which writes the whole EXTI chain plus its IRQ group), enabling peripheral interrupts via `interrupts` (9-segment NVIC value, name checked against the db/SVD), one-shot Serial Wire repair, and retargeting clocks to the nearest reachable frequency (`clock: { targetHz }`, derived keys recomputed, per-peripheral frequencies reported) |
 | `stm32_ioc_apply` | Requires a `planId`; re-checks the SHA before writing (refuses if the file changed meanwhile), backs up, replaces atomically, re-parses to validate, rolls back on failure. Supports `rollbackFrom` |
 
 ### Code and build

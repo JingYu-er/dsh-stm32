@@ -27,7 +27,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
-import { checkIocRules } from "./ioc-rules.js";
+import { CORE_EXCEPTIONS, checkIocRules, extiIrqName } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
 import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
 import { loadSvdForLine, svdLineForChip } from "../data/svd.js";
@@ -41,12 +41,30 @@ import { isKnownPin } from "../data/chips.js";
 export interface PinAddRequest {
   /** 引脚名，例如 PA0、PC13。 */
   pin: string;
-  /** input=GPIO_Input，output=GPIO_Output；缺省 output。 */
+  /** input=GPIO_Input，output=GPIO_Output；配了 interrupt 时是 EXTI 引脚，这项被忽略。 */
   signal?: "input" | "output";
   /** GPIO 标签（生成 C 变量前缀），必须是合法 C 标识符。 */
   label?: string;
   pull?: "none" | "up" | "down";
   speed?: "low" | "medium" | "high";
+  /**
+   * 输出类型：pp（推挽，CubeMX 的默认值，不写键）/ od（开漏，写 GPIO_Mode=GPIO_MODE_OUTPUT_OD）。
+   * 只有 signal=output 时有意义。实测（6.15.0）：写在引脚上的 GPIO_Mode 会被逐字保留。
+   */
+  outputType?: "pp" | "od";
+  /**
+   * 初始电平：high 写 PinState=GPIO_PIN_SET（生成代码里上电即高）；low 是 CubeMX 的默认值，
+   * 不写这个键（写了也是默认值，只会制造伪 diff）。实测：PinState 与 GPIO_Mode 一样必须列进
+   * <pin>.GPIOParameters 才不会被 CubeMX 丢掉。
+   */
+  initial?: "low" | "high";
+  /**
+   * 把这根脚配成外部中断（EXTI）：rising / falling / both。
+   * 一次写全整条链路：Signal=GPXTI<line>、GPIO_ModeDefaultEXTI、GPIOParameters、
+   * SH.GPXTI<line>.0=GPIO_EXTI<line> 与 ConfNb，并按线号补 NVIC.EXTI*_IRQn（0–4 → EXTI<n>_IRQn，
+   * 5–9 → EXTI9_5_IRQn，10–15 → EXTI15_10_IRQn）。实测（6.15.0）：这条链路逐字保留、CubeMX 不补别的键。
+   */
+  interrupt?: "rising" | "falling" | "both";
 }
 
 /** 启用一个外设：按预设一次写全"引脚 Mode/Signal + Mcu.IPn + IPParameters"。 */
@@ -57,6 +75,15 @@ export interface PeripheralEnableRequest {
   pins?: Record<string, string>;
   /** 覆盖预设的默认参数，key 是 <ip>.IPParameters 里的参数名（BaudRate/Prescaler…）。 */
   parameters?: Record<string, string>;
+}
+
+/** 一条 NVIC 中断：irq 是中断名（USART1 / USART1_IRQn / EXTI9_5），preempt/sub 是优先级。 */
+export interface IocInterruptRequest {
+  irq: string;
+  /** 抢占优先级（0–15，F1 的 NVIC_PRIORITYGROUP_4）。缺省 0。 */
+  preempt?: number;
+  /** 子优先级。F1 上 group4 没有子优先级，保持 0。 */
+  sub?: number;
 }
 
 export interface IocPlanRequest {
@@ -73,6 +100,12 @@ export interface IocPlanRequest {
    * 它按引脚的 Mode+Signal 反推复用模式；缺 <pin>.Mode 就静默丢弃整个外设。
    */
   peripherals?: PeripheralEnableRequest[];
+  /**
+   * 打开中断（写 NVIC.<名字>_IRQn）。名字写外设实例（USART1、TIM2）或 <line>（EXTI9_5）都行，
+   * 带不带 _IRQn 后缀都认。值固定 9 段 true:pre:sub:false:false:true:true:true:true
+   * （实测 6.15.0 对非 DMA 外设就是这一串；DMA 通道的末段是 false:true:true，由 DMA 逻辑自己写）。
+   */
+  interrupts?: (string | IocInterruptRequest)[];
   /** 确保 Serial Wire 调试口（PA13/PA14），并清掉 No_Debug 遗留。 */
   serialWire?: boolean;
   /**
@@ -370,6 +403,49 @@ const SPEED_VALUES: Record<NonNullable<PinAddRequest["speed"]>, string> = {
   medium: "GPIO_SPEED_FREQ_MEDIUM",
   high: "GPIO_SPEED_FREQ_HIGH",
 };
+/** EXTI 触发边沿 → <pin>.GPIO_ModeDefaultEXTI 的值（语料 504 份里只有这三个 token）。 */
+const EXTI_MODES: Record<NonNullable<PinAddRequest["interrupt"]>, string> = {
+  rising: "GPIO_MODE_IT_RISING",
+  falling: "GPIO_MODE_IT_FALLING",
+  both: "GPIO_MODE_IT_RISING_FALLING",
+};
+/**
+ * 引脚属性键写进 <pin>.GPIOParameters 的顺序。
+ *
+ * 这不是"我们觉得好看"的顺序，而是 CubeMX 6.15.0 回写时自己用的顺序——它把 GPIOParameters 当
+ * 集合重新序列化，**无视我们写进去的排列**（所以排列只影响 diff 噪声，不影响功能）。
+ *
+ * 证据两条：
+ * 1) 真机探针（2026-11-02，demo.ioc 副本 load+save）：写 `GPIO_Label,GPIO_PuPd,GPIO_ModeDefaultEXTI`
+ *    回写成 `GPIO_PuPd,GPIO_Label,GPIO_ModeDefaultEXTI`；写 `GPIO_Label,PinState,GPIO_Mode`
+ *    回写成 `PinState,GPIO_Label,GPIO_Mode`。
+ * 2) 语料 266 份 MxCube.Version=6.x 板级 .ioc 的 11808 条 GPIOParameters 两两先后统计（0 反例）：
+ *    GPIO_Speed < GPIO_PuPd(376/0)、GPIO_Speed < PinState(61/0)、PinState < GPIO_PuPd(54/0)、
+ *    GPIO_PuPd < GPIO_Label(694/0)、GPIO_Label < GPIO_Mode(268/0)、
+ *    GPIO_Label < GPIO_ModeDefaultEXTI(97/0)、GPIO_ModeDefaultEXTI < GPIO_PuPd→反(85/0)。
+ *    合成全序：Speed → PinState → PuPd → Label → ModeDefault* → GPIO_Mode。
+ */
+const PIN_ATTRIBUTE_ORDER = [
+  "GPIO_Speed", "PinState", "GPIO_PuPd", "GPIO_Label",
+  "GPIO_ModeDefaultEXTI", "GPIO_ModeDefaultPP", "GPIO_ModeDefaultOutputPP", "GPIO_Mode",
+];
+
+/** 引脚号 = EXTI 线号（PA5 → 5）。非 GPIO 名返回 null。 */
+function extiLineOf(pin: string): number | null {
+  const match = /^P[A-Z]([0-9]{1,2})(?:-|$)/u.exec(pin.trim().toUpperCase());
+  if (match === null) return null;
+  const line = Number.parseInt(match[1] as string, 10);
+  return line >= 0 && line <= 15 ? line : null;
+}
+
+/**
+ * NVIC.<name>_IRQn 的 9 段值：Enable:Preempt:Sub:Configurable:System:IrqHandlerGenerated:…
+ * 实测依据（6.15.0）：给非 DMA 外设打开中断后 CubeMX 自己写的就是 true:0:0:false:false:true:true:true:true。
+ * DMA 通道是另一串（true:0:0:false:false:true:false:true:true），由 DMA 那段逻辑单独写。
+ */
+export function nvicIrqValue(preempt: number, sub: number): string {
+  return ["true", String(preempt), String(sub), "false", "false", "true", "true", "true", "true"].join(":");
+}
 
 /** RCC_ADCPCLK2_DIV2/4/6/8 → 2/4/6/8；认不出来返回 null（那就别动 ADCFreqValue）。 */
 function adcPrescalerDiv(token: string): number | null {
@@ -422,13 +498,43 @@ function samePinOrder(left: readonly string[], right: readonly string[]): boolea
   return true;
 }
 
+/**
+ * Mcu.Pin<i> 的排列规则（2026-11-02 真机确认，三次探针一致）：
+ * **按 db 里 <Pin Position> 升序**，虚拟脚（VP_*）永远在最后。
+ *
+ * 证据：demo.ioc 原序 PC13-TAMPER-RTC(2), PC14-OSC32_IN(3), PC15-OSC32_OUT(4), PD0-OSC_IN(5),
+ * PD1-OSC_OUT(6), PA13, PA14, VP_SYS_VS_Systick 正是 Position 序；我们追加 PA5/PA6/PA7/PA0 之后
+ * CubeMX 回写成 PA0-WKUP(10), PA5(15), PA6(16), PA7(17)…PA13, PA14, VP_* —— 我们尾部追加的顺序被它重排。
+ * db 不可用（没装 CubeMX / 查不到这根脚）时保持原序，只在末尾放 VP_*。
+ */
+function sortPinsByPosition(order: readonly string[], positionOf: (pin: string) => number | null): string[] {
+  const keyed = order.map((pin, index) => {
+    const position = positionOf(pin);
+    // 分三档：已知 Position 的真实脚（1）→ db 里查不到的真实脚（2，保持原相对序）→ 虚拟脚（3，永远最后）。
+    const bucket = pin.startsWith("VP_") ? 3 : position === null ? 2 : 1;
+    const rank = position === null ? index : position;
+    return { pin, index, bucket, rank };
+  });
+  keyed.sort((left, right) => {
+    if (left.bucket !== right.bucket) return left.bucket - right.bucket;
+    if (left.rank !== right.rank) return left.rank - right.rank;
+    return left.index - right.index;
+  });
+  return keyed.map((item) => item.pin);
+}
+
 /** 把引脚列表整体重编号写回 entries（新增/删除都可能让下标变化，重写最稳）。 */
-function writePinOrder(entries: Map<string, string>, order: string[]): void {
+function writePinOrder(
+  entries: Map<string, string>,
+  order: string[],
+  positionOf?: (pin: string) => number | null,
+): void {
+  const finalOrder = positionOf === undefined ? order : sortPinsByPosition(order, positionOf);
   const previous = Number.parseInt(entries.get("Mcu.PinsNb") ?? "0", 10);
   const oldCount = Number.isFinite(previous) ? previous : 0;
-  order.forEach((pin, position) => entries.set("Mcu.Pin" + String(position), pin));
-  for (let position = order.length; position < oldCount; position += 1) entries.delete("Mcu.Pin" + String(position));
-  entries.set("Mcu.PinsNb", String(order.length));
+  finalOrder.forEach((pin, position) => entries.set("Mcu.Pin" + String(position), pin));
+  for (let position = finalOrder.length; position < oldCount; position += 1) entries.delete("Mcu.Pin" + String(position));
+  entries.set("Mcu.PinsNb", String(finalOrder.length));
 }
 
 function addPin(table: PinTable, request: PinAddRequest): void {
@@ -462,27 +568,57 @@ function addPin(table: PinTable, request: PinAddRequest): void {
       }
     }
   }
-  const signal = request.signal === "input" ? "GPIO_Input" : "GPIO_Output";
+  const exti = request.interrupt;
+  const line = exti === undefined ? null : extiLineOf(pin);
+  if (exti !== undefined && line === null) {
+    table.errors.push("引脚 " + pin + " 不能做 EXTI（EXTI 线号取引脚号 0–15，虚拟引脚没有线号）");
+    return;
+  }
+  const signal = exti === undefined
+    ? (request.signal === "input" ? "GPIO_Input" : "GPIO_Output")
+    : "GPXTI" + String(line);
   const pull = request.pull === undefined ? "none" : request.pull;
   const speed = request.speed === undefined ? "low" : request.speed;
-  // S1/S2：CubeMX 只写「非默认」的 GPIO 属性 —— 默认（无上下拉、低速）时这些键根本不出现，
-  // GPIOParameters 也只列真正写了的名字。语料 504 份 .ioc 实测：GPIO 输出脚最常见的
-  // GPIOParameters 就是单独一个 GPIO_Label（14,357 次），75.2% 的输出脚连 Speed/PuPd 都没有；
-  // 以前三个名字无条件全写，等于每个脚自造 2–3 处伪 diff。
-  const parameters: string[] = [];
-  if (label !== "") parameters.push("GPIO_Label");
-  if (speed !== "low") parameters.push("GPIO_Speed");
-  if (pull !== "none") parameters.push("GPIO_PuPd");
+  // S1/S2：CubeMX 只写「非默认」的 GPIO 属性 —— 默认（无上下拉、低速、输出推挽、初始低电平）时这些键
+  // 根本不出现。语料 504 份 .ioc 实测：GPIO 输出脚最常见的 GPIOParameters 就是单独一个 GPIO_Label
+  // （14,357 次），75.2% 的输出脚连 Speed/PuPd 都没有；三个名字无条件全写等于每个脚自造 2–3 处伪 diff。
+  //
+  // 2026-11-02 真机（6.15.0）补充两条：
+  // - 写在引脚上的 GPIO_* 属性键，只有同时列进 <pin>.GPIOParameters 才会被保留，
+  //   否则 CubeMX 静默删掉（实测 PC13-TAMPER-RTC.PinState 就是这样丢的）；
+  // - GPIO_Mode / PinState 的值它不规范化，写什么回写什么（GPIO_MODE_OUTPUT_OD / GPIO_PIN_SET 都逐字保留），
+  //   所以能不能表达开漏、初始电平只取决于我们写不写这两个键。
+  const attributes = new Map<string, string>();
+  if (label !== "") attributes.set("GPIO_Label", label);
+  if (speed !== "low") attributes.set("GPIO_Speed", SPEED_VALUES[speed]);
+  if (pull !== "none") attributes.set("GPIO_PuPd", PULL_VALUES[pull]);
+  if (exti !== undefined) {
+    attributes.set("GPIO_ModeDefaultEXTI", EXTI_MODES[exti]);
+  } else {
+    if (request.initial === "high") attributes.set("PinState", "GPIO_PIN_SET");
+    if (request.signal !== "input" && request.outputType === "od") {
+      attributes.set("GPIO_Mode", "GPIO_MODE_OUTPUT_OD");
+    }
+  }
+  const parameters = PIN_ATTRIBUTE_ORDER.filter((name) => attributes.has(name));
   if (parameters.length > 0) table.entries.set(pin + ".GPIOParameters", parameters.join(","));
   else table.entries.delete(pin + ".GPIOParameters");
-  if (label !== "") table.entries.set(pin + ".GPIO_Label", label);
-  else table.entries.delete(pin + ".GPIO_Label");
+  for (const name of PIN_ATTRIBUTE_ORDER) {
+    if (attributes.has(name)) table.entries.set(pin + "." + name, attributes.get(name) as string);
+    else table.entries.delete(pin + "." + name);
+  }
   table.entries.set(pin + ".Locked", "true");
   table.entries.set(pin + ".Signal", signal);
-  if (pull !== "none") table.entries.set(pin + ".GPIO_PuPd", PULL_VALUES[pull]);
-  else table.entries.delete(pin + ".GPIO_PuPd");
-  if (speed !== "low") table.entries.set(pin + ".GPIO_Speed", SPEED_VALUES[speed]);
-  else table.entries.delete(pin + ".GPIO_Speed");
+  // EXTI 引脚在 CubeMX 的 .ioc 里没有 .Mode（模式由 GPIO_ModeDefaultEXTI + SH 块表达）。
+  if (exti !== undefined) table.entries.delete(pin + ".Mode");
+  if (exti !== undefined && line !== null) {
+    enableExtiSharedLine(table, line);
+    const irq = extiIrqName(line);
+    if (!table.entries.has("NVIC." + irq + "_IRQn")) table.entries.set("NVIC." + irq + "_IRQn", nvicIrqValue(0, 0));
+    if (pull === "none") {
+      table.warnings.push("EXTI 引脚 " + pin + " 没有上/下拉：边沿触发时悬空会乱触发（常见做法是 pull=up 配 falling）");
+    }
+  }
   if (signal === "GPIO_Input" && pull === "none") {
     table.warnings.push("引脚 " + pin + " 配成输入但没有上/下拉：悬空时读数会乱（常见做法是 pull=up）");
   }
@@ -510,6 +646,84 @@ function ensureSerialWire(table: PinTable): void {
     }
     table.entries.set(item.pin + ".Mode", "Serial_Wire");
     table.entries.set(item.pin + ".Signal", item.signal);
+  }
+}
+
+/** 解析 "USART1" / "USART1_IRQn" / "EXTI9_5:2:0" → { irq, preempt?, sub? }。 */
+function parseInterruptText(text: string): IocInterruptRequest {
+  const parts = text.split(":");
+  const irq = (parts[0] ?? "").trim();
+  const preempt = parts.length > 1 ? Number.parseInt((parts[1] ?? "").trim(), 10) : undefined;
+  const sub = parts.length > 2 ? Number.parseInt((parts[2] ?? "").trim(), 10) : undefined;
+  return {
+    irq,
+    ...(preempt === undefined || Number.isNaN(preempt) ? {} : { preempt }),
+    ...(sub === undefined || Number.isNaN(sub) ? {} : { sub }),
+  };
+}
+
+/**
+ * 打开中断：写 NVIC.<名字>_IRQn。
+ *
+ * 为什么值得单开一个参数：C1 —— 以前"启用 USART1"只写 Mcu.IPn + 引脚 + IPParameters，
+ * 中断一个都不写，用户还得自己去 entries 里手拼 9 段；拼错第一段位置（true/false）CubeMX 会
+ * 按默认值覆盖，而且不报错。名字先按「db 外设实例 / SVD 中断表 / Cortex-M 内核异常」校验，
+ * 查不到就报错——写一条没人认的 NVIC 键，生成代码里不会有任何使能，等于白写。
+ */
+function applyInterrupts(
+  table: PinTable,
+  requests: readonly (string | IocInterruptRequest)[],
+  context: { facts: CubemxMcuFacts | null; interrupts: ReadonlySet<string> | null },
+  notes: string[],
+): void {
+  for (const item of requests) {
+    // 字符串形式允许内联优先级："USART1:2:0"（preempt:sub）；对象形式直接给字段。
+    const request: IocInterruptRequest = typeof item === "string" ? parseInterruptText(item) : item;
+    const raw = request.irq.trim();
+    if (raw === "") {
+      table.errors.push("interrupts 里有空的中断名");
+      continue;
+    }
+    const name = raw.replace(/_IRQn$/iu, "");
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/u.test(name)) {
+      table.errors.push("中断名 " + JSON.stringify(raw) + " 不是合法标识符（例：USART1 / EXTI9_5 / SysTick）");
+      continue;
+    }
+    const inIps = context.facts !== null && context.facts.ips.has(name.toUpperCase());
+    const inSvd = context.interrupts !== null && context.interrupts.has(name);
+    // EXTI 线是按线号分组的（EXTI0…EXTI4 / EXTI9_5 / EXTI15_10），SVD 里就叫这么个名字，
+    // 但它不是外设实例，db 里查不到；写 pins 的 interrupt 时也是同一个名字来源，所以直接放行。
+    const isExtiGroup = /^EXTI[0-9]+(?:_[0-9]+)?$/u.test(name);
+    if (!CORE_EXCEPTIONS.has(name) && !inIps && !inSvd && !isExtiGroup) {
+      if (context.interrupts === null && context.facts === null) {
+        table.warnings.push("中断名 " + name + " 没法校验：本机既没有 CubeMX db 也没有 SVD 中断表");
+      } else {
+        table.errors.push(
+          "中断名 " + name + " 既不在本机 CubeMX db 的外设实例里，也不在 SVD 的中断表里：".concat(
+            "CubeMX 会忽略 NVIC.", name, "_IRQn，生成代码里不会有这个中断",
+          ),
+        );
+        continue;
+      }
+    }
+    const preempt = request.preempt ?? 0;
+    const sub = request.sub ?? 0;
+    if (!Number.isInteger(preempt) || preempt < 0 || preempt > 15) {
+      table.errors.push("中断 " + name + " 的 preempt 必须是 0–15 的整数（F1 的 NVIC 只有 4 位）");
+      continue;
+    }
+    if (!Number.isInteger(sub) || sub < 0 || sub > 15) {
+      table.errors.push("中断 " + name + " 的 sub 必须是 0–15 的整数");
+      continue;
+    }
+    const key = "NVIC." + name + "_IRQn";
+    const existing = table.entries.get(key);
+    if (existing !== undefined && request.preempt === undefined && request.sub === undefined) {
+      notes.push(key + " 已存在（" + existing + "），保留原值；要改优先级请显式传 preempt/sub");
+      continue;
+    }
+    table.entries.set(key, nvicIrqValue(preempt, sub));
+    notes.push("已打开中断 " + key + " = " + nvicIrqValue(preempt, sub));
   }
 }
 
@@ -611,6 +825,25 @@ export function createPinNameResolver(options: {
       (roots.length === 0 ? "（无候选目录）" : roots.join("、")) +
       "），引脚名退回内置别名表：只覆盖 F1 的 6 根带后缀的脚，db 里换过名的话会写错脚",
   };
+}
+
+/**
+ * EXTI 的共享信号块：`SH.GPXTI<line>.0=GPIO_EXTI<line>` + `SH.GPXTI<line>.ConfNb=1`。
+ *
+ * 和定时器/ADC 的 SH 块同一个机制，但值不带「,<模式>」（EXTI 没有多模式）：
+ * 语料里的实物形态是 SH.GPXTI13.0=GPIO_EXTI13、SH.GPXTI13.ConfNb=1；
+ * 实测 6.15.0 回写时逐字保留、不会补别的键。
+ */
+function enableExtiSharedLine(table: PinTable, line: number): void {
+  const prefix = "SH.GPXTI" + String(line) + ".";
+  const value = "GPIO_EXTI" + String(line);
+  const declared = Number.parseInt(table.entries.get(prefix + "ConfNb") ?? "", 10);
+  const count = Number.isFinite(declared) ? declared : 0;
+  for (let index = 0; index < count; index += 1) {
+    if ((table.entries.get(prefix + String(index)) ?? "").trim() === value) return;
+  }
+  table.entries.set(prefix + String(count), value);
+  table.entries.set(prefix + "ConfNb", String(count + 1));
 }
 
 function enablePeripheral(
@@ -931,6 +1164,15 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const pinTable = readPinTable(after, errors, warnings);
   // 先记下原始引脚表：只有真的变了才重写 Mcu.PinN，顺序没变就一个字节都不碰。
   const originalOrder = [...pinTable.order];
+  // SVD 的中断表先准备好：interrupts 参数要拿它校验中断名，R20 也要用（同一个 set 复用，只读一次盘）。
+  // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有资源包时 device 为 null，校验跳过。
+  let interrupts: ReadonlySet<string> | null = null;
+  const cpn = (after.get("Mcu.CPN") ?? "").trim();
+  if (cpn !== "") {
+    const line = svdLineForChip(cpn);
+    const device = line === null ? null : loadSvdForLine(line);
+    if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
+  }
   for (const pin of request.pins ?? []) addPin(pinTable, pin);
   if (request.serialWire === true) ensureSerialWire(pinTable);
   const family = (after.get("Mcu.Family") ?? "").trim();
@@ -952,7 +1194,22 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   // 不带 .Signal）。按 .Signal 过滤会把它从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*
   // 成了没有引脚指向的孤儿键，CubeMX 下次打开就丢这段配置。所以：已在表里的引脚一个都不删，只追加。
   // 虚拟引脚（VP_*）的清理归 ensureSerialWire 管，这里不掺和。
-  if (!samePinOrder(originalOrder, pinTable.order)) writePinOrder(after, pinTable.order);
+  // 排序：CubeMX 自己按 db 的 <Pin Position> 升序写 Mcu.Pin<i>（虚拟脚在最后），我们以前只会尾部追加，
+  // 所以每次加引脚都会多一条"引脚表被重排"的真 diff（三次真机探针一致）。
+  // 没有 db 时所有脚都查不到 Position：排序退化成「原序 + 虚拟脚挪到最后」，仍然是我们想要的
+  // （原文件本来就是 CubeMX 写的，顺序已经对；VP_* 无论哪种情况都在最后）。
+  const positionOf = (pin: string): number | null => {
+    const fact = pinNames.facts === null ? undefined : pinNames.facts.pins.get(pin);
+    return fact === undefined ? null : fact.position;
+  };
+  const finalOrder = sortPinsByPosition(pinTable.order, positionOf);
+  if (!samePinOrder(originalOrder, finalOrder)) {
+    const onlyReordered = samePinOrder(originalOrder, pinTable.order);
+    writePinOrder(after, pinTable.order, positionOf);
+    if (onlyReordered) {
+      notes.push("Mcu.Pin<i> 按 CubeMX db 的引脚 Position 重排（虚拟脚在最后）：CubeMX 自己保存时就是这个顺序");
+    }
+  }
 
   for (const item of request.entries ?? []) {
     const key = item.key.trim();
@@ -973,6 +1230,11 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
       continue;
     }
     after.delete(trimmed);
+  }
+  // 中断放在 entries/unset 之后：entries 里手写的 NVIC 值优先，没显式给优先级时原样保留
+  // （applyInterrupts 见到已存在的键只会记 note，不会覆盖）。
+  if ((request.interrupts ?? []).length > 0) {
+    applyInterrupts(pinTable, request.interrupts ?? [], { facts: pinNames.facts, interrupts }, notes);
   }
 
   // 时钟：.ioc 里的一段键，和 entries 一起算（不单开工具）。复用 after，所以同一调用里的
@@ -1026,15 +1288,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     after.set(ip + ".IPParameters", [...listed, ...added].join(","));
     notes.push("自动补 " + ip + ".IPParameters：" + added.join("、") + "（不补会被 CubeMX 静默丢弃）");
   }
-  // R20 要 SVD 的中断表：.ioc 里只有 CPN，先换成 SVD 的 line（STM32F103C8T6 → "103"）。
-  // 没有资源包（或老包没有 interrupts 字段）时 device 为 null / 表为空 → R20 自动跳过。
-  let interrupts: ReadonlySet<string> | null = null;
-  const cpn = (after.get("Mcu.CPN") ?? "").trim();
-  if (cpn !== "") {
-    const line = svdLineForChip(cpn);
-    const device = line === null ? null : loadSvdForLine(line);
-    if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
-  }
+  // R20 用的中断表就是上面那份（interrupts 参数校验时已经读过一次盘，这里复用）。
   const ruleReport = checkIocRules(after, { db: pinNames.db, facts: pinNames.facts, interrupts });
   for (const issue of ruleReport.errors) errors.push("[" + issue.rule + "] " + issue.message);
   for (const issue of ruleReport.warnings) warnings.push("[" + issue.rule + "] " + issue.message);

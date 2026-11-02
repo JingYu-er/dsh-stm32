@@ -65,7 +65,16 @@ test("plan 只算不写：源文件 SHA-256 不变，候选文件已落盘", () 
   assert.ok(keys.includes("PA5.Signal"), "应写入 PA5.Signal");
   assert.ok(keys.includes("PA5.GPIO_Label"));
   assert.equal(report.changes.find((change) => change.key === "Mcu.PinsNb")?.after, "9");
-  assert.equal(report.changes.find((change) => change.key === "Mcu.Pin8")?.after, "PA5");
+  // Mcu.Pin<i> 按 db Position 升序写（虚拟脚最后），所以新脚具体落在哪个下标不固定——按下标断言会假失败。
+  const candidate = parseIocEntries(candidateText(projectDir, report.planId));
+  const pinOrder = [];
+  for (let index = 0; ; index += 1) {
+    const pin = candidate.get("Mcu.Pin" + String(index));
+    if (pin === undefined) break;
+    pinOrder.push(pin);
+  }
+  assert.ok(pinOrder.includes("PA5"), "PA5 要进引脚表：" + JSON.stringify(pinOrder));
+  assert.equal(pinOrder[pinOrder.length - 1], "VP_SYS_VS_Systick", "虚拟脚永远在最后");
   // 候选内容的语义：新引脚真的进了引脚表
   assert.equal(report.summaryAfter?.pins.some((pin) => pin.pin === "PA5" && pin.label === "led2"), true);
 });
@@ -307,10 +316,16 @@ test("peripherals(USART1)：一次写全引脚 Mode+Signal、Mcu.IPn、IPParamet
   // 参数与 IPParameters 列表
   assert.equal(entries.get("USART1.VirtualMode"), "VM_ASYNC");
   assert.equal(entries.get("USART1.IPParameters"), "VirtualMode");
-  // 引脚进 Mcu.PinN
-  assert.equal(entries.get("Mcu.Pin8"), "PA9");
-  assert.equal(entries.get("Mcu.Pin9"), "PA10");
-  assert.equal(entries.get("Mcu.PinsNb"), "10");
+  // 引脚进 Mcu.PinN（顺序按 db Position，VP_* 最后）
+  const pinOrder = [];
+  for (let index = 0; ; index += 1) {
+    const pin = entries.get("Mcu.Pin" + String(index));
+    if (pin === undefined) break;
+    pinOrder.push(pin);
+  }
+  assert.ok(pinOrder.includes("PA9") && pinOrder.includes("PA10"), JSON.stringify(pinOrder));
+  assert.equal(entries.get("Mcu.PinsNb"), String(pinOrder.length));
+  assert.equal(pinOrder[pinOrder.length - 1], "VP_SYS_VS_Systick", "虚拟脚永远在最后");
   // 自己写的东西不该触发"缺 Mode"告警
   assert.equal(report.warnings.join(" ").includes("没有 .Mode"), false, report.warnings.join(" "));
 });
@@ -320,7 +335,8 @@ test("peripherals(TIM2)：PA0 换成 db 名 PA0-WKUP，带空格的子键要转�
   const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM2", parameters: { Prescaler: "71", Period: "999" } }] });
   assert.equal(report.ok, true, report.message);
   const entries = parseIocEntries(candidateText(projectDir, report.planId));
-  assert.equal(entries.get("Mcu.Pin8"), "PA0-WKUP", "PA0 在 F1 db 里叫 PA0-WKUP");
+  const pinValues = [...entries.entries()].filter(([key]) => /^Mcu\.Pin[0-9]+$/u.test(key)).map(([, value]) => value);
+  assert.ok(pinValues.includes("PA0-WKUP"), "PA0 在 F1 db 里叫 PA0-WKUP：" + JSON.stringify(pinValues));
   // 共享信号：引脚不带 .Mode，功能由 SH 块表达（CubeMX 自己的写法）
   assert.equal(entries.get("PA0-WKUP.Mode"), undefined);
   assert.equal(entries.get("PA0-WKUP.Signal"), "S_TIM2_CH1_ETR");
@@ -680,6 +696,178 @@ test("C6：entries 写的标量键自动补进 <IP>.IPParameters（不补会被 
   assert.ok(listed.includes("BaudRate"), "BaudRate 必须被补进白名单：" + JSON.stringify(listed));
   assert.equal(entries.get("USART3.BaudRate"), "9600");
   assert.ok(report.notes.some((note) => note.includes("自动补 USART3.IPParameters")), "notes 要说明补了什么：" + JSON.stringify(report.notes));
+});
+
+test("pins 开漏 + 初始高电平：GPIO_Mode/PinState 都写，并且都列进 GPIOParameters", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    pins: [{ pin: "PA6", label: "led2", outputType: "od", initial: "high" }],
+  });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  // 真机 6.15.0：这两个值 CubeMX 逐字保留，能不能表达开漏/初始电平只取决于我们写不写。
+  assert.equal(entries.get("PA6.GPIO_Mode"), "GPIO_MODE_OUTPUT_OD");
+  assert.equal(entries.get("PA6.PinState"), "GPIO_PIN_SET");
+  assert.equal(entries.get("PA6.Signal"), "GPIO_Output");
+  // 顺序按 CubeMX 回写实测：PinState 在 GPIO_Mode 之前。
+  assert.equal(entries.get("PA6.GPIOParameters"), "PinState,GPIO_Label,GPIO_Mode");
+  // 默认值不写（开漏/高电平是显式传了才写）
+  const plain = planIocChanges({ projectDir, pins: [{ pin: "PA7", signal: "output" }] });
+  const plainEntries = parseIocEntries(candidateText(projectDir, plain.planId));
+  assert.equal(plainEntries.get("PA7.GPIO_Mode"), undefined, "推挽是默认值，不该写 GPIO_Mode");
+  assert.equal(plainEntries.get("PA7.PinState"), undefined, "初始低电平是默认值，不该写 PinState");
+});
+
+test("pins EXTI：一次写全 GPXTI<line> 链路（Signal/ModeDefaultEXTI/GPIOParameters/SH/NVIC）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA5", interrupt: "falling", pull: "up", label: "key" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("PA5.Signal"), "GPXTI5");
+  assert.equal(entries.get("PA5.Mode"), undefined, "EXTI 脚在 .ioc 里没有 .Mode（模式由 SH 块表达）");
+  assert.equal(entries.get("PA5.GPIO_ModeDefaultEXTI"), "GPIO_MODE_IT_FALLING");
+  assert.equal(entries.get("PA5.GPIO_PuPd"), "GPIO_PULLUP");
+  assert.equal(entries.get("PA5.GPIOParameters"), "GPIO_PuPd,GPIO_Label,GPIO_ModeDefaultEXTI");
+  assert.equal(entries.get("SH.GPXTI5.0"), "GPIO_EXTI5", "EXTI 的 SH 值不带模式（不同于 TIM/ADC）");
+  assert.equal(entries.get("SH.GPXTI5.ConfNb"), "1");
+  // PA5 → 线 5 → EXTI9_5 组
+  assert.equal(entries.get("NVIC.EXTI9_5_IRQn"), "true:0:0:false:false:true:true:true:true");
+  assert.equal(report.errors.length, 0, JSON.stringify(report.errors));
+});
+
+test("pins EXTI：PA10 落 EXTI15_10 组；虚拟脚/无上拉各有提醒", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({ projectDir, pins: [{ pin: "PA10", interrupt: "rising" }] });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("PA10.Signal"), "GPXTI10");
+  assert.equal(entries.get("PA10.GPIO_ModeDefaultEXTI"), "GPIO_MODE_IT_RISING");
+  assert.equal(entries.get("NVIC.EXTI15_10_IRQn"), "true:0:0:false:false:true:true:true:true");
+  assert.match(report.warnings.join(" "), /没有上\/下拉/u, "EXTI 无上下拉要提醒悬空乱触发");
+
+  const bad = planIocChanges({ projectDir, pins: [{ pin: "VP_SYS_VS_RTC", interrupt: "rising" }] });
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join(" "), /不能做 EXTI/u);
+});
+
+test("pins EXTI：已有 NVIC 键不覆盖（用户自己设的优先级要留住）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    pins: [{ pin: "PA5", interrupt: "both" }],
+    entries: [{ key: "NVIC.EXTI9_5_IRQn", value: "true:3:0:false:false:true:true:true:true" }],
+  });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("NVIC.EXTI9_5_IRQn"), "true:3:0:false:false:true:true:true:true");
+  assert.equal(entries.get("PA5.GPIO_ModeDefaultEXTI"), "GPIO_MODE_IT_RISING_FALLING");
+});
+
+test("interrupts：写 9 段值、支持内联优先级、已存在时保留原值", () => {
+  const { projectDir } = freshProject();
+  // 夹具资源包没有 SVD、这里也不给 db → 只能告警不能报错（离线也要能算）
+  const emptyRoot = join(TMP, "no-cubemx-irq");
+  mkdirSync(emptyRoot, { recursive: true });
+  const env = { STM32_CUBEMX_ROOT: emptyRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" };
+  const report = withEnv(env, () => planIocChanges({ projectDir, interrupts: ["USART1", "EXTI9_5:2:3"] }));
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("NVIC.USART1_IRQn"), "true:0:0:false:false:true:true:true:true");
+  assert.equal(entries.get("NVIC.EXTI9_5_IRQn"), "true:2:3:false:false:true:true:true:true");
+  assert.match(report.warnings.join(" "), /没法校验/u);
+
+  const keep = withEnv(env, () => planIocChanges({
+    projectDir,
+    interrupts: ["USART1"],
+    entries: [{ key: "NVIC.USART1_IRQn", value: "true:7:0:false:false:true:true:true:true" }],
+  }));
+  assert.equal(keep.ok, true, keep.message);
+  assert.equal(parseIocEntries(candidateText(projectDir, keep.planId)).get("NVIC.USART1_IRQn"), "true:7:0:false:false:true:true:true:true");
+  assert.ok(keep.notes.some((note) => note.includes("保留原值")), JSON.stringify(keep.notes));
+});
+
+test("interrupts：名字/优先级不合法直接报错（有 db 时按 db 实例白名单校验）", () => {
+  const { projectDir } = freshProject();
+  const dbRoot = join(TMP, "fake-cubemx-irq");
+  writeFakeCubeMxDb(dbRoot, "STM32F103C(8-B)Tx", ["PA5", "PB2"]);
+  // 补 IP 列表：db 里只有 USART1/TIM2，写别的就是白写。
+  const mcuXml = join(dbRoot, "db", "mcu", "STM32F103C(8-B)Tx.xml");
+  writeFileSync(
+    mcuXml,
+    readFileSync(mcuXml, "utf8").replace(
+      "</Mcu>",
+      '  <IP InstanceName="USART1" Name="USART" Version="1.0"/>\n  <IP InstanceName="TIM2" Name="TIM" Version="1.0"/>\n</Mcu>',
+    ),
+    "utf8",
+  );
+  const env = { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" };
+
+  const unknown = withEnv(env, () => planIocChanges({ projectDir, interrupts: ["SPI9"] }));
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.errors.join(" "), /既不在本机 CubeMX db 的外设实例里/u);
+
+  const known = withEnv(env, () => planIocChanges({ projectDir, interrupts: ["USART1:2:0"] }));
+  assert.equal(known.ok, true, known.message);
+  assert.equal(parseIocEntries(candidateText(projectDir, known.planId)).get("NVIC.USART1_IRQn"), "true:2:0:false:false:true:true:true:true");
+
+  const badPriority = withEnv(env, () => planIocChanges({ projectDir, interrupts: ["USART1:99:0"] }));
+  assert.equal(badPriority.ok, false);
+  assert.match(badPriority.errors.join(" "), /preempt 必须是 0–15/u);
+});
+
+test("Mcu.Pin 排序：有 db 时按 <Pin Position> 升序，虚拟脚永远最后", () => {
+  const { projectDir } = freshProject();
+  const dbRoot = join(TMP, "fake-cubemx-order");
+  // demo.ioc 原序：PC13-TAMPER-RTC, PC14-OSC32_IN, PC15-OSC32_OUT, PD0-OSC_IN, PD1-OSC_OUT, PA13, PA14, VP_*
+  // 这里让 PC15/PD0/PD1 不在 db 里（查不到 → 排在已知脚后面），PA5 排在最前 → 能看出真的按 Position 重排。
+  writeFakeCubeMxDb(dbRoot, "STM32F103C(8-B)Tx", ["PA5", "PC13-TAMPER-RTC", "PC14-OSC32_IN"]);
+  const report = withEnv(
+    { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir, pins: [{ pin: "PA5", signal: "output" }] }),
+  );
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  const order = [];
+  for (let index = 0; ; index += 1) {
+    const pin = entries.get("Mcu.Pin" + String(index));
+    if (pin === undefined) break;
+    order.push(pin);
+  }
+  assert.equal(order[0], "PA5", "db Position 最小的排最前：" + JSON.stringify(order));
+  assert.equal(order[1], "PC13-TAMPER-RTC");
+  assert.equal(order[2], "PC14-OSC32_IN");
+  assert.equal(order[order.length - 1], "VP_SYS_VS_Systick", "虚拟脚必须在最后");
+  assert.equal(order.includes("PA5"), true, "新脚要进表");
+  assert.equal(entries.get("Mcu.PinsNb"), String(order.length));
+});
+
+test("Mcu.Pin 排序：没有 db 时保持原序（只把虚拟脚挪到最后），单测不依赖开发机", () => {
+  const { projectDir } = freshProject();
+  const emptyRoot = join(TMP, "no-cubemx-order");
+  mkdirSync(emptyRoot, { recursive: true });
+  const before = parseIocEntries(readFileSync(DEMO_IOC, "utf8"));
+  const beforeOrder = [];
+  for (let index = 0; ; index += 1) {
+    const pin = before.get("Mcu.Pin" + String(index));
+    if (pin === undefined) break;
+    beforeOrder.push(pin);
+  }
+  const report = withEnv(
+    { STM32_CUBEMX_ROOT: emptyRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir, pins: [{ pin: "PA6", signal: "output" }] }),
+  );
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  const order = [];
+  for (let index = 0; ; index += 1) {
+    const pin = entries.get("Mcu.Pin" + String(index));
+    if (pin === undefined) break;
+    order.push(pin);
+  }
+  const expectedTail = beforeOrder.filter((pin) => !pin.startsWith("VP_"));
+  assert.deepEqual(order.slice(0, expectedTail.length), expectedTail, "原有脚顺序不能乱");
+  assert.equal(order[order.length - 1], "VP_SYS_VS_Systick");
 });
 
 let failed = 0;
