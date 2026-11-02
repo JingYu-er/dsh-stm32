@@ -4685,3 +4685,63 @@ verify: benign=true；droppedPeripherals / missingKeys / signalRewrites / valueC
   ADC 要定 Rank/采样时间，DMA 要按族的请求表校验通道名。这三类在非 F1 上仍是「请手写键」。
 - **时钟规划仍只有 F1**：`clock-plan.ts` 的 RCC/PLL 上限表只覆盖 F1，非 F1 的 `clock` 参数照旧被拒。
 - **只有 F4 做过逐键往返**：C0/F0/G4/L0 有建工程→生成→编译的证据（§63.6），但没对 db 派生预设做 round-trip；其余 8 族连固件包都还没装。
+
+## 65. 把 F1 也切到 db 派生：手写预设表只剩 db 表达不了的三类
+
+### 65.1 为什么连 F1 也不该用手写表
+
+用户的判断是对的：手写表里的每个值本来就来自某个版本的 CubeMX db，抄下来就成了「快照」——
+db 换版本、族换型号，快照立刻变成错误事实。这一步之后**所有能查 db 的预设都走 db**，F1 也不例外：
+手写表退化成两件事：db 表达不了的三种预设（见 65.4），以及没装 CubeMX 时的离线兜底。
+
+### 65.2 代码改动
+
+- `src/data/db-presets.ts` 扩到三类：串口（USART/UART/LPUART）、定时器 PWM（`TIMx` → CH1）、ADC 单通道（`ADC1` → 优先 IN1）。
+  新增 `DbPresetOptions { familyId }`：只有 F1 才在 ADC 预设里带 `RCC.ADCPresc=RCC_ADCPCLK2_DIV6`（F1 ADC 上限 14 MHz），
+  其它族只提醒「要降频请用 entries 设」。
+- **修掉一个会丢脚的 bug**：`pinsWithSignal` 原先「名字含 `-` 就跳过」，会把 F1 的 `PA0-WKUP`（TIM2_CH1 的默认脚）整根丢掉。
+  现在用 `logicalPinName()` 映射成逻辑名（PA0）后再写进预设，只跳过 `VP_*`。
+- `.ioc` 写法与 db 不同的两处集中在这里处理（语料实证：504 份官方板级 .ioc）：
+  定时器通道 `.ioc` 写 `S_<db 信号名>`（`S_TIM2_CH1`），ADC 通道 `.ioc` 写 `ADCx_INn`（不是 `ADC1_INn`），实例由 SH 块表达。
+- `src/engine/ioc-plan.ts`：解析顺序改成**db 优先（所有族）** —— 变体/DMA 用手写表；其余先派生，db 不可用才回退手写表；
+  两者都没有才报错（错误文案带这一条的具体原因 + 手写表清单）。
+
+### 65.3 真机证据（F1，plan → apply → CubeMX 回写逐键比对）
+
+```text
+peripherals: [{name:USART1},{name:TIM2},{name:ADC1}]
+notes : 按 db 派生预设 USART1（按 db 选脚 PA9/PA10）/ TIM2（按 db 选脚 PA0）/ ADC1（按 db 选脚 PA1）
+写入  : PA9.Signal=USART1_TX, PA10.Signal=USART1_RX, PA0-WKUP.Signal=S_TIM2_CH1,
+        SH.S_TIM2_CH1.0=TIM2_CH1,PWM Generation1 CH1, PA1.Signal=ADCx_IN1, SH.ADCx_IN1.0=ADC1_IN1,IN1
+verify: benign=true；droppedPeripherals / signalRewrites / valueChanged / missingKeys 全空
+```
+
+注意 `S_TIM2_CH1` 与手写表里的 `S_TIM2_CH1_ETR` 不同：后者是某个 db 版本的合并名，CubeMX 对两者都认，
+但**只有 db 派生的那个永远与当前 db 一致**。这条差异本身就是「别抄快照」的证据。
+
+### 65.4 手写表现在只剩三类（都写清了为什么）
+
+| 预设 | 为什么 db 给不出来 |
+| --- | --- |
+| `TIMx:timebase` | 不占引脚，只有 Prescaler/Period 取值，db 的引脚信息里没有「纯时基」这种用法 |
+| `DMA:<IP>` | 「哪个外设请求对应哪条 DMA 通道」不在 db 的引脚复用例表里 |
+| `ADC1:1,4,5` | 多 Rank 扫描的通道顺序、Rank 编号，是调用方的意图而不是 db 事实 |
+| （离线兜底） | 没装 CubeMX / db 里没这颗时，退回手写表并在 notes 里写明「内置表兜底启用」 |
+
+### 65.5 同类「手抄事实」盘点（这一节的用途：下一步照单清理）
+
+| 位置 | 抄的是什么 | 真源 | 结论 |
+| --- | --- | --- | --- |
+| `src/engine/clock-plan.ts`（`F1_PLL_MULS` / `F1_APB_DIVS` / 上限表） | 各族的 PLL 倍频枚举与 APB 分频 | `db/mcu/IP/RCC-*_Modes.xml` 的 `<RefParameter Name="PLLMUL" Type="list">` → `PossibleValue RCC_PLL_MUL2..`（已核实存在），上限用 MCU xml 的 `<Frequency>` | **可改**，是时钟规划全族化的钥匙 |
+| `src/engine/hal-chip.ts` `PIN_COUNT_BY_PACKAGE`（T/C/R/V/Z→36/48/64/100/144） | 封装脚数 | `device/<族>/chips.json` 的 `pinCount`（db `<Package>` + `<Pin>`） | **可删** |
+| `src/engine/hal-chip.ts` `MCU_NAME_GROUPS`（F1 分组名） | db 的 `RefName` 分组名 | `chips.json` 的 `mcuName` | **可删** |
+| `src/data/device-facts.ts` `namingFrom` ↔ 资源仓 `family-assets.mjs` `namingOf` | 启动文件/设备头/设备宏的拼法（两侧必须逐字一致） | 资源仓生成器 + 固件包 existsSync 验过的显式字段 | 收敛为「插件只读表里的显式字段，`namingFrom` 只给老资源包兜底」 |
+| `src/data/ioc-presets.ts` `PIN_DB_ALIASES`（F1 六根带后缀脚） | db 的引脚名（PA0-WKUP…） | 运行时的 `pinNameResolver`（已按 db 解析） | 保留为离线兜底，语义已在注释里写清 |
+| `src/data/ioc-presets.ts` `ADC_PIN_BY_CHANNEL` | 通道 → 默认脚 | db 的 `ADC1_INn` 复用例（同一套派生逻辑，批量版即可） | 可改（多 Rank 预设下一步一起做） |
+| `src/data/ioc-presets.ts` `ALLOWED_DMA_IP` + `DMA1_ChannelN` | 外设 → DMA 通道映射 | db 的 `DMA-*_Modes.xml` 有 DMA 实例参数，但「请求映射」不在其中 | **保留**（要另找来源，不能凭 db 引脚猜） |
+| `src/data/family.ts` 里每族的 `core` | 内核 | MCU xml 的 `<Core>`（db 已是权威） | 可改（`openocdTarget` 只能手写：openocd 脚本名不在 db 里） |
+| `src/data/cmsis-sources.ts` 四张 sha256 表 | 下载资源的指纹 | 上游文件本身 | **必须保留**（安全边界） |
+| `src/engine/route-plan.ts` `PERIPHERAL_RULES` | 「这个需求该走 HAL 还是寄存器」的经验规则 | 没有权威源 | **保留**（是判断，不是事实） |
+
+结论：真正值得下一步动的只有两件 —— **时钟规划改成从 `RCC-*_Modes.xml` 的枚举 + `<Frequency>` 派生**（收益最大），
+以及 `PIN_COUNT_BY_PACKAGE` / `MCU_NAME_GROUPS` / 每族 `core` 这三处小表（都已有现成真源，删掉即可）。

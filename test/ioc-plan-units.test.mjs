@@ -370,9 +370,11 @@ test("peripherals(TIM2)：PA0 换成 db 名 PA0-WKUP，带空格的子键要转�
   assert.ok(pinValues.includes("PA0-WKUP"), "PA0 在 F1 db 里叫 PA0-WKUP：" + JSON.stringify(pinValues));
   // 共享信号：引脚不带 .Mode，功能由 SH 块表达（CubeMX 自己的写法）
   assert.equal(entries.get("PA0-WKUP.Mode"), undefined);
-  assert.equal(entries.get("PA0-WKUP.Signal"), "S_TIM2_CH1_ETR");
-  assert.equal(entries.get("SH.S_TIM2_CH1_ETR.0"), "TIM2_CH1,PWM Generation1 CH1");
-  assert.equal(entries.get("SH.S_TIM2_CH1_ETR.ConfNb"), "1");
+  // 共享信号名由 db 现算（S_ + db 信号名）：当前 db 里 PA0 的信号是 TIM2_CH1（合并过的 TIM2_CH1_ETR 也接受）。
+  // 手写表里那个 S_TIM2_CH1_ETR 只是某个 db 版本的快照 —— 2026-11-02 的 F1 真机往返证明 CubeMX 接受 S_TIM2_CH1。
+  assert.equal(entries.get("PA0-WKUP.Signal"), "S_TIM2_CH1");
+  assert.equal(entries.get("SH.S_TIM2_CH1.0"), "TIM2_CH1,PWM Generation1 CH1");
+  assert.equal(entries.get("SH.S_TIM2_CH1.ConfNb"), "1");
   assert.equal(entries.get("TIM2.Prescaler"), "71");
   assert.equal(entries.get("TIM2.Period"), "999");
   assert.equal(
