@@ -29,6 +29,7 @@ import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
 import { CORE_EXCEPTIONS, checkIocRules, extiIrqName } from "./ioc-rules.js";
 import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
+import { derivePeripheralPreset } from "../data/db-presets.js";
 import { auditIocKeys, iocSchemaCoverage, matchIocKey, renderIocKey } from "../data/ioc-schema.js";
 import type { IocKeyAuditContext } from "../data/ioc-schema.js";
 import {
@@ -1048,14 +1049,29 @@ function enablePeripheral(
   request: PeripheralEnableRequest,
   pinNames: PinNameResolver,
   notes: string[],
+  familyId: string,
 ): void {
-  const preset = findPeripheralPreset(request.name);
+  // 解析顺序按族分，理由：内置表是 F1 的**脚位**表（PA9/PA10 做 USART1 只对 F1/F4 这类巧合成立），
+  // 换族之后同一外设的可用脚位完全不同。所以：
+  //   - F1 用内置表（真机验过）；
+  //   - 非 F1 先用 db 派生（按这颗芯片的复用例表选脚）；
+  //   - 非 F1 上唯一还能复用内置表的是**与脚无关**的两类：纯时基 TIMx:timebase、DMA:IP
+  //     （参数名在 ST 全系一致，且不碰引脚）。
+  const builtin = findPeripheralPreset(request.name);
+  const pinsFree = /:timebase$/iu.test(request.name.trim()) || /^DMA:/iu.test(request.name.trim());
+  const isF1 = familyId.trim().toUpperCase() === "STM32F1";
+  let preset = isF1 ? builtin : (builtin !== null && pinsFree ? builtin : null);
   if (preset === null) {
-    table.errors.push(
-      "不认识的外设预设 " + JSON.stringify(request.name) + "；内置：" + peripheralPresetNames().join("、") +
-        "（要配别的请直接用 entries 逐键写，键集可参考官方板级 .ioc）",
-    );
-    return;
+    const derived = derivePeripheralPreset(pinNames.facts, request.name);
+    if (derived.preset === null) {
+      table.errors.push(
+        "不能启用 " + JSON.stringify(request.name) + "：" + derived.reason +
+          "；内置表：" + peripheralPresetNames().join("、") + "（F1 手写）",
+      );
+      return;
+    }
+    preset = derived.preset;
+    notes.push("按 db 派生预设 " + preset.name + "（" + preset.label + "）");
   }
 
   // Mcu.IPn：占了槽位就把 IPNb 按实际条数重算。
@@ -1409,24 +1425,13 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (family === "" && (request.peripherals ?? []).length > 0) {
     warnings.push("读不到 Mcu.Family，引脚名按原样写入：F1 的 PA0 实际 db 名是 PA0-WKUP，写错会被 CubeMX 丢弃");
   }
-  // 预设表是手写的 F1 键表（脚位、参数默认值、DMA 参数白名单全是 F1 实证出来的）：
-  // 换族之后同一外设的脚位/参数名/IP 实例都可能不同，套上去会写出一堆该族不认的键，
-  // 所以非 F1 直接拒绝，让调用方用 pins + entries 手写该族的键（下一步按族从 db 的 RefParameter 生成预设表）。
-  const presetsSupported = familyProfile === null || familyProfile.capabilities.iocPresets;
+  // 预设不再按族整体拒绝：内置表（F1 手写）之外，任何有 db 的族都能派生 USART/UART/LPUART 预设，
+  // 派生不出来的（TIM/ADC/DMA、db 里没这个实例）由 enablePeripheral 逐条报人话。
   if ((request.peripherals ?? []).length > 0) {
-    if (!presetsSupported) {
-      errors.push(
-        "peripherals 参数已忽略（" + (familyProfile === null ? family : capabilityGap(familyProfile, "iocPresets")) +
-        "）：这一族请用 pins + entries 手写该族的键",
-      );
-    } else {
-      notes.push(pinNames.describe());
-      const pinWarning = pinNames.warning();
-      if (pinWarning !== "") warnings.push(pinWarning);
-    }
-  }
-  if (presetsSupported) {
-    for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, pinNames, notes);
+    notes.push(pinNames.describe());
+    const pinWarning = pinNames.warning();
+    if (pinWarning !== "") warnings.push(pinWarning);
+    for (const item of request.peripherals ?? []) enablePeripheral(pinTable, item, pinNames, notes, family);
   }
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，

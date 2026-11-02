@@ -4612,3 +4612,76 @@ C0 建工程冒烟（`accept/C0-openocd`）：create ok，`openocd.cfg` 含
 
 **还没做的诚实说明**：手上没有 C0/U0 板子，所以「能连上、能烧、烧完能跑」没有真机证据；
 H5 / N6 / U3 / WBA / WB0 / WL3 / MP2 依旧没有脚本（也不在 14 族范围里），照旧明确拒绝。
+
+## 64. 全系列第三步：.ioc 外设预设按 db 派生（先做串口）
+
+### 64.1 为什么不手抄 14 份预设表
+
+F1 的 `PERIPHERAL_PRESETS`（`src/data/ioc-presets.ts`）是手写表：USART1 → PA9/PA10、TIM3 → PA6（共享信号
+`S_TIM3_CH1`）、ADC1 → PA1（`ADCx_IN1` + `RCC.ADCPresc`），每条都是真机验过的。这套表**换族就失效**：
+同一颗 F4 上 USART1 的默认脚可以是 PA9/PA10 也可以是 PB6/PB7，TIM2_CH1 落在哪根脚要看具体型号，
+共享信号的规范名（`S_TIMx_CHy`）与 ADC 的 Rank/采样参数也各不相同。手抄 14 份表 = 把 14 族手册各抄一遍，
+抄错一根脚的表现是「plan 成功、CubeMX 一打开把整个外设丢掉」——最贵的那种错。
+
+CubeMX 自己就有这些事实：`db/mcu/<Mcu.Name>.xml` 里每个 `<Pin>` 的 `<Signal>` 就是「这根脚能做什么」，
+`db/mcu/IP/<IP>-<ver>_Modes.xml` 的 `<RefParameter DefaultValue>` 是参数默认值。所以这一步做的是**读 db 选脚**。
+
+### 64.2 新模块 `src/data/db-presets.ts`
+
+`derivePeripheralPreset(facts, name)` 返回 `{ preset, reason }`，第一步只覆盖串口（`USART` / `UART` / `LPUART` + 数字）。
+选脚规则刻意写成**可复现的三条**、不掺型号特例：
+
+1. 信号名必须**完全相等**（`<IP>_TX` / `<IP>_RX`）：db 里定时器通道信号既有 `TIM2_CH1` 也有合并的 `S_TIM2_CH1_ETR`，
+   用前缀/includes 匹配会把「能做什么」和「做过什么」混一起；
+2. 候选引脚按「端口字母 → 脚号」升序，跳过虚拟脚（`VP_*`）与带 `-`/`/` 后缀的名字；
+3. 优先**同端口的一对**（PA9 + PA10）；没有同端口的对就各取一根，并在 `notes` 里写明跨端口。
+   缺 TX 或缺 RX 直接拒绝并点名缺哪一路。
+
+参数只写 `VirtualMode=VM_ASYNC`（异步），其余走 CubeMX 缺省（8N1 / 115200）。
+TIM / ADC 到这里会拿到明确的人话（「还没按族派生…现在请用 pins + entries 手写」），宁可拒绝，也不写一份 CubeMX 会丢的配置。
+
+### 64.3 解析顺序：F1 用内置表，非 F1 用 db 派生
+
+第一版写成「先查内置表、没有才派生」，F4 上立刻露馅：`findPeripheralPreset("USART1")` 命中 F1 表，
+走的是手写 PA9/PA10，**db 派生根本没跑**（round-trip 的 notes 写「已启用预设 USART1」而不是「按 db 派生」）。
+PA9/PA10 在 F4 上碰巧也对，所以没暴露错误 —— 这正是「巧合成立」的陷阱。
+
+改成按族分流（`src/engine/ioc-plan.ts` 的 `enablePeripheral` 新增 `familyId` 参数）：F1 用内置表；
+非 F1 **只允许与脚无关的两类**内置预设 —— `TIMx:timebase`（纯时基，不占脚）与 `DMA:<IP>`（`Dma.*` 键与脚无关），
+其余一律走 db 派生。
+
+### 64.4 闸门变化：从「整族拒绝」到「逐条报人话」
+
+原来 `ioc-plan.ts` 的 `presetsSupported` 闸门在 `capabilities.iocPresets` 为 false 时把整个 `peripherals` 忽略掉。
+现在改成逐条解析：每条要么成功（内置表或 db 派生），要么给出**这一条**为什么不行（名字不在 db 的 IP 清单里 / 缺 TX /
+TIM 还没派生 / 认不出的名字）。`capabilities.iocPresets` 语义收窄成「有手写脚位表」，
+`CAPABILITY_GAPS.iocPresets` 文案改为「手写 .ioc 预设表只有 F1（其它族靠 db 派生 USART/UART/LPUART，TIM/ADC/DMA 仍需手写键）」。
+
+### 64.5 顺带修掉一个假 diff：`ProjectManager.ProjectFileName`
+
+F4 第一轮往返 `benign` 是 false，唯一差异是 `ProjectManager.ProjectFileName: demo.ioc -> blink_f4.ioc`：
+模板里这个键固定写 `demo.ioc`，工程文件实际叫 `<工程名>.ioc`，CubeMX 保存时按真实文件名改回去，
+于是**每次** plan→verify 都多一条「值被改写」。修法：`renderIoc(template, facts, projectName)` 多收一个工程名，
+建工程时把这个键一起渲染（可选键，老模板没有这项也不报错）。
+
+### 64.6 验证与数字
+
+真机往返（F4，`demo/.dsh-stm32/f4-usart-verify.mjs`）：新建工程 → `peripherals: [{ name: "USART1" }]` → apply → `runIocVerify`：
+
+```text
+notes : 按 db 派生预设 USART1（USART1 异步串口（按 db 选脚 PA9/PA10））
+计划  : PA9.Signal=USART1_TX / PA10.Signal=USART1_RX / 两个 .Mode=Asynchronous / USART1.VirtualMode=VM_ASYNC
+verify: benign=true；droppedPeripherals / missingKeys / signalRewrites / valueChanged 全空
+        message「CubeMX 认了全部 4 个外设；计划生成 2 个初始化函数」
+```
+
+单测：新增 `test/db-presets-units.test.mjs`（8 例，已进 `test/run-units.mjs`）——同端口优先（PB6 有 TX 但不配对 → 仍选 PA9/PA10）、
+跨端口、缺 RX、实例不在 db（列出真实 IP 清单）、虚拟脚/带后缀脚不参与、TIM/ADC 给「还没派生」、facts=null、LPUART 同规则。
+`ioc-plan-units` 里「不认识的外设预设」那条断言改成 `/不能启用/u`（文案变了）。
+
+### 64.7 这一步**没有**做什么
+
+- **TIM / ADC / DMA 的预设还没按族派生**：定时器要处理共享信号（`S_TIMx_CHy` + `SH` 块）与通道参数，
+  ADC 要定 Rank/采样时间，DMA 要按族的请求表校验通道名。这三类在非 F1 上仍是「请手写键」。
+- **时钟规划仍只有 F1**：`clock-plan.ts` 的 RCC/PLL 上限表只覆盖 F1，非 F1 的 `clock` 参数照旧被拒。
+- **只有 F4 做过逐键往返**：C0/F0/G4/L0 有建工程→生成→编译的证据（§63.6），但没对 db 派生预设做 round-trip；其余 8 族连固件包都还没装。

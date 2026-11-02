@@ -19,6 +19,7 @@ const suites = [
   "breakpoints-units.test.mjs",
 "family-units.test.mjs",
   "family-facts-units.test.mjs",
+  "db-presets-units.test.mjs",
   "rtt-units.test.mjs",
   "svd-units.test.mjs",
   "stm32f1-units.test.mjs",

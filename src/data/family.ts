@@ -32,7 +32,11 @@ export interface Stm32FamilyCapabilities {
   readonly halScaffold: boolean;
   /** 寄存器路线建工程（CMSIS 设备头 + 启动文件从资源包缓存取）。 */
   readonly registerScaffold: boolean;
-  /** .ioc 外设预设表（src/data/ioc-presets.ts 里有该族的表）。 */
+  /**
+   * .ioc 外设**手写**预设表（src/data/ioc-presets.ts）。注意这只表示"有手抄的脚位表"：
+   * 非 F1 族虽然没有手写表，但 ioc-plan 现在会按 CubeMX db 派生 USART/UART/LPUART 预设
+   * （src/data/db-presets.ts），所以这个 false 不等于"完全不能用 peripherals"。
+   */
   readonly iocPresets: boolean;
   /** 时钟规划（src/engine/clock-plan.ts 能按该族枚举 PLL）。 */
   readonly clockPlan: boolean;
@@ -133,7 +137,7 @@ const NO_SVD = "资源包只有 F1 的 SVD（中断名/寄存器名校验暂不�
 export const CAPABILITY_GAPS: Readonly<Record<keyof Stm32FamilyCapabilities, string>> = {
   halScaffold: "HAL 建工程（模板/启动文件/链接脚本/设备宏）只按 14 个单核族实现",
   registerScaffold: "寄存器版模板（CMSIS 头 + 启动文件）目前只有 F1",
-  iocPresets: ".ioc 外设预设表目前只有 F1",
+  iocPresets: "手写 .ioc 预设表只有 F1（其它族靠 db 派生 USART/UART/LPUART，TIM/ADC/DMA 仍需手写键）",
   clockPlan: "时钟规划只按 F1 的 RCC/PLL 键实现",
   svdValidation: "中断名/寄存器名校验要该族的 SVD，资源包目前只有 F1 的",
 };

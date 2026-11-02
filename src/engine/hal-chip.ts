@@ -308,13 +308,17 @@ export function renderLinkerScript(template: string, facts: HalChipFacts): strin
  * .ioc 按芯片渲染：只改这五行，引脚/时钟树沿用模板的最小集（PA13/PA14 SWD + 一个 GPIO）。
  * 缺键就抛错——没把握的 .ioc 宁可不写，写一份 CubeMX 认不出的配置更糟。
  */
-export function renderIoc(template: string, facts: HalChipFacts): string {
+export function renderIoc(template: string, facts: HalChipFacts, projectName = ""): string {
   const values: ReadonlyArray<readonly [string, string]> = [
     ["Mcu.CPN", facts.mcu],
     ["Mcu.Name", facts.mcuName],
     ["Mcu.Package", facts.packageName],
     ["Mcu.UserName", facts.deviceId],
     ["ProjectManager.DeviceId", facts.deviceId],
+    // 工程文件名也要跟着工程走：模板里写的是 demo.ioc，CubeMX 保存时发现"文件名与键不一致"
+    // 就会把它改回真实文件名 —— 那是每次 plan→verify 都会出现的假 diff（F4 实测过）。
+    // 这条不是必需键（老模板可能没有），所以单独放 optional，不参与缺键检查。
+    ...(projectName === "" ? [] : [["ProjectManager.ProjectFileName", projectName + ".ioc"] as const]),
   ];
   const eol = template.includes("\r\n") ? "\r\n" : "\n";
   const seen = new Set<string>();

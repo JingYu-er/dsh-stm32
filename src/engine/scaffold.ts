@@ -506,7 +506,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
       if (destRel !== ".gitignore" && destRel !== LEGACY_LINKER_SCRIPT) {
         text = text.split("__PROJECT_NAME__").join(projectName);
       }
-      if (destRel === projectName + ".ioc") text = renderIoc(text, facts);
+      if (destRel === projectName + ".ioc") text = renderIoc(text, facts, projectName);
       if (destRel === "cmake/gcc-arm-none-eabi.cmake" || destRel === "cmake/starm-clang.cmake") {
         text = pointLinkerFlagAt(text, facts);
       }

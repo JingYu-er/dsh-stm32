@@ -438,7 +438,8 @@ test("peripherals：不认识的名字直接报错，并列出内置预设", () 
   const { projectDir } = freshProject();
   const report = planIocChanges({ projectDir, peripherals: [{ name: "SPI1" }] });
   assert.equal(report.ok, false);
-  assert.match(report.errors.join(" "), /不认识的外设预设/u);
+  // 现在会先试 db 派生（USART/UART/LPUART），SPI1 还没派生 → 报"认不出/还没派生"并列出内置表
+  assert.match(report.errors.join(" "), /不能启用/u);
   assert.match(report.errors.join(" "), /USART1/u);
 });
 
