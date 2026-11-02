@@ -3938,7 +3938,7 @@ interface IocPlanRequest {
   夹具 `demo.ioc` 0 未覆盖、真 plan 产物 0 未覆盖 + 无双后缀 + schema 键真的落地。
 - `ioc-verify-units` 9 → 16 例（`orderOnly`、纯插入不算重排、`valueNormalized`、`valueChanged`、
   三个旧字段与新桶一致、`isIocValueNormalized` 边界、中断被删提示 + EXTI 不误报）。
-- `node test/run-units.mjs` → **708 pass / 0 fail**（41 → 42 个套件；§61.11 收尾后 712）；`node scripts/pack-size.mjs` →
+- `node test/run-units.mjs` → **708 pass / 0 fail**（41 → 42 个套件；§61.12 收尾后 714）；`node scripts/pack-size.mjs` →
   包体 550.0 KB（上限 1171.9 KB，117 个文件，解包 1747.8 KB），运行时资产 16.4 KB / 7 个（上限 40.0 KB）。
 
 ### 61.10 判过但不动 / 下一步
@@ -4025,8 +4025,82 @@ TIM3 256 条、ADC1 77 条、SPI1 27 条、GPIO 15 条。所以新增 `readIpPar
 
 **单测与包体**：`test/ioc-schema-units.test.mjs` 8 → 12 例（新增 `iocKeyTier` 推导表、strong/weak 分层、
 `auditIocKeys` 六种 verdict、`readIpParameterNames` 用临时目录造假 db）；
-`node test/run-units.mjs` → **712 pass / 0 fail**（42 个套件）；`node scripts/pack-size.mjs` →
-包体 **554.0 KB**（上限 1171.9 KB，117 个文件，解包 1759.9 KB），模板 66.4 KB，运行时资产 16.4 KB / 7 个。
+`node test/run-units.mjs` → **712 pass / 0 fail**（42 个套件；§61.12 再收两条后 714）；`node scripts/pack-size.mjs` →
+包体 **554.0 KB**（上限 1171.9 KB，117 个文件，解包 1759.9 KB；§61.12 后 555.4 KB / 1764.0 KB），模板 66.4 KB，运行时资产 16.4 KB / 7 个。
 
 **仍未做**：F4/F7 族的 db 表（`clock-plan.ts`/`chips.ts` 是另一条工作流，需用户开启）；`ioc_verify` 的输出
 还没把审计结论并进 `attribution`（目前两边独立，计划阶段告警 / 回写阶段归类）。
+
+### 61.12 §61.11 的两处收尾：ADC 合成参数名 + `Mcu.IP<i>` 排序（同日再续）
+
+§61.11 的验收只跑了「USART1 + 引脚 + EXTI + Serial Wire」这一条路径。补跑 ADC + DMA 那条
+（`demo/.dsh-stm32/s5-verify-dma.mjs`，`ADC1`(IN0=PA0-WKUP) + `DMA:ADC1`，`durationMs=79400`）后暴露两个问题，
+都属于「闸门自己不准」，不是生成器写错：
+
+**① ADC 每通道参数名被审计误报（假阳性）**
+
+计划阶段报了三条：
+
+```
+[SCHEMA] 3 个键名形状对但上下文不对：ADC1.Channel-0#ChannelRegularConversion（ADC1 的 db 参数清单里没有…）；
+ADC1.Rank-0#ChannelRegularConversion…；ADC1.SamplingTime-0#ChannelRegularConversion…
+```
+
+根因在 db 的形状：`db/mcu/IP/ADC-aditf_v2_5F1_Cube_Modes.xml` 的 `<RefParameter>` 只登记**基名**
+（120 行去重后 40 个：`Instance`/`DataAlign`/`ScanConvMode`/`NbrOfConversion`/`Rank`/`Channel`/
+`SamplingTime`/…），而每通道/每 Rank 的键名是 CubeMX **合成**的 `<基名>-<n>#<信号>`。
+所以「整体名字必须在清单里」这条判据对 ADC 天然为假。
+
+修法（`src/data/ioc-schema.ts` 的 `parameterNameKnown(name, names)`）：先整体命中，再退一步判
+**`-/#` 之前的基名**命中 —— `Channel-0#ChannelRegularConversion` 的基名 `Channel` ∈ 清单 → ok；
+`Channelz-0#…` 的基名 `Channelz` 不在 → 仍报 `unknown-parameter`（detail 会写出「也没有基名 Channelz」）。
+单测补 5 条断言（三条合成名放行、两条拼错照抓）。
+
+**② `Mcu.IP<i>` 顺序：我们尾部追加，CubeMX 回写时整表重排**
+
+同一次往返的 `changedValues` 5 条全是槽位换位：
+
+```
+before  IP0=NVIC IP1=RCC IP2=SYS IP3=ADC1 IP4=DMA
+after   IP0=ADC1 IP1=DMA IP2=NVIC IP3=RCC IP4=SYS      （benign=false，其余 added/removed/orderOnly 全空）
+```
+
+往返 A 之所以零 diff，只是因为 `USART1` 恰好排在 `SYS` 之后 —— 尾部追加正好等于正确位置。
+
+**排列规则（504 份官方板级 .ioc 实测）**：实例名按 **natural 序（数字段按数值比）升序，伪实例（板名，含 `-`）永远在最后**。
+差别只在 `TIM2…TIM4,TIM15` 这种（纯字典序会把 `TIM15` 排到 `TIM2` 前）。
+
+| 判据 | 命中 |
+| --- | --- |
+| 纯字典序升序 | 375 / 502 |
+| natural 序 | 392 / 502 |
+| natural 序 + 伪实例置尾 | **435 / 502** |
+
+按族看更清楚 —— **单核族全对，反例全在双核/TrustZone 板**：
+
+| 族 | 反例 | 例子 |
+| --- | --- | --- |
+| F0/F1/F2/F3/F4/F7/G0/G4/L0/L1/L4/WB/WL3/C0/U0 | **0**（F1 12/12） | — |
+| H7 | 4 | `NUCLEO-H7S3L8` 插在 `EXTMEM_MANAGER` 与 `NVIC2` 之间 |
+| U5 / WBA / L5 | 21 / 14 / 6 | `NVIC2` 在 `NVIC1` 前（TrustZone 双 NVIC） |
+| H5 / N6 / MP1 / WL | 6 / 6 / 2 / 6 | `SYS` 在 `SYS_M0PLUS` 前、`NVIC1,NVIC2` |
+
+实现（`src/engine/ioc-plan.ts`）：新增 `compareIpInstance(left, right)`（伪实例分桶 + `\d+|\D+` 分词的数值比较）
+与 `sortIpSlots(entries)`（收集 `mcu.ip_index` 槽位 → 排序 → **顺序没变就一个字节都不动** → 否则重编号并写 `Mcu.IPNb`）。
+调用点在 C6 之后、覆盖率闸门之前，条件 `ipTouched`（这次动过 IP 槽位才排）：用户没动外设时不动文件。
+作用等价于引脚表既有的 `sortPinsByPosition`/`writePinOrder` 那一套。
+
+**实测（CubeMX 6.15.0 无头，本机 db `DB.6.0.150`）**：
+
+- ADC+DMA 往返（修后）：plan 36 个键、`durationMs=76583` → `addedKeys`/`removedKeys`/`changedValues`/
+  `signalRewrites`/`orderOnly` **全空**、`benign=true`、`dropped=[]`；计划阶段只剩一条**内容**告警
+  （`ADC1` 换了引脚但 `Channel-0#…` 仍是 `ADC_CHANNEL_1`，通道号必须与引脚一致 —— 这条是真该报的）。
+- USART1 + 引脚 + EXTI 往返（回归）：plan 33 个键、`durationMs=102148`，六个 diff 桶仍**全空**、`benign=true`。
+
+**单测与包体**：`ioc-plan-units` 49 → 51 例（natural 序 `NVIC,RCC,SYS,TIM2,TIM4,TIM15`；伪实例 `AAA-BOARD` 字典序最前仍置尾），
+`ioc-schema-units` 的 audit 用例补 5 条断言（仍 12 例）；`node test/run-units.mjs` → **714 pass / 0 fail**（42 个套件）；
+`node scripts/pack-size.mjs` → 包体 **555.4 KB**（上限 1171.9 KB，117 个文件，解包 1764.0 KB），模板 66.4 KB，运行时资产 16.4 KB / 7 个。
+
+**边界（别当成已解决）**：双核/TrustZone 族（H7/H5/U5/U3/N6/L5/WBA/MP1/WL）的 `Mcu.IP<i>` 仍是另一套插入序 ——
+我们按 natural 序写会在这些族上继续产生 `changedValues` 噪音（功能不受影响：键值集合一致，CubeMX 只是重排），
+所以「零 diff」的结论只对单核族成立，本项目当前范围是 F1。`ioc_verify` 也还没把审计结论并进 `attribution`。

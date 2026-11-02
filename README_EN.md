@@ -69,7 +69,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 708 offline cases in 42 suites, no board needed
+npm test                            # optional: 714 offline cases in 42 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
@@ -172,7 +172,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Tool | What it does |
 | --- | --- |
 | `stm32_ioc_inspect` | Parses MCU part, pins/signals/labels, peripherals and interrupts, clock tree, project settings; reports fatal risks such as "no Serial Wire means a generated `SWJ_DISABLE`" |
-| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table (pull/speed, open-drain `outputType: od`, initial level `initial`, and `interrupt` which writes the whole EXTI chain plus its IRQ group), enabling peripheral interrupts via `interrupts` (9-segment NVIC value, name checked against the db/SVD), one-shot Serial Wire repair, and retargeting clocks to the nearest reachable frequency (`clock: { targetHz }`, derived keys recomputed, per-peripheral frequencies reported). Key names are rendered from the `.ioc` truth table in `src/data/ioc-schema.ts` (49 specs). The coverage gate runs on two levels: keys outside the table raise a `[SCHEMA]` warning, and shape-only hits such as `{ip}.{name}` are additionally audited against live context (the db `RefParameter` name list, whether the instance is enabled in `Mcu.IP<i>`, and the DMA parameter whitelist), so a misspelled parameter or instance name is reported too — CubeMX silently ignores such keys |
+| `stm32_ioc_plan` | Step one of any `.ioc` change: computes a per-key diff plus the source SHA-256 and returns a `planId`, **without touching the source**. Supports setting/removing keys, adding GPIO from the chip pin table (pull/speed, open-drain `outputType: od`, initial level `initial`, and `interrupt` which writes the whole EXTI chain plus its IRQ group), enabling peripheral interrupts via `interrupts` (9-segment NVIC value, name checked against the db/SVD), one-shot Serial Wire repair, and retargeting clocks to the nearest reachable frequency (`clock: { targetHz }`, derived keys recomputed, per-peripheral frequencies reported). Key names are rendered from the `.ioc` truth table in `src/data/ioc-schema.ts` (49 specs). The coverage gate runs on two levels: keys outside the table raise a `[SCHEMA]` warning, and shape-only hits such as `{ip}.{name}` are additionally audited against live context (the db `RefParameter` name list, whether the instance is enabled in `Mcu.IP<i>`, and the DMA parameter whitelist), so a misspelled parameter or instance name is reported too — CubeMX silently ignores such keys. Enabling a peripheral also re-sorts `Mcu.IP<i>` into CubeMX's own natural order (`TIM2…TIM4,TIM15`, board-name pseudo instances last); otherwise every enable of an alphabetically-early peripheral produces a handful of phantom diffs on write-back |
 | `stm32_ioc_verify` | Lets CubeMX say what it actually accepted: copies the `.ioc` to `.dsh-stm32/verify/<stamp>/`, rewrites it headlessly (`config load` + `config save`), then diffs key by key (25–40 s, the project `.ioc` is not touched). Reports `droppedPeripherals` / `plannedFunctions` / `signalRewrites` / `removedKeys` / `addedKeys` / `changedValues` plus the `attribution` buckets: `orderOnly` (same value, different line order) / `valueNormalized` (only member order normalized) / `valueChanged` (value really changed) / `benign` — **`benign: true` means zero substantive difference**, so it is safe to run `stm32_generate` |
 | `stm32_ioc_apply` | Requires a `planId`; re-checks the SHA before writing (refuses if the file changed meanwhile), backs up, replaces atomically, re-parses to validate, rolls back on failure. Supports `rollbackFrom` |
 
@@ -388,14 +388,14 @@ Without an `openocd.cfg` the plugin falls back to `interface/cmsis-dap.cfg` + `t
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 42 offline suites, 708 cases; no board, CubeMX, or toolchain needed
+npm test                 # 42 offline suites, 714 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **708 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **714 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 

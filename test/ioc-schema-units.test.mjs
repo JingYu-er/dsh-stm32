@@ -175,6 +175,13 @@ test("auditIocKeys：六种 verdict 各按上下文判", () => {
   assert.deepEqual(verdicts(["USART1.BaudRate"]), ["ok"], "实例 + 合法参数");
   assert.deepEqual(verdicts(["USART1.Baudrate"]), ["unknown-parameter"], "拼错的参数名");
   assert.deepEqual(verdicts(["TIM3.Whatever"]), ["ok"], "查不到 db 清单时不判错");
+  // ADC 每通道/每 Rank 的参数名是 CubeMX 合成的 <基名>-<n>#<信号>，db 只登记基名 → 命中基名即放行
+  const adc = { instances: ["ADC1"], paramNamesOf: () => ["Instance", "Channel", "Rank", "SamplingTime"] };
+  assert.deepEqual(verdicts(["ADC1.Channel-0#ChannelRegularConversion"], adc), ["ok"], "合成名命中基名 Channel");
+  assert.deepEqual(verdicts(["ADC1.Rank-0#ChannelRegularConversion"], adc), ["ok"], "合成名命中基名 Rank");
+  assert.deepEqual(verdicts(["ADC1.SamplingTime-0#ChannelRegularConversion"], adc), ["ok"]);
+  assert.deepEqual(verdicts(["ADC1.Channelz-0#ChannelRegularConversion"], adc), ["unknown-parameter"], "基名拼错照样抓");
+  assert.deepEqual(verdicts(["ADC1.Bogus#X"], adc), ["unknown-parameter"]);
   assert.deepEqual(verdicts(["PA9.BaudRate"]), ["pin-attribute"], "ip 位写的是引脚名");
   assert.deepEqual(
     verdicts(["USART1.BaudRate"], { instances: [], dbInstances: ["USART1"] }),

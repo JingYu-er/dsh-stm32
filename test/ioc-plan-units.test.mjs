@@ -459,8 +459,45 @@ test("peripherals：共享信号块会追加第二个实例（ADC1 之后再加 
   assert.equal(entries.get("SH.ADCx_IN1.ConfNb"), "2");
   assert.equal(entries.get("SH.ADCx_IN1.0"), "ADC1_IN1,IN1");
   assert.equal(entries.get("SH.ADCx_IN1.1"), "ADC2_IN1,IN1");
-  assert.equal(entries.get("Mcu.IP3"), "ADC1");
-  assert.equal(entries.get("Mcu.IP4"), "ADC2");
+  // Mcu.IP<i> 按 natural 序重排（CubeMX 回写时也这么排）：ADC1/ADC2 字典序在 NVIC 之前。
+  assert.equal(entries.get("Mcu.IP0"), "ADC1");
+  assert.equal(entries.get("Mcu.IP1"), "ADC2");
+  assert.equal(entries.get("Mcu.IP2"), "NVIC");
+});
+
+test("Mcu.IPn 排序：natural 序（数字段按数值比，TIM15 在 TIM4 之后、TIM2 之前）", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    entries: [
+      { key: "Mcu.IP3", value: "TIM4" },
+      { key: "Mcu.IP4", value: "TIM15" },
+      { key: "Mcu.IP5", value: "TIM2" },
+    ],
+  });
+  assert.equal(report.ok, true, report.message);
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.equal(entries.get("Mcu.IPNb"), "6");
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5].map((index) => entries.get("Mcu.IP" + String(index))),
+    ["NVIC", "RCC", "SYS", "TIM2", "TIM4", "TIM15"],
+  );
+});
+
+test("Mcu.IPn 排序：伪实例（板名，含 -）永远在最后，哪怕字典序最靠前", () => {
+  const { projectDir } = freshProject();
+  const report = planIocChanges({
+    projectDir,
+    entries: [
+      { key: "Mcu.IP3", value: "AAA-BOARD" },
+      { key: "Mcu.IP4", value: "ADC1" },
+    ],
+  });
+  const entries = parseIocEntries(candidateText(projectDir, report.planId));
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((index) => entries.get("Mcu.IP" + String(index))),
+    ["ADC1", "NVIC", "RCC", "SYS", "AAA-BOARD"],
+  );
 });
 
 test("peripherals(TIM3)：预设自己写出的共享信号不该触发告警", () => {
