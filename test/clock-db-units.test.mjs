@@ -24,6 +24,13 @@ function dbFacts(overrides = {}) {
     sources: [{ id: "hse", label: "HSE", iocValue: "RCC_PLLSOURCE_HSE", defaultHz: 8_000_000, selectable: true, note: "" }],
     apbDivs: [{ div: 1, iocValue: "RCC_HCLK_DIV1" }, { div: 2, iocValue: "RCC_HCLK_DIV2" }],
     ahbDivs: [{ div: 1, iocValue: "RCC_SYSCLK_DIV1" }, { div: 2, iocValue: "RCC_SYSCLK_DIV2" }],
+    // direct 模型（C0）才用到的四项：pllmul/pllmn 合成时不该被读到
+    directSources: [],
+    srcDivs: [],
+    srcDivKey: "",
+    srcDivSources: [],
+    apb2Divs: [],
+    derivedNames: [],
     adcDivs: [{ div: 2, iocValue: "RCC_ADCPCLK2_DIV2" }],
     pllM: [],
     pllN: null,

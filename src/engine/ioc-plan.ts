@@ -48,6 +48,8 @@ import type { IocSummary } from "./ioc.js";
 import { emptyClockPlan, formatHz, planClock } from "./clock-plan.js";
 import { clockFactsFromDb, readClockDbFacts } from "../data/clock-db.js";
 import { planClockPllmn } from "./clock-pllmn.js";
+import { planClockDirect } from "./clock-direct.js";
+import { followDerivedClocks } from "./clock-derived.js";
 import type { ClockPlan, ClockPlanRequest } from "./clock-plan.js";
 import { isKnownPin } from "../data/chips.js";
 import { capabilityGap, familyProfileOf, isF1 } from "../data/family.js";
@@ -797,6 +799,25 @@ function ensureDebugInstance(entries: Map<string, string>, facts: CubemxMcuFacts
 }
 
 /**
+ * 确保 `ProjectManager.functionlistsort` 里有 `2-MX_GPIO_Init-GPIO-false-HAL-true`。
+ *
+ * 真机证据（C0 板级 .ioc 往返，2026-11）：只要 .ioc 里有引脚——哪怕只有 PA13/PA14 的 SWD——
+ * CubeMX 保存时都会把 MX_GPIO_Init 插到清单**第二位**（SystemClock_Config 之后、CORTEX 之前）。
+ * 因为是插在中间而不是追加到末尾，ioc_verify 里"纯追加 MX_*_Init 不算差异"的例外盖不住它，
+ * 会记成一条 valueChanged。族模板里本来就有这一项（G0/U0 实测都有），C0 模板是零引脚所以没有。
+ */
+function ensureGpioInitEntry(entries: Map<string, string>): boolean {
+  const key = renderIocKey("project.functionlistsort");
+  const current = entries.get(key);
+  if (current === undefined) return false;
+  const items = current.split(",").map((item) => item.trim()).filter((item) => item !== "");
+  if (items.some((item) => item.includes("-MX_GPIO_Init-"))) return false;
+  items.splice(items.length > 0 ? 1 : 0, 0, "2-MX_GPIO_Init-GPIO-false-HAL-true");
+  entries.set(key, items.join(","));
+  return true;
+}
+
+/**
  * 确保 Serial Wire 调试口：PA13/PA14 用调试信号，同时清掉 VP_SYS_VS_ND（No_Debug）残留。
  *
  * 脚名与信号名**不能写死 F1 的字面量**（2026-11 实测 C0 板级 .ioc 才发现的跨族 bug）：
@@ -815,9 +836,14 @@ function ensureSerialWire(table: PinTable, pins: PinNameResolver): void {
     }
     table.warnings.push("已删除 " + pin + "（No_Debug 会让 CubeMX 生成 __HAL_AFIO_REMAP_SWJ_DISABLE()）");
   }
-  // 调试口挂在 SYS 实例下：SYS 不在 Mcu.IP<i> 里时 CubeMX 保存会自己补，我们提前补掉（见 ensureIpInstance 注释）。
-  ensureIpInstance(table.entries, "SYS");
+  // 调试口挂在哪个实例下由**本族 db** 决定，不能一律写 SYS：
+  //   - F1/F4 的 db 里调试口就是 SYS（Pin 的 signal 叫 SYS_JTMS-SWDIO），要补 Mcu.IPn=SYS；
+  //   - C0/U0 的 db 把它单列成 DEBUG 实例（signal 叫 DEBUG_SWDIO），此时写 SYS 反而多出来的一个
+  //     ——2026-11 C0 板级 .ioc 往返实测：我们写的 Mcu.IP4=SYS 被 CubeMX 整条删掉、IPNb 5→4，
+  //     ioc_verify 因此报了两条 valueChanged。
+  // DEBUG 实例由紧随其后的 ensureDebugInstance 按 db 补，这里只管 SYS。
   const facts = pins.facts;
+  const debugSignals: string[] = [];
   // preferred 的顺序就是"想写成什么"的优先级；fallback 是 db 里有别名笔误时的兜底正则。
   const debugPins: Array<{ logical: string; preferred: readonly string[]; fallback: RegExp }> = [
     { logical: "PA13", preferred: ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"], fallback: /SWDIO|JTMS/u },
@@ -845,7 +871,9 @@ function ensureSerialWire(table: PinTable, pins: PinNameResolver): void {
     }
     table.entries.set(renderIocKey("pin.mode", { pin }), "Serial_Wire");
     table.entries.set(renderIocKey("pin.signal", { pin }), signal);
+    debugSignals.push(signal);
   }
+  if (!debugSignals.some((name) => /^DEBUG_/u.test(name))) ensureIpInstance(table.entries, "SYS");
 }
 
 /** 解析 "USART1" / "USART1_IRQn" / "EXTI9_5:2:0" → { irq, preempt?, sub? }。 */
@@ -1426,6 +1454,10 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (ensureDebugInstance(pinTable.entries, pinNames.facts)) {
     notes.push("把 DEBUG 登记进 Mcu.IP<i>：本族 db 把调试口单列成实例 DEBUG，CubeMX 回写时自己会补（C0 实证）");
   }
+  // 有引脚就得有 MX_GPIO_Init 这一项（C0 模板零引脚缺它，CubeMX 保存时插在第二位）。
+  if (pinTable.order.length > 0 && ensureGpioInitEntry(pinTable.entries)) {
+    notes.push("ProjectManager.functionlistsort 补上 2-MX_GPIO_Init-GPIO-false-HAL-true：有引脚时 CubeMX 会自己插这一项（C0 实证）");
+  }
   if (familyProfile !== null && !isF1(familyProfile) && ((request.pins ?? []).length > 0 || (request.interrupts ?? []).length > 0)) {
     warnings.push(
       "引脚/中断的写入规则只在 F1 上做过真机往返（" + familyProfile.id + " 未验证）：键名按本族 db 生成，落地前请用 stm32_ioc_verify 复核",
@@ -1494,7 +1526,8 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   // entries（例如 RCC.MCOSource）对时钟规划是可见的；规划出的键也是"候选文件"的一部分。
   // 时钟事实优先从本机 CubeMX db 现算（PLLMUL/PLLM/PLLN 枚举、SYSCLK 上限）：
   //   - pllmul 模型（F0/F1/L0…）且有该族总线上限 → 直接规划（F1 的派生结果与手写表逐项相等，已在单测里钉住）；
-  //   - pllmn 模型（F2/F4/F7/G4…，PLLM/PLLN/PLLP）与 unknown（H7/U5 分相 PLL）→ 明确拒绝，不套 F1 的键名；
+  //   - direct 模型（C0：没有 PLL，SYSCLK 直接取源）→ 走 clock-direct.ts；
+  //   - unknown（H7/U5 分相 PLL 这类还没实现的模型）→ 明确拒绝，不套别的族的键名；
   //   - 读不到 db（没装 CubeMX）→ F1 用 F1_FACTS 兜底，别的族拒绝。
   const clockDb = pinNames.facts === null || pinNames.db === null ? null : readClockDbFacts(pinNames.db, pinNames.facts);
   const clockDbFacts = clockDb === null ? null : clockFactsFromDb(clockDb, family === "" ? "STM32F1" : family);
@@ -1506,15 +1539,19 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
         ? "；也没读到本机 CubeMX db 的 RCC Modes（装 CubeMX 后重试）"
         : clockDb.model === "pllmn"
           ? "；这一族的 PLL 是 PLLM/PLLN/PLLP 模型，但 VCO 允许区间在 db 的 RCC Modes 与 override 表里都没有"
-          : clockDb.model === "unknown"
-            ? "；这一族的 PLL 模型不在已实现的两种之内"
-            : "；这一族的 APB1/APB2 频率上限在 db 的 RCC Modes 里没读到（也可能这一族不在这份 db 里）");
-  // 两种 PLL 模型各走各的规划器（pllmul：源 × PLLMUL；pllmn：源 ÷ PLLM × PLLN ÷ PLLP），
-  // 但输出同一种 ClockPlan，后面的写键逻辑不分叉。
+          : clockDb.model === "direct"
+            ? "；这一族没有 PLL（SYSCLK 直接取源），但 db 的 SYSCLKSource 里没有 HSE/HSI"
+            : clockDb.model === "unknown"
+              ? "；这一族的 PLL 模型不在已实现的三种之内（pllmul / pllmn / direct）"
+              : "；这一族的 APB1/APB2 频率上限在 db 的 RCC Modes 里没读到（也可能这一族不在这份 db 里）");
+  // 三种时钟模型各走各的规划器（pllmul：源 × PLLMUL；pllmn：源 ÷ PLLM × PLLN ÷ PLLP；
+  // direct：没有 PLL，SYSCLK 直接取源），但输出同一种 ClockPlan，后面的写键逻辑不分叉。
   const clockPlan = !clockSupported
     ? emptyClockPlan(clockRefusal + "：clock 参数不会生效")
     : clockDbFacts !== null && clockDbFacts.model === "pllmn"
       ? planClockPllmn({ request: request.clock, entries: after, facts: clockDbFacts, familyId: family })
+      : clockDbFacts !== null && clockDbFacts.model === "direct"
+        ? planClockDirect({ request: request.clock, entries: after, facts: clockDbFacts, familyId: family })
       : (request.clock === undefined
         ? planClock(undefined, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }), ...(family === "" ? {} : { familyId: family }) })
         : planClock(request.clock, { entries: after, ...(clockDbFacts === null ? {} : { clockFacts: clockDbFacts }), ...(family === "" ? {} : { familyId: family }) }));
@@ -1535,9 +1572,24 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   } else {
     warnings.push(...clockPlan.warnings);
     if (clockPlan.note !== "") notes.push("时钟：" + clockPlan.note);
+    // 派生频率键（RCC.<外设>Freq_Value）的“跟随改写”要在写键之前拍快照：它靠“旧值等于哪个时钟域”
+    // 判断该跟着谁走，新旧值都从这张表里读。详见 clock-derived.ts 的注释。
+    const beforeClockWrite = new Map(after);
     for (const item of clockPlan.entries) after.set(item.key, item.value);
     for (const key of clockPlan.unset) after.delete(key);
     for (const error of clockPlan.errors) errors.push("时钟：" + error);
+    const followed = followDerivedClocks(after, beforeClockWrite, new Set(clockPlan.entries.map((item) => item.key)));
+    if (followed.written.length > 0) {
+      notes.push(
+        "顺带改写 " + String(followed.written.length) + " 个派生频率键（旧值等于同名时钟域的跟着走）：" +
+        followed.written.map((item) => item.key.replace("RCC.", "") + "→" + formatHz(item.to)).join("、"),
+      );
+    }
+    if (followed.skipped.length > 0) {
+      notes.push(
+        "这些派生频率键新旧时钟域对不上、留 CubeMX 重算：" + followed.skipped.map((item) => item.key.replace("RCC.", "")).join("、"),
+      );
+    }
   }
 
   // 外设接线自洽性（IPNb 条数、外设有没有引脚指向、多模式引脚缺不缺 .Mode）。

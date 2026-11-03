@@ -180,8 +180,14 @@ export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 11520
  * 核过手册/真机的族用 override 表。
  */
 export interface ClockFacts {
-  /** PLL 模型：pllmul（源 × PLLMUL）或 pllmn（源 ÷ PLLM × PLLN ÷ PLLP）。缺省按 pllmul。 */
-  model?: "pllmul" | "pllmn";
+  /**
+   * 时钟模型：
+   *   pllmul —— 源 × PLLMUL（F0/F1/F3/L0/L1…）
+   *   pllmn  —— 源 ÷ PLLM × PLLN ÷ PLLP|PLLR（F2/F4/F7/G4/L4…）
+   *   direct —— 没有 PLL，SYSCLK 直接取源（÷ 可选源分频），C0 这类族
+   * 缺省按 pllmul。
+   */
+  model?: "pllmul" | "pllmn" | "direct";
   muls: readonly PllMulFact[];
   /** pllmn 模型才用得到：PLLM 分频枚举、PLLN 范围、PLLP 分频枚举。 */
   pllM?: readonly DividerFact[];
@@ -205,6 +211,25 @@ export interface ClockFacts {
    * 写错不会报错：CubeMX 载入时直接死循环（F2 实测 >240 s 不返回）。
    */
   ahbDivs?: readonly DividerFact[];
+  /**
+   * APB2 分频枚举（`RCC.APB2CLKDivider` 的取值）。**没有这个参数就不是双 APB 族**（C0 只有
+   * APB1CLKDivider）：不能写 `RCC.APB2CLKDivider`，写了 CubeMX 会当成未知键丢掉。
+   */
+  apb2Divs?: readonly DividerFact[];
+  /**
+   * direct 模型：源分频枚举（C0 的 HSISYSCLKDivider：÷1/2/4/…/128）与它写在 .ioc 里的键名。
+   * 枚举为空表示这一族没有源分频（HSE 直连），planner 不写 `RCC.HSISYSCLKDivider`。
+   */
+  srcDivs?: readonly DividerFact[];
+  srcDivKey?: string;
+  /** 源分频只对这些源生效（C0 的 HSISYSCLKDivider 只管 HSI）。 */
+  srcDivSources?: readonly ClockSourceId[];
+  /**
+   * db 里这一族 RCC 的派生频率参数名（`SYSCLKFreq_VALUE` / `APBFreq_Value` …）。
+   * direct 模型按名字算得出来的会写对，写不对的宁可留给 CubeMX 重算——写错值会让
+   * ioc_verify 报「值被改写」而不是「派生值重算」，那是真差异。
+   */
+  derivedClockNames?: readonly string[];
   adcDivs: readonly DividerFact[];
   limits: { sysclkHz: number; apb1Hz: number; apb2Hz: number; adcHz: number };
   /** pllmn 模型才用得到：VCO 输出与 PLL 输入的允许区间（db 的 Min/Max 或 override 表）。 */

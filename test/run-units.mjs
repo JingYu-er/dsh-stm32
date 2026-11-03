@@ -27,6 +27,8 @@ const suites = [
   "clock-units.test.mjs",
   "clock-db-units.test.mjs",
   "clock-pllmn-units.test.mjs",
+  "clock-direct-units.test.mjs",
+  "clock-derived-units.test.mjs",
   "cubemx-guard-units.test.mjs",
   "doctor-chip-units.test.mjs",
   "cmake-sources-units.test.mjs",

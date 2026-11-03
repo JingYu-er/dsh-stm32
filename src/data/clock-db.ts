@@ -27,6 +27,12 @@ export type ClockModel =
   | "pllmul"
   /** 源 ÷ PLLM × PLLN ÷ PLLP|PLLR（F2/F4/F7/G4/L4…；.ioc 键是 RCC.PLLM/PLLN/PLLP）。 */
   | "pllmn"
+  /**
+   * 没有 PLL：SYSCLK 直接取源（HSE 或 HSI÷1/2/4/…/128）。C0 就是这一类——
+   * Modes xml 里既没有 PLLMUL 也没有 PLLM/PLLN，只有 SYSCLKSource + HSISYSCLKDivider。
+   * 早先把它判成 unknown 直接拒绝，等于 C0 不能规划时钟。
+   */
+  | "direct"
   /** 认不出（H7 的 DIVM1/DIVN1、U5 的 PLL1 分相…）：调用方必须拒绝，别硬套别的模型。 */
   | "unknown";
 
@@ -53,6 +59,17 @@ export interface ClockDbFacts {
   muls: PllMulFact[];
   /** PLL 输入源（只收频率已知的：HSE 与 HSI/HSI÷2）。 */
   sources: PllSourceFact[];
+  /** direct 模型：能直接当 SYSCLK 的源（Modes xml 的 SYSCLKSource 里认得出的 HSE/HSI）。 */
+  directSources: PllSourceFact[];
+  /** direct 模型：源分频枚举（HSISYSCLKDivider）与它的键名；空 = 没有源分频。 */
+  srcDivs: DividerFact[];
+  srcDivKey: string;
+  /** 源分频只对这些源生效（键名以 HSI 开头 → 只有 hsi）。 */
+  srcDivSources: ClockSourceId[];
+  /** APB2 分频枚举；空 = 单 APB 族（C0），不能写 RCC.APB2CLKDivider。 */
+  apb2Divs: DividerFact[];
+  /** RCC 的派生频率参数名（RefParameter 里 *Freq_Value/*FreqValue 那批）。 */
+  derivedNames: string[];
   /** APB 分频（来自 APB1CLKDivider 枚举）。 */
   apbDivs: DividerFact[];
   /**
@@ -185,6 +202,17 @@ function sourceIdOf(value: string): ClockSourceId | null {
 }
 
 /**
+ * RCC_SYSCLKSOURCE_HSE / _HSI → "hse" / "hsi"（direct 模型的源）。
+ * LSE/LSI 是 32 kHz 级，规划 MHz 目标时用不上，返回 null 让调用方跳过。
+ */
+function directSourceIdOf(value: string): ClockSourceId | null {
+  const upper = value.toUpperCase();
+  if (upper === "RCC_SYSCLKSOURCE_HSE") return "hse";
+  if (upper === "RCC_SYSCLKSOURCE_HSI") return "hsi";
+  return null;
+}
+
+/**
  * 读一颗芯片的时钟事实。读不到 RCC Modes 文件返回 null（调用方按「这一族没有 db 时钟事实」处理）。
  */
 export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFacts | null {
@@ -218,11 +246,6 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
   // PLLP 只有 DIV7/DIV17 = 那是 PLLSAI1 的输出，SYSCLK 走 PLLR（L4 的 RCC-STM32L4*）。
   const pllPIsSai = pllP.length > 0 && pllP.every((item) => item.div === 7 || item.div === 17);
   const sysclkOutput: "P" | "R" = pllPIsSai && pllR.length > 0 ? "R" : "P";
-  const model: ClockModel = muls.length > 0 ? "pllmul" : pllM.length > 0 || pllN !== null ? "pllmn" : "unknown";
-  if (model === "unknown") {
-    notes.push("db 的 RCC Modes 里既没有 PLLMUL 也没有 PLLM/PLLN：这一族的 PLL 模型不在已实现的两种之内（H7/U5 这类分相 PLL 需要单独实现）");
-  }
-
   const sources: PllSourceFact[] = [];
   for (const entry of enumOf(text, "PLLSource")) {
     const id = sourceIdOf(entry.value);
@@ -260,7 +283,42 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
       .sort((left, right) => left.div - right.div);
   const apbDivs = toDivs(enumOf(text, "APB1CLKDivider"));
   const ahbDivs = toDivs(enumOf(text, "AHBCLKDivider"));
+  const apb2Divs = toDivs(enumOf(text, "APB2CLKDivider"));
   const adcDivs = toDivs(enumOf(text, "ADCPresc"));
+
+  // direct 模型（C0）：SYSCLK 直接取源，没有 PLL。能当源的只有 SYSCLKSource 里的 HSE/HSI
+  // （LSE/LSI 是 32 kHz 级，规划到 MHz 目标用不上，也不该被当成「凑不到就选最近的」兜底）。
+  const directSources: PllSourceFact[] = [];
+  for (const entry of enumOf(text, "SYSCLKSource")) {
+    const id = directSourceIdOf(entry.value);
+    if (id === null) continue;
+    if (directSources.some((source) => source.id === id)) continue;
+    directSources.push({
+      id,
+      label: id === "hse" ? "HSE（外部晶振）" : "HSI（内部 RC）",
+      iocValue: entry.value,
+      // 真值从 .ioc 的 RCC.HSE_VALUE / RCC.HSI_VALUE 读；这里只是占位缺省。
+      defaultHz: id === "hse" ? 8_000_000 : 16_000_000,
+      selectable: true,
+      note: id === "hse" ? "外部晶振：频率以 .ioc 的 RCC.HSE_VALUE 为准" : "内部 RC：频率以 .ioc 的 RCC.HSI_VALUE 为准（C0 是 48 MHz）",
+    });
+  }
+  // 源分频：C0 的 HSISYSCLKDivider（÷1..÷128）。名字带 HSI 前缀 → 只作用于 HSI（HSE 直连）。
+  const srcDivs = toDivs(enumOf(text, "HSISYSCLKDivider"));
+  const srcDivKey = srcDivs.length > 0 ? "RCC.HSISYSCLKDivider" : "";
+  const srcDivSources: ClockSourceId[] = srcDivs.length > 0 ? ["hsi"] : [];
+  // 派生频率参数名：RefParameter 里以 Freq_Value/FreqValue 结尾的那批（C0 有 25 个）。
+  const derivedNames: string[] = [];
+  for (const matched of text.matchAll(/<RefParameter[^>]*\bName="([A-Za-z0-9_]+(?:Freq_Value|FreqValue))"/gu)) {
+    const name = matched[1] as string;
+    if (!derivedNames.includes(name)) derivedNames.push(name);
+  }
+
+  const model: ClockModel =
+    muls.length > 0 ? "pllmul" : pllM.length > 0 || pllN !== null ? "pllmn" : directSources.length > 0 ? "direct" : "unknown";
+  if (model === "unknown") {
+    notes.push("db 的 RCC Modes 里既没有 PLLMUL、也没有 PLLM/PLLN、也没有能直连的 SYSCLKSource（HSE/HSI）：这一族的时钟模型不在已实现的三种之内");
+  }
 
   // 总线上限与 VCO 区间：都在同一份 Modes xml 的 RefParameter Max/Min 里（CubeMX 自己校验用）。
   const sysclkMaxDbHz = limitOf(text, ["SYSCLKFreq_VALUE", "HCLKFreq_Value"])?.max ?? 0;
@@ -307,8 +365,14 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
     vco,
     muls,
     sources,
+    directSources,
+    srcDivs,
+    srcDivKey,
+    srcDivSources,
     apbDivs: apbDivs.length > 0 ? apbDivs : [1, 2, 4, 8, 16].map((div) => ({ div, iocValue: "RCC_HCLK_DIV" + String(div) })),
     ahbDivs,
+    apb2Divs,
+    derivedNames,
     adcDivs,
     pllM,
     pllN,
@@ -382,7 +446,8 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
   const family = familyId.trim().toUpperCase();
   const limits: BusLimits | null = BUS_LIMITS[family] ?? facts.busLimits;
   if (limits === null) return null;
-  if (facts.sources.length === 0) return null;
+  // direct 模型没有 PLL，也就没有 PLLSource 参数：源从 SYSCLKSource 来。
+  if (facts.sources.length === 0 && facts.model !== "direct") return null;
   // SYSCLK 上限三级回退：MCU xml 的 <Frequency> → db 的 SYSCLKFreq_VALUE Max → APB2 上限。
   // 第三级是兜底（G4/U0 的 <Frequency> 读出来是 0，但它们的 SYSCLKFreq_VALUE Max 是有的）。
   const sysclkHz =
@@ -392,6 +457,7 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
     apbDivs: facts.apbDivs,
     sysclkSourceKey: facts.sysclkSourceKey,
     ...(facts.ahbDivs.length > 0 ? { ahbDivs: facts.ahbDivs } : {}),
+    ...(facts.apb2Divs.length > 0 ? { apb2Divs: facts.apb2Divs } : {}),
     adcDivs: facts.adcDivs.length > 0 ? facts.adcDivs : [{ div: 1, iocValue: "" }],
     limits: {
       sysclkHz,
@@ -420,6 +486,18 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
       pllP: facts.pllP,
       pllR: facts.pllR,
       sysclkOutput: facts.sysclkOutput,
+    };
+  }
+  if (facts.model === "direct") {
+    if (facts.directSources.length === 0) return null;
+    return {
+      ...base,
+      model: "direct",
+      muls: [],
+      sources: facts.directSources,
+      ...(facts.srcDivs.length > 0 ? { srcDivs: facts.srcDivs, srcDivKey: facts.srcDivKey } : {}),
+      ...(facts.srcDivSources.length > 0 ? { srcDivSources: facts.srcDivSources } : {}),
+      derivedClockNames: facts.derivedNames,
     };
   }
   if (facts.model !== "pllmul") return null;

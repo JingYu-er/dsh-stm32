@@ -985,7 +985,54 @@ test("serialWire 跨族：脚名与调试信号名都按 db 写（C0：PA14-BOOT
   // DEBUG 实例：本族 db 有它就补进 Mcu.IP<i>，CubeMX 回写才不会再插一条（C0 真机验收差的就是这条）。
   const ipSlots = plan.changes.filter((change) => /^Mcu\.IP\d+$/u.test(change.key)).map((change) => change.after);
   assert.ok(ipSlots.includes("DEBUG"), "Mcu.IP<i> 里要有 DEBUG 实例，实际：" + ipSlots.join(","));
-  assert.ok(ipSlots.includes("SYS"), "Mcu.IP<i> 里要有 SYS 实例，实际：" + ipSlots.join(","));
+  // 反过来不能再补 SYS：C0 的调试口不挂 SYS 实例，多写一条 CubeMX 保存时会整条删掉
+  // （板级 .ioc 往返实测：Mcu.IP4=SYS 被删、IPNb 5→4，ioc_verify 报两条 valueChanged）。
+  assert.equal(ipSlots.includes("SYS"), false, "DEBUG 信号下不该补 SYS，实际：" + ipSlots.join(","));
+});
+
+test("有引脚就补 functionlistsort 的 MX_GPIO_Init（C0 模板零引脚缺它，CubeMX 会插在第二位）", () => {
+  rmSync(TMP, { recursive: true, force: true });
+  mkdirSync(TMP, { recursive: true });
+  writeFileSync(join(TMP, "c0-list.ioc"), [
+    "Mcu.CPN=STM32C031C6T3",
+    "Mcu.Family=STM32C0",
+    "Mcu.Name=STM32C031C(4-6)Tx",
+    "Mcu.PinsNb=1",
+    "Mcu.Pin0=PC13",
+    "PC13.Signal=GPIO_Output",
+    "ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,0-MX_CORTEX_M0+_Init-CORTEX_M0+-false-HAL-true",
+    "ProjectManager.TargetToolchain=CMake",
+    "ProjectManager.KeepUserCode=true",
+  ].join("\n"), "utf8");
+  const dbRoot = join(TMP, "fake-cubemx-c0-list");
+  writeFakeCubeMxDbSignals(
+    dbRoot,
+    "STM32C031C(4-6)Tx",
+    [
+      ["PC13", ["GPIO", "EXTI13"]],
+      ["PA13", ["GPIO", "DEBUG_SWDIO"]],
+      ["PA14-BOOT0", ["GPIO", "DEBUG_SWCLK"]],
+    ],
+    ["DEBUG", "SYS"],
+  );
+  const plan = withEnv(
+    { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir: TMP, serialWire: true }),
+  );
+  assert.equal(plan.ok, true, plan.message);
+  const list = plan.changes.find((change) => change.key === "ProjectManager.functionlistsort")?.after ?? "";
+  assert.match(list, /1-SystemClock_Config-RCC-false-HAL-false,2-MX_GPIO_Init-GPIO-false-HAL-true,0-MX_CORTEX_M0\+_Init/u);
+  // 已经有这一项时不许重复插。
+  const again = withEnv(
+    { STM32_CUBEMX_ROOT: dbRoot, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" },
+    () => planIocChanges({ projectDir: TMP, serialWire: true }),
+  );
+  assert.equal(
+    (plan.changes.filter((change) => change.key === "ProjectManager.functionlistsort").length),
+    1,
+    "同一次计划里只该写一次",
+  );
+  assert.equal(again.ok, true, again.message);
 });
 
 let failed = 0;
