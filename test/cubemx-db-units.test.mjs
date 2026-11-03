@@ -32,6 +32,24 @@ test("parseMcuXml：读出芯片名/封装/频率/引脚 Signal/IP 实例", () =
   assert.equal(facts.ips.get("TIM3").name, "TIM1_8F1");
 });
 
+test("parseMcuXml：带子节点的 <IP>…</IP> 也要读（TrustZone 族的 RCC 就是这种写法）", () => {
+  const text = [
+    "<Mcu Family=\"STM32U5\" Package=\"LQFP144\" RefName=\"STM32U575ZIx\">",
+    "  <Frequency>160</Frequency>",
+    "  <IP InstanceName=\"RCC\" Name=\"RCC\" Version=\"STM32U5_rcc_v1_0\">",
+    "    <ContextSplit Name=\"split1\"><ContextIP ContextName=\"CortexM33S\"/></ContextSplit>",
+    "  </IP>",
+    "  <IP ConfigFile=\"TIM-STM32U5xx\" InstanceName=\"TIM3\" Name=\"TIM1_8F1\" Version=\"gptimer2_v1_x_Cube\"/>",
+    "  <Pin Name=\"PA0\" Position=\"10\" Type=\"I/O\"><Signal Name=\"GPIO\"/></Pin>",
+    "</Mcu>",
+  ].join("\n");
+  const facts = parseMcuXml(text);
+  assert.equal(facts.ips.size, 2);
+  assert.equal(facts.ips.get("RCC").version, "STM32U5_rcc_v1_0");
+  assert.equal(facts.ips.get("TIM3").name, "TIM1_8F1");
+  assert.equal(hasIpInstance(facts, "rcc"), true);
+});
+
 test("resolveDbPinName：逻辑名换算成 db 名", () => {
   const facts = parseMcuXml(SAMPLE);
   assert.equal(resolveDbPinName(facts, "PA0"), "PA0-WKUP");

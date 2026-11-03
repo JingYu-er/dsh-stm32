@@ -155,10 +155,16 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
   }
 
   const ips = new Map<string, CubemxIpFact>();
-  for (const ip of text.matchAll(/<IP\b([^>]*)\/>/gu)) {
+  // 两种写法都要认（U5 实测）：自闭合 <IP …/>（F1/F2/F4 这些单上下文族）与带子节点的
+  // <IP …>…</IP>（TrustZone/多上下文族：<IP> 里挂 <ContextSplit>/<ContextIP>）。
+  // 早先只认自闭合，U5 的 110 个 <IP> 里只有 1 个是自闭合的 —— RCC 正好不是，
+  // 于是 readMcuFacts 读出来的 ips 里没有 RCC，时钟事实整族读不到（假结论「db 没有这一族的 RCC」）。
+  // 键统一大写：.ioc 的 Mcu.IP<i> 与信号名都是大写实例名，而 ipModesPath/hasIpInstance 也按大写查。
+  for (const ip of text.matchAll(/<IP\b([^>]*?)(?:\/>|>)/gu)) {
     const ipAttrs = ip[1] as string;
-    const instanceName = /InstanceName="([^"]+)"/u.exec(ipAttrs)?.[1] ?? "";
-    if (instanceName === "") continue;
+    const rawName = /InstanceName="([^"]+)"/u.exec(ipAttrs)?.[1] ?? "";
+    if (rawName === "") continue;
+    const instanceName = rawName.toUpperCase();
     ips.set(instanceName, {
       instanceName,
       name: /(?:^|\s)Name="([^"]+)"/u.exec(ipAttrs)?.[1] ?? "",
