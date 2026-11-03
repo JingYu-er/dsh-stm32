@@ -104,7 +104,21 @@ export interface IocVerifyAttribution {
    * 它改的是「第 i 个槽位放谁」，逐键比值必然「全变了」；从集合看却一个外设都没变，语义上无害。
    */
   ipOrderOnly: string[];
-  /** 只剩「无害」差异（只重排/只规范化/只自动补清单）时为 true —— 这才是可交付的零 diff。 */
+  /**
+   * RCC 的派生频率键（时钟树的输出，名字以 Freq_Value/FreqValue 结尾）被 CubeMX 重算的值。
+   *
+   * 为什么单列：这些键不是「设定」，是 CubeMX 按 PLL/分频重算出来的结果——模板里带的是上一版
+   * 的旧值，我们改 PLL 之后它必然重算一遍。计划文件里没写过它们时，这条差异与「我们写错了」无关，
+   * 所以不参与 benign 判定（写了却对不上的仍然留在 valueChanged 里）。
+   * 实测（2026-11，DB.6.0.150）：F2 的 48MHZClocksFreq_Value/I2SClocksFreq_Value/VCOI2SOutputFreq_Value、
+   * F3 的 TIM2Freq_Value/USART1Freq_Value、L1 的 TIMFreq_Value 都是这一类。
+   */
+  derivedRecomputed: IocValueChange[];
+  /** CubeMX 自己补进 .ioc 的派生频率键（我们不写、它按树补出来的，例如 F2 的 EthernetFreq_Value）。 */
+  derivedAdded: string[];
+  /** RCC.IPParameters 里被 CubeMX 追加的派生频率名（我们的名单是它的子集）。 */
+  ipParametersAdded: string[];
+  /** 只剩「无害」差异（只重排/只规范化/只自动补清单/只重算派生频率）时为 true —— 这才是可交付的零 diff。 */
   benign: boolean;
 }
 
@@ -184,6 +198,23 @@ function pinSignals(entries: Map<string, string>): Map<string, string> {
     result.set(pin, value.trim());
   }
   return result;
+}
+
+/**
+ * RCC 的派生频率名（不带 `RCC.` 前缀）：`SYSCLKFreq_VALUE`、`APB1Freq_Value`、`ADCFreqValue`、
+ * `VCOOutputFreq_Value`、`VcooutputI2S` 这些。
+ *
+ * 它们不是设定，是 CubeMX 按 PLL/分频**算出来的结果**（db 里只有 Comment/Min/Max，公式在 java 里，
+ * 我们不重算）。模板带的是上一版的旧值，改了 PLL 之后它必然重算一遍。
+ */
+export function isDerivedClockName(name: string): boolean {
+  return /(?:Freq_Value|FreqValue|VcooutputI2S)$/u.test(name.trim());
+}
+
+/** 键 `RCC.APB1Freq_Value` 是不是派生频率键（只看 RCC 实例，别的实例同名的键不是一回事）。 */
+export function isDerivedClockKey(key: string): boolean {
+  const match = /^RCC\.([A-Za-z0-9_]+)$/u.exec(key);
+  return match === null ? false : isDerivedClockName(match[1] as string);
 }
 
 /**
@@ -352,7 +383,10 @@ export function diffIocForVerify(
   beforeText: string,
   afterText: string,
   audit?: IocAuditInput | null,
+  /** 计划里写过的键（来自 <projectDir>/.dsh-stm32/plans/*.json）。null/缺省 = 不知道，按形状归类。 */
+  planned?: ReadonlySet<string> | null,
 ): IocVerifyDiff {
+  const plannedKeys = planned ?? null;
   const before = parseIocEntries(beforeText);
   const after = parseIocEntries(afterText);
   const beforeIps = peripheralsOf(before);
@@ -419,10 +453,34 @@ export function diffIocForVerify(
       keptPrefix.length === beforeItems.length &&
       keptPrefix.every((item, index) => item === beforeItems[index]) &&
       appended.length > 0 &&
-      appended.every((item) => /^[0-9]+-MX_[A-Za-z0-9_]+_Init-[^,]*$/u.test(item));
+      // 外设名里会出现 '+'（U0 的 CORTEX_M0+ 生成 MX_CORTEX_M0+_Init），别把它当成非法条目。
+      appended.every((item) => /^[0-9]+-MX_[A-Za-z0-9_+]+_Init-[^,]*$/u.test(item));
     if (onlyAppended) {
       autoAddedFunctions.push(...appended);
       changedValues.splice(listSortIndex, 1);
+    }
+  }
+
+  // RCC.IPParameters 只被 CubeMX **追加**派生频率名时不算差异：这一列是「这台 MCU 有哪些 RCC 参数」
+  // 的登记表，我们写的是它的子集，它保存时把重算出来的频率名一并登记进去。
+  // 判据：我们的名字**一个不少**（after ⊇ before），多出来的必须全是派生频率名，只多不少。
+  // 顺序不参与判定——这一列是集合，CubeMX 按 ASCII 升序写，我们跟着排；
+  // 删名/改名/插进非派生名仍然留在 changedValues 里。
+  const ipParametersAdded: string[] = [];
+  const ipParametersIndex = changedValues.findIndex((item) => item.key === "RCC.IPParameters");
+  if (ipParametersIndex >= 0) {
+    const change = changedValues[ipParametersIndex] as IocValueChange;
+    const splitNames = (text: string): string[] =>
+      text.split(",").map((name) => name.trim()).filter((name) => name !== "");
+    const beforeNames = splitNames(change.before);
+    const afterNames = splitNames(change.after);
+    const afterSet = new Set(afterNames);
+    const keptAll = beforeNames.every((name) => afterSet.has(name));
+    const beforeSet = new Set(beforeNames);
+    const extras = afterNames.filter((name) => !beforeSet.has(name));
+    if (keptAll && afterNames.length > beforeNames.length && extras.every((name) => isDerivedClockName(name))) {
+      ipParametersAdded.push(...extras);
+      changedValues.splice(ipParametersIndex, 1);
     }
   }
 
@@ -434,26 +492,39 @@ export function diffIocForVerify(
   const misordered = misorderedKeysOf(before, after);
   const valueNormalized: IocValueChange[] = [];
   const valueChanged: IocValueChange[] = [];
+  const derivedRecomputed: IocValueChange[] = [];
   for (const item of changedValues) {
+    // 派生频率键被 CubeMX 重算：计划里没写过它 → 这是它按树算出来的结果，不是我们写错；
+    // 计划里写过它 → 两边对不上，那是我们算错了，得留在 valueChanged 里让人看见。
+    if (isDerivedClockKey(item.key) && !(plannedKeys?.has(item.key) ?? false)) {
+      derivedRecomputed.push(item);
+      continue;
+    }
     const bucket = isIocValueNormalized(item.before, item.after) ? valueNormalized : valueChanged;
     bucket.push(item);
   }
+  // CubeMX 自己补出来的派生键（我们不写、它按树算）。计划里写过的仍算缺键。
+  const derivedAdded = addedKeys.filter((key) => isDerivedClockKey(key) && !(plannedKeys?.has(key) ?? false));
+  const keptAddedKeys = addedKeys.filter((key) => !derivedAdded.includes(key));
   const attribution: IocVerifyAttribution = {
     // IP 槽位重排已经从 valueChanged 里摘走，这里也不重复报成「行序变化」（两者都是无害桶，别重复计数）。
     orderOnly: misordered.filter((key) => !ipOrderOnly.includes(key)).slice(0, KEY_SAMPLE_LIMIT),
     valueNormalized: valueNormalized.slice(0, KEY_SAMPLE_LIMIT),
     valueChanged: valueChanged.slice(0, KEY_SAMPLE_LIMIT),
     missingKeys: removedKeys.slice(0, KEY_SAMPLE_LIMIT),
-    addedKeys: addedKeys.slice(0, KEY_SAMPLE_LIMIT),
+    addedKeys: keptAddedKeys.slice(0, KEY_SAMPLE_LIMIT),
     droppedPeripherals: dropped,
     autoAddedFunctions,
     droppedReasons: explainKeys(removedKeys, auditContext, beforeIps),
-    addedVerdicts: explainKeys(addedKeys, auditContext, beforeIps),
+    addedVerdicts: explainKeys(keptAddedKeys, auditContext, beforeIps),
     ipOrderOnly: ipOrderOnly.slice(0, KEY_SAMPLE_LIMIT),
+    derivedRecomputed: derivedRecomputed.slice(0, KEY_SAMPLE_LIMIT),
+    derivedAdded,
+    ipParametersAdded,
     benign:
       dropped.length === 0 &&
       removedKeys.length === 0 &&
-      addedKeys.length === 0 &&
+      keptAddedKeys.length === 0 &&
       valueChanged.length === 0 &&
       signalRewrites.length === 0,
   };
@@ -544,6 +615,41 @@ export interface IocVerifyReport {
   message: string;
 }
 
+/**
+ * 读最近一次 ioc 计划写过的键（planIocChanges 落的 <projectDir>/.dsh-stm32/plans/<id>.json）。
+ *
+ * 用途：区分「派生频率键是 CubeMX 自己重算的」和「我们算错了」。读不到就返回 null（按形状归类），
+ * 而不是让诊断失败——独立跑 verify 时本来就没有计划。
+ */
+function readPlannedKeys(projectDir: string): Set<string> | null {
+  const dir = join(projectDir, STATE_DIR, "plans");
+  let newest: { id: string; at: string } | null = null;
+  for (const name of readdirSafe(dir)) {
+    if (!name.toLowerCase().endsWith(".json")) continue;
+    const id = name.slice(0, name.length - ".json".length);
+    let at = "";
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, name), "utf8")) as { createdAt?: unknown };
+      at = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
+    } catch {
+      at = "";
+    }
+    if (newest === null || at >= newest.at) newest = { id, at };
+  }
+  if (newest === null) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, newest.id + ".json"), "utf8")) as {
+      changes?: { key?: unknown }[];
+    };
+    const keys = (parsed.changes ?? [])
+      .map((item) => (typeof item.key === "string" ? item.key : ""))
+      .filter((key) => key !== "");
+    return keys.length === 0 ? null : new Set(keys);
+  } catch {
+    return null;
+  }
+}
+
 function findIoc(projectDir: string): string | null {
   const dir = projectDir;
   const names: string[] = [];
@@ -604,7 +710,14 @@ function buildAuditInput(beforeText: string, roots: readonly string[]): { audit:
   };
 }
 
-/** 跑一次「load + save」诊断。约 25–40 s（不需要生成代码）。 */
+/**
+ * 跑一次「load + save」诊断。
+ *
+ * 耗时（实测 2026-11，DB.6.0.150，Windows）：**98–120 s**，不是早期记的 25–40 s——这台机器上
+ * 光是 load 就要 ~98 s，而且保存完成之后进程有时还不退出（日志已有 `SaveConfig` 但 java 挂着）。
+ * 所以默认超时给 180 s（request.timeoutMs 可调），而判定「成功」只看日志里有没有
+ * `SaveConfig`/`Bye bye`，不看进程有没有正常退出——反之，没这一行就绝不能报通过。
+ */
 export async function runIocVerify(
   subprocess: SubprocessService,
   request: IocVerifyRequest,
@@ -658,16 +771,47 @@ export async function runIocVerify(
     });
     const log = outcome.stdout + "\n" + outcome.stderr;
     const afterText = readFileSync(snapshotPath, "utf8");
+    // 判定成功的唯一依据是日志里走到了保存：CubeMX 卡死/崩溃/超时时快照还是我们复制进去的原文，
+    // 逐键比出来的「零 diff」是假通过（实测 F2 写错 AHB 枚举名时就是这样，>240 s 不返回）。
+    const savedDone = /SaveConfig|Bye bye/iu.test(log);
+    const logTail = log.trim().split(/\r?\n/u).slice(-3).join(" | ");
+    if (!savedDone) {
+      const how = outcome.timedOut
+        ? "超时 " + String(request.timeoutMs ?? 180_000) + " ms 被中止"
+        : "退出码 " + (outcome.exitCode === null ? "（没有）" : String(outcome.exitCode));
+      return {
+        ...base,
+        snapshotPath,
+        durationMs: Date.now() - startedAt,
+        errors: ["CubeMX 没有保存完：" + how + "；日志末尾：" + logTail],
+        message:
+          "诊断失败：CubeMX 没保存完（" + how + "）。日志里没有 SaveConfig/Bye bye，" +
+          "快照还是原样的 .ioc —— 这时报「零 diff」是假通过，所以直接判失败",
+      };
+    }
     const auditInfo = buildAuditInput(beforeText, config.cubeMxRoots);
-    const diff = diffIocForVerify(beforeText, afterText, auditInfo.audit);
+    const diff = diffIocForVerify(beforeText, afterText, auditInfo.audit, readPlannedKeys(projectDir));
     const notes = [
       "CubeMX 写回的是「它理解的结果」，不是正确答案：被丢掉的外设不会自己补回来。",
       "副本在 " + snapshotPath + "（工程里的 .ioc 没动过）。",
       "判定口径：Mcu.IPn = 真正激活的外设；functionlistsort = 计划生成的 MX_*_Init。",
       auditInfo.note,
     ];
-    if (!/SaveConfig|Bye bye/iu.test(log)) {
-      notes.push("日志里没看到保存完成的行，结论可能不完整；原始日志末尾：" + log.trim().split(/\r?\n/u).slice(-3).join(" | "));
+    if (outcome.timedOut || outcome.exitCode !== 0) {
+      notes.push(
+        "CubeMX 已经保存完（日志里有 SaveConfig），但进程没有正常退出（" +
+          (outcome.timedOut ? "超时被中止" : "退出码 " + String(outcome.exitCode ?? "（没有）")) +
+          "）：这台机器上次实测就这样，结论照常可用，只是得多花一次超时的时间。",
+      );
+    }
+    const derived = diff.attribution;
+    if (derived.derivedRecomputed.length > 0 || derived.derivedAdded.length > 0 || derived.ipParametersAdded.length > 0) {
+      notes.push(
+        "派生频率键（*Freq_Value/*FreqValue）是 CubeMX 按 PLL 与分频**算出来的**，不是我们写的设定：" +
+          "重算 " + String(derived.derivedRecomputed.length) + " 个、它自己补 " + String(derived.derivedAdded.length) +
+          " 个、RCC.IPParameters 里追加 " + String(derived.ipParametersAdded.length) +
+          " 个名字——都不算差异（计划里写过的派生键仍会报）。",
+      );
     }
     const dropped = diff.droppedPeripherals;
     const valueSuffix = diff.attribution.valueChanged.length === 0
@@ -702,6 +846,14 @@ export async function runIocVerify(
     const autoSuffix = diff.autoAddedFunctions.length === 0
       ? ""
       : "；它另外自己补了 " + String(diff.autoAddedFunctions.length) + " 条初始化清单（functionlistsort，不影响生成正确性）";
+    const derivedCount = derived.derivedRecomputed.length + derived.derivedAdded.length;
+    const derivedSuffix = derivedCount === 0
+      ? ""
+      : "；它按时钟树重算了 " + String(derivedCount) + " 个派生频率键（*Freq_Value，不是设定）";
+    const ipSuffix = derived.ipParametersAdded.length === 0
+      ? ""
+      : "；RCC.IPParameters 里它自己追加了 " + derived.ipParametersAdded.slice(0, 4).join("/") +
+        (derived.ipParametersAdded.length > 4 ? " 等 " + String(derived.ipParametersAdded.length) + " 个派生名" : "");
     return {
       ...base,
       ok: true,
@@ -713,7 +865,7 @@ export async function runIocVerify(
         (dropped.length === 0
           ? "CubeMX 认了全部 " + String(diff.afterPeripherals.length) + " 个外设；计划生成 " + String(diff.plannedFunctions.length) + " 个初始化函数"
           : "CubeMX 丢了 " + dropped.join("、") + "（其余 " + String(diff.afterPeripherals.length) + " 个认了）") +
-        valueSuffix + normalizedSuffix + orderSuffix + autoSuffix + causeSuffix,
+        valueSuffix + normalizedSuffix + orderSuffix + autoSuffix + derivedSuffix + ipSuffix + causeSuffix,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

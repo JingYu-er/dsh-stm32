@@ -176,7 +176,8 @@ export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 11520
  *
  * F1_FACTS 是兜底（没有 CubeMX db 时用它），正常情况下由 src/data/clock-db.ts 从
  * db/mcu/<型号>.xml 与 db/mcu/IP/RCC-*.xml 现算出一份同形状的事实。
- * busLimits（APB1/APB2/ADC 上限）db 里没有 —— 那是数据手册规格，仍按族手写。
+ * busLimits（APB1/APB2/ADC 上限）与 vco 区间由 clock-db.ts 从 db 的 RCC Modes 读，
+ * 核过手册/真机的族用 override 表。
  */
 export interface ClockFacts {
   /** PLL 模型：pllmul（源 × PLLMUL）或 pllmn（源 ÷ PLLM × PLLN ÷ PLLP）。缺省按 pllmul。 */
@@ -191,9 +192,23 @@ export interface ClockFacts {
   /** 用哪个 PLL 输出当 SYSCLK：P（F2/F4/F7/G4）或 R（L4）。缺省 P。 */
   sysclkOutput?: "P" | "R";
   sources: readonly PllSourceFact[];
+  /**
+   * 写 SYSCLK 源用哪个键：`RCC.SYSCLKSource`（多数族）或 `RCC.SYSCLKSourceVirtual`（F3 这类
+   * 把源做成 Virtual 项的族）。由 clock-db 按 RCC Modes 里有没有 SYSCLKSourceVirtual 决定：
+   * 写错的那个会被 CubeMX 静默丢掉（F303 实测），只能靠 PLL 键让它自己反推，等于碰运气。
+   */
+  sysclkSourceKey?: string;
   apbDivs: readonly DividerFact[];
+  /**
+   * AHB 分频枚举（`RCC.AHBCLKDivider` 的取值）：只有 pllmn 族写这个键。
+   * 名字按族不同（F2/F4/F7 是 RCC_SYSCLK_DIVn，C0 是 RCC_HCLK_DIVn），必须从 db 读，
+   * 写错不会报错：CubeMX 载入时直接死循环（F2 实测 >240 s 不返回）。
+   */
+  ahbDivs?: readonly DividerFact[];
   adcDivs: readonly DividerFact[];
   limits: { sysclkHz: number; apb1Hz: number; apb2Hz: number; adcHz: number };
+  /** pllmn 模型才用得到：VCO 输出与 PLL 输入的允许区间（db 的 Min/Max 或 override 表）。 */
+  vco?: { minHz: number; maxHz: number; inMinHz?: number; inMaxHz?: number };
   usb: { hz: number; requiresPllClkHz: number; iocValue: string };
   peripheralClocks: readonly PeripheralClockFact[];
   baudList: readonly number[];

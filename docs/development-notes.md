@@ -2537,7 +2537,8 @@ engine 的 `src/engine/regs.ts` **一行没动**：它仍旧只负责「生成 o
 
 ### 32.2 白嫖一个 oracle：`config save`
 
-CubeMX 的 `-q` 脚本里可以用 **`config save <路径>`**（日志 `UtilMem:75 - End SaveConfig()`）。它**写到被 `config load` 的那份文件、忽略给定路径**，约 25–40 s、不生成代码 —— 于是每轮试探从「生成代码 3–4 分钟 + 翻 main.c」缩成「load+save 40 s + 看它自己写回来的键」。上面三条坑基本就是这么一条条试出来的。
+CubeMX 的 `-q` 脚本里可以用 **`config save <路径>`**（日志 `UtilMem:75 - End SaveConfig()`）。它**写到被 `config load` 的那份文件、忽略给定路径**、不生成代码 —— 于是每轮试探从「生成代码 3–4 分钟 + 翻 main.c」缩成「load+save 一轮 + 看它自己写回来的键」。
+（耗时后来按族复核过：这台机器上**单次 load+save 98–120 s**，而且保存完进程有时不退出——见 §52。早先记的 25–40 s 偏乐观，别据此设超时。）上面三条坑基本就是这么一条条试出来的。
 
 调用方式（PowerShell 里踩过的坑）：`jre\bin\java.exe` 与 `STM32CubeMX.exe` 直接调，**不要**传 `-Dfile.encoding=UTF-8`（会被 pwsh 拆成 `/encoding=UTF-8` → `ClassNotFoundException`）；日志用 `cmd /c xxx.bat > log 2>&1` 重定向（pwsh 的 `*>` 会写成 UTF-16，read 工具读不了）。脚本命令集合可用 `help` 查（`config load/save`、`project setCustomFWPath`、`generate all_code_in_main`、`generate code <目录>`、`script <file>`…）。
 
@@ -2604,7 +2605,7 @@ CubeMX 的 `-q` 脚本里可以用 **`config save <路径>`**（日志 `UtilMem:
 
 §32 的三条坑（引脚没进 `Mcu.PinN`、普通外设缺 `<pin>.Mode`、定时器/ADC 缺 `SH.*` 共享信号块）是在本机用 `config save` 一轮轮试出来的。但用户机器上跑的是插件，出问题的现场没有我：只把方法写成文档，等于要求 agent 每次重新发明一遍流程。所以拆成两半：
 
-- **确定性部分进工具**：`stm32_ioc_verify` 把 .ioc 复制到 `.dsh-stm32/verify/<stamp>/`，用无头脚本 `config load` + `config save` 让 CubeMX 写回「它理解的结果」，再 diff 出结构化结论（丢了哪些外设、信号被改成什么、补了哪些 `SH` 块、计划生成哪些 `MX_*_Init`、缺什么的提示）。约 25–40 s，不生成代码，**不动工程里的 .ioc**。
+- **确定性部分进工具**：`stm32_ioc_verify` 把 .ioc 复制到 `.dsh-stm32/verify/<stamp>/`，用无头脚本 `config load` + `config save` 让 CubeMX 写回「它理解的结果」，再 diff 出结构化结论（丢了哪些外设、信号被改成什么、补了哪些 `SH` 块、计划生成哪些 `MX_*_Init`、缺什么的提示）。实测单次 98–120 s（默认超时 180 s），不生成代码，**不动工程里的 .ioc**。
 - **判断经验进 skill**：`src/skill/stm32-workflow.ts` 新增「六、外设写了却没生效？先让它自己说（oracle 诊断）」——症状、怎么读 `droppedPeripherals`/`plannedFunctions`/`signalRewrites`/`sharedSignals`/`hints`、三条已知原因的修法，以及「别手改 .ioc / 别把副本覆盖回去 / 别并发跑 CubeMX」的禁令。
 
 ### 34.2 工具输出怎么读
@@ -2675,7 +2676,7 @@ D:/app/STM32CubeMX/jre/bin/javap.exe -p -c -classpath <解出的目录> com.st.m
 ### 35.4 验证
 
 - `npm run build` exit 0；`npm test` → **600 pass / 0 fail（38 套件）**，新增 `test/ioc-rules-units.test.mjs` 8 例（R1/R2/R3/R5/R7 正反例）。
-- 这些规则是**离线**的（毫秒级），与 `stm32_ioc_verify`（25–40 s 跑 CubeMX）互补：先离线挡住“必被丢”的写法，再用 oracle 复核实际理解。
+- 这些规则是**离线**的（毫秒级），与 `stm32_ioc_verify`（实测 98–120 s 跑 CubeMX）互补：先离线挡住“必被丢”的写法，再用 oracle 复核实际理解。
 
 ## 36. 通用 .ioc 规则清单（族无关，来自 CubeMX 字节码 + 实测）（2026-11-01）
 
@@ -5053,3 +5054,122 @@ U0  761,912 B
   （不影响编译，只影响工程自带调试口）。
 - F2/F3/F7/G0/L1/L4/U0 的包在 `dsh-firmware`（插件装的），不在 CubeMX 官方 `Repository`；CubeMX GUI 打开这类工程可能提示缺包，
   走插件的 `stm32_generate` 没问题（它用 `setCustomFWPath` 指过去）。
+
+## 72. 时钟扩到 18 族：总线上限/VCO/分频枚举全部从 db 读（2026-11-03）
+
+### 72.1 为什么原来只有 7 族能用 clock
+
+`src/data/clock-db.ts` 里的 `BUS_LIMITS`（APB1/APB2/ADC 上限）只收 7 族、`PLL_VCO_LIMITS`（VCO 输入/输出区间）只收 4 族，
+注释写的是「db 里没有这些数，属数据手册规格，按族手写」。**这句是错的**：
+
+`db/mcu/IP/RCC-*_Modes.xml` 里 `<RefParameter Name="APB1Freq_Value" Max="30000000" …>` 的 `Min`/`Max` 就是 CubeMX 自己的校验上限，
+同族还带 `VCOOutputFreq_Value` / `VCOInputFreq_Value` / `SYSCLKFreq_VALUE` / `HCLKFreq_Value` / `ADCFreq_Value`。
+所以做成 `readClockDbFacts` 里读、手写表降级成「核过族的 override」：
+
+- `ClockDbFacts` 新增 `sysclkMaxDbHz`（`SYSCLKFreq_VALUE` 的 Max）、`busLimits`（`BusLimits | null`）、`vco`（`PllVcoLimits | null`，含 `inMinHz`/`inMaxHz`）。
+- 取值规则：**同名参数有多个变体**（`<Condition Expression="scale1">`／G4 的 150M 与 170M／U0 的 96–344M 与 96–128M）→ 取「最小的 Min + 最大的 Max」；
+  `Max="=SYSCLKFreq_VALUE"` 这种表达式值一律丢弃（`numAttr` 里 `value.startsWith("=")` 直接当没有）。
+- 名字回退：APB1 → `APB1Freq_Value` 再 `APBFreq_Value`（单 APB 族）；APB2 → `APB2Freq_Value` 再 `APBFreq_Value`；
+  ADC → `ADCFreq_Value` → `ADC12outputFreq_Value` → `synchADCFreq_Value`，都没有就按 APB2 顶。
+- `clockFactsFromDb`：`const limits = BUS_LIMITS[family] ?? facts.busLimits`（null 就返回 null → planner 照旧拒绝并说人话）；
+  SYSCLK 上限三级回退 **MCU xml `<Frequency>` → db `SYSCLKFreq_VALUE` Max → apb2Hz**（G4/U0 的 `<Frequency>` 读出来是 0，不回退会误用 apb2）。
+- `PLL_VCO_LIMITS[family] ?? facts.vco` 同理，`clock-pllmn.ts` 不再按族名查表。
+
+逐族真值（**按具体型号读**，`assets/chips[0]` 常是入门型号：F1→F100 24 MHz、F4→84 MHz，会给出错的族结论）：
+
+| 族 | 型号 | 模型 | SYSCLK | APB1 | APB2 | VCO 输出 | VCO 输入 |
+|---|---|---|---|---|---|---|---|
+| F2 | STM32F205R(B-C-E-F-G)Tx | pllmn | 120M | 30M | 60M | 192–432M | 1–2M |
+| F3 | STM32F303C(B-C)Tx | pllmul | 72M | 36M | 72M | — | — |
+| G0 | STM32G030C(6-8)Tx | pllmn | 64M | 64M | 64M | 96–344M | 2.66–16M |
+| L1 | STM32L100C6Ux | pllmul | 32M | 32M | 32M | — | — |
+| U0 | STM32U031C6Tx | pllmn | 56M（回退） | 64M | 64M | 96–344M | 2.66–16M |
+
+五族 `adcDivs` 全空 → ADC 上限对它们不生效（planner 只在 `adcDivs` 非空时才写 `RCC.ADCPresc`/`RCC.ADCFreqValue`）。
+F407 42/84、F722 54/108、G431 170/170、L476 80/80 与旧手写表一致；F072 的 db 给 ADC 48M 但 override 表 14M 胜出 —— 所以 override 优先、db 兜底这条顺序不能反。
+
+### 72.2 一个错枚举让 CubeMX 死循环（F2 卡死的真因）
+
+F2 跑时钟验收时 `config load` 之后 >240 s 不返回，日志固定停在 `PinOutPanel:1589 - setPackage(STM32F205RBTx,LQFP64)`。
+二分（每一组都是 `config load`+`config save` 的完整往返，超时 240 s）定位到**单个键**：
+
+| 组 | 内容 | 结果 |
+|---|---|---|
+| baseline | 未经时钟计划的 .ioc | 98 s，exit 0，saved（3399 B） |
+| PLL | PLLM/PLLN/PLLP/SYSCLKSource | 118 s，OK，CubeMX 自己补全派生键 |
+| PLL + 分频 | 再加 AHBCLKDivider/APB1CLKDivider/APB2CLKDivider | >150 s 不返回 |
+| PLL + `AHBCLKDivider=RCC_SYSCLK_DIV1` | 只换这一个值 | 跑到 `End SaveConfig()`（保存完成） |
+| PLL + `AHBCLKDivider=RCC_HCLK_DIV1` | 错值 | 240 s 内根本没保存 |
+
+db 对照（`RCC-STM32F217-rcc_v1_0_Modes.xml`）：`:441` `AHBCLKDivider` 的取值是 **`RCC_SYSCLK_DIV1/2/4/8/16/64/128/256/512`**，
+`:452`/`:463` 的 `APB1CLKDivider`/`APB2CLKDivider` 才是 `RCC_HCLK_DIV1/2/4/8/16`。全库统计：`AHBCLKDivider` 默认 `RCC_SYSCLK_DIV1` 的 51 个文件，
+`RCC_HCLK_DIV1` 的只有 3 个（C0 系）。原码把 APB 的枚举值写进 AHB 键 → **CubeMX 拿到非法枚举不报错、直接死循环**。
+F4/F7/G4/L4 一直是同一个错值，只是它们没死循环、verify 又把这些当「值被改写」报了 benign=false 才被掩盖。
+
+修法：`ClockDbFacts.ahbDivs`（`enumOf(text, "AHBCLKDivider")`）、`ClockFacts.ahbDivs?`，`clock-pllmn.ts` 里
+`const divValueOf = (divs, div, fallback) => divFact(divs, div)?.iocValue ?? fallback(div)`，**查不到就不写这个键**（缺省就是 ÷1）。
+
+同批还修了一个一直没被触发的错：APB2 分频写死 `?? 1`。F2 是 120 MHz SYSCLK / 60 MHz APB2，写死 ÷1 会把 APB2 顶到 120 MHz 超规格；
+F4/F7/G4/L4 的 SYSCLK 上限恰等于 APB2 上限，所以从没暴露。现在是 `minimalDiv(facts.apbDivs, best.sysclkHz, facts.limits.apb2Hz).div`。
+
+**方法论教训 1**：CubeMX 无头 `config save` 有时「保存完但不退出」（上表第 4 行就是），所以成功判据只能看日志里的 `SaveConfig`/`Bye bye`，不能只看退出码。
+**方法论教训 2**：单键隔离实验如果超时给太短（120 s）会把「机器本来就慢」记成「这个键有毒」，整体结论会反 —— 一次 load+save 实测 98–120 s。
+
+### 72.3 F303 的 SYSCLK 源叫 SYSCLKSourceVirtual
+
+db 全库只有 `RCC-STM32F303_rcc_v1_0/_F303E/WBA/WBA6` 同时有 `SYSCLKSource` 与 `SYSCLKSourceVirtual`；
+F303 里 `:258` `SYSCLKSourceVirtual` 才是可选列表（PossibleValue HSI/HSE/PLLCLK），`:269` 的 `SYSCLKSource` 是 `DefaultValue="+SYSCLKSourceVirtualString"` 的派生项。
+写 `RCC.SYSCLKSource` 会被静默丢掉（F3 首轮 verify 的 `missingKeys` 正是它），靠 PLL 键让 CubeMX 反推只是运气。
+
+现在 `ClockDbFacts.sysclkSourceKey`＝db 文本里含 `Name="SYSCLKSourceVirtual"` 就是 `RCC.SYSCLKSourceVirtual`，否则 `RCC.SYSCLKSource`，
+pllmul 与 pllmn 两条路径都按它写。
+
+### 72.4 ioc_verify：把「CubeMX 自己重算的派生频率」从实质差异里摘出来
+
+以前每次改时钟，`valueChanged` 里都塞满 `RCC.AHBFreq_Value`/`CortexFreq_Value`/`I2SClocksFreq_Value`/`VCOI2SOutputFreq_Value` 这类**时钟树输出**，
+真正的差异（比如某个键被丢）反而看不见。现在：
+
+- `isDerivedClockKey(key)`：键形如 `^RCC\.[A-Za-z0-9_]+$` 且成员名以 `Freq_Value`/`FreqValue`/`VcooutputI2S` 结尾。
+  `SYSCLKFreq_VALUE` 故意**不算**派生 —— 那是我们写的设定，被改必须报。
+- 归因新增三个字段：`derivedRecomputed`（CubeMX 重算的派生键）、`derivedAdded`（它自己补的派生键）、
+  `ipParametersAdded`（`RCC.IPParameters` 里它自己追加的名字；判据是 after ⊇ before 且多出来的全是派生名，**顺序不参与判定**，因为它会整体重排）。
+- 计划里写过的派生键仍然留在 `valueChanged`（算我们算错）—— 靠 `<projectDir>/.dsh-stm32/plans/*.json` 里 createdAt 最新那份的 `changes[].key` 判断。
+- `benign` 的语义随之变成「只重排／只规范化／只自动补清单／只重算派生频率」。
+- 顺带放宽 `functionlistsort` 纯追加的正则：U0 会追加 `0-MX_CORTEX_M0+_Init-CORTEX_M0+-false-HAL-true`，旧正则的 `[A-Za-z0-9_]+` 认不出 `+`。
+
+**没有保存就必须判失败**：超时时 `runStreaming` 不抛错，快照还是原样的 .ioc，逐键比出来是「零 diff」—— 这是假通过。
+现在先看 `/SaveConfig|Bye bye/` 是否出现：没出现直接 `ok: false` 并说明；保存了但进程没正常退出则照常出结论、在 `notes` 里交代。
+文档里的耗时也改成实测值（单次 load+save 98–120 s，默认超时 180 s）。
+
+### 72.5 G0/U0 模板与「资产缓存才生效」
+
+- G0：模板只有 `Mcu.IP0=NVIC / IP1=RCC`，CubeMX 保存时自己补 `SYS` → `Mcu.IPNb` 2→3 成了唯一差异。模板补 `Mcu.IP2=SYS`、`IPNb=3`。
+- U0：模板用逻辑脚名 `PA13`/`PA14`，而该族 db 的脚名是 `PA13 (SWDIO)`/`PA14 (SWCLK)`；信号是 `DEBUG_JTMS-SWDIO`/`DEBUG_JTCK-SWCLK`，
+  还要一个 `DEBUG` 实例。模板改成 `Mcu.Pin0=PA13 (SWDIO)` + 转义键 `PA13\ (SWDIO).Mode=Serial_Wire`、`IP0=CORTEX_M0+ / IP1=DEBUG / IP2=NVIC / IP3=RCC / IPNb=4`。
+- **改了资源仓的模板不等于插件会用**：插件读的是已安装缓存 `~/.dsh-stm32/assets/<version>/ioc/family/*.ioc`。
+  验收前要把模板同步进缓存并按 sha256 更新缓存里的 `manifest.json`，否则复跑的仍然是旧模板（G0/U0 第一次复跑就是这样白跑一轮）。
+
+### 72.6 pllmul 文案里写死的「F1 的」
+
+F0/G0/L0/L1/F3 共用同一个 `finish()`，不可达文案原来整句写死「F1 的 PLL 只能整数倍频」。
+现在按 `facts.muls` 的 min/max 说，并补上真正的备选源：HSE 也进候选（`readHseHz`，.ioc 里没 `RCC_OSC_IN` 时明说「要板上真接着晶振」），
+USB 警告分两种（`requiresPllClkHz > 0` 才说「只在 PLLCLK=<多> 时拿得到」，否则说「这一族的 USB 时钟来源还没建模」）。
+
+### 72.7 五族时钟验收（create → clock → apply → ioc_verify → generate → build）
+
+```text
+F2  STM32F205RBT6  HSE ÷20 ×192 ÷2 → 120 MHz (VCO 240M)  benign=true  872,828 B  0 warning
+F3  STM32F303CBT6  HSI÷2 4M ×16     →  64 MHz（72 不可达） benign=true  850,344 B  0 warning
+G0  STM32G030C6T6  HSE ÷1 ×16 ÷2    →  64 MHz (VCO 128M)  benign=true  615,828 B  0 warning
+L1  STM32L100C6U6  HSI ×4           →  32 MHz              benign=true  597,460 B  0 warning
+U0  STM32U031C6T6  HSE ÷1 ×28 ÷2    →  56 MHz (VCO 112M)  benign=true  762,820 B  0 warning
+```
+
+单测 `node test/run-units.mjs` → **783 pass / 0 fail**；`node scripts/pack-size.mjs` → 602.9 KB（上限 1171.9 KB）、解包 1902.0 KB、护栏通过。
+
+### 72.8 遗留
+
+- F3 的 72 MHz 在只有 HSI 时不可达（HSI÷2 4 MHz ×16 = 64 MHz）。要么模板加 `RCC_OSC_IN`（前提是板上有 8 MHz 晶振），要么接受 64 MHz；
+  现在只把 HSE ×9 这条路写在 note 里。
+- 派生频率的公式在 CubeMX 的 jar 里，插件只认「派生键被重算」这个事实，不复算数值 —— 所以 `derivedRecomputed` 里的值不参与 benign 判定，也不校验。
+- 双核/TrustZone 族（H5/U5/WB 的双核）没验，pllmn 的 VCO 区间与 APB 上限对它们可能是另一套键（`APB3Freq_Value` 之类）。

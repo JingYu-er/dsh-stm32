@@ -683,23 +683,43 @@ function finish(input: FinishInput): ClockPlan {
       "目标 " + formatHz(input.targetHz) + " 不可达，已选 " + formatHz(chain.sysclkHz) +
       "（差 " + (delta > 0 ? "+" : "-") + formatHz(Math.abs(delta)) + "）",
     );
+    // 文案别写死 "F1 的"：同一个 finish 被 F0/G0/L0/L1/F3 这些 pllmul 族共用，
+    // 实测 F303 打到 72 MHz 时报出「F1 的 PLL 只能整数倍频」会把人带偏（见 §72.2）。
     if (input.targetHz > activeFacts.limits.sysclkHz) {
-      parts.push("F1 的 SYSCLK 上限是 " + formatHz(activeFacts.limits.sysclkHz));
+      parts.push("SYSCLK 上限是 " + formatHz(activeFacts.limits.sysclkHz) + "（db 的 SYSCLKFreq_VALUE）");
+    } else if (activeFacts.muls.length > 0) {
+      const muls = activeFacts.muls.map((fact) => fact.mul);
+      parts.push(
+        "这一族的 PLL 只能整数倍频（×" + String(Math.min(...muls)) + "..×" + String(Math.max(...muls)) + "），" +
+        chain.pllSourceLabel + " 拼不出这一档",
+      );
     } else {
-      parts.push("F1 的 PLL 只能整数倍频（×2..×16），" + chain.pllSourceLabel + " 拼不出这一档");
+      parts.push(chain.pllSourceLabel + " 拼不出这一档");
     }
   }
   // 换源提示：另一个可用源也许正好凑得出目标，但没说它能替代（HSI 精度差 / 要换晶振）。
   if (!input.reachable && input.targetHz > 0 && input.targetHz <= activeFacts.limits.sysclkHz) {
+    const mulList = activeFacts.muls.map((fact) => fact.mul);
+    const lowestMul = mulList.length === 0 ? 2 : Math.min(...mulList);
+    const highestMul = mulList.length === 0 ? 16 : Math.max(...mulList);
     for (const other of activeFacts.sources) {
       if (!other.selectable || other.id === chain.pllSource) continue;
-      if (other.id === "hse") continue; // 板上没晶振就没法凭空变一个出来
-      const pllIn = Math.round(activeHsiHz / (other.divider ?? (other.id === "hsi-div2" ? 2 : 1)));
+      // HSE 也算一个「能凑出来但要板上真有晶振」的候选：默认不选（.ioc 里没接晶振时凭空假设一个
+      // 会生成跑不起来的配置），但把组合明写出来，让人自己决定要不要加晶振。
+      const pllIn = other.id === "hse"
+        ? readHseHz(input.entries)
+        : Math.round(activeHsiHz / (other.divider ?? (other.id === "hsi-div2" ? 2 : 1)));
+      if (pllIn <= 0) continue;
       const mul = input.targetHz / pllIn;
-      if (!Number.isInteger(mul) || mul < 2 || mul > 16) continue;
+      if (!Number.isInteger(mul) || mul < lowestMul || mul > highestMul) continue;
+      const why = other.id === "hsi-div2"
+        ? "HSI 精度 ±1%，UART 波特率会跟着漂"
+        : other.id === "hse"
+          ? "这要板上真接着晶振（.ioc 里没写 RCC_OSC_IN，也没启 HSE）"
+          : "需要板上换晶振";
       parts.push(
         "（改用 " + other.label + " ×" + String(mul) + " 正好 " + formatHz(input.targetHz) +
-        "，但 " + (other.id === "hsi-div2" ? "HSI 精度 ±1%，UART 波特率会跟着漂" : "需要板上换晶振") + "，默认没选它）",
+        "，但 " + why + "，默认没选它）",
       );
       break;
     }
@@ -709,9 +729,15 @@ function finish(input: FinishInput): ClockPlan {
     warnings.push("用 HSI÷2（内部 RC，±1%）当 PLL 输入：UART 波特率会漂，量产建议接 8 MHz 晶振（HSE）。");
   }
   if (!chain.usbAvailable && input.usbWanted) {
+    // 同样别写死 "F1 的"：db 派生的族把 requiresPllClkHz 记 0（USB 规则没建模），
+    // 这里得说「没建模」，不能声称它们有 F1 那条 PLLCLK÷1.5 的路。
+    const requires = activeFacts.usb.requiresPllClkHz;
     warnings.push(
-      "USB 不可用：F1 的 USB 只能从 PLLCLK÷1.5 得到 48 MHz，需要 PLLCLK=72 MHz；当前 SYSCLK " +
-      formatHz(chain.sysclkHz) + "。",
+      requires > 0
+        ? "USB 不可用：这一族的 48 MHz 只在 PLLCLK=" + formatHz(requires) + " 时拿得到；当前 SYSCLK " +
+          formatHz(chain.sysclkHz) + "。"
+        : "USB 不可用：这一族的 USB 时钟来源还没建模（计划不会写 RCC.USBPrescaler），当前 SYSCLK " +
+          formatHz(chain.sysclkHz) + "。",
     );
   }
   if (!chain.usbAvailable && input.entries.get("RCC.USBPrescaler") !== undefined) {
@@ -727,7 +753,8 @@ function finish(input: FinishInput): ClockPlan {
     const push = (key: string, value: string): void => {
       entries.push({ key, value });
     };
-    push("RCC.SYSCLKSource", "RCC_SYSCLKSOURCE_PLLCLK");
+    // 键名按 db 决定：F3（F303）读的是 SYSCLKSourceVirtual，写 RCC.SYSCLKSource 会被静默丢掉。
+    push(activeFacts.sysclkSourceKey ?? "RCC.SYSCLKSource", "RCC_SYSCLKSOURCE_PLLCLK");
     push("RCC.PLLSourceVirtual", input.source.iocValue);
     push("RCC.PLLMUL", pllMulValue(chain.pllMul));
     push("RCC.SYSCLKFreq_VALUE", String(chain.sysclkHz));

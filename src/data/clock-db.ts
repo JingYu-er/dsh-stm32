@@ -8,8 +8,13 @@
  *     `<PossibleValue Value="RCC_PLL_MUL2" Comment="2"/>` 就是倍频枚举，分频同理。
  * 抄快照的问题与预设表一样：换族/换 db 版本就失真（F1 的 `S_TIM2_CH1_ETR` 已经栽过一次）。
  *
- * db 里**没有**的东西（所以仍然手写，别指望这一层给）：APB1/APB2/ADC 的**频率上限**
- * （那是数据手册的规格，db 只给引脚与枚举）；USB 需要的 48 MHz 规则同理。
+ * 早先以为「APB1/APB2/ADC 的频率上限 db 里没有」，实测是错的：`RCC-*_Modes.xml` 里
+ * `<RefParameter Name="APB1Freq_Value" Max="30000000">`、`APB2Freq_Value`、`ADCFreq_Value`、
+ * `VCOOutputFreq_Value`、`VCOInputFreq_Value`、`SYSCLKFreq_VALUE` 的 Min/Max 就是
+ * CubeMX 自己校验的上限，所以这里按族从 db 读（见 readClockDbFacts）。
+ * 但 db 是**按 RCC IP 版本**给值，个别族偏保守（F103 走 RCC-STM32F102，APB2 只给 36/48 MHz，
+ * 实际 72 MHz），所以核过手册/真机的族用 BUS_LIMITS / PLL_VCO_LIMITS 的 override。
+ * db 里确实没有的：USB 需要的 48 MHz 规则。
  */
 import { existsSync, readFileSync } from "node:fs";
 
@@ -29,12 +34,34 @@ export interface ClockDbFacts {
   model: ClockModel;
   /** MCU xml `<Frequency>`（MHz → Hz）；0 = db 没写。 */
   sysclkMaxHz: number;
+  /** db 的 SYSCLKFreq_VALUE Max（MCU xml 没写 `<Frequency>` 时用它，例如 G4/U0 读出来是 0）。 */
+  sysclkMaxDbHz: number;
+  /**
+   * 写 SYSCLK 源该用哪个键：`RCC.SYSCLKSource` 还是 `RCC.SYSCLKSourceVirtual`。
+   *
+   * 为什么不能写死：F303 的 Modes xml 里两个名字都有——`SYSCLKSource` 是由
+   * `SYSCLKSourceVirtualString` 拼出来的派生项，CubeMX 真正读的是 `SYSCLKSourceVirtual`。
+   * 实测（2026-11，DB.6.0.150，F303CBT6 @72 MHz）写 `RCC.SYSCLKSource` 会被**静默丢掉**，
+   * 只靠 PLL 键让它自己推出 PLLCLK；换一档频率就可能猜错，所以按 db 里有没有 Virtual 决定。
+   */
+  sysclkSourceKey: string;
+  /** db 的 APB1Freq_Value/APB2Freq_Value/ADCFreq_Value Max（G0/U0 这种单 APB 族用 APBFreq_Value）。 */
+  busLimits: BusLimits | null;
+  /** db 的 VCOOutputFreq_Value/VCOInputFreq_Value Min/Max（pllmul 族通常没有）。 */
+  vco: PllVcoLimits | null;
   /** pllmul 模型的倍频枚举（RCC_PLL_MUL2..）。 */
   muls: PllMulFact[];
   /** PLL 输入源（只收频率已知的：HSE 与 HSI/HSI÷2）。 */
   sources: PllSourceFact[];
-  /** AHB/APB 分频（来自 APB1CLKDivider 枚举；AHB 用同一套值）。 */
+  /** APB 分频（来自 APB1CLKDivider 枚举）。 */
   apbDivs: DividerFact[];
+  /**
+   * AHB 分频（AHBCLKDivider 枚举）。取值名字跟 APB **不是同一套**：
+   * F2/F4/F7 是 RCC_SYSCLK_DIV1/2/4/…/512，C0 是 RCC_HCLK_DIV1/2/4/8/16。
+   * 早先把 APB 的值直接写进 AHBCLKDivider（RCC_HCLK_DIV1），F2 拿到非法枚举值后
+   * CubeMX 载入即死循环（>240 s 不返回、日志停在 setPackage），所以这里单独读。
+   */
+  ahbDivs: DividerFact[];
   /** ADC 预分频（来自 ADCPresc 枚举）。 */
   adcDivs: DividerFact[];
   /** pllmn 模型：PLLM 分频枚举 / PLLN 范围 / PLLP 分频枚举。 */
@@ -111,6 +138,41 @@ function rangeOf(text: string, parameterName: string): { min: number; max: numbe
   const max = numberOf(/Max="([^"]*)"/u.exec(matched[0])?.[1] ?? "");
   if (min === null || max === null || min >= max) return null;
   return { min, max };
+}
+
+/** 取 RefParameter 的数值属性；`Max="=SYSCLKFreq_VALUE"` 这类表达式直接丢弃（不是数字）。 */
+function numAttr(attrs: string, key: string): number | null {
+  const raw = new RegExp('\\b' + key + '="([^"]*)"', "u").exec(attrs)?.[1];
+  if (raw === undefined) return null;
+  const text = raw.trim();
+  if (text === "" || text.startsWith("=")) return null;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 取同名 RefParameter 的 Min/Max（"APB1Freq_Value" 这种）。
+ *
+ * 同名参数在 Modes xml 里常常有多个**变体**，各自带 `<Condition Expression="scale1">`
+ * （G0/U0 的 ADC 35000000/16000000/80000000、G4 的 APB1 150M/170M 都是这种）。
+ * 这里取「最小的 Min + 最大的 Max」：CubeMX 允许多少就给多少，规划出来的档位不会因为
+ * 取错变体而被无故拒绝；真正的兜底还有后面的 SYSCLK 上限与 CubeMX 自己的校验。
+ * 名字按顺序试，先读出 Max 的优先（APB1Freq_Value 优先于单 APB 族的 APBFreq_Value）。
+ */
+function limitOf(text: string, names: readonly string[]): { min: number | null; max: number | null } | null {
+  const re = (name: string): RegExp => new RegExp('<RefParameter[^>]*Name="' + name + '"[^>]*>', "gu");
+  for (const name of names) {
+    let min: number | null = null;
+    let max: number | null = null;
+    for (const matched of text.matchAll(re(name))) {
+      const one = numAttr(matched[0], "Min");
+      const other = numAttr(matched[0], "Max");
+      if (one !== null) min = min === null ? one : Math.min(min, one);
+      if (other !== null) max = max === null ? other : Math.max(max, other);
+    }
+    if (max !== null) return { min, max };
+  }
+  return null;
 }
 
 /** RCC_PLLSOURCE_HSE → "hse"；只认频率已知的三种。 */
@@ -197,14 +259,56 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
       .filter((item) => item.div >= 1 && item.iocValue !== "")
       .sort((left, right) => left.div - right.div);
   const apbDivs = toDivs(enumOf(text, "APB1CLKDivider"));
+  const ahbDivs = toDivs(enumOf(text, "AHBCLKDivider"));
   const adcDivs = toDivs(enumOf(text, "ADCPresc"));
+
+  // 总线上限与 VCO 区间：都在同一份 Modes xml 的 RefParameter Max/Min 里（CubeMX 自己校验用）。
+  const sysclkMaxDbHz = limitOf(text, ["SYSCLKFreq_VALUE", "HCLKFreq_Value"])?.max ?? 0;
+  const apb1 = limitOf(text, ["APB1Freq_Value", "APBFreq_Value"]);
+  const apb2 = limitOf(text, ["APB2Freq_Value", "APBFreq_Value"]);
+  const adcLimit = limitOf(text, ["ADCFreq_Value", "ADC12outputFreq_Value", "synchADCFreq_Value"]);
+  const apb1Max = apb1?.max ?? null;
+  const busLimits: BusLimits | null =
+    apb1Max === null
+      ? null
+      : {
+          apb1Hz: apb1Max,
+          apb2Hz: apb2?.max ?? apb1Max,
+          // 没有独立 ADC 上限的族（L1 的 ADCFreq_Value 没有 Max）先按 APB2 顶住，
+          // 反正 adcDivs 为空时 planner 不写 ADCPresc，这条不会生效。
+          adcHz: adcLimit?.max ?? apb2?.max ?? apb1Max,
+        };
+  if (busLimits === null) {
+    notes.push("db 的 RCC Modes 里没有 APB1Freq_Value/APBFreq_Value 的 Max：这一族的总线上限读不出来");
+  }
+  const vcoOut = limitOf(text, ["VCOOutputFreq_Value"]);
+  const vcoIn = limitOf(text, ["VCOInputFreq_Value"]);
+  const vcoMinHz = vcoOut?.min ?? null;
+  const vcoMaxHz = vcoOut?.max ?? null;
+  const vco: PllVcoLimits | null =
+    vcoMinHz === null || vcoMaxHz === null || vcoMinHz <= 0 || vcoMinHz >= vcoMaxHz
+      ? null
+      : {
+          minHz: vcoMinHz,
+          maxHz: vcoMaxHz,
+          ...(vcoIn?.min === null || vcoIn?.min === undefined ? {} : { inMinHz: vcoIn.min }),
+          ...(vcoIn?.max === null || vcoIn?.max === undefined ? {} : { inMaxHz: vcoIn.max }),
+        };
+
+  // SYSCLK 源按 db 的 RefParameter 名字决定：有 SYSCLKSourceVirtual 就只能写它（F303）。
+  const sysclkSourceKey = /\bName="SYSCLKSourceVirtual"/u.test(text) ? "RCC.SYSCLKSourceVirtual" : "RCC.SYSCLKSource";
 
   return {
     model,
     sysclkMaxHz: Math.round((facts.frequencyMhz ?? 0) * 1_000_000),
+    sysclkMaxDbHz,
+    sysclkSourceKey,
+    busLimits,
+    vco,
     muls,
     sources,
     apbDivs: apbDivs.length > 0 ? apbDivs : [1, 2, 4, 8, 16].map((div) => ({ div, iocValue: "RCC_HCLK_DIV" + String(div) })),
+    ahbDivs,
     adcDivs,
     pllM,
     pllN,
@@ -217,9 +321,12 @@ export function readClockDbFacts(db: CubemxDb, facts: CubemxMcuFacts): ClockDbFa
 }
 
 /**
- * 总线频率上限（APB1 / APB2 / ADC）。**db 里没有这些** —— 它们是数据手册的规格，
- * db 只给引脚、复用例与枚举值。所以这里仍然是手写表，但只写「核过的族」：
- * 没在表里的族一律拒绝规划（宁可说"这一族的上限还没核"，也不拿 F1 的 36/72/14 去套）。
+ * 总线频率上限（APB1 / APB2 / ADC）的 **override 表**：只收「核过手册 + 做过真机往返」的族。
+ *
+ * 没在表里的族不再直接拒绝：先用 db 的 `APB1Freq_Value`/`APB2Freq_Value` Max（那是 CubeMX
+ * 自己的约束，见 readClockDbFacts），读不到才拒绝。保留这张表的理由：db 按 RCC IP 版本给值，
+ * 个别族比手册保守（F103 走 RCC-STM32F102，APB2 只有 36/48 MHz，实际 72 MHz），
+ * 核过的族以手册/真机为准。
  */
 export interface BusLimits {
   apb1Hz: number;
@@ -244,7 +351,11 @@ export const BUS_LIMITS: Readonly<Record<string, BusLimits>> = {
   STM32L0: { apb1Hz: 32_000_000, apb2Hz: 32_000_000, adcHz: 16_000_000 },
 };
 
-/** VCO 允许区间（数据手册规格，db 不写）。只收核过手册 + 做过真机往返的族。 */
+/**
+ * VCO 允许区间（`VCOOutputFreq_Value`/`VCOInputFreq_Value` 的 override）。
+ * 同样只收核过手册 + 做过真机往返的族；没在表里的族用 db 的 Min/Max（F2 的 192–432 MHz、
+ * G0/U0 的 96–344 MHz 都是 db 给的原值）。
+ */
 export interface PllVcoLimits {
   minHz: number;
   maxHz: number;
@@ -269,15 +380,21 @@ export const PLL_VCO_LIMITS: Readonly<Record<string, PllVcoLimits>> = {
  */
 export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFacts | null {
   const family = familyId.trim().toUpperCase();
-  const limits = BUS_LIMITS[family];
-  if (limits === undefined) return null;
+  const limits: BusLimits | null = BUS_LIMITS[family] ?? facts.busLimits;
+  if (limits === null) return null;
   if (facts.sources.length === 0) return null;
+  // SYSCLK 上限三级回退：MCU xml 的 <Frequency> → db 的 SYSCLKFreq_VALUE Max → APB2 上限。
+  // 第三级是兜底（G4/U0 的 <Frequency> 读出来是 0，但它们的 SYSCLKFreq_VALUE Max 是有的）。
+  const sysclkHz =
+    facts.sysclkMaxHz > 0 ? facts.sysclkMaxHz : facts.sysclkMaxDbHz > 0 ? facts.sysclkMaxDbHz : limits.apb2Hz;
   const base = {
     sources: facts.sources,
     apbDivs: facts.apbDivs,
+    sysclkSourceKey: facts.sysclkSourceKey,
+    ...(facts.ahbDivs.length > 0 ? { ahbDivs: facts.ahbDivs } : {}),
     adcDivs: facts.adcDivs.length > 0 ? facts.adcDivs : [{ div: 1, iocValue: "" }],
     limits: {
-      sysclkHz: facts.sysclkMaxHz > 0 ? facts.sysclkMaxHz : limits.apb2Hz,
+      sysclkHz,
       apb1Hz: limits.apb1Hz,
       apb2Hz: limits.apb2Hz,
       adcHz: limits.adcHz,
@@ -289,12 +406,14 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
     baudList: F1_BAUD_LIST,
   };
   if (facts.model === "pllmn") {
-    if (PLL_VCO_LIMITS[family] === undefined) return null;
+    const vco = PLL_VCO_LIMITS[family] ?? facts.vco;
+    if (vco === null) return null;
     const outputDivs = facts.sysclkOutput === "R" ? facts.pllR : facts.pllP;
     if (facts.pllM.length === 0 || outputDivs.length === 0 || facts.pllN === null) return null;
     return {
       ...base,
       model: "pllmn",
+      vco,
       muls: [],
       pllM: facts.pllM,
       pllN: facts.pllN,
@@ -309,6 +428,8 @@ export function clockFactsFromDb(facts: ClockDbFacts, familyId: string): ClockFa
     muls: facts.muls,
     sources: facts.sources,
     apbDivs: facts.apbDivs,
+    sysclkSourceKey: facts.sysclkSourceKey,
+    ...(facts.ahbDivs.length > 0 ? { ahbDivs: facts.ahbDivs } : {}),
     adcDivs: facts.adcDivs.length > 0 ? facts.adcDivs : [{ div: 1, iocValue: "" }],
     limits: {
       sysclkHz: facts.sysclkMaxHz > 0 ? facts.sysclkMaxHz : limits.apb2Hz,

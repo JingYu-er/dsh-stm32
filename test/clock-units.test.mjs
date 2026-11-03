@@ -49,6 +49,41 @@ test("就近：60 MHz 不可达 → 64 MHz，note 明写「不可达，已选 64
   assert.equal(entryValue(plan, "RCC.PLLMUL"), "RCC_PLL_MUL8");
 });
 
+/** 造一份「没有 HSE 引脚、USB 未建模」的 pllmul 族事实（按 F303 的形状：HSI÷2 4 MHz、×2..×16）。 */
+function hsiOnlyFacts() {
+  return {
+    muls: Array.from({ length: 15 }, (_unused, index) => ({ mul: index + 2, iocValue: "RCC_PLL_MUL" + String(index + 2) })),
+    sources: [
+      { id: "hse", label: "HSE 8 MHz", iocValue: "RCC_PLLSOURCE_HSE", defaultHz: 8_000_000, selectable: true, note: "" },
+      { id: "hsi-div2", label: "HSI÷2 4 MHz", iocValue: "RCC_PLLSOURCE_HSI_DIV2", defaultHz: 4_000_000, selectable: true, note: "" },
+    ],
+    apbDivs: [1, 2, 4, 8, 16].map((div) => ({ div, iocValue: "RCC_HCLK_DIV" + String(div) })),
+    adcDivs: [{ div: 1, iocValue: "" }],
+    limits: { sysclkHz: 72_000_000, apb1Hz: 36_000_000, apb2Hz: 72_000_000, adcHz: 72_000_000 },
+    usb: { hz: 48_000_000, requiresPllClkHz: 0, iocValue: "" },
+    peripheralClocks: [],
+    baudList: [],
+  };
+}
+
+test("pllmul：不可达文案不写死「F1 的」，并把 HSE 那条备用组合明写出来", () => {
+  // 实测 F303CBT6 打到 72 MHz 时的真相：模板里没有 HSE 引脚 → 只能用 HSI÷2 4 MHz，最高 ×16 = 64 MHz。
+  const plan = planClock({ targetHz: 72_000_000 }, { entries: new Map(), clockFacts: hsiOnlyFacts() });
+  assert.equal(plan.achieved.sysclkHz, 64_000_000);
+  assert.equal(plan.reachable, false);
+  assert.doesNotMatch(plan.note, /F1/u, "这个 finish 被 F0/F3/G0/L0/L1 共用，写死 F1 会误导：" + plan.note);
+  assert.match(plan.note, /整数倍频（×2..×16）/u);
+  assert.match(plan.note, /HSE 8 MHz ×9 正好 72 MHz/u, "要把「接上 8 MHz 晶振就能到 72」讲出来");
+  assert.match(plan.note, /RCC_OSC_IN/u, "还要说明我们凭什么默认没选它");
+});
+
+test("pllmul：USB 没建模的族不能声称「只能 PLLCLK÷1.5 拿 48 MHz」", () => {
+  const plan = planClock({ targetHz: 48_000_000, usb: true }, { entries: new Map(), clockFacts: hsiOnlyFacts() });
+  const warnings = plan.warnings.join("；");
+  assert.match(warnings, /还没建模/u, warnings);
+  assert.doesNotMatch(warnings, /PLlCLK÷1.5|PLLCLK÷1\.5/u, warnings);
+});
+
 test("72 MHz 精确命中：APB1 自动 ÷2、ADC 自动 ÷6", () => {
   const plan = planClock({ targetHz: 72_000_000 }, { entries: demoEntries() });
   assert.equal(plan.reachable, true);

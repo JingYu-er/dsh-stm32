@@ -1,7 +1,9 @@
 // stm32_ioc_verify 的纯函数单测：node test/ioc-verify-units.test.mjs
 import assert from "node:assert/strict";
 
-import { diffIocForVerify, isIocValueNormalized, misorderedKeysOf, plannedFunctionOf } from "../lib/engine/ioc-verify.js";
+import {
+  diffIocForVerify, isDerivedClockKey, isDerivedClockName, isIocValueNormalized, misorderedKeysOf, plannedFunctionOf,
+} from "../lib/engine/ioc-verify.js";
 
 const cases = [];
 function test(name, fn) {
@@ -163,6 +165,74 @@ test("归因：missingKeys/addedKeys/droppedPeripherals 与旧字段一致", () 
   assert.deepEqual(diff.attribution.addedKeys, diff.addedKeys);
   assert.deepEqual(diff.attribution.droppedPeripherals, diff.droppedPeripherals);
   assert.equal(diff.attribution.benign, false, "外设被丢 + 信号被改写都不是良性的");
+});
+
+test("派生频率键判定：只认 RCC 的 *Freq_Value/*FreqValue，SYSCLKFreq_VALUE 不算派生", () => {
+  assert.equal(isDerivedClockKey("RCC.I2SClocksFreq_Value"), true);
+  assert.equal(isDerivedClockKey("RCC.ADCFreqValue"), true);
+  assert.equal(isDerivedClockKey("RCC.VcooutputI2S"), true);
+  // 这两个是我们自己写的「设定」，被改写就必须报出来，不能塞进派生桶。
+  assert.equal(isDerivedClockKey("RCC.SYSCLKFreq_VALUE"), false);
+  assert.equal(isDerivedClockKey("RCC.PLLM"), false);
+  // 同名键在别的实例下不是 RCC 的派生频率（别把任意外设的 Freq_Value 也放过）。
+  assert.equal(isDerivedClockKey("TIM2.TIMFreq_Value"), false);
+  assert.equal(isDerivedClockName("APB1Freq_Value"), true);
+  assert.equal(isDerivedClockName("APB1TimFreq_Value"), true);
+  assert.equal(isDerivedClockName("PLLCLKFreq_Value"), true);
+});
+
+test("归因：派生频率被 CubeMX 重算（计划里没写过）→ derivedRecomputed，benign 为真", () => {
+  const before = "RCC.PLLM=20\nRCC.I2SClocksFreq_Value=96000000\nRCC.TIM2Freq_Value=8000000\n";
+  const after = "RCC.PLLM=20\nRCC.I2SClocksFreq_Value=120000000\nRCC.TIM2Freq_Value=72000000\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.changedValues.map((item) => item.key), ["RCC.I2SClocksFreq_Value", "RCC.TIM2Freq_Value"]);
+  assert.deepEqual(
+    diff.attribution.derivedRecomputed.map((item) => item.key),
+    ["RCC.I2SClocksFreq_Value", "RCC.TIM2Freq_Value"],
+  );
+  assert.deepEqual(diff.attribution.valueChanged, [], "派生频率是它算出来的，不能算成我们写错");
+  assert.equal(diff.attribution.benign, true);
+});
+
+test("归因：计划里写过的派生频率被改写 → 仍留在 valueChanged（benign 为假）", () => {
+  const before = "RCC.TIM2Freq_Value=8000000\n";
+  const after = "RCC.TIM2Freq_Value=72000000\n";
+  const diff = diffIocForVerify(before, after, null, new Set(["RCC.TIM2Freq_Value"]));
+  assert.deepEqual(diff.attribution.derivedRecomputed, [], "我们写了它，对不上就是算错了");
+  assert.deepEqual(diff.attribution.valueChanged.map((item) => item.key), ["RCC.TIM2Freq_Value"]);
+  assert.equal(diff.attribution.benign, false);
+});
+
+test("归因：CubeMX 自己补的派生键 → derivedAdded，benign 为真", () => {
+  const before = "RCC.PLLM=20\n";
+  const after = "RCC.PLLM=20\nRCC.EthernetFreq_Value=120000000\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.addedKeys, ["RCC.EthernetFreq_Value"], "原始字段照旧留着");
+  assert.deepEqual(diff.attribution.derivedAdded, ["RCC.EthernetFreq_Value"]);
+  assert.deepEqual(diff.attribution.addedKeys, [], "它按树自己补的不算我们多写");
+  assert.equal(diff.attribution.benign, true);
+});
+
+test("归因：RCC.IPParameters 只被追加派生名（顺序也变了）→ ipParametersAdded，benign 为真", () => {
+  // F2 实测就是这样：我们的名单是它的子集，它保存时把重算出来的频率名一并登记并按 ASCII 重排。
+  const before = "RCC.IPParameters=PLLM,AHBCLKDivider,APB1Freq_Value\n";
+  const after = "RCC.IPParameters=AHBCLKDivider,APB1Freq_Value,EthernetFreq_Value,I2SClocksFreq_Value,PLLM\n";
+  const diff = diffIocForVerify(before, after);
+  assert.deepEqual(diff.attribution.ipParametersAdded, ["EthernetFreq_Value", "I2SClocksFreq_Value"]);
+  assert.deepEqual(diff.attribution.valueChanged, []);
+  assert.equal(diff.attribution.benign, true);
+});
+
+test("归因：RCC.IPParameters 少了名字或插进非派生名 → 仍然报 valueChanged", () => {
+  const removed = diffIocForVerify(
+    "RCC.IPParameters=PLLM,AHBCLKDivider\n",
+    "RCC.IPParameters=PLLM,AHBCLKDivider,EthernetFreq_Value,USBPrescaler\n",
+  );
+  assert.deepEqual(removed.attribution.ipParametersAdded, [], "USBPrescaler 不是派生频率名，不能放过");
+  assert.deepEqual(removed.attribution.valueChanged.map((item) => item.key), ["RCC.IPParameters"]);
+  const dropped = diffIocForVerify("RCC.IPParameters=PLLM,AHBCLKDivider\n", "RCC.IPParameters=PLLM\n");
+  assert.deepEqual(dropped.attribution.ipParametersAdded, []);
+  assert.deepEqual(dropped.attribution.valueChanged.map((item) => item.key), ["RCC.IPParameters"]);
 });
 
 test("isIocValueNormalized：空白折叠算规范化，单值不同不算", () => {

@@ -88,12 +88,15 @@ const diffSchema: JsonSchema = {
         droppedReasons: explanationList,
         addedVerdicts: explanationList,
         ipOrderOnly: { type: "array", items: { type: "string" } },
+        derivedRecomputed: valueChangeList,
+        derivedAdded: { type: "array", items: { type: "string" } },
+        ipParametersAdded: { type: "array", items: { type: "string" } },
         benign: { type: "boolean" },
       },
       required: [
         "orderOnly", "valueNormalized", "valueChanged", "missingKeys", "addedKeys",
         "droppedPeripherals", "autoAddedFunctions", "droppedReasons", "addedVerdicts",
-        "ipOrderOnly", "benign",
+        "ipOrderOnly", "derivedRecomputed", "derivedAdded", "ipParametersAdded", "benign",
       ],
     },
     autoAddedFunctions: { type: "array", items: { type: "string" } },
@@ -167,10 +170,29 @@ function format(report: IocVerifyReport): string[] {
     if (reason.verdict === "ok") continue;
     lines.push("被丢键：" + reason.key + "  " + reason.detail);
   }
+  const derived = diff.attribution;
+  if (derived.derivedRecomputed.length > 0) {
+    lines.push(
+      "派生频率被重算（*Freq_Value 是 CubeMX 按 PLL/分频算出来的，不是我们写的设定）：" +
+        derived.derivedRecomputed.map((change) => change.key + "  " + change.before + " → " + change.after).join("、"),
+    );
+  }
+  if (derived.derivedAdded.length > 0) {
+    lines.push("CubeMX 自己补的派生键（我们没写）：" + derived.derivedAdded.join("、"));
+  }
+  if (derived.ipParametersAdded.length > 0) {
+    lines.push("RCC.IPParameters 里它自己追加的派生名：" + derived.ipParametersAdded.join("、"));
+  }
+  const cosmetic =
+    derived.orderOnly.length > 0 ||
+    derived.valueNormalized.length > 0 ||
+    derived.derivedRecomputed.length > 0 ||
+    derived.derivedAdded.length > 0 ||
+    derived.ipParametersAdded.length > 0;
   lines.push(
-    diff.attribution.benign
-      ? "结论：零实质差异" + (diff.attribution.orderOnly.length > 0 || diff.attribution.valueNormalized.length > 0
-        ? "（只有行序/成员序的规范化）" : "")
+    derived.benign
+      ? "结论：零实质差异" + (cosmetic
+        ? "（只有行序/成员序规范化与 CubeMX 自己重算的派生频率）" : "")
       : "结论：有实质差异，见上面各条",
   );
   if (diff.autoAddedFunctions.length > 0) {
@@ -188,7 +210,7 @@ export function registerIocVerify(ctx: DshContext): void {
   ctx.tools.register({
     name: IOC_VERIFY_TOOL,
     description:
-      "让 CubeMX 自己诊断一份 .ioc：把 .ioc 复制到 .dsh-stm32/verify/ 后用无头脚本 config load + config save 让它写回「它理解的结果」，再对比出「哪些外设被静默丢弃、引脚信号被规范成什么、它补了哪些 SH 共享信号块、计划生成哪些 MX_*_Init」，并给出缺什么的提示。约 25–40 s，不生成代码、不动工程 .ioc。改完 .ioc 却不生效、或生成结果里少了某个外设时用它定位。",
+      "让 CubeMX 自己诊断一份 .ioc：把 .ioc 复制到 .dsh-stm32/verify/ 后用无头脚本 config load + config save 让它写回「它理解的结果」，再对比出「哪些外设被静默丢弃、引脚信号被规范成什么、它补了哪些 SH 共享信号块、计划生成哪些 MX_*_Init」，并给出缺什么的提示。实测一次 100–180 s（load 就要约 98 s，保存完进程有时还不退出，按日志里的 SaveConfig 判定），不生成代码、不动工程 .ioc。改完 .ioc 却不生效、或生成结果里少了某个外设时用它定位。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -218,7 +240,7 @@ export function registerIocVerify(ctx: DshContext): void {
           attribution: {
             orderOnly: [], valueNormalized: [], valueChanged: [], missingKeys: [], addedKeys: [],
             droppedPeripherals: [], autoAddedFunctions: [], droppedReasons: [], addedVerdicts: [],
-            ipOrderOnly: [], benign: true,
+            ipOrderOnly: [], derivedRecomputed: [], derivedAdded: [], ipParametersAdded: [], benign: true,
           },
         },
       };
