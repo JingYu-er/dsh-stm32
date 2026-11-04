@@ -26,6 +26,8 @@ function divFact(divs: readonly DividerFact[] | undefined, div: number): Divider
 }
 
 function minimalDiv(divs: readonly DividerFact[], value: number, limit: number): DividerFact {
+  // 没有 APB 分频参数的族（WB0/WL3 总线不分频）：只有 ÷1 这一档，别去写那个键。
+  if (divs.length === 0) return { div: 1, iocValue: "" };
   let best: DividerFact | null = null;
   for (const item of divs) {
     if (item.div <= 0 || value / item.div > limit) continue;
@@ -34,9 +36,13 @@ function minimalDiv(divs: readonly DividerFact[], value: number, limit: number):
   return best ?? (divs[divs.length - 1] as DividerFact);
 }
 
-/** .ioc 里的 RCC.HSE_VALUE / RCC.HSI_VALUE（Hz）。缺省值只是占位：C0 的 HSI 是 48 MHz。 */
-function readSourceHz(entries: Map<string, string>, source: { id: ClockSourceId; defaultHz: number }): number {
-  const key = source.id === "hse" ? "RCC.HSE_VALUE" : "RCC.HSI_VALUE";
+/**
+ * 源的标称频率（Hz）。hzKey 是 db 给的「这一路频率写在 .ioc 的哪个键」（HSE → RCC.HSE_VALUE）；
+ * 空 hzKey = 固定频率源（WB0/WL3 的 RC64MPLL 64 MHz），不读 .ioc。
+ */
+function readSourceHz(entries: Map<string, string>, source: { id: ClockSourceId; defaultHz: number; hzKey?: string }): number {
+  const key = source.hzKey ?? (source.id === "hse" ? "RCC.HSE_VALUE" : source.id === "hsi" ? "RCC.HSI_VALUE" : "");
+  if (key === "") return source.defaultHz;
   const parsed = Number.parseInt((entries.get(key) ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : source.defaultHz;
 }
@@ -88,14 +94,30 @@ export function planClockDirect(input: DirectPlanInput): ClockPlan {
   }
 
   const srcKey = facts.sysclkSourceKey ?? "RCC.SYSCLKSource";
-  const srcDivKey = facts.srcDivKey ?? "";
-  const srcDivs = facts.srcDivs ?? [];
-  const divsOf = (source: ClockSourceId): readonly DividerFact[] =>
-    srcDivKey !== "" && srcDivs.length > 0 && (facts.srcDivSources ?? []).includes(source) ? srcDivs : [{ div: 1, iocValue: "" }];
+  // 源分频两种写法：单键（C0 的 HSISYSCLKDivider 只管 HSI）与「一源一键」（WB0/WL3：
+  // HSE 走 SYSCLK32Divider/SYSCLK48Divider、RC64MPLL 走 SYSCLK64Divider）。
+  const legacySrcDivKey = facts.srcDivKey ?? "";
+  const legacySrcDivs = facts.srcDivs ?? [];
+  const perSource = facts.srcDivBySource ?? {};
+  const divsOf = (source: ClockSourceId): readonly DividerFact[] => {
+    const bySource = perSource[source];
+    if (bySource !== undefined && bySource.divs.length > 0) return bySource.divs;
+    if (legacySrcDivKey !== "" && legacySrcDivs.length > 0 && (facts.srcDivSources ?? []).includes(source)) return legacySrcDivs;
+    return [{ div: 1, iocValue: "" }];
+  };
+  const divKeyOf = (source: ClockSourceId | null): string => {
+    if (source !== null) {
+      const bySource = perSource[source];
+      if (bySource !== undefined) return bySource.key;
+      if (legacySrcDivKey !== "" && (facts.srcDivSources ?? []).includes(source)) return legacySrcDivKey;
+    }
+    return "";
+  };
 
   const currentValue = entries.get(srcKey) ?? "";
   const currentSource = pllSourceById(sources.find((source) => source.iocValue === currentValue)?.id ?? "", sources)?.id ?? null;
-  const currentDivValue = srcDivKey === "" ? "" : (entries.get(srcDivKey) ?? "");
+  const currentDivKey = divKeyOf(currentSource);
+  const currentDivValue = currentDivKey === "" ? "" : (entries.get(currentDivKey) ?? "");
   const wantedSource: ClockSourceId =
     request?.pllSource !== undefined && sources.some((source) => source.id === request.pllSource)
       ? request.pllSource
@@ -135,10 +157,13 @@ export function planClockDirect(input: DirectPlanInput): ClockPlan {
     const asIs = candidates.find((item) => item.source === wantedSource && (currentDivValue === "" ? item.div === 1 : item.divValue === currentDivValue));
     best = asIs ?? (candidates.filter((item) => item.source === wantedSource).sort((left, right) => left.div - right.div)[0] as Candidate) ?? (candidates[0] as Candidate);
   } else {
-    const sameSource = candidates.filter((item) => item.source === wantedSource);
-    const pool = sameSource.length > 0 ? sameSource : candidates;
-    pool.sort((left, right) => left.score - right.score || left.div - right.div);
-    best = pool[0] as Candidate;
+    // 先按「当前/偏好的源」找最近档；那个源凑不出来时（WB0/WL3 的 HSE 只有 32/48 MHz，
+    // 64 MHz 得走 RC64MPLL）再放开到所有源，否则会把可达的目标报成不可达。
+    const byScore = (left: Candidate, right: Candidate): number => left.score - right.score || left.div - right.div;
+    const sameSource = candidates.filter((item) => item.source === wantedSource).sort(byScore);
+    const allSources = [...candidates].sort(byScore);
+    const sameBest = sameSource[0];
+    best = sameBest !== undefined && sameBest.score <= (allSources[0] as Candidate).score ? sameBest : (allSources[0] as Candidate);
   }
 
   // 2) 总线分频：APB1/APB2 各取满足上限的最小分频；单 APB 族（C0）没有 APB2 参数，APB2 跟着 APB1 走
@@ -187,11 +212,14 @@ export function planClockDirect(input: DirectPlanInput): ClockPlan {
   const source = sources.find((item) => item.id === best.source);
   if (source === undefined) return emptyClockPlan("SYSCLK 源的 .ioc 取值在 db 枚举里找不到：clock 参数不会生效");
   draft.set(srcKey, source.iocValue);
-  if (srcDivKey !== "" && best.divValue !== "") draft.set(srcDivKey, best.divValue);
+  const bestDivKey = divKeyOf(best.source);
+  if (bestDivKey !== "" && best.divValue !== "") draft.set(bestDivKey, best.divValue);
   // AHB 只 ÷1。取值名按族不同（C0 是 RCC_HCLK_DIV1、F2 是 RCC_SYSCLK_DIV1），从 db 查。
   const ahbOne = divFact(facts.ahbDivs, 1);
   if (ahbOne !== null && ahbOne.iocValue !== "") draft.set("RCC.AHBCLKDivider", ahbOne.iocValue);
-  draft.set("RCC.APB1CLKDivider", divFact(facts.apbDivs, apb1Div)?.iocValue ?? "");
+  // 没有 APB 分频参数的族（WB0/WL3）不写这个键：CubeMX 会把未知键当垃圾丢掉，
+  // 计划里写了、保存后消失 = ioc_verify 报 missingKeys。
+  if (facts.apbDivs.length > 0) draft.set("RCC.APB1CLKDivider", divFact(facts.apbDivs, apb1Div)?.iocValue ?? "");
   if (hasApb2) draft.set("RCC.APB2CLKDivider", divFact(facts.apb2Divs, apb2Div)?.iocValue ?? "");
   // 空值（db 里查不到这个分频的枚举名）不写：空串会让 CubeMX 载入失败。
   for (const [key, value] of [...draft.entries()]) if (value === "") draft.delete(key);

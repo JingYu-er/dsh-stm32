@@ -9,8 +9,12 @@
  * 的 SYSCLK 上限都是 72 MHz；connectivity（105/107）多一级 PREDIV1，本插件暂不规划。
  */
 
-/** PLL 输入源。F1 值料号 PLLSRC 只有 HSE / HSI÷2 两种（RM0008 RCC_CFGR.PLLSRC）。 */
-export type ClockSourceId = "hse" | "hsi-div2" | "hsi";
+/**
+ * PLL/SYSCLK 的输入源。F1 值料号 PLLSRC 只有 HSE / HSI÷2 两种（RM0008 RCC_CFGR.PLLSRC）。
+ * `rc64` 是无线 SoC（WB0/WL3）的 64 MHz 内部 RC 多相时钟（db 里叫 RC64MPLL，频率 PLL64_VALUE）：
+ * 它不在 .ioc 里读频率，固定 64 MHz，只能 ÷ SYSCLK64Divider。
+ */
+export type ClockSourceId = "hse" | "hsi-div2" | "hsi" | "rc64";
 
 export interface PllSourceFact {
   id: ClockSourceId;
@@ -20,6 +24,11 @@ export interface PllSourceFact {
   iocValue: string;
   /** 默认输入频率（Hz）；HSE 以 RCC.HSE_VALUE 为准，这里是缺省值。 */
   defaultHz: number;
+  /**
+   * 这一路的标称频率写在 .ioc 的哪个键（`RCC.HSE_VALUE` / `RCC.HSI_VALUE`）。
+   * 缺省（空）时按 id 猜：hse → HSE_VALUE、其它 → HSI_VALUE；固定频率源（RC64MPLL）不写。
+   */
+  hzKey?: string;
   /** 能不能当 PLL 输入。 */
   selectable: boolean;
   /** PLL 输入前的固定分频（F0/L0 的 RCC_PLLSOURCE_HSI 硬件上就是 HSI/2；缺省 1）。 */
@@ -262,6 +271,11 @@ export interface ClockFacts {
   srcDivKey?: string;
   /** 源分频只对这些源生效（C0 的 HSISYSCLKDivider 只管 HSI）。 */
   srcDivSources?: readonly ClockSourceId[];
+  /**
+   * 每个源各自的分频键（WB0/WL3 这种「一个源一套分频」的族：HSE 走 SYSCLK32Divider/SYSCLK48Divider，
+   * RC64MPLL 走 SYSCLK64Divider）。有这张表时 planner 优先按它查，没有再回落到上面的单键写法。
+   */
+  srcDivBySource?: Partial<Record<ClockSourceId, { key: string; divs: readonly DividerFact[] }>>;
   /**
    * db 里这一族 RCC 的派生频率参数名（`SYSCLKFreq_VALUE` / `APBFreq_Value` …）。
    * direct 模型按名字算得出来的会写对，写不对的宁可留给 CubeMX 重算——写错值会让

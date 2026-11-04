@@ -209,6 +209,8 @@ function pinSignals(entries: Map<string, string>): Map<string, string> {
  * 我们不重算）。模板带的是上一版的旧值，改了 PLL 之后它必然重算一遍。
  */
 export function isDerivedClockName(name: string): boolean {
+  // 注意别把 `SYSCLKFreq_VALUE` 放进来：它是「我们写进去的设定」（计划声明目标 SYSCLK），
+  // 被 CubeMX 改成别的值就是模型错了，必须报 valueChanged 而不是归到派生重算。
   return /(?:Freq_Value|FreqValue|VcooutputI2S)$/u.test(name.trim());
 }
 

@@ -849,14 +849,41 @@ function ensureSerialWire(table: PinTable, pins: PinNameResolver): void {
   const facts = pins.facts;
   const debugSignals: string[] = [];
   // preferred 的顺序就是"想写成什么"的优先级；fallback 是 db 里有别名笔误时的兜底正则。
-  const debugPins: Array<{ logical: string; preferred: readonly string[]; fallback: RegExp }> = [
-    { logical: "PA13", preferred: ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"], fallback: /SWDIO|JTMS/u },
-    { logical: "PA14", preferred: ["SYS_JTCK-SWCLK", "DEBUG_SWCLK"], fallback: /SWCLK|JTCK/u },
+  const debugPins: Array<{ logical: string; role: "swdio" | "swclk"; preferred: readonly string[]; fallback: RegExp }> = [
+    { logical: "PA13", role: "swdio", preferred: ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"], fallback: /SWDIO|JTMS/u },
+    { logical: "PA14", role: "swclk", preferred: ["SYS_JTCK-SWCLK", "DEBUG_SWCLK"], fallback: /SWCLK|JTCK/u },
   ];
+  // 脚位从 db 里反查：WB0/WL3 的 SWD 不在 PA13/PA14，而是 PA2(DEBUG_SWDIO)/PA3(DEBUG_SWCLK)
+  // ——2026-11 合成 .ioc 往返实测：按 F1 的 PA13/PA14 写，CubeMX 把两条脚和 SYS 实例整段丢掉
+  // （Mcu.PinsNb 2→0、Mcu.IPNb 4→3，ioc_verify 报 4 条 valueChanged）。
+  const findDebugPin = (role: "swdio" | "swclk"): { pin: string; signal: string } | null => {
+    if (facts === null) return null;
+    const rankOf = (signal: string): number => {
+      const preferred = role === "swdio" ? ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"] : ["SYS_JTCK-SWCLK", "DEBUG_SWCLK"];
+      const index = preferred.indexOf(signal);
+      if (index >= 0) return index;
+      const fallback = role === "swdio" ? /SWDIO|JTMS/u : /SWCLK|JTCK/u;
+      return fallback.test(signal) ? preferred.length : -1;
+    };
+    let best: { pin: string; signal: string; rank: number } | null = null;
+    for (const [pinName, info] of facts.pins) {
+      for (const signal of info.signals.keys()) {
+        const rank = rankOf(signal);
+        if (rank < 0) continue;
+        if (best === null || rank < best.rank) best = { pin: pinName, signal, rank };
+      }
+    }
+    return best === null ? null : { pin: best.pin, signal: best.signal };
+  };
   for (const item of debugPins) {
-    const pin = facts === null ? item.logical : (resolveDbPinName(facts, item.logical) ?? item.logical);
+    const found = findDebugPin(item.role);
+    let pin = facts === null ? item.logical : (resolveDbPinName(facts, item.logical) ?? item.logical);
     let signal = item.preferred[0] as string;
-    const signals = facts === null ? undefined : facts.pins.get(pin)?.signals;
+    if (found !== null) {
+      pin = found.pin;
+      signal = found.signal;
+    }
+    const signals = facts === null || found !== null ? undefined : facts.pins.get(pin)?.signals;
     if (signals !== undefined && signals.size > 0) {
       const chosen =
         item.preferred.find((name) => signals.has(name)) ??

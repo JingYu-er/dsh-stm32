@@ -29,6 +29,8 @@ function dbFacts(overrides = {}) {
     srcDivs: [],
     srcDivKey: "",
     srcDivSources: [],
+    srcDivBySource: {},
+    hasApbDivider: true,
     apb2Divs: [],
     derivedNames: [],
     adcDivs: [{ div: 2, iocValue: "RCC_ADCPCLK2_DIV2" }],
@@ -256,6 +258,61 @@ test("readSysclkPllOutput：时钟树里 PLLCLK 接的是 PLLR 还是 PLLP（读
   // 不存在的时钟树 / 空名字：null（调用方回退旧启发式）
   assert.equal(readSysclkPllOutput(db, "STM32NOPE"), null);
   assert.equal(readSysclkPllOutput(db, ""), null);
+});
+
+// WB0/WL3（无线族）是第三种形状：没有 PLL、总线不分频、SYSCLK 只靠「源 ÷ 源分频」，
+// 而且源分频一源一键（WB0 的 HSE 走 SYSCLK32Divider、RC64MPLL 走 SYSCLK64Divider；WL3 的 HSE 走
+// SYSCLK48Divider）、WL3 的源键还叫 ROOTClkSource。这些名字/上限全部是本机 db 的事实。
+test("真 db：WB0 是 direct 模型（RC64MPLL 64 MHz + 每源一套分频），总线不分频", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const mcu = readMcuFacts(db, "STM32WB05KZVx");
+  if (mcu === null) return t.skip("本机 db 里没有 STM32WB05KZVx");
+  const derived = readClockDbFacts(db, mcu);
+  assert.notEqual(derived, null);
+  assert.equal(derived.model, "direct");
+  assert.equal(derived.sysclkSourceKey, "RCC.SYSCLKSource");
+  // MCU xml 没有 <Frequency>：上限只能来自 db 的 SysCLKFreq_VALUE（注意是 Freq_VALUE 写法）
+  assert.equal(derived.sysclkMaxHz, 0);
+  assert.equal(derived.sysclkMaxDbHz, 64_000_000);
+  assert.deepEqual(derived.directSources.map((source) => source.id), ["hse", "rc64"]);
+  assert.equal(derived.directSources[0].iocValue, "RCC_SYSCLKSOURCE_DIRECT_HSE");
+  assert.equal(derived.directSources[0].hzKey, "RCC.HSE_VALUE");
+  // RC64MPLL 是固定频率源：没有 hzKey（不读 .ioc）
+  assert.equal(derived.directSources[1].hzKey, undefined);
+  assert.equal(derived.directSources[1].defaultHz, 64_000_000);
+  // SYSCLK32Divider/SYSCLK64Divider 是 **CLKSYS 那一路**的预分频（时钟树里 SYSCLK32Prescaler 的
+  // 输入是 SYSCLK、输出是 CLKSYS32），不是 SYSCLK 分频器 —— 按名字猜就会在 WB0 上写出「SYSCLK ÷2」，
+  // 实际 CubeMX 只把 CLKSYS 减半、SYSCLK 仍等于源值（真机往返实测）。所以这里必须是空的。
+  assert.deepEqual(derived.srcDivBySource, {}, "WB0 的 SYSCLK 分频器应当是空集（树里没有）");
+  // 总线不分频：没有 APB1CLKDivider 参数，不能造假枚举去写那个键
+  assert.equal(derived.hasApbDivider, false);
+  assert.deepEqual(derived.apbDivs, []);
+  const plan = clockFactsFromDb(derived, "STM32WB0");
+  assert.notEqual(plan, null, "总线不分频的族应当用 SYSCLK 上限兜住总线上限，而不是直接拒绝");
+  assert.equal(plan.limits.sysclkHz, 64_000_000);
+  assert.equal(plan.limits.apb1Hz, 64_000_000);
+  assert.deepEqual(plan.apbDivs, []);
+  assert.deepEqual(plan.srcDivBySource ?? {}, {}, "没有 SYSCLK 分频器：源值就是 SYSCLK");
+});
+
+test("真 db：WL3 的源键是 ROOTClkSource，HSE 分频叫 SYSCLK48Divider（有 ÷3/÷6/÷12）", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const mcu = readMcuFacts(db, "STM32WL30K8Vx");
+  if (mcu === null) return t.skip("本机 db 里没有 STM32WL30K8Vx");
+  const derived = readClockDbFacts(db, mcu);
+  assert.notEqual(derived, null);
+  assert.equal(derived.model, "direct");
+  assert.equal(derived.sysclkSourceKey, "RCC.ROOTClkSource", "WL3 没有 SYSCLKSource，写错会被 CubeMX 丢掉");
+  assert.equal(derived.sysclkMaxDbHz, 64_000_000);
+  // WL3 的 SYSCLK48Divider 同样是 CLKSYS 预分频（ROOTCLK48Prescaler → CLKSYS48），不是 SYSCLK 分频。
+  assert.deepEqual(derived.srcDivBySource, {}, "WL3 的 SYSCLK 分频器应当是空集（树里没有）");
+  assert.equal(derived.hasApbDivider, false);
+  const plan = clockFactsFromDb(derived, "STM32WL3");
+  assert.notEqual(plan, null);
+  assert.equal(plan.sysclkSourceKey, "RCC.ROOTClkSource");
+  assert.equal(plan.limits.sysclkHz, 64_000_000);
 });
 
 test("readClockTreeDerivedNames：时钟树的 refParameter 里能读到 EPOD_VALUE（名字不带 Freq_Value）", (t) => {

@@ -160,6 +160,89 @@ test("direct：SYSCLK 上限挡住超频（目标 56 MHz 在 C0 上只能到 48 
   assert.ok(plan.achieved.sysclkHz <= 48_000_000);
 });
 
+// 无线族（WB0/WL3）：没有 PLL、总线不分频、源分频一源一键，且 RC64MPLL 是固定 64 MHz。
+// 形状全部按 db 实测抄（RCC-STM32WB0_rcc_v1_0_Modes.xml / RCC-STM32WL33xx_rcc_v1_0_Modes.xml）。
+function wb0Facts(overrides = {}) {
+  return {
+    model: "direct",
+    muls: [],
+    sources: [
+      { id: "hse", label: "HSE（外部晶振）", iocValue: "RCC_SYSCLKSOURCE_DIRECT_HSE", defaultHz: 32_000_000, hzKey: "RCC.HSE_VALUE", selectable: true, note: "" },
+      { id: "rc64", label: "RC64MPLL（64 MHz 内部 RC）", iocValue: "RCC_SYSCLKSOURCE_RC64MPLL", defaultHz: 64_000_000, selectable: true, note: "" },
+    ],
+    sysclkSourceKey: "RCC.SYSCLKSource",
+    // 无 SYSCLK 分频器：SYSCLK 就是源频率（WB0 的 SYSCLK32/64Divider 是 CLKSYS 预分频，别当成 SYSCLK 分频）。
+    // 总线不分频：没有 APB1CLKDivider 参数
+    apbDivs: [],
+    derivedClockNames: ["SysCLKFreq_VALUE", "CLKSYSFreq_VALUE", "MCO1PinFreq_Value"],
+    adcDivs: [{ div: 1, iocValue: "" }],
+    limits: { sysclkHz: 64_000_000, apb1Hz: 64_000_000, apb2Hz: 64_000_000, adcHz: 64_000_000 },
+    usb: { hz: 48_000_000, requiresPllClkHz: 0, iocValue: "" },
+    peripheralClocks: [{ id: "SPI1", label: "SPI1", bus: "apb1", kind: "spi" }],
+    baudList: [115200],
+    ...overrides,
+  };
+}
+
+test("direct（WB0）：64 MHz 目标走 RC64MPLL，只写源，不写 CLKSYS 预分频、不碰 APB", () => {
+  const e = new Map([
+    ["RCC.HSE_VALUE", "32000000"],
+    ["RCC.SysCLKFreq_VALUE", "48000000"],
+    ["RCC.IPParameters", "HSE_VALUE,HSI_VALUE,SysCLKFreq_VALUE"],
+  ]);
+  const plan = planClockDirect({ request: { targetHz: 64_000_000 }, entries: e, facts: wb0Facts(), familyId: "STM32WB0" });
+  assert.equal(plan.ok, true, plan.note);
+  assert.equal(plan.reachable, true, plan.note);
+  assert.equal(plan.achieved.sysclkHz, 64_000_000);
+  const map = keyed(plan);
+  assert.equal(map.get("RCC.SYSCLKSource"), "RCC_SYSCLKSOURCE_RC64MPLL");
+  assert.equal(map.get("RCC.SysCLKFreq_VALUE"), "64000000");
+  // 总线不分频：写 APB1CLKDivider 会被 CubeMX 当未知键丢掉
+  assert.equal(map.get("RCC.APB1CLKDivider"), undefined);
+  assert.equal(map.get("RCC.AHBCLKDivider"), undefined);
+  // CLKSYS 预分频键一个都不该写：它们不改变 SYSCLK，写了只会让 CLKSYS 差一截
+  assert.equal(map.get("RCC.SYSCLK64Divider"), undefined);
+  assert.equal(map.get("RCC.SYSCLK32Divider"), undefined);
+});
+
+test("direct（WB0）：HSE 32 MHz 直接当 SYSCLK；HSE 那一路凑不出目标时放开到 RC64MPLL", () => {
+  const e = new Map([["RCC.HSE_VALUE", "32000000"]]);
+  const asIs = new Map(e);
+  asIs.set("RCC.SYSCLKSource", "RCC_SYSCLKSOURCE_DIRECT_HSE");
+  const hse = planClockDirect({ request: { targetHz: 32_000_000 }, entries: asIs, facts: wb0Facts(), familyId: "STM32WB0" });
+  assert.equal(hse.reachable, true, hse.note);
+  assert.equal(hse.achieved.pllSource, "hse", "当前源能凑出目标时不该换源");
+  assert.equal(keyed(hse).get("RCC.SYSCLKSource"), "RCC_SYSCLKSOURCE_DIRECT_HSE");
+  assert.equal(keyed(hse).get("RCC.SYSCLK32Divider"), undefined, "分频器是 CLKSYS 的，不该写");
+  // 64 MHz 在 HSE（8/32 MHz）那一路凑不出来，必须换到 RC64MPLL，而不是报「不可达」
+  const rc = planClockDirect({ request: { targetHz: 64_000_000 }, entries: e, facts: wb0Facts(), familyId: "STM32WB0" });
+  assert.equal(rc.achieved.sysclkHz, 64_000_000);
+  assert.equal(rc.achieved.pllSource, "rc64");
+});
+
+test("direct（WL3）：源键是 ROOTClkSource，48 MHz HSE 直接当 SYSCLK；凑不出的目标报最近档", () => {
+  const facts = wb0Facts({
+    sysclkSourceKey: "RCC.ROOTClkSource",
+    sources: [
+      { id: "hse", label: "HSE（外部晶振）", iocValue: "RCC_SYSCLKSOURCE_DIRECT_HSE", defaultHz: 48_000_000, hzKey: "RCC.HSE_VALUE", selectable: true, note: "" },
+      { id: "rc64", label: "RC64MPLL（64 MHz 内部 RC）", iocValue: "RCC_SYSCLKSOURCE_RC64MPLL", defaultHz: 64_000_000, selectable: true, note: "" },
+    ],
+  });
+  const e = new Map([
+    ["RCC.HSE_VALUE", "48000000"],
+    ["RCC.ROOTClkSource", "RCC_SYSCLKSOURCE_DIRECT_HSE"],
+  ]);
+  const hit = planClockDirect({ request: { targetHz: 48_000_000 }, entries: e, facts, familyId: "STM32WL3" });
+  const map = keyed(hit);
+  assert.equal(map.get("RCC.ROOTClkSource"), "RCC_SYSCLKSOURCE_DIRECT_HSE");
+  assert.equal(map.get("RCC.SYSCLKSource"), undefined, "WL3 没有 SYSCLKSource 这个键");
+  assert.equal(map.get("RCC.SYSCLK48Divider"), undefined, "SYSCLK48Divider 是 CLKSYS 预分频，不是 SYSCLK 分频");
+  // 16 MHz 在 WL3 上做不到（源只有 48/64 MHz 两档，且没有 SYSCLK 分频器）：报最接近的 48 MHz，并说清不可达
+  const miss = planClockDirect({ request: { targetHz: 16_000_000 }, entries: e, facts, familyId: "STM32WL3" });
+  assert.equal(miss.reachable, false);
+  assert.equal(miss.achieved.sysclkHz, 48_000_000);
+});
+
 test("direct：db 里没有能直连的源 → 空计划（不猜一个 HSI 出来）", () => {
   const plan = planClockDirect({ request: { targetHz: 48_000_000 }, entries, facts: c0Facts({ sources: [] }), familyId: "STM32C0" });
   assert.equal(plan.ok, false);
