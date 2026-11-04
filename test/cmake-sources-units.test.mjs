@@ -12,6 +12,7 @@ import {
   collectCmakeSources,
   describeRefresh,
   deviceDefineFromStartup,
+  familyTokensFromDriversDir,
   familyTokensFromStartup,
   listStartupFiles,
   refreshCubemxCmakeLists,
@@ -103,6 +104,34 @@ test("deviceDefineFromStartup / familyTokensFromStartup：按文件名反推，�
   assert.deepEqual(familyTokensFromStartup("startup_stm32f103xb.s"), { token: "stm32f1xx", upper: "STM32F1xx" });
   assert.equal(familyTokensFromStartup("startup_stm32f407vg.s").upper, "STM32F4xx");
   assert.equal(familyTokensFromStartup("startup_nonsense.s"), null);
+});
+
+test("familyTokensFromDriversDir：三四字符族段（WBA/WL）只能从 Drivers 目录反推", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-cmake-fam-"));
+  try {
+    // WBA 的启动文件是 startup_stm32wba50xx.s —— familyTokensFromStartup 拆不出（^stm32[a-z][0-9] 不匹配），
+    // 于是源清单一个字都不改，CMakeLists 里留着固件包没有的 stm32wbaxx_hal_gpio_ex.c。
+    mkdirSync(join(dir, "Drivers", "STM32WBAxx_HAL_Driver", "Src"), { recursive: true });
+    assert.equal(familyTokensFromStartup("startup_stm32wba50xx.s"), null);
+    assert.deepEqual(familyTokensFromDriversDir(dir), { token: "stm32wbaxx", upper: "STM32WBAxx" });
+    // L4+ 的 HAL 目录仍是 STM32L4xx（族段带 + 不影响目录名）
+    const l4p = mkdtempSync(join(tmpdir(), "dsh-cmake-fam-"));
+    try {
+      mkdirSync(join(l4p, "Drivers", "STM32L4xx_HAL_Driver", "Src"), { recursive: true });
+      assert.deepEqual(familyTokensFromDriversDir(l4p), { token: "stm32l4xx", upper: "STM32L4xx" });
+    } finally {
+      rmSync(l4p, { recursive: true, force: true });
+    }
+    // 没有 Drivers 目录就是 null（上层回退启动文件名规则）
+    const bare = mkdtempSync(join(tmpdir(), "dsh-cmake-fam-"));
+    try {
+      assert.equal(familyTokensFromDriversDir(bare), null);
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("listStartupFiles：只认工程根的 startup_stm32*.s，且排序稳定", () => {

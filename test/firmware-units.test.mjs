@@ -267,9 +267,10 @@ test("firmwarePlanFor：F1 的目录名、版本串、归档与内核头都对�
 });
 
 test("firmwarePlanFor：没接入的族、错的版本号都要说人话（不瞎猜）", () => {
-  const h7 = firmwarePlanFor({ family: "STM32H743VIT6" });
-  assert.equal(h7.ok, false);
-  assert.match(h7.error, /目前只会/u);
+  // H7 已经接入了（8 族装配扩完之后），拿真正没接入的 N6 当反例
+  const n6 = firmwarePlanFor({ family: "STM32N645A0HxQ" });
+  assert.equal(n6.ok, false);
+  assert.match(n6.error, /目前只会/u);
 
   const badVersion = firmwarePlanFor({ family: "F1", version: "1.8" });
   assert.equal(badVersion.ok, false);
@@ -295,12 +296,24 @@ test("verifyFirmwarePackage：空目录必须判不过，并把缺的条目标�
     const empty = verifyFirmwarePackage(root, "F1");
     assert.equal(empty.ok, false);
     assert.ok(empty.missing.length >= 3, "HAL/CMSIS/设备三块都缺");
-    const unknown = verifyFirmwarePackage(root, "H7");
+    const unknown = verifyFirmwarePackage(root, "N6");
     assert.equal(unknown.ok, false);
     assert.match(unknown.missing.join("；"), /清单/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("CM7 族的 coreHeaders 带 cachel1_armv7.h：core_cm7.h 会 include 它", () => {
+  // 实测：H7 工程编译 stm32h7xx_it.c 时 core_cm7.h:2234 直接
+  // fatal error: cachel1_armv7.h: No such file or directory —— 装配清单漏了这个头。
+  for (const family of ["H7", "F7"]) {
+    const spec = FIRMWARE_FAMILIES[family];
+    assert.ok(spec.coreHeaders.includes("core_cm7.h"), family + " 用 CM7 的内核头");
+    assert.ok(spec.coreHeaders.includes("cachel1_armv7.h"), family + " 缺 cachel1_armv7.h");
+  }
+  // 非 CM7 族不要顺手加（多下一个用不上的头）
+  assert.equal(FIRMWARE_FAMILIES.F1.coreHeaders.includes("cachel1_armv7.h"), false);
 });
 
 /* ------------------------- 计划：零副作用 ------------------------- */
@@ -468,7 +481,7 @@ test("stm32_firmware_install：注册契约与计划模式（不联网、不建�
     assert.match(value.report.targetDir, /dsh-firmware[\\/]STM32Cube_FW_F1_V1.8.7$/u);
 
     const needDecision = await definition.execute(
-      { family: "STM32H743VIT6", cubeMxRoot: root },
+      { family: "STM32N645A0HxQ", cubeMxRoot: root },
       { signal: new AbortController().signal },
     );
     assert.equal(needDecision.report.ok, false);

@@ -104,6 +104,34 @@ export function familyTokensFromStartup(file: string): FamilyTokens | null {
   return { token: "stm32" + code + "xx", upper: "STM32" + code.toUpperCase() + "xx" };
 }
 
+/**
+ * 从工程里真实存在的 Drivers/STM32<族>xx_HAL_Driver 目录反推家族名。
+ *
+ * 为什么不能只靠启动文件名：F1/F4 这类「族段两字符」的启动文件名（stm32f103xb）能拆出 f1，
+ * 但 WBA 是 startup_stm32wba50xx.s、WL 是 startup_stm32wle4xx.s —— 族段三四个字符，
+ * ^stm32([a-z]\d) 直接匹配不上，于是 collectCmakeSources 报「认不出启动文件属于哪个族」，
+ * 源清单一个字都不改（WBA/WL 的 CMakeLists 里就留着固件包里根本不存在的
+ * stm32wbaxx_hal_gpio_ex.c，cmake configure 在 target_sources 处失败）。
+ * 目录名是磁盘上的事实：STM32WBAxx_HAL_Driver → token stm32wbaxx、upper STM32WBAxx。
+ */
+export function familyTokensFromDriversDir(projectDir: string): FamilyTokens | null {
+  const dir = join(projectDir, "Drivers");
+  if (!existsSync(dir)) return null;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const hits = names
+    .map((name) => /^STM32([A-Z0-9]+)xx_HAL_Driver$/u.exec(name)?.[1] ?? "")
+    .filter((token) => token.length >= 2)
+    .sort();
+  if (hits.length === 0) return null;
+  const code = hits[0] as string;
+  return { token: "stm32" + code.toLowerCase() + "xx", upper: "STM32" + code + "xx" };
+}
+
 export interface HalModuleFacts {
   /** 小写模块名（gpio / uart / can…），已排序去重。 */
   modules: string[];
@@ -211,8 +239,9 @@ export function collectCmakeSources(projectDir: string): CmakeSourcesFacts | { e
   if (startup === null) {
     return { error: "工程根没有 startup_stm32*.s（不是脚手架建的 HAL 工程？），无从反推芯片与源清单" };
   }
-  const family = familyTokensFromStartup(startup.file);
-  if (family === null) return { error: "认不出启动文件 " + startup.file + " 属于哪个 STM32 家族" };
+  // 优先信磁盘上的 HAL 目录（WBA/WL 这种三四字符族段的启动文件名拆不出族）；拆不出再回退文件名规则。
+  const family = familyTokensFromDriversDir(projectDir) ?? familyTokensFromStartup(startup.file);
+  if (family === null) return { error: "认不出启动文件 " + startup.file + " 属于哪个 STM32 家族（Drivers 下也没有 STM32*xx_HAL_Driver 目录）" };
   const deviceDefine = deviceDefineFromStartup(startup.file);
   const notes = [...startup.notes];
   const moduleFacts = halModulesInUse(projectDir, family);

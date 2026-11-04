@@ -71,6 +71,15 @@ test("familyIdOfPart：型号前缀 → 族（三段前缀必须先于两段判�
     ["STM32MP211AAL", "STM32MP2"],
     ["STM32H563ZI", "STM32H5"],
     ["STM32U575ZI", "STM32U5"],
+    // db 里的真实零件名：H7 的族段后面还跟着 A3（字母+数字），旧规则把这种当"族段长了两字符"拒掉；
+    // L4P5 必须先按 L4+ 判；WBA/WLE4 是三四个字符的族段。
+    ["STM32H7A3RIT6", "STM32H7"],
+    ["STM32H723VEH6", "STM32H7"],
+    ["STM32L4P5CGT6", "STM32L4+"],
+    ["STM32WBA50KGU6", "STM32WBA"],
+    ["STM32WLE4C8U6", "STM32WL"],
+    ["STM32WB10CCU6", "STM32WB"],
+    ["STM32U375CET6", "STM32U3"],
     ["STM32G071RB", "STM32G0"],
     ["STM32MP157F", "STM32MP1"],
   ];

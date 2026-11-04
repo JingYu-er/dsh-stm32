@@ -64,6 +64,9 @@ _estack = ORIGIN(RAM) + LENGTH(RAM);    /* end of RAM */
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
 _Min_Stack_Size = 0x400; /* required amount of stack */
+/* Stack limit (MSPLIM): H5/H7 等启动文件会把 _sstack 写进 MSPLIM，取「栈底」= 栈顶 - 预留栈。
+   F1 的启动文件不用它；同一份链接脚本给所有族用，多一个等值别名不影响链接结果。 */
+_sstack = _estack - _Min_Stack_Size;
 
 /* Define output sections */
 SECTIONS

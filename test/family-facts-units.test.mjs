@@ -39,11 +39,15 @@ function fakeCubeRoot(packages) {
   return root;
 }
 
-test("族 id → 资源包路径：F1/F4/L4+/C0 各自一份 chips.json，认不出才回退 F1", () => {
+test("族 id → 资源包路径：按族段原样拼目录（l4+/wba/wl 不是前两个字母），认不出才回退 F1", () => {
   assert.equal(familyFactsRelOf("STM32F1"), "device/f1/chips.json");
   assert.equal(familyFactsRelOf("STM32F4"), "device/f4/chips.json");
-  // L4+ 的零件名是 L4P/L4Q/L4R/L4S，资源包目录按「族字母 + line 首字符」= l4（与其它族同规则）
-  assert.equal(familyFactsRelOf("STM32L4+"), "device/l4/chips.json");
+  // 目录名 = 族画像的族段（familyProfileOf(...).line）小写，保留 "+"：
+  // 旧实现取前两个字符，L4+ 会读成 l4（那是另一份表）、WBA 会读成 wb（WB 的表）。
+  assert.equal(familyFactsRelOf("STM32L4+"), "device/l4+/chips.json");
+  assert.equal(familyFactsRelOf("STM32WBA"), "device/wba/chips.json");
+  assert.equal(familyFactsRelOf("STM32WL"), "device/wl/chips.json");
+  assert.equal(namingFrom("BA50", "xx", "STM32WBA50KGUx")?.startup, "startup_stm32wba50xx.s");
   // 族段也能直接传（familyProfileOf 接受 "C0" 这种写法）
   assert.equal(familyFactsRelOf("C0"), "device/c0/chips.json");
   // 认不出的族不猜路径：回退 F1 的老路径，让上层按「查不到」处理
@@ -233,11 +237,14 @@ test("assetsFamilyIocText：资源包里有这个族的 .ioc 模板才返回文�
   assert.equal(assetsFamilyIocText("G0"), null);
 });
 
-test("族画像的 HAL 能力：14 个单核族放行，双核/MPU/范围外的族仍拒绝", () => {
-  for (const family of ["STM32C0", "STM32F0", "STM32F1", "STM32F2", "STM32F3", "STM32F4", "STM32F7", "STM32G0", "STM32G4", "STM32L0", "STM32L1", "STM32L4", "STM32L4+", "STM32U0"]) {
+test("族画像的 HAL 能力：21 个单核族放行，双核/MPU/范围外的族仍拒绝", () => {
+  // 每一条都在 demo/.dsh-stm32/accept-*.log 里跑过 create→generate→build（0 warning）：
+  // L5/H5/L4+/U3/U5/WBA/WL 是这一次补上的七族，此前只有 14 族。
+  for (const family of ["STM32C0", "STM32F0", "STM32F1", "STM32F2", "STM32F3", "STM32F4", "STM32F7", "STM32G0", "STM32G4", "STM32H5", "STM32H7", "STM32L0", "STM32L1", "STM32L4", "STM32L4+", "STM32L5", "STM32U0", "STM32U3", "STM32U5", "STM32WBA", "STM32WL"]) {
     assert.equal(familyProfileOf(family).capabilities.halScaffold, true, family + " 应支持 HAL 建工程");
   }
-  for (const family of ["STM32H5", "STM32H7", "STM32L5", "STM32U5", "STM32WB", "STM32MP1"]) {
+  // WB 是双核（M4+M0），WB0/WL3 的时钟模型刚点亮但建工程没做；MP1/MP2/N6 不在范围里。
+  for (const family of ["STM32WB", "STM32WB0", "STM32WL3", "STM32MP1", "STM32MP2", "STM32N6"]) {
     assert.equal(familyProfileOf(family).capabilities.halScaffold, false, family + " 不该宣称支持 HAL 建工程");
   }
   // 寄存器版模板仍只有 F1：能力闸门别被 HAL 的放行带跑

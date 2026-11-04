@@ -117,8 +117,8 @@ export function namingFrom(line: string, group: string, deviceId: string): {
   readonly deviceHeader: string;
   readonly linkerScript: string;
 } {
-  // line 三字符但可能带字母（L4+ 的 4P5）；group 两种形态：按容量（x6/xb/xx）或按封装（cx/rx/tx）。
-  if (!/^[0-9A-Z]{3}$/u.test(line) || !/^(?:x[0-9a-z]|[0-9a-z]x)$/u.test(group)) {
+  // line 三到四字符且可能带字母（L4+ 的 4P5、WBA 的 BA50 —— startup_stm32wba50xx.s）；group 两种形态：按容量（x6/xb/xx）或按封装（cx/rx/tx）。
+  if (!/^[0-9A-Z]{3,4}$/u.test(line) || !/^(?:x[0-9a-z]|[0-9a-z]x)$/u.test(group)) {
     return { startup: "", deviceDefine: "", deviceHeader: "", linkerScript: "" };
   }
   // 族字母从型号名里取（STM32F103C8Tx → F；STM32L4P5AGIx → L），不写死 F。
@@ -255,14 +255,16 @@ export function loadDeviceFacts(env: NodeJS.ProcessEnv = process.env): DeviceFac
 
 /**
  * 族 id → 资源包里的设备事实相对路径：STM32F1 → device/f1/chips.json；
- * STM32L4+ → device/l4/chips.json（目录取「族字母 + line 首字符」，与资源仓库生成器一致）。
+ * STM32L4+ → device/l4+/chips.json；STM32WBA → device/wba/chips.json。
+ *
+ * 目录名取族画像的族段（小写、保留 +）—— 资源仓库就是这么建的目录。
+ * 不能按「前两个字符」推：WBA 会被推成 wb、L4+ 会被推成 l4（都是别的族，读到的芯片表是错的）。
  */
 export function familyFactsRelOf(familyId: string): string {
   const raw = familyId.trim().toUpperCase();
-  const segment = raw.startsWith("STM32") ? raw.slice("STM32".length) : raw;
-  const dir = (segment.charAt(0) + segment.charAt(1)).toLowerCase();
-  if (!/^[a-z][0-9]$/u.test(dir)) return ASSETS_DEVICE_FACTS_FILE;
-  return "device/" + dir + "/chips.json";
+  const line = familyProfileOf(raw).line.toLowerCase();
+  if (!/^[a-z0-9]{1,3}\+?$/u.test(line)) return ASSETS_DEVICE_FACTS_FILE;
+  return "device/" + line + "/chips.json";
 }
 
 /**

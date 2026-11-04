@@ -570,7 +570,7 @@ test("stm32_firmware_install 的计划报告符合 output schema，且不建目�
     assert.match(planned.report.message, /还没动手/u);
 
     // 没接入的族：必须在联网前停下，并把话说清楚（不能瞎下）。
-    const unknown = await tool.execute({ family: "STM32H743VIT6", cubeMxRoot: cubemxRoot }, exec);
+    const unknown = await tool.execute({ family: "STM32N645A0HxQ", cubeMxRoot: cubemxRoot }, exec);
     reportProblems("stm32_firmware_install(没接入的族)", firmwareInstallSchema, unknown);
     assert.equal(unknown.report.ok, false);
     assert.match(unknown.report.message, /目前只会/u);
