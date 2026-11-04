@@ -117,3 +117,92 @@ test("pllmn：外设频率按总线算（TIM 在 APB1 上自动 ×2，USART 在 
   assert.notEqual(usart, undefined);
   assert.ok((tim?.clockHz ?? 0) > 0 && (usart?.clockHz ?? 0) > 0);
 });
+
+/** PLL1 形状的合成事实（H5/U5/WBA/L4+ 那套：PLL1P/PLL1R、VCI 分段、PLLUsed 开关）。 */
+function pll1Facts(overrides = {}) {
+  return {
+    model: "pllmn",
+    muls: [],
+    pllM: [1, 2, 4, 8].map((div) => ({ div, iocValue: String(div) })),
+    pllN: { min: 4, max: 512 },
+    pllP: [2, 4, 8].map((div) => ({ div, iocValue: "RCC_PLL1_DIV" + String(div) })),
+    sources: [{ id: "hse", label: "HSE", iocValue: "RCC_PLL1_SOURCE_HSE", defaultHz: 8_000_000, selectable: true, note: "" }],
+    apbDivs: [1, 2, 4, 8, 16].map((div) => ({ div, iocValue: "RCC_HCLK_DIV" + String(div) })),
+    ahbDivs: [1, 2, 4, 8, 16].map((div) => ({ div, iocValue: "RCC_SYSCLK_DIV" + String(div) })),
+    adcDivs: [],
+    limits: { sysclkHz: 250_000_000, apb1Hz: 250_000_000, apb2Hz: 250_000_000, adcHz: 250_000_000 },
+    vco: { minHz: 128_000_000, maxHz: 560_000_000, inMinHz: 1_000_000, inMaxHz: 16_000_000 },
+    vcoBands: [
+      { value: "RCC_PLL1_VCIRANGE_0", inMinHz: 1_000_000, inMaxHz: 2_000_000, minHz: 150_000_000, maxHz: 420_000_000, vcoSel: "RCC_PLL1_VCORANGE_MEDIUM" },
+      { value: "RCC_PLL1_VCIRANGE_1", inMinHz: 2_000_000, inMaxHz: 4_000_000, minHz: 128_000_000, maxHz: 560_000_000, vcoSel: "RCC_PLL1_VCORANGE_WIDE" },
+    ],
+    vciRangeKey: "RCC.PLL1_VCI_Range",
+    vcoSelKey: "RCC.PLL1_VCO_SEL",
+    pll1Naming: true,
+    pllMKey: "RCC.PLLM1",
+    pllPKey: "RCC.PLL1P",
+    pllRKey: "RCC.PLL1R",
+    pllEnable: { usedKey: "RCC.PLLUsed", usedValue: "1", stateKey: "RCC.PLLState", stateValue: "RCC_PLL_ON" },
+    knownDerivedNames: ["SYSCLKFreq_VALUE", "HCLKFreq_Value", "AHBFreq_Value", "PLL1CLKFreq_Value", "VCOOutputFreq_Value", "APB1Freq_Value", "APB1TimFreq_Value", "APB2Freq_Value", "APB2TimFreq_Value"],
+    usb: { hz: 48_000_000, requiresPllClkHz: 0, iocValue: "" },
+    peripheralClocks: [],
+    baudList: [],
+    ...overrides,
+  };
+}
+
+test("pllmn/PLL1：键名按 db 走（PLLM1/PLL1P），写 VCI 频段与 VCO 档位，只写 PLLUsed 不写 PLLState", () => {
+  const plan = planClockPllmn({ request: { targetHz: 100_000_000 }, entries, facts: pll1Facts(), familyId: "STM32H5" });
+  assert.equal(plan.ok, true, plan.note);
+  assert.equal(plan.achieved.sysclkHz, 100_000_000, plan.note);
+  const map = new Map(plan.entries.map((item) => [item.key, item.value]));
+  assert.notEqual(map.get("RCC.PLLM1"), undefined, "L4+/PLL1 族的输入分频键是 RCC.PLLM1");
+  assert.equal(map.get("RCC.PLLM"), undefined, "不该再写旧名 RCC.PLLM");
+  assert.notEqual(map.get("RCC.PLL1P"), undefined, "PLL1 族输出键是 RCC.PLL1P");
+  assert.equal(map.get("RCC.PLLP"), undefined);
+  // 写回去的 VCI 频段必须就是这一档输入频率所落的段（0 段 MEDIUM / 1 段 WIDE 都可能是最优解，
+  // 所以这里按实际选中的输入频率反查，而不是写死某一段）
+  const facts = pll1Facts();
+  const inHz = plan.achieved.pllInHz;
+  const band = facts.vcoBands.find((item) => inHz >= item.inMinHz && inHz <= item.inMaxHz);
+  assert.notEqual(band, undefined, "输入频率没落在任何分段：" + inHz);
+  assert.equal(map.get("RCC.PLL1_VCI_Range"), band.value);
+  assert.equal(map.get("RCC.PLL1_VCO_SEL"), band.vcoSel);
+  assert.equal(map.get("RCC.PLLUsed"), "1", "不写 PLLUsed=1 时 CubeMX 会认为不用 PLL");
+  assert.equal(map.get("RCC.PLLState"), undefined, "PLLState 是派生键，写了会被 CubeMX 丢掉（F4/F7 实测）");
+});
+
+test("pllmn/PLL1：VCO 上限跟着输入频段走（1 MHz 段只到 420 MHz，2 MHz 段才到 560 MHz）", () => {
+  // 目标 250 MHz：1 MHz 输入段最多 420 MHz VCO → 撑不到 250 MHz×2，必须换到 2–4 MHz 段
+  const plan = planClockPllmn({ request: { targetHz: 250_000_000 }, entries, facts: pll1Facts(), familyId: "STM32H5" });
+  assert.equal(plan.ok, true, plan.note);
+  assert.equal(plan.achieved.sysclkHz, 250_000_000, plan.note);
+  const map = new Map(plan.entries.map((item) => [item.key, item.value]));
+  const inHz = plan.achieved.pllInHz;
+  assert.ok(inHz >= 2_000_000 && inHz <= 4_000_000, "要落进 2–4 MHz 段才够 560 MHz VCO：" + inHz);
+  assert.equal(map.get("RCC.PLL1_VCI_Range"), "RCC_PLL1_VCIRANGE_1");
+  assert.equal(map.get("RCC.PLL1_VCO_SEL"), "RCC_PLL1_VCORANGE_WIDE");
+});
+
+test("pllmn/PLL1：派生频率键只在 db 有同名参数时写，SYSCLKFreq_VALUE 永远写", () => {
+  const plan = planClockPllmn({ request: { targetHz: 100_000_000 }, entries, facts: pll1Facts(), familyId: "STM32H5" });
+  assert.equal(plan.ok, true, plan.note);
+  const map = new Map(plan.entries.map((item) => [item.key, item.value]));
+  assert.equal(map.get("RCC.SYSCLKFreq_VALUE"), "100000000", "SYSCLKFreq_VALUE 的尾巴是 _VALUE，不在名单里也必须写");
+  assert.equal(map.get("RCC.PLLCLKFreq_Value"), undefined, "db 没有 PLLCLKFreq_Value（H5 只有 PLL1CLKFreq_Value）→ 不写");
+  assert.equal(map.get("RCC.PLL1CLKFreq_Value"), "100000000", "派生键跟着 db 名单换名");
+});
+
+test("pllmn：db 带 Cortex 分频参数时不写 CortexFreq_Value（交给 CubeMX，避免往返反向改写）", () => {
+  const plan = planClockPllmn({
+    request: { targetHz: 100_000_000 },
+    entries,
+    facts: pll1Facts({ cortexFollowsHclk: false, knownDerivedNames: ["SYSCLKFreq_VALUE", "HCLKFreq_Value", "CortexFreq_Value", "FCLKCortexFreq_Value"] }),
+    familyId: "STM32U5",
+  });
+  assert.equal(plan.ok, true, plan.note);
+  const map = new Map(plan.entries.map((item) => [item.key, item.value]));
+  assert.equal(map.get("RCC.CortexFreq_Value"), undefined);
+  assert.equal(map.get("RCC.FCLKCortexFreq_Value"), undefined);
+  assert.equal(map.get("RCC.HCLKFreq_Value"), "100000000", "HCLK 还是要写（AHB 固定 ÷1）");
+});
