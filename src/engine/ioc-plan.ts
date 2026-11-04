@@ -1563,18 +1563,24 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const clockDb = pinNames.facts === null || pinNames.db === null ? null : readClockDbFacts(pinNames.db, pinNames.facts);
   const clockDbFacts = clockDb === null ? null : clockFactsFromDb(clockDb, family === "" ? "STM32F1" : family);
   const clockSupported = familyProfile === null || familyProfile.capabilities.clockPlan || clockDbFacts !== null;
+  // 拒绝原因按「先看事实、再看族画像」排：族画像里的 clockPlan 是早期「只按 F1 手写表」的粗粒度闸门，
+  // 现在 24 个族都能从 db 现算，拿它当原因会盖掉真正缺口（H7 是分相 PLL 没实现，不是「只支持 F1」）。
   const clockRefusal = clockSupported
     ? ""
-    : (familyProfile === null ? family : capabilityGap(familyProfile, "clockPlan")) +
-      (clockDb === null
-        ? "；也没读到本机 CubeMX db 的 RCC Modes（装 CubeMX 后重试）"
+    : (clockDb === null
+        ? (familyProfile === null ? family : capabilityGap(familyProfile, "clockPlan")) +
+          "；也没读到本机 CubeMX db 的 RCC Modes（装 CubeMX 后重试）"
         : clockDb.model === "pllmn"
-          ? "；这一族的 PLL 是 PLLM/PLLN/PLLP 模型，但 VCO 允许区间在 db 的 RCC Modes 与 override 表里都没有"
+          ? family + "：这一族的 PLL 是 PLLM/PLLN/PLLP 模型，但 VCO 允许区间在 db 的 RCC Modes 与 override 表里都没有"
           : clockDb.model === "direct"
-            ? "；这一族没有 PLL（SYSCLK 直接取源），但 db 的 SYSCLKSource 里没有 HSE/HSI"
+            ? family + "：这一族没有 PLL（SYSCLK 直接取源），但 db 的 SYSCLKSource 里没有 HSE/HSI"
             : clockDb.model === "unknown"
-              ? "；这一族的 PLL 模型不在已实现的三种之内（pllmul / pllmn / direct）"
-              : "；这一族的 APB1/APB2 频率上限在 db 的 RCC Modes 里没读到（也可能这一族不在这份 db 里）");
+              ? family + "：" +
+                // 具体是哪种没实现的模型（分相 PLL / MSI 直连）由 clock-db 写在 notes 里，原样带给用户：
+                // 只说"不在已实现的三种之内"会让人以为是配置写错，实际是插件还不支持这一族的形状。
+                (clockDb.notes.find((note) => /还没实现|还没建模/u.test(note)) ??
+                  "这一族的时钟模型还没实现（已实现 pllmul / pllmn / direct），不会给时钟计划")
+              : family + "：这一族的 APB1/APB2 频率上限在 db 的 RCC Modes 里没读到（也可能这一族不在这份 db 里）");
   // 三种时钟模型各走各的规划器（pllmul：源 × PLLMUL；pllmn：源 ÷ PLLM × PLLN ÷ PLLP；
   // direct：没有 PLL，SYSCLK 直接取源），但输出同一种 ClockPlan，后面的写键逻辑不分叉。
   const clockPlan = !clockSupported

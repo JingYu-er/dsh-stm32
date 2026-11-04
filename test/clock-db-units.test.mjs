@@ -323,3 +323,38 @@ test("readClockTreeDerivedNames：时钟树的 refParameter 里能读到 EPOD_VA
   assert.ok(names.includes("SYSCLKFreq_VALUE"));
   assert.deepEqual(readClockTreeDerivedNames(db, ""), []);
 });
+test("真 db：H7 是分相 PLL（DIVM1/DIVN1/DIVP1）—— 判成 unknown 而不是假直连，clock 规划明确拒绝", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const mcu = readMcuFacts(db, "STM32H723VEHx");
+  if (mcu === null) return t.skip("本机 db 里没有 STM32H723VEHx");
+  const derived = readClockDbFacts(db, mcu);
+  assert.notEqual(derived, null);
+  // H7 的 SYSCLKSource 里有 HSE/HSI/CSI，光看这个会以为「没有 PLL」，实际 PLL 参数叫 DIVM/DIVN/DIVP。
+  // directSources 会被读出来（HSE/HSI 确实在 SYSCLKSource 里），但模型必须降级成 unknown：
+  // 光看 SYSCLKSource 会漏掉 PLLCLK 那一档，按 HSI 猜出来的档位写进 .ioc 就是错的时钟。
+  assert.equal(derived.model, "unknown", "有分相 PLL 参数就不能当 direct");
+  assert.ok(derived.directSources.length > 0, "HSE/HSI 本来就在 SYSCLKSource 里（这正是它看起来像 direct 的原因）");
+  const note = derived.notes.join(" ");
+  assert.match(note, /分相模型/u);
+  assert.match(note, /DIVM1/u);
+  assert.equal(clockFactsFromDb(derived, "STM32H7"), null, "拒绝规划，不给假档位");
+});
+
+test("真 db：U3 的 SYSCLK 能直连 MSIS（96 MHz）—— 直连模型没建模 MSI，也判 unknown", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const mcu = readMcuFacts(db, "STM32U375CETx");
+  if (mcu === null) return t.skip("本机 db 里没有 STM32U375CETx");
+  const derived = readClockDbFacts(db, mcu);
+  assert.notEqual(derived, null);
+  // U3 的 RCC Modes 里一个 PLL 配置参数都没有（SYSCLKSource 只有 MSIS/HSI/HSE），
+  // 所以它「不是分相 PLL」而是「MSI 频率可配」—— 两种原因要分别报，不能都说成 PLL 未实现。
+  assert.equal(derived.model, "unknown");
+  assert.equal(derived.sysclkMaxDbHz, 96_000_000);
+  const note = derived.notes.join(" ");
+  assert.match(note, /MSI/u);
+  assert.match(note, /还没建模/u);
+  assert.doesNotMatch(note, /分相模型/u);
+  assert.equal(clockFactsFromDb(derived, "STM32U3"), null);
+});
