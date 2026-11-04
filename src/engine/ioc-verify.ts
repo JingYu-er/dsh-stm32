@@ -23,6 +23,7 @@ import { STATE_DIR, acquireLock, cubeMxLaunch } from "./generate.js";
 import { runStreaming } from "./subprocess-runner.js";
 import { describeCubeMxGuiConflict, findRunningCubeMxGui } from "./cube-mx-guard.js";
 import { locateCubemxDb, readIpParameterNames, readMcuFacts } from "./cubemx-db.js";
+import { readClockTreeDerivedNames } from "../data/clock-db.js";
 import { DMA_PARAM_ORDER } from "./ioc-plan.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { auditIocKeys, matchIocKey, renderIocKey } from "../data/ioc-schema.js";
@@ -385,8 +386,16 @@ export function diffIocForVerify(
   audit?: IocAuditInput | null,
   /** 计划里写过的键（来自 <projectDir>/.dsh-stm32/plans/*.json）。null/缺省 = 不知道，按形状归类。 */
   planned?: ReadonlySet<string> | null,
+  /** 时钟树里由 CubeMX 自己算的频率槽（db/plugins/clock/<ClockTree>.xml 的 refParameter）；null = 不知道。 */
+  clockTreeDerived?: ReadonlySet<string> | null,
 ): IocVerifyDiff {
   const plannedKeys = planned ?? null;
+  const isDerived = (key: string): boolean => {
+    if (isDerivedClockKey(key)) return true;
+    if (clockTreeDerived === null || clockTreeDerived === undefined) return false;
+    const name = /^RCC\.([A-Za-z0-9_]+)$/u.exec(key);
+    return name !== null && clockTreeDerived.has(name[1] as string);
+  };
   const before = parseIocEntries(beforeText);
   const after = parseIocEntries(afterText);
   const beforeIps = peripheralsOf(before);
@@ -478,7 +487,7 @@ export function diffIocForVerify(
     const keptAll = beforeNames.every((name) => afterSet.has(name));
     const beforeSet = new Set(beforeNames);
     const extras = afterNames.filter((name) => !beforeSet.has(name));
-    if (keptAll && afterNames.length > beforeNames.length && extras.every((name) => isDerivedClockName(name))) {
+    if (keptAll && afterNames.length > beforeNames.length && extras.every((name) => isDerivedClockName(name) || (clockTreeDerived?.has(name) ?? false))) {
       ipParametersAdded.push(...extras);
       changedValues.splice(ipParametersIndex, 1);
     }
@@ -496,7 +505,7 @@ export function diffIocForVerify(
   for (const item of changedValues) {
     // 派生频率键被 CubeMX 重算：计划里没写过它 → 这是它按树算出来的结果，不是我们写错；
     // 计划里写过它 → 两边对不上，那是我们算错了，得留在 valueChanged 里让人看见。
-    if (isDerivedClockKey(item.key) && !(plannedKeys?.has(item.key) ?? false)) {
+    if (isDerived(item.key) && !(plannedKeys?.has(item.key) ?? false)) {
       derivedRecomputed.push(item);
       continue;
     }
@@ -504,7 +513,7 @@ export function diffIocForVerify(
     bucket.push(item);
   }
   // CubeMX 自己补出来的派生键（我们不写、它按树算）。计划里写过的仍算缺键。
-  const derivedAdded = addedKeys.filter((key) => isDerivedClockKey(key) && !(plannedKeys?.has(key) ?? false));
+  const derivedAdded = addedKeys.filter((key) => isDerived(key) && !(plannedKeys?.has(key) ?? false));
   const keptAddedKeys = addedKeys.filter((key) => !derivedAdded.includes(key));
   const attribution: IocVerifyAttribution = {
     // IP 槽位重排已经从 valueChanged 里摘走，这里也不重复报成「行序变化」（两者都是无害桶，别重复计数）。
@@ -674,7 +683,10 @@ function readdirSafe(dir: string): string[] {
  * 拿不到 db 时就返回 audit=null（只报键名、不判成因），而不是让整次诊断失败：
  * 「CubeMX 不认这个键」这个结论不依赖 db，只有「为什么不认」依赖它。
  */
-function buildAuditInput(beforeText: string, roots: readonly string[]): { audit: IocAuditInput | null; note: string } {
+function buildAuditInput(
+  beforeText: string,
+  roots: readonly string[],
+): { audit: IocAuditInput | null; note: string; clockTreeDerived: ReadonlySet<string> | null } {
   const entries = parseIocEntries(beforeText);
   const mcuName = (entries.get(renderIocKey("mcu.name")) ?? "").trim();
   const db = locateCubemxDb([...roots]);
@@ -682,6 +694,7 @@ function buildAuditInput(beforeText: string, roots: readonly string[]): { audit:
     return {
       audit: null,
       note: "本机没找到可用的 CubeMX db：被丢/被补的键只报键名，不判成因（参数名与引脚名无从校验）。",
+      clockTreeDerived: null,
     };
   }
   const facts = mcuName === "" ? null : readMcuFacts(db, mcuName);
@@ -691,6 +704,7 @@ function buildAuditInput(beforeText: string, roots: readonly string[]): { audit:
       note:
         "db（" + db.version + "）里没有 Mcu.Name=" + (mcuName === "" ? "（缺失）" : mcuName) +
         " 这颗芯片的描述：被丢/被补的键只报键名，不判成因。",
+      clockTreeDerived: null,
     };
   }
   return {
@@ -706,7 +720,9 @@ function buildAuditInput(beforeText: string, roots: readonly string[]): { audit:
     },
     note:
       "差异归因的上下文来自本机 CubeMX db（" + db.version + "，" + facts.name + "）：" +
-      "参数名按 RefParameter 清单、引脚名按 db 引脚表校验。",
+      "参数名按 RefParameter 清单、引脚名按 db 引脚表校验" +
+      (facts.clockTree === "" ? "" : "；时钟树 " + facts.clockTree + " 的 refParameter 当成 CubeMX 自算的频率槽"),
+    clockTreeDerived: new Set(readClockTreeDerivedNames(db, facts.clockTree)),
   };
 }
 
@@ -790,7 +806,7 @@ export async function runIocVerify(
       };
     }
     const auditInfo = buildAuditInput(beforeText, config.cubeMxRoots);
-    const diff = diffIocForVerify(beforeText, afterText, auditInfo.audit, readPlannedKeys(projectDir));
+    const diff = diffIocForVerify(beforeText, afterText, auditInfo.audit, readPlannedKeys(projectDir), auditInfo.clockTreeDerived);
     const notes = [
       "CubeMX 写回的是「它理解的结果」，不是正确答案：被丢掉的外设不会自己补回来。",
       "副本在 " + snapshotPath + "（工程里的 .ioc 没动过）。",

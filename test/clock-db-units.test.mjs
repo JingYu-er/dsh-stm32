@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { BUS_LIMITS, clockFactsFromDb, readClockDbFacts } from "../lib/data/clock-db.js";
+import { BUS_LIMITS, clockFactsFromDb, readClockDbFacts, readClockTreeDerivedNames, readSysclkPllOutput } from "../lib/data/clock-db.js";
 import { F1_ADC_DIVS, F1_APB_DIVS, F1_CLOCK_LIMITS, F1_PLL_MULS } from "../lib/data/clock-f1.js";
 import { locateCubemxDb, readMcuFacts } from "../lib/engine/cubemx-db.js";
 
@@ -207,4 +207,62 @@ test("真 db：F2/F3/G0/L1/U0 的总线上限与 VCO 区间从 db 读出来，cl
       );
     }
   }
+});
+// 四族（H5/U5/WBA/L4+ = PLL1 族）的时钟：分频键叫 PLL1P/PLL1R、SYSCLK 走哪一路从时钟树读、
+// Cortex 时钟不归我们写。这些全部是本机 db 的事实，db 换版本时数值变了要立刻看到。
+test("真 db：PLL1 四族的分频键名、SYSCLK 输出路径与 Cortex 归属都从 db 读出来", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const cases = [
+    // H5：PLLM/PLL1P 都是单独的名字，SYSCLK 走 PLL1P；Cortex 有选择参数 → 我们不写
+    { family: "STM32H5", mcu: "STM32H503CBTx", pll1: true, mKey: "PLLM", pKey: "PLL1P", out: "P", cortex: false, bands: 4 },
+    // U5：PLL1P 是 integer 1..128（没有枚举），SYSCLK 从时钟树读到走 PLLR
+    { family: "STM32U5", mcu: "STM32U535CBTx", pll1: true, mKey: "PLLM", pKey: "PLL1P", out: "R", cortex: false, bands: 2 },
+    // WBA：PLLM 1..8，SYSCLK 走 PLLR
+    { family: "STM32WBA", mcu: "STM32WBA50KGUx", pll1: true, mKey: "PLLM", pKey: "PLL1P", out: "R", cortex: false, bands: 2 },
+    // L4+：输入分频叫 PLLM1，输出键是 PLLP/PLLR（不是 PLL1*），SYSCLK 走 PLLR
+    { family: "STM32L4+", mcu: "STM32L4P5C(G-E)Tx", pll1: false, mKey: "PLLM1", pKey: "PLLP", out: "R", cortex: false, bands: 0 },
+  ];
+  for (const item of cases) {
+    const mcu = readMcuFacts(db, item.mcu);
+    if (mcu === null) {
+      t.skip("本机 db 里没有 " + item.mcu);
+      continue;
+    }
+    const derived = readClockDbFacts(db, mcu);
+    assert.notEqual(derived, null, item.family + "：读不到 RCC Modes");
+    assert.equal(derived.model, "pllmn", item.family + " 的 PLL 模型");
+    assert.equal(derived.pll1Naming, item.pll1, item.family + " 的分频键是不是 PLL1*");
+    assert.equal(derived.pllMKey, "RCC." + item.mKey, item.family + " 的 PLLM 键名");
+    assert.equal(derived.pllPKey, "RCC." + item.pKey, item.family + " 的 PLLP 键名");
+    assert.equal(derived.sysclkOutput, item.out, item.family + " 的 SYSCLK 走哪一路 PLL 输出");
+    assert.equal(derived.cortexFollowsHclk, item.cortex, item.family + " 的 Cortex 时钟能不能按 HCLK 写");
+    assert.equal(derived.vcoBands.length, item.bands, item.family + " 的 VCI 分段数");
+    assert.ok(derived.pllM.length > 0, item.family + " 的 PLLM 档位");
+    const plan = clockFactsFromDb(derived, item.family);
+    assert.notEqual(plan, null, item.family + "：clockFactsFromDb 应当放行");
+    assert.equal(plan.model, "pllmn");
+    assert.equal(plan.cortexFollowsHclk, false, item.family + " 的 CortexFreq 不该由 planner 写");
+    if (item.pll1) assert.equal(plan.pll1Naming, true);
+  }
+});
+
+test("readSysclkPllOutput：时钟树里 PLLCLK 接的是 PLLR 还是 PLLP（读不到返回 null）", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  // 实测：L4RS 与 U5 的 SYSCLK 都接 PLLRCLKFreq_Value（按 PLLP 规划会错）
+  assert.equal(readSysclkPllOutput(db, "STM32L4RS"), "R");
+  assert.equal(readSysclkPllOutput(db, "STM32U5"), "R");
+  // 不存在的时钟树 / 空名字：null（调用方回退旧启发式）
+  assert.equal(readSysclkPllOutput(db, "STM32NOPE"), null);
+  assert.equal(readSysclkPllOutput(db, ""), null);
+});
+
+test("readClockTreeDerivedNames：时钟树的 refParameter 里能读到 EPOD_VALUE（名字不带 Freq_Value）", (t) => {
+  const db = locateCubemxDb(["D:/app/STM32CubeMX"]);
+  if (db === null) return t.skip("本机没有 CubeMX db");
+  const names = readClockTreeDerivedNames(db, "STM32H5");
+  assert.ok(names.includes("EPOD_VALUE"), "H5 的 PLLSRC 频率信号就是 EPOD_VALUE");
+  assert.ok(names.includes("SYSCLKFreq_VALUE"));
+  assert.deepEqual(readClockTreeDerivedNames(db, ""), []);
 });

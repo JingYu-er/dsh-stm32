@@ -66,6 +66,12 @@ export interface CubemxMcuFacts {
   flashKb: number[];
   /** 封装上引脚总数（db 的 IONb）。 */
   ioNb: number;
+  /**
+   * db 的 `ClockTree` 属性（例如 `STM32F2_F205-F207-F215-F217`、`STM32H5_128`）：
+   * 时钟树定义在 `db/plugins/clock/<ClockTree>.xml`，里面的 `refParameter` 就是"由 CubeMX 自己算"的
+   * 频率槽（`HSE_VALUE`、`EPOD_VALUE`…）。空串 = 老 db 没这个属性。
+   */
+  clockTree: string;
   pins: Map<string, CubemxPinFact>;
   ips: Map<string, CubemxIpFact>;
 }
@@ -124,6 +130,7 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
   const core = /<Core>([^<]+)<\/Core>/u.exec(text)?.[1]?.trim() ?? "";
   const ramKb = Number.parseInt(/<Ram>(\d+)<\/Ram>/u.exec(text)?.[1] ?? "", 10);
   const ioNb = Number.parseInt(/<IONb>(\d+)<\/IONb>/u.exec(text)?.[1] ?? "", 10);
+  const clockTree = /(?:^|\s)ClockTree="([^"]+)"/u.exec(attrs)?.[1] ?? "";
   const flashKb: number[] = [];
   for (const flash of text.matchAll(/<Flash>(\d+)<\/Flash>/gu)) {
     const size = Number.parseInt(flash[1] ?? "", 10);
@@ -184,6 +191,7 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
     ramKb: Number.isFinite(ramKb) ? ramKb : 0,
     flashKb,
     ioNb: Number.isFinite(ioNb) ? ioNb : 0,
+    clockTree,
     pins,
     ips,
   };
@@ -213,10 +221,16 @@ export function resolveDbPinName(facts: CubemxMcuFacts, logical: string): string
   return null;
 }
 
-/** db 引脚名去掉后缀（`PA0-WKUP` → PA0；`PA13 (JTMS-SWDIO)` → PA13）。 */
+/**
+ * db 引脚名去掉后缀（`PA0-WKUP` → PA0；`PA13 (JTMS-SWDIO)` → PA13；`PA13(JTMS/SWDIO)` → PA13）。
+ *
+ * 三种写法都在 db 里出现过（实测）：F1 用连字符、F7/L4 用「空格 + 括号」、H5 用「无空格 + 斜杠」。
+ * 少拆一种，那根脚就解析不出来 → .ioc 里写的是逻辑名、CubeMX 不认、整根脚被静默丢掉（H5 实测丢过 SWD）。
+ */
 export function pinBaseOf(dbName: string): string {
   const trimmed = dbName.trim();
-  const bySpace = trimmed.split(/\s+/u)[0] ?? trimmed;
+  const byParen = (trimmed.split("(")[0] ?? trimmed).trim();
+  const bySpace = byParen.split(/\s+/u)[0] ?? byParen;
   return bySpace.split("-")[0] ?? bySpace;
 }
 

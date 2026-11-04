@@ -171,6 +171,20 @@ export const F1_PERIPHERAL_CLOCKS: readonly PeripheralClockFact[] = [
 /** UART 波特率整除误差默认算这几档（F1 值料号常用档）。 */
 export const F1_BAUD_LIST: readonly number[] = [9600, 19200, 38400, 57600, 115200, 230400];
 
+/** PLL 输入频段（H5/U5/WBA 的 VCI range）：输入区间 + 该段的 VCO 区间 + 要写的枚举值。 */
+export interface VcoBand {
+  /** 写进 RCC.PLL1_VCI_Range 的枚举值（db 的 PossibleValue）。 */
+  value: string;
+  /** 这一段覆盖的 PLL 输入频率。 */
+  inMinHz: number;
+  inMaxHz: number;
+  /** 这一段允许的 VCO 输出频率。 */
+  minHz: number;
+  maxHz: number;
+  /** 这一段要求的 RCC.PLL1_VCO_SEL 值（没有就不写）。 */
+  vcoSel?: string;
+}
+
 /**
  * 一套完整的「时钟事实」：planClock 只认这一层，不再直接读 F1_* 常量。
  *
@@ -197,6 +211,30 @@ export interface ClockFacts {
   pllR?: readonly DividerFact[];
   /** 用哪个 PLL 输出当 SYSCLK：P（F2/F4/F7/G4）或 R（L4）。缺省 P。 */
   sysclkOutput?: "P" | "R";
+  /**
+   * PLL1 族（H5/U5/WBA/L4+）的分频键是 RCC.PLL1P / RCC.PLL1R，不是 RCC.PLLP / RCC.PLLR。
+   * 写错键名 CubeMX 不报错、只是当成未知键丢掉，PLL 就退回默认值 → 频率对不上。
+   */
+  pll1Naming?: boolean;
+  /** 写 PLLM / PLLP / PLLR 用的键名（L4+ 是 RCC.PLLM1 / RCC.PLL1P；缺省走 PLLM/PLLP/PLLR）。 */
+  pllMKey?: string;
+  pllPKey?: string;
+  pllRKey?: string;
+  /** false = db 给了 Cortex 选择/分频参数，CortexFreq_Value 由 CubeMX 自己算，planner 别写。 */
+  cortexFollowsHclk?: boolean;
+  /**
+   * PLL 输入频段（H5 的 PLL1_VCI_Range：1–2/2–4/4–8/≥8 MHz 各一段，段内 VCO 上限不同）。
+   * 非空时 planner 必须先按输入频率选段，再把段值写回 RCC.PLL1_VCI_Range。
+   */
+  vcoBands?: readonly VcoBand[];
+  /** 写输入频段用哪个键（RCC.PLL1_VCI_Range）；没有键名就不写。 */
+  vciRangeKey?: string;
+  /** 写 VCO 档位用哪个键（RCC.PLL1_VCO_SEL，H5 用它切换 150–420/128–560 MHz）。 */
+  vcoSelKey?: string;
+  /** 打开 PLL 的键（H5/U5 的 RCC.PLLUsed=1 + RCC.PLLState=RCC_PLL_ON）。 */
+  pllEnable?: { usedKey: string; usedValue: string; stateKey: string; stateValue: string };
+  /** db 里这一族有的派生频率名（写派生键前先查，避免写进 CubeMX 会丢的名字）。 */
+  knownDerivedNames?: readonly string[];
   sources: readonly PllSourceFact[];
   /**
    * 写 SYSCLK 源用哪个键：`RCC.SYSCLKSource`（多数族）或 `RCC.SYSCLKSourceVirtual`（F3 这类

@@ -812,6 +812,10 @@ function ensureGpioInitEntry(entries: Map<string, string>): boolean {
   if (current === undefined) return false;
   const items = current.split(",").map((item) => item.trim()).filter((item) => item !== "");
   if (items.some((item) => item.includes("-MX_GPIO_Init-"))) return false;
+  // 判据是"有引脚"而不是"有 GPIO 引脚"：H5 实测纯 SWD（PA13/PA14 的 Serial_Wire）也会被 CubeMX 插进
+  // MX_GPIO_Init；反过来 C0 模板零引脚时它不会插，我们插了反而被删掉（两条都是真机往返看到的）。
+  const hasPins = [...entries.keys()].some((key) => key.endsWith(".Mode"));
+  if (!hasPins) return false;
   items.splice(items.length > 0 ? 1 : 0, 0, "2-MX_GPIO_Init-GPIO-false-HAL-true");
   entries.set(key, items.join(","));
   return true;
