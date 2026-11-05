@@ -448,7 +448,10 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     const wanted = explicitPackage === "" ? firmwarePackage + "_V*" : firmwarePackage;
     return fail(
       "找不到 " + facts.familyId + " 的 CubeMX 固件包 " + wanted + "（找过：" + firmware.checked.join("；") + "）。" +
-        "固件包是 Drivers/ 与 startup 的唯一合法来源，插件不内嵌 ST 代码；先用 CubeMX 的包管理器装这个族的固件包。",
+        "固件包是 Drivers/ 与 startup 的唯一合法来源，插件不内嵌 ST 代码。两条路任选：" +
+        "① 直接调 stm32_firmware_install（传 mcu:" + facts.mcu + "，真装要给 dryRun:false + confirm:true）——" +
+        "它会先从 ST 官网下官方 zip 交给 CubeMX 装进 Repository，走不通再回退 GitHub 拼包；" +
+        "② 在 CubeMX 里用包管理器（Help → Manage embedded software packages）自己装这个族的固件包，然后重跑 stm32_project_create。",
     );
   }
 

@@ -31,6 +31,15 @@ import {
   orderCubeMxRoots,
   readFirmwareInstallRecords,
 } from "../lib/engine/firmware-install.js";
+import {
+  crc32Of,
+  downloadOfficialZip,
+  installViaSwmgr,
+  officialFirmwareUrl,
+  refNamePattern,
+  resolveFwLibrary,
+  verifyZipCrc,
+} from "../lib/engine/firmware-official.js";
 import { FIRMWARE_INSTALL_TOOL, registerFirmwareInstall } from "../lib/tools/firmware-install.js";
 
 function tempDir(tag) {
@@ -817,4 +826,324 @@ test("installFirmware：暂存目录每次唯一，结束时不留残渣，老�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+/* ---------------------- 官网直取通道（firmware-official.js） ---------------------- */
+
+function storedZip(entries) {
+  // 只造 store（method 0）的小 zip：本套件要验的是 CRC/中央目录解析，不测压缩算法。
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [name, data] of entries) {
+    const nameBuf = Buffer.from(name, "utf8");
+    const body = Buffer.from(data);
+    const crc = crc32Of(body);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(body.length, 18);
+    local.writeUInt32LE(body.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28);
+    locals.push(local, nameBuf, body);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(body.length, 20);
+    central.writeUInt32LE(body.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central, nameBuf);
+    offset += 30 + nameBuf.length + body.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+
+test("officialFirmwareUrl：db 的 FwLibrary 与 packageBase 都按官网命名规律拼，base 可覆盖", () => {
+  assert.equal(officialFirmwareUrl("STM32Cube_FW_F1", "1.8.7"), "https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_f1_v187.zip");
+  assert.equal(officialFirmwareUrl("STM32Cube_FW_H7RS", "1.4.0"), "https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_h7rs_v140.zip");
+  assert.equal(officialFirmwareUrl("STM32Cube_FW_WL3", "1.2.0"), "https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_wl3_v120.zip");
+  const env = { DSH_STM32_FIRMWARE_BASE: "http://127.0.0.1:9/packs" };
+  assert.equal(officialFirmwareUrl("STM32Cube_FW_F1", "1.8.7", env), "http://127.0.0.1:9/packs/stm32cube_fw_f1_v187.zip");
+});
+
+test("refNamePattern：db 的 RefName 簇写法要能匹配具体 CPN", () => {
+  assert.equal(refNamePattern("STM32F103C(8-B)Tx").test("STM32F103C8T6"), true);
+  assert.equal(refNamePattern("STM32F103C(8-B)Tx").test("STM32F103CBT6"), true);
+  assert.equal(refNamePattern("STM32F103C(8-B)Tx").test("STM32F103C6T6"), false);
+  assert.equal(refNamePattern("STM32H7R3A8Ix").test("STM32H7R3A8I6"), true);
+  assert.equal(refNamePattern("STM32H7R3A8Ix").test("STM32H743VIT6"), false);
+  // 元字符不许当正则用：中间带点的型号不能把 "." 当通配。
+  assert.equal(refNamePattern("STM32X1.2x").test("STM32X1X2Y"), false);
+});
+
+test("resolveFwLibrary：H7RS 的子系列要拿到 STM32Cube_FW_H7RS，普通族回落到 packageBase", () => {
+  const dbRoot = "D:/app/STM32CubeMX/db";
+  if (!existsSync(join(dbRoot, "mcu"))) {
+    // 本机没有 db 就只验回落，不假装验过真 db。
+    assert.equal(resolveFwLibrary("", "STM32F103C8T6", "STM32Cube_FW_F1"), "STM32Cube_FW_F1");
+    return;
+  }
+  assert.equal(resolveFwLibrary(dbRoot, "STM32F103C8T6", "STM32Cube_FW_F1"), "STM32Cube_FW_F1");
+  assert.equal(resolveFwLibrary(dbRoot, "STM32H7R3A8I6", "STM32Cube_FW_H7"), "STM32Cube_FW_H7RS");
+  assert.equal(resolveFwLibrary(dbRoot, "STM32H743VIT6", "STM32Cube_FW_H7"), "STM32Cube_FW_H7");
+});
+
+test("crc32Of：对齐 zip 用的 CRC-32 标准向量，且可分段续算", () => {
+  assert.equal(crc32Of(Buffer.from("123456789", "utf8")), 0xcbf43926);
+  const whole = crc32Of(Buffer.from("hello world", "utf8"));
+  const part = crc32Of(Buffer.from(" world", "utf8"), crc32Of(Buffer.from("hello", "utf8")));
+  assert.equal(part, whole);
+});
+
+test("verifyZipCrc：好 zip 逐条比过；改坏一个字节要指名道姓", () => {
+  const dir = tempDir("crc");
+  const good = join(dir, "good.zip");
+  const zip = storedZip([
+    ["package.xml", "<Package/>"],
+    ["Drivers/CMSIS/Include/core_cm4.h", "int x;"],
+  ]);
+  writeFileSync(good, zip);
+  const report = verifyZipCrc(good);
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.entries, 2);
+  assert.equal(report.checked, 2);
+  assert.deepEqual(report.mismatches, []);
+
+  const bad = join(dir, "bad.zip");
+  const broken = Buffer.from(zip);
+  const at = broken.indexOf(Buffer.from("int x;", "utf8"));
+  broken[at] = 0x6a; // "i" → "j"
+  writeFileSync(bad, broken);
+  const badReport = verifyZipCrc(bad);
+  assert.equal(badReport.ok, false);
+  assert.equal(badReport.mismatches.length, 1);
+  assert.equal(badReport.mismatches[0].name, "Drivers/CMSIS/Include/core_cm4.h");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("downloadOfficialZip：Content-Length 对不上就删文件、判失败；对得上才算成", async () => {
+  const dir = tempDir("dl");
+  const zip = storedZip([["package.xml", "<Package/>"]]);
+  const goodFetch = async () =>
+    new Response(zip, { status: 200, headers: { "content-length": String(zip.length) } });
+  const okFile = join(dir, "ok.zip");
+  const ok = await downloadOfficialZip({ url: "http://x/a.zip", destFile: okFile, fetchImpl: goodFetch });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.bytes, zip.length);
+  assert.equal(verifyZipCrc(okFile).ok, true);
+
+  const shortFetch = async () =>
+    new Response(zip, { status: 200, headers: { "content-length": String(zip.length + 10) } });
+  const shortFile = join(dir, "short.zip");
+  const short = await downloadOfficialZip({ url: "http://x/a.zip", destFile: shortFile, fetchImpl: shortFetch });
+  assert.equal(short.ok, false);
+  assert.match(short.error, /Content-Length/u);
+  assert.equal(existsSync(shortFile), false, "半截文件必须删掉，否则后面 CRC 报出来的错看不懂");
+
+  const missFetch = async () => new Response("<Error/>", { status: 404, statusText: "Not Found" });
+  const miss = await downloadOfficialZip({ url: "http://x/none.zip", destFile: join(dir, "miss.zip"), fetchImpl: missFetch });
+  assert.equal(miss.ok, false);
+  assert.match(miss.error, /404/u);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("installFirmware：source=official 但没进程服务时明确拒绝，不静默换源、一次网络都不发", async () => {
+  const root = cubeMxRoot("official");
+  let calls = 0;
+  const neverFetch = async () => {
+    calls += 1;
+    throw new Error("不该联网");
+  };
+  const result = await installFirmware({
+    family: "F1",
+    cubeMxRoots: [root],
+    mode: "install",
+    source: "official",
+    env: { ...process.env, DSH_STM32_ASSETS: join(root, "assets") },
+    fetchImpl: neverFetch,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.source, "official");
+  assert.match(result.message, /官网直取没成功/u);
+  assert.equal(calls, 0);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("installFirmware：默认 auto 没有进程服务时回退 GitHub 拼包，报告里写明来源", async () => {
+  const root = cubeMxRoot("auto");
+  const result = await installFirmware({
+    family: "F1",
+    cubeMxRoots: [root],
+    mode: "install",
+    fetchImpl: firmwareFetch(),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.source, "github");
+  assert.equal(result.downloadUrl, "");
+  assert.equal(result.steps.length, 5);
+  assert.ok(result.notes.some((note) => /官网直取跳过/u.test(note)), "要说明为什么没走官网");
+  rmSync(root, { recursive: true, force: true });
+});
+
+/* ---------------------- swmgr 交给 CubeMX（installViaSwmgr） ---------------------- */
+
+function fakeSubprocess(onSpawn) {
+  return {
+    resolveExecutable: async (command) => command,
+    spawn(spec) {
+      if (onSpawn !== undefined) onSpawn(spec);
+      return {
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        collected: {
+          stdout: { readFrom: () => ({ text: "swmgr install ...\nOK\n", lossy: false, nextOffset: 0 }) },
+          stderr: { readFrom: () => ({ text: "", lossy: false, nextOffset: 0 }) },
+        },
+        terminate() {},
+        waitForExit: async () => {},
+      };
+    },
+  };
+}
+
+test("installViaSwmgr：脚本写成 swmgr install \"<正斜杠路径>\" ask；Repository 落盘才算成", async () => {
+  const root = tempDir("swmgr");
+  const work = join(root, "work");
+  const zip = join(root, "dl", "STM32Cube_FW_C0_V1.4.0.zip");
+  mkdirSync(join(root, "dl"), { recursive: true });
+  writeFileSync(zip, "stub");
+  let argvSeen = [];
+  const subprocess = fakeSubprocess((spec) => {
+    argvSeen = spec.argv;
+    const landed = join(root, "Repository", "STM32Cube_FW_C0_V1.4.0");
+    mkdirSync(landed, { recursive: true });
+    writeFileSync(join(landed, "package.xml"), "<Package/>");
+  });
+  const result = await installViaSwmgr({
+    subprocess,
+    java: "java.exe",
+    jar: "STM32CubeMX.exe",
+    root,
+    zipFile: zip,
+    dirName: "STM32Cube_FW_C0_V1.4.0",
+    workDir: work,
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.dir, join(root, "Repository", "STM32Cube_FW_C0_V1.4.0"));
+  assert.equal(result.reused, false);
+  assert.deepEqual(argvSeen.slice(0, 4), ["java.exe", "-Dfile.encoding=UTF-8", "-jar", "STM32CubeMX.exe"]);
+  const script = readFileSync(join(work, "swmgr-STM32Cube_FW_C0_V1.4.0.txt"), "utf8");
+  assert.equal(script, 'swmgr install "' + zip.split("\\").join("/") + '" ask\nexit\n');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("installViaSwmgr：CubeMX 没把包装进 Repository 就判失败，并把日志尾巴带出来", async () => {
+  const root = tempDir("swmgr-bad");
+  const zip = join(root, "x.zip");
+  writeFileSync(zip, "stub");
+  const result = await installViaSwmgr({
+    subprocess: fakeSubprocess(),
+    java: "java.exe",
+    jar: "STM32CubeMX.exe",
+    root,
+    zipFile: zip,
+    dirName: "STM32Cube_FW_WBA_V1.7.0",
+    workDir: join(root, "work"),
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /没把包装进 Repository/u);
+  assert.match(result.error, /OK/u, "日志末尾要能看出 CubeMX 说了什么");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("installViaSwmgr：Repository 里本来就有这个包时判成功并标 reused（swmgr 会报 KO 已存在）", async () => {
+  const root = tempDir("swmgr-reuse");
+  const landed = join(root, "Repository", "STM32Cube_FW_WL3_V1.2.0");
+  mkdirSync(landed, { recursive: true });
+  writeFileSync(join(landed, "package.xml"), "<Package/>");
+  const zip = join(root, "x.zip");
+  writeFileSync(zip, "stub");
+  const result = await installViaSwmgr({
+    subprocess: fakeSubprocess(),
+    java: "java.exe",
+    jar: "STM32CubeMX.exe",
+    root,
+    zipFile: zip,
+    dirName: "STM32Cube_FW_WL3_V1.2.0",
+    workDir: join(root, "work"),
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.reused, true);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("installFirmware 官网直取成功：下载→CRC→swmgr→自检五步 done，source=official 不回退", async () => {
+  const root = tempDir("official-ok");
+  mkdirSync(join(root, "jre", "bin"), { recursive: true });
+  writeFileSync(join(root, "jre", "bin", "java.exe"), "");
+  writeFileSync(join(root, "STM32CubeMX.exe"), "");
+  mkdirSync(join(root, "Repository"), { recursive: true });
+  const cache = tempDir("official-ok-cache");
+  const spec = FIRMWARE_FAMILIES.F1;
+  const dirName = spec.packageBase + "_V" + spec.defaultVersion;
+  // findRunningCubeMxGui 也会起一个进程（tasklist），所以只数真正跑 swmgr 脚本的那次。
+  let spawned = 0;
+  const subprocess = fakeSubprocess((spawnSpec) => {
+    if (!spawnSpec.argv.some((arg) => arg.endsWith(".txt"))) return;
+    spawned += 1;
+    const dir = join(root, "Repository", dirName);
+    mkdirSync(join(dir, "Drivers", "CMSIS", "Include"), { recursive: true });
+    for (const header of spec.coreHeaders) writeFileSync(join(dir, "Drivers", "CMSIS", "Include", header), "");
+    mkdirSync(join(dir, spec.halDir, "Inc"), { recursive: true });
+    writeFileSync(join(dir, spec.halDir, "Inc", "hal.h"), "");
+    mkdirSync(join(dir, spec.halDir, "Src"), { recursive: true });
+    writeFileSync(join(dir, spec.halDir, "Src", "hal.c"), "");
+    mkdirSync(join(dir, spec.deviceDir, "Include"), { recursive: true });
+    writeFileSync(join(dir, spec.deviceDir, "Include", "device.h"), "");
+    mkdirSync(join(dir, spec.deviceDir, "Source", "Templates", "gcc"), { recursive: true });
+    writeFileSync(join(dir, spec.deviceDir, "Source", "Templates", "gcc", "startup_stm32f103xb.s"), "");
+    writeFileSync(join(dir, "package.xml"), "<Package/>");
+  });
+  const zip = storedZip([["package.xml", "<Package/>"]]);
+  const fetchImpl = async () =>
+    new Response(zip, { status: 200, headers: { "content-length": String(zip.length) } });
+  const env = { DSH_STM32_CACHE: cache };
+  const result = await installFirmware({
+    family: "F1",
+    version: spec.defaultVersion,
+    cubeMxRoots: [root],
+    cubeMxRoot: root,
+    target: "repository",
+    mode: "install",
+    env,
+    subprocess,
+    fetchImpl,
+    source: "official",
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.source, "official");
+  assert.equal(result.targetKind, "repository");
+  assert.equal(result.downloadUrl, officialFirmwareUrl(spec.packageBase, spec.defaultVersion, env));
+  assert.deepEqual(result.steps.map((step) => step.status), ["done", "done", "done", "done", "done"]);
+  assert.equal(spawned, 1);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(cache, { recursive: true, force: true });
 });

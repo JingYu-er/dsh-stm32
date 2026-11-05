@@ -166,7 +166,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_assets` | 管**设备事实资源包**（芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "refresh"`（默认 `profile: "core"`，30 个文件约 237 KiB；已装同版本直接复用；`profile: "full"` 是 128 个文件，多加 SVD 等表）从 GitHub → jsDelivr → gitcode 多源拉 `manifest.json`，逐文件钉 sha256 装到 `~/.dsh-stm32/assets/<版本>/`；`list` / `verify` / `prune` 管各版本。**插件不再内置任何芯片表**，设备事实只从这里读，第一次用要联网装一次，装好后离线可用 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
-| `stm32_firmware_install` | 缺固件包时的一条龙：`dryRun`（默认）只出计划——装到哪、下哪两个源码仓、几条自检判据；`dryRun: false` + `confirm: true` 才真下（GitHub 上 HAL 驱动与 CMSIS 设备支持两个源码包 + 内核头，合计约 2 MB），组装成与官方同构的 `STM32Cube_FW_<族>_V<版本>` 包（自写 `package.xml`）并过五条自检。已有官方包时什么都不做；默认装到 `<CubeMX 根>/dsh-firmware`（不是 `Repository`——塞自造版本号会被 CubeMX 静默忽略），生成时由 `stm32_generate` 用 `setCustomFWPath` 指过去 |
+| `stm32_firmware_install` | 缺固件包时的一条龙，两条通道：`source: "auto"`（默认）先按 db 的 `FwLibrary` 拼官方 zip 的 URL 下载（验 `Content-Length` + 逐条 CRC32），再交给 CubeMX 自己的 `swmgr install` 装进 `Repository`——包被包管理器正经认下；装不成（没 CubeMX、跑着 GUI、首次装新族要弹许可协议窗）就把原因写进 `notes`，回退 GitHub 拼包（HAL 驱动 + CMSIS 设备支持 + 内核头约 2 MB，自写 `package.xml`，放进 `<CubeMX 根>/dsh-firmware`，生成时用 `setCustomFWPath` 指过去）。`source: "official"` 只走官网、失败直接报错。`dryRun`（默认）只出计划，`dryRun: false` + `confirm: true` 才真装；已有包时什么都不做 |
 
 ### .ioc：只读与事务
 
@@ -300,7 +300,12 @@ stm32_rtt action=stop                      # 释放端口；turn 结束也会自
 
 ### 固件包下载（HAL 路线）
 
-CubeMX 装好也不一定有**这一颗芯片**的固件包（安装包里不带，得在包管理器里另装）。插件能代下的那一代，`stm32_firmware_install` 会从 GitHub 拉两个源码包组装出来：
+CubeMX 装好也不一定有**这一颗芯片**的固件包（安装包里不带，得在包管理器里另装）。`stm32_firmware_install` 有两条通道，默认先试官网：
+
+- 官网直取（`source: "auto"` 的第一步）：按 db 里那颗芯片的 `FwLibrary`（多数族为空，按族名兜底；H7RS / MP13 / WB0 / WL3 有专名）拼 `https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_<族小写>_v<版本去点>.zip`，下载后验 `Content-Length` 与 zip 里每一条的 CRC32，再调 CubeMX 的 `swmgr install <本地 zip> ask` 装进 `Repository`——这个包是 CubeMX 自己记账的，包管理器里看得见、删得掉；
+- 三种失败会把原因写进 `notes` 再回退下面的 GitHub 拼包：没装 CubeMX、CubeMX 正开着 GUI、**首次装某族的新版本时 CubeMX 要弹许可协议窗等人点同意**（无头只能超时，插件不替你点，也不代勾）；`source: "official"` 则只走这条，失败直接报错；
+
+回退通道（GitHub 拼包）：
 
 - 下什么：`stm32f1xx-hal-driver`（HAL 驱动，BSD-3-Clause）+ `cmsis-device-f1`（设备头与启动文件，Apache-2.0）+ 5 个 CMSIS 内核头，合计约 2 MB、几秒钟；
 - 为什么不能直接解压 `STM32CubeF1` 的源码包：它的 HAL 与 CMSIS 设备目录是 **git 子模块**，tarball 里是空目录——解压出来编译必挂（缺 startup、缺 HAL 源文件）；

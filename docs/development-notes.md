@@ -5173,3 +5173,43 @@ U0  STM32U031C6T6  HSE ÷1 ×28 ÷2    →  56 MHz (VCO 112M)  benign=true  762,
   现在只把 HSE ×9 这条路写在 note 里。
 - 派生频率的公式在 CubeMX 的 jar 里，插件只认「派生键被重算」这个事实，不复算数值 —— 所以 `derivedRecomputed` 里的值不参与 benign 判定，也不校验。
 - 双核/TrustZone 族（H5/U5/WB 的双核）没验，pllmn 的 VCO 区间与 APB 上限对它们可能是另一套键（`APB3Freq_Value` 之类）。
+
+## 73. 固件包官网直取通道：先问 CubeMX，再回退 GitHub（2026-11-05）
+
+到 72 为止，缺固件包只有一条路：从 GitHub 拉 HAL + CMSIS 两个源码包自己拼一个 `STM32Cube_FW_<族>_V<版本>`，装进 `<CubeMX 根>/dsh-firmware`，生成时用 `setCustomFWPath` 指过去。这条路能用，但它有两个天花板：一是我们拼出来的包 `package.xml` 是自写的，CubeMX 的包管理器不认（列不出来、也删不掉）；二是版本号必须我们自己维护，官方发了新版得改代码。
+
+所以加了第二条通道：**按 db 的 FwLibrary 拼官方 zip 的 URL，下载校验后交给 CubeMX 自己的 `swmgr install`**，让 CubeMX 把包装进 `Repository` 并记账。`stm32_firmware_install` 默认 `source: "auto"`：先试官网，失败（没有 CubeMX、跑着 GUI、下载/校验/许可协议任一步不过）就把原因写进 `notes` 回退 GitHub 拼包；`source: "official"` 时不回退，直接报失败。
+
+### 拼 URL：FwLibrary 只在少数族上
+
+先取证：`db/mcu/*.xml` 里只有一小部分 `<Mcu>` 带 `FwLibrary` 属性，`families.xml` 里根本没有这个字段（探针 `demo/.dsh-stm32/probe-fwlib.mjs` 统计了全量 2019 个 xml）。有值的是 STM32H7 的 H7RS 行（`STM32Cube_FW_H7RS`）、STM32MP1 的 MP13 行、WB0、WL3；其余族为空串。所以规则是：
+
+- `resolveFwLibrary(dbRoot, partNumber, fallback)`：按 db 文件名（RefName 簇写法，如 `STM32F103C(8-B)Tx`、`STM32H7R3A8Ix`）转成正则去匹配用户给的型号，命中且带 `FwLibrary` 就用它；否则退回落包名 `STM32Cube_FW_<族>`。
+- URL 规律（实测 HEAD 全部 200）：`https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_<库名后缀小写>_v<版本去点>.zip`，例 `stm32cube_fw_f1_v187.zip`（56,220,914 B）、`stm32cube_fw_wba_v170.zip`（388,603,994 B）。不存在的版本返回 404 + 一个 XML 错误页，所以必须判状态码，不能只看有没有字节。
+- `DSH_STM32_FIRMWARE_BASE` 可把基址换掉（内网镜像/离线测试用）。
+
+### 校验：Content-Length + 逐条 CRC32
+
+官方 zip 几十到几百 MB，下了一半就交给 CubeMX 会把包管理器搞坏，所以两道闸：
+
+- 下载时比 `Content-Length`，对不上就删掉半截文件并判失败；`downloadOfficialZip` 默认 600 s 超时，走 `AbortController`。
+- 下完扫一遍 zip：读 EOCD → 中央目录 → 逐条 `inflateRawSync` 算 CRC32 比对（method 0/8，其它方法跳过）。`crc32Of` 是查表法自实现的，因为 `package.json` 写着 `node >= 20`，而 `zlib.crc32` 要到 20.15 才回移、22 才稳定。实测 WL3 1.2.0 那个 32,172,685 B 的包：6,166 条条目全部对上，用时 11 s。
+
+### 装：swmgr 只认本地 zip，且第一次装新族会弹 GUI
+
+CubeMX 无头命令行里 `swmgr` 子命令有 `refresh` / `connection` / `install <包名|本地zip> <deny|ask>` / `remove`。实测：
+
+- 传家族包名（`STM32Cube_FW_H5_V1.5.1`）一律 KO：`MainUpdater:1578 Unknown pack`——`cubemx.pidx` 里只有 62 条 X-CUBE 条目，没有固件包。只有**本地 zip 的绝对路径**可行。
+- 许可协议是**按族×版本**记的（日志里 `Accepted Firmware Licenses: FW.C0.1.3.0,FW.C0.1.4.0,FW.F4.1.28.0`）。首次装某个族的新版本时，`ask` 会弹 GUI 对话框等人点同意——无头调用会一直挂着。这是这条通道唯一的硬限制：插件不代点、只超时回退，并在 `notes` 里写明「许可见 CubeMX 弹窗」。
+- 对已经装着的包，`swmgr` 常常直接打 `KO` 就退出（实测日志尾 `…End of Local Load Thread | KO | exit | Bye bye`），但包本身是好的。所以判据不看日志文本，看 `Repository/<包名>` 里有没有 `package.xml` / `Drivers` / `Utilities/pc_software`；`reused` 在起进程**之前**取，用来区分「本来就有」和「这次装上的」——跑完再取会把两者混为一谈（第一版就是这么错的，单测当场抓住）。
+
+### 验收
+
+- `test/firmware-units.test.mjs` 42 pass：URL 拼法（含 base 覆盖）、RefName 正则、FwLibrary 解析与回落、CRC 标准向量与续算、好包/坏包（改一个字节要精确指到 `Drivers/CMSIS/Include/core_cm4.h`）、Content-Length 不符删文件、404、`source: "official"` 没给 CubeMX 时明确失败且零网络、`auto` 回退 GitHub 且 `notes` 留原因、swmgr 成功/失败/预存包三条。
+- 全量：`npx tsc --noEmit` 0；`node test/run-units.mjs` TOTAL pass=830；`node scripts/pack-size.mjs` 631.6 KB（上限 1171.9 KB）。
+- 真机证据：`probe-official-real.mjs` 真下 WL3 包并校验通过；`probe-swmgr-real.mjs` 真起 CubeMX 跑 `swmgr install`（65 s），`Repository\STM32Cube_FW_WL3_V1.2.0` 在，`reused=true`。
+- 没验到的：首次装**未装过**的族时 EULA 弹窗的超时回退——那一步需要真人去 CubeMX 窗口点同意，本机做不到，代码里按超时+回退处理，逻辑由单测覆盖。
+
+### 顺带
+
+`project_create` 缺固件包时的拒绝文案（`src/engine/scaffold.ts`）改成指到 `stm32_firmware_install`：传 `mcu`，真装要 `dryRun: false` + `confirm: true`，先官网后 GitHub。
