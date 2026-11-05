@@ -363,3 +363,23 @@ test("CRLF 与 LF 混排：内容没变就不写（不能因为行尾把整文�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("每外设一对 .c/.h：CubeMX 拆出来的 gpio.c 也进清单（C0 实测：漏了它 main.c 引 MX_GPIO_Init 链接失败）", () => {
+  const dir = mkProject();
+  try {
+    touch(join(dir, "Core/Src/gpio.c"), "/* gpio */\n");
+    const facts = collectCmakeSources(dir);
+    assert.equal(typeof facts.error, "undefined", facts.error);
+    assert.ok(facts.appFiles.includes("Core/Src/gpio.c"), "collectCmakeSources 要枚举 Core/Src 下所有 .c");
+    assert.ok(facts.appFiles.includes("Core/Src/main.c"));
+    // 固定入口文件在前，启动文件在最后
+    assert.equal(facts.appFiles[0], "Core/Src/main.c");
+    assert.equal(facts.appFiles.at(-1), "startup_stm32f103xb.s");
+    const result = refreshCubemxCmakeLists(dir);
+    assert.equal(result.ok, true);
+    assert.ok(result.added.some((item) => item.includes("gpio.c")), JSON.stringify(result.added));
+    assert.match(readCmake(dir), /Core\/Src\/gpio\.c/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
