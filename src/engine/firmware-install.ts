@@ -36,6 +36,7 @@ import {
   officialFirmwareUrl,
   resolveFwLibrary,
   verifyZipCrc,
+  SWMGR_TIME_LIMIT_MS,
 } from "./firmware-official.js";
 import { cubeMxLaunch } from "./generate.js";
 import { fetchAll, type FetchOptions, type FetchOutcome, type FetchTarget } from "./fetch.js";
@@ -658,7 +659,9 @@ async function tryOfficial(
   const db = locateCubemxDb([root]);
   const fwLibrary = resolveFwLibrary(db === null ? "" : db.root, request.mcu ?? "", plan.packageBase);
   const url = officialFirmwareUrl(fwLibrary, plan.version, env);
-  const timeoutMs = Math.max(request.timeoutMs ?? 600_000, 600_000);
+  // 下载按大文件给默认值；等 CubeMX 装包另算上限（许可没记录时不再干等）。
+  const downloadTimeoutMs = Math.max(request.timeoutMs ?? 600_000, 600_000);
+  const swmgrTimeoutMs = Math.min(downloadTimeoutMs, SWMGR_TIME_LIMIT_MS);
 
   const prepare = stepOf(steps, "prepare");
   const download = stepOf(steps, "download");
@@ -678,7 +681,7 @@ async function tryOfficial(
     destFile: zipFile,
     ...(request.fetchImpl === undefined ? {} : { fetchImpl: request.fetchImpl }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
-    timeoutMs,
+    timeoutMs: downloadTimeoutMs,
     onProgress: (bytes, total) => {
       const pct = total > 0 ? String(Math.floor((bytes * 100) / total)) + "%" : "";
       progress("下载 " + String(Math.round(bytes / 1024)) + " KB" + (pct === "" ? "" : "（" + pct + "）"));
@@ -715,18 +718,30 @@ async function tryOfficial(
     root,
     zipFile,
     dirName: plan.dirName,
+    family: plan.family,
+    version: plan.version,
     workDir: path.join(slash(cacheRoot(env)), "firmware", "swmgr"),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
-    timeoutMs,
+    timeoutMs: swmgrTimeoutMs,
     onProgress: progress,
   });
   if (!installed.ok) {
     packageStep.status = "failed";
     packageStep.detail = installed.logTail;
-    notes.push(
-      "官网直取没装成（" + installed.error + "）。首次装某个族/版本时 CubeMX 会弹许可协议等人点同意，" +
-        "无头进程等不到就只能放弃——去 CubeMX 包管理器里点一次同意，或继续用 GitHub 拼包。",
-    );
+    if (installed.missingLicence !== "") {
+      notes.push(
+        "官网直取没装成：" + installed.missingLicence + " 的许可协议 CubeMX 还没记录（已接受：" +
+          (installed.acceptedLicences.length === 0 ? "无" : installed.acceptedLicences.join("、")) +
+          "）。这一族/版本的首装要先在 CubeMX 里点一次同意：Help → Manage embedded software packages → " +
+          "展开 " + plan.packageBase + " → Install → 许可协议点 I Agree；点过之后这条通道就能自己装，" +
+          "本次先回退 GitHub 拼包。",
+      );
+    } else {
+      notes.push(
+        "官网直取没装成（" + installed.error + "）。首次装某个族/版本时 CubeMX 会弹许可协议等人点同意，" +
+          "无头进程等不到就只能放弃——去 CubeMX 包管理器里点一次同意，或继续用 GitHub 拼包。",
+      );
+    }
     return null;
   }
   packageStep.status = "done";

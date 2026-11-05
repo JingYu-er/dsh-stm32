@@ -34,7 +34,9 @@ import {
 import {
   crc32Of,
   downloadOfficialZip,
+  firmwareLicenceTag,
   installViaSwmgr,
+  parseAcceptedFirmwareLicences,
   officialFirmwareUrl,
   refNamePattern,
   resolveFwLibrary,
@@ -1092,6 +1094,104 @@ test("installViaSwmgr：Repository 里本来就有这个包时判成功并标 re
   });
   assert.equal(result.ok, true, result.error);
   assert.equal(result.reused, true);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("firmwareLicenceTag：按「族+版本」拼 FW.<族>.<版本>；非规范输入给空串", () => {
+  assert.equal(firmwareLicenceTag("H5", "1.5.1"), "FW.H5.1.5.1");
+  assert.equal(firmwareLicenceTag("C0", "V1.3.0"), "FW.C0.1.3.0");
+  assert.equal(firmwareLicenceTag("STM32F4", "1.28.0"), "FW.F4.1.28.0");
+  assert.equal(firmwareLicenceTag("", "1.5.1"), "");
+  assert.equal(firmwareLicenceTag("H5", "1.5"), "");
+});
+
+test("parseAcceptedFirmwareLicences：从 CubeMX 日志里读已接受的许可清单（去重、忽略别的行）", () => {
+  const log = [
+    "2026-11-05 15:38:13,797 [INFO] AnalyticsPlugin:253 - Accepted Software Licenses: STM32CubeMX.6.13.0",
+    "2026-11-05 15:38:13,806 [INFO] AnalyticsPlugin:257 - Accepted Firmware Licenses: FW.C0.1.3.0,FW.C0.1.4.0, FW.F4.1.28.0",
+    "2026-11-05 15:39:00,000 [INFO] AnalyticsPlugin:257 - Accepted Firmware Licenses: FW.C0.1.3.0",
+  ].join("\n");
+  assert.deepEqual(parseAcceptedFirmwareLicences(log), ["FW.C0.1.3.0", "FW.C0.1.4.0", "FW.F4.1.28.0"]);
+  assert.deepEqual(parseAcceptedFirmwareLicences("no licence line"), []);
+});
+
+test("installViaSwmgr：目标版本不在已接受清单里就判「首装要先点同意」，不再干等", async () => {
+  const root = tempDir("swmgr-licence");
+  const zip = join(root, "x.zip");
+  writeFileSync(zip, "stub");
+  const log = [
+    "2026-11-05 15:38:13,806 [INFO] AnalyticsPlugin:257 - Accepted Firmware Licenses: FW.C0.1.3.0,FW.F4.1.28.0",
+    'swmgr install "' + zip.split("\\").join("/") + '" ask',
+    "",
+  ].join("\n");
+  const subprocess = {
+    resolveExecutable: async (command) => command,
+    spawn() {
+      return {
+        done: Promise.resolve({ exitCode: null, signal: null }),
+        collected: {
+          stdout: { readFrom: () => ({ text: log, lossy: false, nextOffset: log.length }) },
+          stderr: { readFrom: () => ({ text: "", lossy: false, nextOffset: 0 }) },
+        },
+        terminate() {},
+        waitForExit: async () => {},
+      };
+    },
+  };
+  const result = await installViaSwmgr({
+    subprocess,
+    java: "java.exe",
+    jar: "STM32CubeMX.exe",
+    root,
+    zipFile: zip,
+    dirName: "STM32Cube_FW_H5_V1.5.1",
+    family: "H5",
+    version: "1.5.1",
+    workDir: join(root, "work"),
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.missingLicence, "FW.H5.1.5.1");
+  assert.deepEqual(result.acceptedLicences, ["FW.C0.1.3.0", "FW.F4.1.28.0"]);
+  assert.match(result.error, /FW\.H5\.1\.5\.1/u);
+  assert.match(result.error, /Manage embedded software packages/u);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("installViaSwmgr：目标版本已在清单里就不写 missingLicence（照常按落盘判成败）", async () => {
+  const root = tempDir("swmgr-licence-ok");
+  const zip = join(root, "x.zip");
+  writeFileSync(zip, "stub");
+  const log = "2026-11-05 15:38:13,806 [INFO] AnalyticsPlugin:257 - Accepted Firmware Licenses: FW.C0.1.3.0\n";
+  const subprocess = {
+    resolveExecutable: async (command) => command,
+    spawn() {
+      return {
+        done: Promise.resolve({ exitCode: null, signal: null }),
+        collected: {
+          stdout: { readFrom: () => ({ text: log, lossy: false, nextOffset: log.length }) },
+          stderr: { readFrom: () => ({ text: "", lossy: false, nextOffset: 0 }) },
+        },
+        terminate() {},
+        waitForExit: async () => {},
+      };
+    },
+  };
+  const result = await installViaSwmgr({
+    subprocess,
+    java: "java.exe",
+    jar: "STM32CubeMX.exe",
+    root,
+    zipFile: zip,
+    dirName: "STM32Cube_FW_C0_V1.3.0",
+    family: "C0",
+    version: "1.3.0",
+    workDir: join(root, "work"),
+    timeoutMs: 30_000,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.missingLicence, "");
+  assert.match(result.error, /没把包装进 Repository/u);
   rmSync(root, { recursive: true, force: true });
 });
 
