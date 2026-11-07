@@ -23,6 +23,7 @@ const suites = [
   "facts-acquire-units.test.mjs",
   "rm-sources-units.test.mjs",
   "rm-extract-units.test.mjs",
+  "generation-risk-units.test.mjs",
   "db-presets-units.test.mjs",
   "rtt-units.test.mjs",
   "svd-units.test.mjs",

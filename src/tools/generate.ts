@@ -15,6 +15,7 @@ import type { GenerateReport } from "../engine/generate.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
+import { generationRiskNotes, mcuFromIoc } from "../engine/facts.js";
 
 export const GENERATE_TOOL = "stm32_generate";
 
@@ -229,6 +230,9 @@ export function registerGenerate(ctx: DshContext): void {
       }
       const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
+      // R5：生成前把「这块板烧录门禁会怎样」摆出来——CubeMX 跑 3–4 分钟之前，
+      // 用户/agent 就该知道 facts 缺不缺、烧录会不会被只读门禁拦。
+      const riskNotes = generationRiskNotes(mcuFromIoc(projectDir));
       // 门禁：无头生成要 CubeMX 启动器 + 它自带的 JRE。缺件时不必等 3–4 分钟才报错。
       const gate = await ensureToolchain(ctx, {
         capability: "generate",
@@ -238,6 +242,9 @@ export function registerGenerate(ctx: DshContext): void {
       });
       if (!gate.ok && gate.mode === "block") {
         const blocked = blockedReport(projectDir, gate);
+        // R5：block 时也要带事实行——用户接下来多半是去装 CubeMX 再重跑，
+        // 「这块板烧录会不会被只读门禁拦」应该在同一个报告里一起看到。
+        for (const n of generationRiskNotes(mcuFromIoc(projectDir))) blocked.notes.push(n);
         return { mode: "report", jobId: "", message: blocked.message, report: blocked };
       }
       const gateNote = gate.ok ? null : gate.message;
@@ -260,6 +267,7 @@ export function registerGenerate(ctx: DshContext): void {
         if (gateNote !== null) report.notes.unshift(gateNote);
         if (released !== null) report.notes.push(released);
         if (resolution.note !== null) report.notes.push(resolution.note);
+        for (const n of riskNotes) report.notes.push(n);
         return { mode: "report", jobId: "", message: summarize(report), report };
       }
 
@@ -274,6 +282,7 @@ export function registerGenerate(ctx: DshContext): void {
           // A35：后台模式下也要看得到「探针已让出 / 会话已停」，否则之后 eval 报没会话时无从追溯。
           if (released !== null) handle.append(released + "\n");
           handle.append("开始无头生成：" + projectDir + "\n" + (resolution.note === null ? "" : resolution.note + "\n"));
+          for (const n of riskNotes) handle.append(n + "\n");
           const done = runGenerate(subprocess, {
             projectDir,
             ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),

@@ -5297,3 +5297,15 @@ R3 自动抽取 rm-facts（引文逐字回查 + 与本线 SVD 位域交叉两道
 - spec（rm-topics-c0.json）里的锚点仍是人挑的——这是「人只负责提出可证伪的候选，机器负责证据」的分工，不是全自动；扩族时每族要一份 spec。
 - R5：facts 摘要接进 generate/project_create。
 - flash 工具的真机放行验证需要接板，留到用户下次上机。
+
+## 77. facts 摘要接进 generate / project_create：生成前就摆出烧录门禁三态（2026-11-07）
+
+R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先跑 `stm32_project_create` / `stm32_generate`（CubeMX 一趟 3–4 分钟），烧板时才发现被只读门禁拦——风险应该出现在**开始长任务之前**，不是任务链末端。`generationRiskNotes(part)`（facts.ts）给一行式三态，与 describeFacts（doctor/flash 的多行详单）分开口径：前者回答「烧录会不会被拦、缺什么、怎么补」，后者给逐条证据。
+
+- **未生成** → 指路 `build-facts.mjs --part <型号>`。**话术踩了一次口径错**：初版写「不补的话 stm32_flash 会拒烧」——错，flash 门禁只在 `found && !verified` 拦，完全没 facts 的族只提示（§7 已知限制）。活体验证（离线驱动真工具 execute）时撞出来，改成「不补也能烧，但启动/调试结论没有 RM 依据可查」。这种「两个工具各说各话」的分歧正是接线测试的价值：单测只测纯函数的话，两口径打架要跑真工具链才暴露。
+- **只有结构** → 「stm32_flash 默认拒烧（allowUnknownFacts=true 可强制）」+ needs 首条并进同一行。
+- **已核实** → 「已核实 N 条语义 → 不会被只读门禁拦；逐条见 stm32_doctor」。
+
+接入点：generate 前台 report.notes、后台 job handle.append（开工横幅里）、**门禁 block 分支也带**（用户接下来去装 CubeMX，重跑前就该一并看到 facts 状态——第一版漏了 blocked 分支，同样是活体撞出来的）；project-create 两条路线都进 warnings（register 用决议后的 report.mcu、hal 用 scaffold.mcu ?? args.mcu，ok=false 时不打扰）。型号来源 generate 侧是 `mcuFromIoc(projectDir)`，工程没 .ioc 就返回空数组不硬凑。
+
+验收：tsc 0；TOTAL **pass=880 fail=0**（新套 generation-risk-units 5 条 + 话术回归）；pack-size 652.6 KB。活体三场景全过：F103 register → 未生成行；C051 HAL（默认 facts 根，六线 verified）→ 已核实行；generate blocked（离线 spawn）→ notes 带未生成行。至此 §5 的 1/2/3/5 与 R5 全部闭环，facts 链路端到端：SVD/载体自动获取 → 覆盖验证 → 双机检抽取 → 门禁采信 → 工具面暴露。
