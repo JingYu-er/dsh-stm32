@@ -11,6 +11,9 @@
 | `project/CMakePresets.json` + `project/build/Debug/CMakeCache.txt` | `build-units` 验证按 preset 与 `build/*/` 两种方式找构建目录 |
 | `project/build/Debug/demo.elf` | **占位文件**（4 KB 的 0），只为验证 `.elf` 的定位与大小判断，不可烧录 |
 | `project/Core/Src/main.c`、`project/_scratch/Src/main.c` | `engine-units` 用真实 CubeMX 产物验证 USER CODE 合并（含标签缺失上报） |
+| `svd/stm32c031-excerpt.svd` | `facts-units`/`facts-acquire-units` 的黄金 SVD 切片（FLASH_ACR/OPTR/SECR 全字段+枚举） |
+| `rm-facts-c0.json` | EN RM0490 Rev 6 自动抽取的 10 条 C0 语义（带页码/引文/appliesTo 六线）；`build-facts` 与黄金样本用它。中文 Rev 1 旧版备份在仓外 `demo/.dsh-stm32/rm-facts-c0.zh-Rev1.bak-2026-11-07` |
+| `rm/`（5 份） | `rm-sources-units` 离线夹具：sitemap 样本、stmcu 分类/详情页样本（真实形状截取）、微型 EN/CID 假 PDF（覆盖判定与表格间距回归） |
 
 会话类用例（`session-units`）不读磁盘上的工具链：它用 `fixtures.mjs` 的 `fakeBinDirs()` 在系统临时目录里造一个假工具链目录（空文件占位的 `openocd` / `gdb-multiarch` / `arm-none-eabi-gcc`），因此没装 msys64 的机器也能跑。
 

@@ -371,13 +371,24 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
       ? (Array.isArray(rm.doc?.lines) ? rm.doc?.lines : [String(rm.doc?.lines)]).map((x) => String(x).toUpperCase())
       : []);
   const uniqueLines = [...new Set(declaredLines)];
-  let items = rm.items;
+  // 采信口径：条目级 appliesTo（自动抽取产出）优先，其次包级 doc.lines，都没有就整批按人声明走。
+  let items = rm.items.filter((it) => {
+    const ap = Array.isArray(it.appliesTo) ? it.appliesTo.map((x) => String(x).toUpperCase()) : [];
+    if (ap.length > 0) return ap.includes(target.line);
+    // 老式条目（无 appliesTo）：仍受包级 doc.lines/--rm-lines 约束——修一个刚引入的回归：
+    // 若这里直接放行，「doc.lines 不含目标线」的整批门禁对混合数据就失效了。
+    return uniqueLines.length === 0 || uniqueLines.includes(target.line);
+  });
   const needs: string[] = [];
-  if (items.length > 0 && uniqueLines.length > 0 && !uniqueLines.includes(target.line)) {
-    needs.push("rm-facts 声明只覆盖 " + uniqueLines.join("/") + "，不含 " + target.line + "：语义 " + String(items.length) + " 条已拒收，需要 " + target.line + " 自己的 RM 抽取");
+  const wholeBatchRejected = rm.items.length > 0 && items.length === 0;
+  if (wholeBatchRejected && uniqueLines.length > 0 && !uniqueLines.includes(target.line)) {
+    needs.push("rm-facts 声明只覆盖 " + uniqueLines.join("/") + "，不含 " + target.line + "：语义 " + String(rm.items.length) + " 条已拒收，需要 " + target.line + " 自己的 RM 抽取");
     items = [];
-  } else if (items.length > 0 && uniqueLines.length === 0) {
-    notes.push("提醒：rm-facts 没声明适用线（doc.lines 或 --rm-lines），本次按目标线 " + target.line + " 原样采信；抽取语义的人要自己核对 RM 是否覆盖该线");
+  } else if (wholeBatchRejected) {
+    needs.push("rm-facts 里没有任何条目声明适用于 " + target.line + "（appliesTo 逐条筛完为空）：需要这条线的 RM 抽取");
+    items = [];
+  } else if (rm.items.length > 0 && uniqueLines.length === 0 && !rm.items.some((it) => Array.isArray(it.appliesTo))) {
+    notes.push("提醒：rm-facts 没声明适用线（doc.lines/--rm-lines/条目 appliesTo），本次按目标线 " + target.line + " 原样采信；抽取语义的人要自己核对 RM 是否覆盖该线");
   }
   if (items.length === 0 && rm.items.length === 0) {
     needs.push("本线只有结构、语义未核实：需要 " + target.line + " 的 RM 手册与 rm-facts 抽取（SVD 只给结构，不给组合规则/流程/引脚）");

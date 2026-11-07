@@ -5268,3 +5268,32 @@ tsc 0；TOTAL pass=863 fail=0（rm-sources-units 10 条全离线）；pack-size 
 ### 遗留
 
 R3 自动抽取 rm-facts（引文逐字回查 + 与本线 SVD 位域交叉两道机检替代人核）；R4 用 EN RM0490 重抽并把 doc.lines 放宽到六线；R5 facts 摘要接进 generate/project_create。run_code 的 execFile env 是空壳（APPDATA/USERPROFILE 未设），python user-site 探测必须补 env，否则 pymupdf 假阴性——本轮踩过后定位：pymupdf 2.1 装在 AppData/Roaming/Python/Python314/site-packages。
+
+## 76. rm-facts 自动抽取：两道机检替代人核，C0 六线语义转正（2026-11-07）
+
+§75 留的问题是「解析能不能免人核」。答案：能，但门禁必须换形状——人核防的是「结论写错」，机检防的是「结论没有语料支撑」。这轮落两道机检：**引文逐字回查**（每条语义带锚点，必须在其声称页码 ±3 的 pymupdf 文本里逐字出现，引文直接从命中页截取）+ **SVD 交叉**（语义引用的寄存器字段必须在本线 SVD 里存在且位偏移一致）。任一道不过整条拒收，原因打进输出，exit 1。
+
+### 抽取器为什么用 pymupdf 而不是插件自研
+
+引文必须来自被核验的那一份文本。Node 侧压平索引（§75）没有页边界与大小写，做不了 page±3 回查——它负责覆盖判定那一层就够。`extract-rm-facts.mjs` 调 pymupdf（`DSH_STM32_PYTHON` 可覆盖解释器），不可用就明确失败并指路，绝不降级到自研抽取凑数。归一化口径：折叠空白、匹配用小写副本、引文保留原大小写（ASCII 下两者等长，注释里写明了 Unicode 边界）。
+
+### 机检当场抓到一条旧误记
+
+§4 记的「自举配置在 SYSCLK 第 4 个上升沿锁存」在 EN RM0490 Rev 6 全文**不存在**——`4th` 只出现在 p.305 之后别的语境。RM 实文是 "The boot mode configuration is latched after a reset"（p.53）+ "BOOT0 pin sampling is done on NRST (external reset) rising edge"（p.54）。旧条目是凭旧版/别处知识写的，锚点回查把它拒了；新拆成 latch/nrst-sample 两条带逐字引文的条目。这条误记进了 §4 的教训扩展：**推断的代价不是「可能错」，是「看起来对并被下游当真」**。
+
+### 采信口径升级：条目级 appliesTo 优先
+
+自动抽取的每条 rm-facts 带 `appliesTo`（该条过了哪些线的 SVD 交叉），`buildFacts` 采信顺序 = 条目级 appliesTo → 包级 doc.lines/--rm-lines → 都没声明才整批放行（notes 提醒）。第一版只按条目级筛，把「doc.lines 不含目标线」的整批门禁架空了（回归测试当场抓住）；无 appliesTo 的老式条目现在仍受包级约束。C0 六线现全在 10 条条目的 appliesTo 里，六线 facts `verified=true`——flash 只读门禁对 C0 全系放行，且这些语义每一条都能溯源到页码+引文。
+
+### 验收
+
+- tsc 0；TOTAL **pass=875 fail=0**（新套 rm-extract-units 11 条：正样本/改一字即拒/旧误记拒收/表格篡改拒收/位偏移剔除/页窗口就近/多锚点防巧合/并集组装/口径/空锚点拒/缺 SVD 不放行；facts-acquire 加了包级门禁与条目级优先两条）；pack-size 651.6 KB。
+- 真语料三连：EN RM0490 全 10 主题采信、六线全适用；**伪造测试**（改锚点/改表格行/改位偏移）三条全按预期拒收、exit 1；`node --test` 前后一致。
+- 端到端：六线逐条 build-facts 落默认 facts 根，readFactsFor 六线 verified=true semantics=10。
+- fixtures/rm-facts-c0.json 换成自动抽取版（旧版留 `.bak-2026-11-07` 同目录）；黄金样本断言改钉新形状（表 9 七行/六线/引文回查/误记清除）。
+
+### 遗留
+
+- spec（rm-topics-c0.json）里的锚点仍是人挑的——这是「人只负责提出可证伪的候选，机器负责证据」的分工，不是全自动；扩族时每族要一份 spec。
+- R5：facts 摘要接进 generate/project_create。
+- flash 工具的真机放行验证需要接板，留到用户下次上机。

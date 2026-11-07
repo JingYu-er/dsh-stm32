@@ -1,123 +1,267 @@
 {
  "doc": {
   "id": "RM0490",
-  "rev": "Rev 1 / English Rev 3",
-  "title": "STM32C0x1 参考手册（中文）",
-  "pages": 755,
-  "file": "D:\\JingYu\\Obsidian\\MyObsidian\\学习\\砖块\\参考手册\\st-STM32C0x1 基于 Arm® 内核的 32 位高级 MCU.pdf",
+  "rev": "Rev 6",
+  "title": "RM0490: STM32C0 series advanced Arm-based 32-bit MCUs",
+  "lang": "en",
+  "pages": 1023,
   "lines": [
    "STM32C011",
-   "STM32C031"
+   "STM32C031",
+   "STM32C051",
+   "STM32C071",
+   "STM32C091",
+   "STM32C092"
   ]
  },
  "items": [
   {
    "id": "c0.boot.table",
-   "statement": "自举模式由 BOOT_LOCK / nBOOT1 / BOOT0 引脚 / nBOOT_SEL / nBOOT0 共同决定",
+   "statement": "自举区域由 BOOT_LOCK / nBOOT1 / BOOT0 引脚 / nBOOT_SEL / nBOOT0 共同选择（RM0490 Rev 6 表 9，7 行组合）",
    "source": {
-    "page": 42,
-    "section": "2.5 自举配置 / 表 4 自举模式"
+    "page": 53
    },
+   "evidence": {
+    "quote": "select the boot area through the boot configuration pin BOOT0 and bits nBOOT1, nBOOT_SEL, and nBOOT0 of the User option byte, as shown in the following table. The boot mode configuration is latched after a reset. It is up to the user to set boot mode configuration related to the required boot mode. The boot mode configuration is also re- sampled when exiting Standby mode. Consequently, they must be kept in the required boot mode configuration in Standby mode. After this startup delay has elapsed, the CPU fetches the top-of-stack value from the address 0x0000 0000, then starts executing code from the address stored in the boot memory at 0x0000 0004. Depending on the selected boot mode, main f",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ],
    "table": [
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": "x",
-     "BOOT0Pin": 0,
-     "nBOOT_SEL": 0,
-     "nBOOT0": "x",
-     "region": "主 Flash"
+     "c0": "0",
+     "c1": "x",
+     "c2": "0",
+     "c3": "0",
+     "c4": "x",
+     "c5": "Main flash"
     },
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": 1,
-     "BOOT0Pin": 1,
-     "nBOOT_SEL": 0,
-     "nBOOT0": "x",
-     "region": "系统存储器"
+     "c0": "0",
+     "c1": "1",
+     "c2": "1",
+     "c3": "0",
+     "c4": "x",
+     "c5": "System memory"
     },
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": 0,
-     "BOOT0Pin": 1,
-     "nBOOT_SEL": 0,
-     "nBOOT0": "x",
-     "region": "嵌入式 SRAM"
+     "c0": "0",
+     "c1": "0",
+     "c2": "1",
+     "c3": "0",
+     "c4": "x",
+     "c5": "Embedded SRAM"
     },
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": "x",
-     "BOOT0Pin": "x",
-     "nBOOT_SEL": 1,
-     "nBOOT0": 1,
-     "region": "主 Flash"
+     "c0": "0",
+     "c1": "x",
+     "c2": "x",
+     "c3": "1",
+     "c4": "1",
+     "c5": "Main flash"
     },
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": 1,
-     "BOOT0Pin": "x",
-     "nBOOT_SEL": 1,
-     "nBOOT0": 0,
-     "region": "系统存储器"
+     "c0": "0",
+     "c1": "1",
+     "c2": "x",
+     "c3": "1",
+     "c4": "0",
+     "c5": "System memory"
     },
     {
-     "BOOT_LOCK": 0,
-     "nBOOT1": 0,
-     "BOOT0Pin": "x",
-     "nBOOT_SEL": 1,
-     "nBOOT0": 0,
-     "region": "嵌入式 SRAM"
+     "c0": "0",
+     "c1": "0",
+     "c2": "x",
+     "c3": "1",
+     "c4": "0",
+     "c5": "Embedded SRAM"
     },
     {
-     "BOOT_LOCK": 1,
-     "nBOOT1": "x",
-     "BOOT0Pin": "x",
-     "nBOOT_SEL": "x",
-     "nBOOT0": "x",
-     "region": "主 Flash"
+     "c0": "1",
+     "c1": "x",
+     "c2": "x",
+     "c3": "x",
+     "c4": "x",
+     "c5": "Main flash memory"
     }
    ]
   },
   {
    "id": "c0.boot.latch",
-   "statement": "复位后自举模式配置在 SYSCLK 第 4 个上升沿锁存；退出待机后重新采样",
+   "statement": "boot mode 配置在 reset 后锁存（latched after a reset）；退出 Standby 时重新采样，Standby 期间要保持所需自举配置",
    "source": {
-    "page": 43
-   }
+    "page": 53
+   },
+   "evidence": {
+    "quote": "boot mode configuration is latched after a reset. It is up to the user to set boot mode configuration related to the required boot mode. The boot mode configuration is also re- sampled when exiting Standby mode. Consequently, they must be kept in the required boot mode configuration in Standby mode. After this startup delay has elapsed, the CPU fetches the top-of-stack value from the address 0x0000 0000, then starts executing code from the address stored in the boot memory at 0x0000 0004. Depending on the selected boot mode, main flash memory, system memory, or SRAM is accessible as follows: • Boot from main flash memory: the main flash memory is aliased in the boot memory space (0x0000 0000",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
+  },
+  {
+   "id": "c0.boot.nrst-sample",
+   "statement": "BOOT0 引脚采样发生在 NRST（外部复位）上升沿；PF2-NRST 引脚模式影响采样（p.54 Caution）",
+   "source": {
+    "page": 54
+   },
+   "evidence": {
+    "quote": "BOOT0 pin sampling is done on NRST (external reset) rising edge. Refer to NRST (external reset) description in Section 6.1.2: System reset for further details on how the PF2-NRST pin mode impacts the BOOT0 sampling. 3.1.1 Physical remap Once the boot mode is selected, the application software can modify the memory accessible in the code area. This modification is performed by programming the MEM_MODE bits in the SYSCFG configuration register 1 (SYSCFG_CFGR1). 3.1.2 Embedded boot loader The embedded bootloader is located in the system memory, programmed by ST during production. It is used to reprogram the flash memory using one of the following serial interfaces: • USART • I2C • SPI (only on ",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
   },
   {
    "id": "c0.boot.empty",
-   "statement": "FLASH_ACR.EMPTY=1（0x08000000 读为 0xFFFFFFFF）时，自动改为从系统存储器自举以便首次编程",
+   "statement": "FLASH_ACR.EMPTY=1 时强制从系统存储器自举（表 9 脚注 1：Boot forced to system memory when EMPTY flag is set）；首次编程若 EMPTY 未更新，复位后仍选系统存储器",
    "source": {
-    "page": 43
-   }
+    "page": 53
+   },
+   "evidence": {
+    "quote": "EMPTY flag in the FLASH access control register (FLASH_ACR) is set. See Section 3.1.4: Empty check. 0 1 1 0 x System memory 0 0 1 0 x Embedded SRAM 0 x x 1 1 Main flash memory(1) 0 1 x 1 0 System memory 0 0 x 1 0 Embedded SRAM 1 x x x x Main flash memory",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
+  },
+  {
+   "id": "c0.boot.swd",
+   "statement": "BOOT0 引脚与 SWD 时钟 SWCLK 共用同一 GPIO（C0 即 PA14）；检测到调试器访问时硬件强制 BOOT0 低（从用户 Flash 自举）以保证 SWCLK 可用于调试，直到下一次上电",
+   "source": {
+    "page": 53
+   },
+   "evidence": {
+    "quote": "BOOT0 pin shares the same GPIO with serial wire clock (SWCLK) that is used by the debugger to connect with the device, based on the fact that these functionalities can be considered almost completely disjoint. Nevertheless, to ensure system robustness, the STM32C0 series devices provide a hardware mechanism to force BOOT0 low (boot from user flash memory) if a debugger access is detected (and BOOT0 information is taken from the pin), in order to use SWCLK clock for debugger serial communications and at the same Table 9. Boot modes Boot mode configuration Selected boot area BOOT_ LOCK nBOOT1 bit BOOT0 pin nBOOT_SEL bit nBOOT0 bit 0 x 0 0 x Main flash memory(1) 1. Boot forced to system memory ",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
   },
   {
    "id": "c0.bootloader.interface",
-   "statement": "嵌入式 bootloader 走 USART1 / I2C1，详见 AN2606",
+   "statement": "嵌入式 bootloader 位于 system memory，串口为 USART / I2C / SPI（仅 C051/C071/C091/92）/ USB DFU（仅 C071）/ FDCAN（仅 C092），详见 AN2606",
    "source": {
-    "page": 43
-   }
+    "page": 54
+   },
+   "evidence": {
+    "quote": "embedded bootloader is located in the system memory, programmed by ST during production. It is used to reprogram the flash memory using one of the following serial interfaces: • USART • I2C • SPI (only on STM32C051xx, STM32C071xx, and STM32C091xx/92xx devices) • USB DFU (only on STM32C071xx) • FDCAN (only on STM32C092xx devices) For further details, refer to the device data sheets and the application note AN2606. Note: Some of the GPIOs are reconfigured from their high-Z state. On STM32C092xx, the FDCAN_BL_CK[1:0] bitfield of the FLASH_OPTR register allows selecting FDCAN clock source. 3.1.3 Forcing boot from main flash memory Setting the BOOT_LOCK bit forces the boot from a unique entry poi",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
+  },
+  {
+   "id": "c0.bootlock",
+   "statement": "BOOT_LOCK（FLASH_SECR）置 1 强制从主 Flash 唯一入口自举，无视其余自举配置与 EMPTY；用于建立信任链（4.5.6）",
+   "source": {
+    "page": 54
+   },
+   "evidence": {
+    "quote": "Setting the BOOT_LOCK bit forces the boot from a unique entry point in the main flash memory, regardless of the boot mode configuration pin, bits, and the EMPTY flag. See Section 4.5.6: Forcing boot from main flash memory. 3.1.4 Empty check Internal empty check flag (the EMPTY bit of the FLASH access control register FLASH_ACR) is implemented to allow easy programming of virgin devices by the boot loader. This flag is checked when the boot configuration defines the main flash memory as the target boot area and the BOOT_LOCK bit is not set. When the EMPTY flag is set, the device is considered empty and the system memory (bootloader) is selected instead of the main flash memory as a boot area,",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
+  },
+  {
+   "id": "c0.dbg.swen",
+   "statement": "FLASH_ACR.DBG_SWEN 由软件控制内核调试访问：0 关（敏感代码/可保护存储区场景）、1 开（4.5.5，Figure 4）",
+   "source": {
+    "page": 75
+   },
+   "evidence": {
+    "quote": "Disabling core debug access For executing sensitive code or manipulating sensitive data in securable memory area, the debug access to the core can temporarily be disabled. Figure 4 gives an example of managing DBG_SWEN and SEC_PROT bits. Figure 4. Example of disabling core debug access 4.5.6 Forcing boot from main flash memory To increase the security and establish a chain of trust, the BOOT_LOCK option bit of the FLASH_SECR register allows forcing the system to boot from the main flash memory Table 24. Securable memory erase at RDP level 1 to level 0 change Securable memory size (SEC_SIZE[4:0]) PCROP_RDP Erased pages 0 1 All (mass erase) 0 0 All but PCROP > 0 1 All (mass erase) > 0 0 All bu",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
   },
   {
    "id": "c0.ob.program",
-   "statement": "选项字节编程：先解 FLASH_CR.OPTLOCK，再向 FLASH_OPTKEYR 依次写 OPTKEY1=0x08192A3B、OPTKEY2=0x4C5D6E7F",
+   "statement": "选项字节编程：先清 FLASH_CR.OPTLOCK（含 LOCK 解锁序列），再向 FLASH_OPTKEYR 依次写 OPTKEY1=0x0819 2A3B、OPTKEY2=0x4C5D 6E7F；错序锁死到下次复位并触发总线错误/HardFault（4.4.2）",
    "source": {
-    "page": 52
-   }
-  },
-  {
-   "id": "c0.secr.layout",
-   "statement": "FLASH_SECR 位于 0x1FFF7870，含 BOOT_LOCK 与 SEC_SIZE",
-   "source": {
-    "page": 52
-   }
+    "page": 67
+   },
+   "evidence": {
+    "quote": "Write OPTKEY1 = 0x0819 2A3B of the FLASH option key register (FLASH_OPTKEYR) 3. Write OPTKEY2 = 0x4C5D 6E7F of the FLASH option key register (FLASH_OPTKEYR) Any wrong sequence locks up the flash memory option registers until the next system reset. In the case of a wrong key sequence, a bus error is detected and a Hard Fault interrupt is generated. The user options can be protected against unwanted erase/program operations by setting the OPTLOCK bit by software. Note: If LOCK is set by software, OPTLOCK is automatically set as well. Modifying user options The option bytes are programmed differently from a main flash memory user address. To modify the value of user options, follow the procedur",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
   },
   {
    "id": "c0.rdp.default",
-   "statement": "RDP 取 0xAA 以外的非 0xCC 值时按级别 1 处理（不匹配值为默认级别 1）",
+   "statement": "RDP[7:0]：0xAA=Level 0 不保护、0xCC=Level 2 全片保护、Other（除 0xAA/0xCC 的一切值）=Level 1（4.7.x FLASH_OPTR 位域）",
    "source": {
-    "page": 53
-   }
+    "page": 85
+   },
+   "evidence": {
+    "quote": "0xAA: Level 0, read protection not active 0xCC: Level 2, chip read protection active Other: Level 1, memories read protection active 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. Res. 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 Res. Res. Res. Res. Res. Res. Res. PCROP1A_STRT[8:0] rw rw rw rw rw rw rw rw rw Bits 31:9 Reserved, must be kept at reset value. Bits 8:0 PCROP1A_STRT[8:0]: PCROP1A area start offset Contains the offset of the first subpage of the PCROP1A area. Note: The number of effective bits depends on the size of the flash memory in the device.",
+    "normalized": true
+   },
+   "appliesTo": [
+    "STM32C011",
+    "STM32C031",
+    "STM32C051",
+    "STM32C071",
+    "STM32C091",
+    "STM32C092"
+   ]
   }
  ]
 }

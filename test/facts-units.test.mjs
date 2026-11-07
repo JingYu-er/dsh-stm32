@@ -50,15 +50,24 @@ test("BOOT_LOCK：FLASH_SECR 第 16 位；SEC_SIZE 第 0 位", () => {
   assert.equal(size.bitOffset, 0);
 });
 
-test("黄金样本：表 4 自举模式 7 行，nBOOT_SEL=1/nBOOT0=0/nBOOT1=1 → 系统存储器", () => {
+test("黄金样本（EN RM0490 Rev 6 自动抽取）：表 9 七行 + appliesTo 六线 + statement 无旧误记", () => {
   const rm = JSON.parse(readFileSync(RM, "utf8"));
+  assert.deepEqual(rm.doc.lines, ["STM32C011", "STM32C031", "STM32C051", "STM32C071", "STM32C091", "STM32C092"]);
+  assert.equal(rm.doc.id, "RM0490");
+  assert.equal(rm.doc.rev, "Rev 6");
   const table = rm.items.find((x) => x.id === "c0.boot.table");
   assert.ok(table, "rm-facts 必须有 c0.boot.table");
-  assert.equal(table.source.page, 42);
+  assert.equal(table.source.page, 53);
   assert.equal(table.table.length, 7);
-  const system = table.table.find((r) => r.nBOOT_SEL === 1 && r.nBOOT0 === 0 && r.nBOOT1 === 1);
-  assert.equal(system.region, "系统存储器");
-  const locked = table.table.find((r) => r.BOOT_LOCK === 1);
-  assert.equal(locked.region, "主 Flash");
-  assert.equal(rm.items.length, 7);
+  // EN 表格是压平行（c0..c5 列）：第 5 行 nBOOT_SEL=1/nBOOT0=0/nBOOT1=1 → System memory
+  const system = table.table.find((r) => r.c0 === "0" && r.c1 === "1" && r.c3 === "1" && r.c4 === "0");
+  assert.equal(system.c5, "System memory");
+  const locked = table.table.find((r) => r.c0 === "1");
+  assert.equal(locked.c5, "Main flash memory");
+  // 引文回查口径：quote 必须能在 statement 声称的来源页原文里逐字找到（这里断言折叠空白后含关键短语）
+  assert.match(table.evidence.quote.toLowerCase(), /boot configuration pin boot0 and bits/);
+  assert.equal(table.appliesTo.length, 6);
+  assert.equal(rm.items.length, 10);
+  // §4 订正：旧「SYSCLK 第 4 个上升沿锁存」的误记必须已从所有 statement 里清除
+  for (const it of rm.items) assert.ok(!/4th|第 ?4 ?个上升沿/.test(it.statement), it.id + " 还残留旧误记");
 });

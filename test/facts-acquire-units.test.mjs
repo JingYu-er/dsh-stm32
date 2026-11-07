@@ -90,8 +90,10 @@ t("acquireSvd：首候选 404 自动换源；全挂时把每个源的原因列�
 
 t("acquireRm：rm-facts 正常读入；坏 JSON 记 error 但不炸", async () => {
   const good = await acquireRm({ rmFactsPath: RMFIX });
-  assert.equal(good.items.length, 7);
+  assert.equal(good.items.length, 10, "EN RM0490 Rev 6 自动抽取后 fixtures 是 10 条");
   assert.equal(good.doc.id, "RM0490");
+  assert.equal(good.doc.rev, "Rev 6");
+  assert.deepEqual(good.doc.lines, ["STM32C011", "STM32C031", "STM32C051", "STM32C071", "STM32C091", "STM32C092"]);
   assert.equal(good.error, "");
   const bad = tmpDir("bad");
   const f = path.join(bad, "rm.json");
@@ -105,7 +107,7 @@ t("buildFacts：SVD + rm-facts → schema2、sources 双类、needs 空；readFa
   const facts = tmpDir("full");
   const rep = await buildFacts({ part: "STM32C031F6P6", svdPath: FIXTURE, rmFactsPath: RMFIX, outDir: path.join(facts, "stm32c0", "STM32C031"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
   assert.equal(rep.ok, true, rep.message);
-  assert.equal(rep.semantics, 7);
+  assert.equal(rep.semantics, 10);
   assert.deepEqual(rep.needs, []);
   assert.equal(rep.family, "STM32C0");
   const kinds = rep.sources.map((s) => s.kind);
@@ -116,7 +118,7 @@ t("buildFacts：SVD + rm-facts → schema2、sources 双类、needs 空；readFa
   const sum = readFactsFor("STM32C031F6P6", { DSH_STM32_FACTS: facts });
   assert.equal(sum.found, true);
   assert.equal(sum.verified, true);
-  assert.equal(sum.semantics, 7);
+  assert.equal(sum.semantics, 10);
 });
 
 t("buildFacts：缺 rm-facts → 降级：semantics=0、needs 指路、readFactsFor 只读", async () => {
@@ -139,17 +141,48 @@ t("buildFacts：SVD 完全拿不到 → 失败并列出尝试，不写 facts.jso
   assert.equal(fs.existsSync(path.join(facts, "stm32c0", "STM32C051", "facts.json")), false);
 });
 
-t("buildFacts：rm-facts 声明只覆盖 C011/C031，套到 C051 → 语义拒收、needs 指路", async () => {
+t("buildFacts：跨线套用拒收（包级门禁）——老式条目无 appliesTo 时 --rm-lines/doc.lines 说了算", async () => {
   const facts = tmpDir("lines");
-  const rep = await buildFacts({ part: "STM32C051C6T6", svdPath: FIXTURE, rmFactsPath: RMFIX, outDir: path.join(facts, "stm32c0", "STM32C051"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
+  // 手工构造一份「老式」rm-facts：条目不带 appliesTo（自动抽取前的形状）
+  const legacy = path.join(tmpDir("legacy"), "rm.json");
+  fs.writeFileSync(legacy, JSON.stringify({
+    doc: { id: "RM0490", rev: "Rev 1（中文）" },
+    items: [
+      { id: "x1", statement: "自举表（中文 Rev 1 的说法）", source: { page: 42 } },
+      { id: "x2", statement: "OPTKEY 序列", source: { page: 52 } },
+      { id: "x3", statement: "RDP 默认档", source: { page: 53 } },
+    ],
+  }, null, 1), "utf8");
+  const rep = await buildFacts({ part: "STM32C051C6T6", svdPath: FIXTURE, rmFactsPath: legacy, rmLines: ["STM32C011", "STM32C031"], outDir: path.join(facts, "stm32c0", "STM32C051"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
   assert.equal(rep.ok, true, rep.message);
-  assert.equal(rep.semantics, 0, "doc.lines 不含 STM32C051，7 条语义必须全部拒收");
+  assert.equal(rep.semantics, 0, "doc.lines/--rm-lines 不含 STM32C051：3 条老式语义必须全部拒收");
   assert.ok(rep.needs.some((n) => n.includes("不含 STM32C051")), rep.needs.join("|"));
   const sum = readFactsFor("STM32C051C6T6", { DSH_STM32_FACTS: facts });
   assert.equal(sum.verified, false, "flash 门禁据此拒绝烧录");
-  // 显式 --rm-lines 覆盖同一份 rm-facts 时可以采信（给 C031 用）
-  const ok31 = await buildFacts({ part: "STM32C031F6P6", svdPath: FIXTURE, rmFactsPath: RMFIX, rmLines: ["STM32C031"], outDir: path.join(facts, "stm32c0", "STM32C031"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
-  assert.equal(ok31.semantics, 7);
+  // 现行自动抽取 fixtures：条目级 appliesTo 六线全含，C051 正常采信
+  const ok51 = await buildFacts({ part: "STM32C051C6T6", svdPath: FIXTURE, rmFactsPath: RMFIX, outDir: path.join(facts, "stm32c0", "STM32C051"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
+  assert.equal(ok51.semantics, 10, "R4 落地：C051 直接用现行 fixtures 就该 verified");
+  assert.equal(readFactsFor("STM32C051C6T6", { DSH_STM32_FACTS: facts }).verified, true);
+});
+
+t("buildFacts：条目级 appliesTo 优先于包级 doc.lines（新数据形状）", async () => {
+  const dir = tmpDir("itemlevel");
+  const f = path.join(dir, "rm.json");
+  // 混合：一条只适用 C051、一条适用 C011；包级 lines 故意只写 C011
+  fs.writeFileSync(f, JSON.stringify({
+    doc: { id: "RM0490", lines: ["STM32C011"] },
+    items: [
+      { id: "a", statement: "只有 C051 的", appliesTo: ["STM32C051"] },
+      { id: "b", statement: "C011 的" },
+    ],
+  }), "utf8");
+  const facts = tmpDir("itemlevel-facts");
+  const rep51 = await buildFacts({ part: "STM32C051C6T6", svdPath: FIXTURE, rmFactsPath: f, outDir: path.join(facts, "stm32c0", "STM32C051"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
+  assert.equal(rep51.semantics, 1, "条目 a 按 appliesTo 命中；无 appliesTo 的 b 受 doc.lines=[C011] 拦截");
+  assert.deepEqual(rep51.semantics === 1 ? ["a"] : [], ["a"]);
+  const rep31 = await buildFacts({ part: "STM32C031F6P6", svdPath: FIXTURE, rmFactsPath: f, outDir: path.join(facts, "stm32c0", "STM32C031"), env: { DSH_STM32_FACTS: facts }, allowNetwork: false });
+  assert.equal(rep31.semantics, 0, "a 被条目级 appliesTo 剔、b 被包级 doc.lines 剔：两层门禁各管各的");
+
 });
 
 t("readFactsFor：没有 facts → needs 指向 build-facts CLI", () => {

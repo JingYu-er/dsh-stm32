@@ -6,6 +6,8 @@ import { homedir } from "node:os";
 export interface FactsSemantic {
   id: string;
   statement: string;
+  /** 条目级适用线（自动抽取带；缺省时由包级 doc.lines 决定）。 */
+  appliesTo?: string[];
   source?: { doc?: string; page?: number; section?: string };
   table?: Record<string, unknown>[];
 }
