@@ -8,6 +8,7 @@
 import { ensureAssets } from "../engine/assets.js";
 import { runDoctor } from "../engine/doctor.js";
 import type { DoctorProcess, DoctorReport } from "../engine/doctor.js";
+import { describeFacts, mcuFromIoc, readFactsFor } from "../engine/facts.js";
 import type { ProbeResult } from "../engine/probe.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
@@ -228,6 +229,8 @@ export function registerDoctor(ctx: DshContext): void {
       } else if (assets.status === "refreshed") {
         report.notes.push(assets.message);
       }
+      const factsMcu = mcuFromIoc(report.projectDir);
+      if (factsMcu !== null) report.notes.push(...describeFacts(readFactsFor(factsMcu)));
       return { message: report.message, report };
     },
   });

@@ -1,0 +1,119 @@
+{
+ "doc": {
+  "id": "RM0490",
+  "rev": "Rev 1 / English Rev 3",
+  "title": "STM32C0x1 参考手册（中文）",
+  "pages": 755,
+  "file": "D:\\JingYu\\Obsidian\\MyObsidian\\学习\\砖块\\参考手册\\st-STM32C0x1 基于 Arm® 内核的 32 位高级 MCU.pdf"
+ },
+ "items": [
+  {
+   "id": "c0.boot.table",
+   "statement": "自举模式由 BOOT_LOCK / nBOOT1 / BOOT0 引脚 / nBOOT_SEL / nBOOT0 共同决定",
+   "source": {
+    "page": 42,
+    "section": "2.5 自举配置 / 表 4 自举模式"
+   },
+   "table": [
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": "x",
+     "BOOT0Pin": 0,
+     "nBOOT_SEL": 0,
+     "nBOOT0": "x",
+     "region": "主 Flash"
+    },
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": 1,
+     "BOOT0Pin": 1,
+     "nBOOT_SEL": 0,
+     "nBOOT0": "x",
+     "region": "系统存储器"
+    },
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": 0,
+     "BOOT0Pin": 1,
+     "nBOOT_SEL": 0,
+     "nBOOT0": "x",
+     "region": "嵌入式 SRAM"
+    },
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": "x",
+     "BOOT0Pin": "x",
+     "nBOOT_SEL": 1,
+     "nBOOT0": 1,
+     "region": "主 Flash"
+    },
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": 1,
+     "BOOT0Pin": "x",
+     "nBOOT_SEL": 1,
+     "nBOOT0": 0,
+     "region": "系统存储器"
+    },
+    {
+     "BOOT_LOCK": 0,
+     "nBOOT1": 0,
+     "BOOT0Pin": "x",
+     "nBOOT_SEL": 1,
+     "nBOOT0": 0,
+     "region": "嵌入式 SRAM"
+    },
+    {
+     "BOOT_LOCK": 1,
+     "nBOOT1": "x",
+     "BOOT0Pin": "x",
+     "nBOOT_SEL": "x",
+     "nBOOT0": "x",
+     "region": "主 Flash"
+    }
+   ]
+  },
+  {
+   "id": "c0.boot.latch",
+   "statement": "复位后自举模式配置在 SYSCLK 第 4 个上升沿锁存；退出待机后重新采样",
+   "source": {
+    "page": 43
+   }
+  },
+  {
+   "id": "c0.boot.empty",
+   "statement": "FLASH_ACR.EMPTY=1（0x08000000 读为 0xFFFFFFFF）时，自动改为从系统存储器自举以便首次编程",
+   "source": {
+    "page": 43
+   }
+  },
+  {
+   "id": "c0.bootloader.interface",
+   "statement": "嵌入式 bootloader 走 USART1 / I2C1，详见 AN2606",
+   "source": {
+    "page": 43
+   }
+  },
+  {
+   "id": "c0.ob.program",
+   "statement": "选项字节编程：先解 FLASH_CR.OPTLOCK，再向 FLASH_OPTKEYR 依次写 OPTKEY1=0x08192A3B、OPTKEY2=0x4C5D6E7F",
+   "source": {
+    "page": 52
+   }
+  },
+  {
+   "id": "c0.secr.layout",
+   "statement": "FLASH_SECR 位于 0x1FFF7870，含 BOOT_LOCK 与 SEC_SIZE",
+   "source": {
+    "page": 52
+   }
+  },
+  {
+   "id": "c0.rdp.default",
+   "statement": "RDP 取 0xAA 以外的非 0xCC 值时按级别 1 处理（不匹配值为默认级别 1）",
+   "source": {
+    "page": 53
+   }
+  }
+ ]
+}

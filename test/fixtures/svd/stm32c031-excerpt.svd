@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device schemaVersion="1.1"><name>STM32C031</name>
+  <peripherals><peripheral><name>FLASH</name><registers>
+    <register><name>FLASH_ACR</name><description>Flash access control register</description>      <field><name>EMPTY</name><description>Main flash memory area empty</description><bitOffset>16</bitOffset><bitWidth>1</bitWidth></field>
+      <field><name>DBG_SWEN</name><description>Debug access software enable Software may use this bit to enable/disable the debugger read access.</description><bitOffset>18</bitOffset><bitWidth>1</bitWidth>
+        <enumeratedValues><enumeratedValue><name>B_0x0</name><description>Debugger disabled</description><value>0x0</value></enumeratedValue><enumeratedValue><name>B_0x1</name><description>Debugger enabled</description><value>0x1</value></enumeratedValue></enumeratedValues>
+      </field></register>
+    <register><name>FLASH_OPTR</name><description>Flash option register</description>      <field><name>RDP</name><description>Read protection level Other: Level 1, memories read protection active</description><bitOffset>0</bitOffset><bitWidth>8</bitWidth>
+        <enumeratedValues><enumeratedValue><name>B_0xAA</name><description>Level 0, read protection not active</description><value>0xAA</value></enumeratedValue><enumeratedValue><name>B_0xCC</name><description>Level 2, chip read protection active</description><value>0xCC</value></enumeratedValue></enumeratedValues>
+      </field>
+      <field><name>NBOOT_SEL</name><description>BOOT0 signal source selection This option bit defines the source of the BOOT0 signal.</description><bitOffset>24</bitOffset><bitWidth>1</bitWidth>
+        <enumeratedValues><enumeratedValue><name>B_0x0</name><description>BOOT0 pin (legacy mode)</description><value>0x0</value></enumeratedValue><enumeratedValue><name>B_0x1</name><description>nBOOT0 option bit</description><value>0x1</value></enumeratedValue></enumeratedValues>
+      </field>
+      <field><name>NBOOT1</name><description>Boot configuration Together with the BOOT0 pin or option bit nBOOT0 (depending on nBOOT_SEL option bit configuration), this bit selects boot mode from the Main flash memory, SRAM or the System memory. Refer to Section3: Boot configuration.</description><bitOffset>25</bitOffset><bitWidth>1</bitWidth></field>
+      <field><name>NBOOT0</name><description>nBOOT0 option bit</description><bitOffset>26</bitOffset><bitWidth>1</bitWidth>
+        <enumeratedValues><enumeratedValue><name>B_0x0</name><description>nBOOT0=0</description><value>0x0</value></enumeratedValue><enumeratedValue><name>B_0x1</name><description>nBOOT0=1</description><value>0x1</value></enumeratedValue></enumeratedValues>
+      </field></register>
+    <register><name>FLASH_SECR</name><description>Flash security register</description>      <field><name>SEC_SIZE</name><description>Securable memory area size</description><bitOffset>0</bitOffset><bitWidth>8</bitWidth></field>
+      <field><name>BOOT_LOCK</name><description>used to force boot from user area If the bit is set in association with RDP level 1, the debug capabilities are disabled</description><bitOffset>16</bitOffset><bitWidth>1</bitWidth></field></register>
+  </registers></peripheral></peripherals>
+</device>

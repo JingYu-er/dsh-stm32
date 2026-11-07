@@ -15,6 +15,7 @@ import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
+import { describeFacts, mcuFromIoc, readFactsFor } from "../engine/facts.js";
 
 export const FLASH_TOOL = "stm32_flash";
 
@@ -71,6 +72,7 @@ interface FlashArgs {
   timeoutMs?: number;
   binDirs?: string[];
   allowNoDebug?: boolean;
+  allowUnknownFacts?: boolean;
   envCheck?: string;
 }
 
@@ -127,6 +129,7 @@ export function registerFlash(ctx: DshContext): void {
         adapterSpeed: { type: "number", description: "adapter speed（kHz）；连不上时可降到 1000 或 100。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 120000。" },
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
+        allowUnknownFacts: { type: "boolean", description: "本型号 facts 只有结构、语义未核实时是否仍然烧录（默认 false：拒绝，只读建议）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值。" },
         envCheck: ENV_CHECK_SCHEMA,
       },
@@ -161,6 +164,16 @@ export function registerFlash(ctx: DshContext): void {
         const blocked = blockedReport(resolution.projectDir, gate);
         return { message: blocked.message, report: flashReportForHost(blocked) };
       }
+      // 事实层门禁：facts 存在但语义为 0（只有结构）时只读，避免拿别的线的事实套用。
+      const mcu = mcuFromIoc(resolution.projectDir);
+      const facts = mcu === null ? null : readFactsFor(mcu);
+      if (facts !== null && facts.found && !facts.verified && args.allowUnknownFacts !== true) {
+        const blocked = emptyReport(
+          "没烧：" + facts.line + " 的事实只有结构、语义未核实（只读建议）。补该线 RM 后重新生成 facts，或传 allowUnknownFacts=true 强制烧录。",
+        );
+        blocked.notes.push(...describeFacts(facts));
+        return { message: blocked.message, report: flashReportForHost(blocked) };
+      }
       // 探针只有一块：门禁通过后才让调试会话让出来（B16：缺件时不该把别人的探针收走）。
       const released = await releaseProbeFor("stm32_flash");
       const report = await runFlash(subprocess, {
@@ -175,6 +188,7 @@ export function registerFlash(ctx: DshContext): void {
         ...(args.allowNoDebug === undefined ? {} : { allowNoDebug: args.allowNoDebug }),
         signal: exec.signal,
       });
+      if (facts !== null) report.notes.push(...describeFacts(facts));
       if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
       if (resolution.note !== null) report.notes.push(resolution.note);
