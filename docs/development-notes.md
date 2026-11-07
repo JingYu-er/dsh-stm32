@@ -5331,3 +5331,34 @@ R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先�
 - tsc 0；TOTAL **pass=890 fail=0**（新 rm-topics-units 4 + ensure-facts-units 4 + generation-risk 重写为 7 条三态）；pack-size 659.9 KB。
 - 真链路（干净 facts 根）：C071 → 自愈全程无人、verified、10 条语义、rmPath 指本地 RM0490；F103 → 结构 8 寄存器 + 载体 RM0008 路径暴露、不拦烧。中途一次 rmPath 空是 sitemap 网络抖动，降级文案正确、重跑恢复——自愈的失败形态就是「如实说没拿到」，不是「假装不需要」。
 - 待用户：重启 dsh 后真机烧 C051（预期直接过）与 F103（预期只提示）；给常用的别的芯片放芯片级 spec 试一轮拒烧→修 spec→放行闭环。
+
+## 79. 烧录探针分两路：实见 ST-LINK 就换 interface，openocd 认不出再走 CubeProgrammer（2026-11-07）
+
+用户拿 C031F6P6 + ST-Link 实测，openocd 报 `Error: unable to find a matching CMSIS-DAP device`，给了七条复盘。逐条按证据核，落成三条结论：**探针类型没分流**（真问题）、**没有第二后端**（真问题）、**「非 F1 没有烧录后端」不成立**（那次是手写 openocd.cfg 覆盖了插件自带的 target 脚本）。
+
+### 取证：三处硬编码与一条被覆盖的自带配置
+
+- `doctor` 把任何认不出的探针都写成「CMSIS-DAP」：它只看 pnputil 里有没有 USB 设备，没解析 VID:PID。`flash` 的兜底 interface 是字面量 `interface/cmsis-dap.cfg`。debug / regs / debug-session 三处各自也各写了一遍同样的字面量——**四处快照，改一处不管用**。
+- 本机 openocd 0.12：`interface/stlink.cfg` 存在且 `hla_vid_pid` 已含 3752（ST-Link/V3）；`interface/cmsis-dap.cfg` 不锁 VID，所以接上 ST-Link 时它会去枚举 DAP 并失败——报错文案正是 "unable to find a matching CMSIS-DAP device"。这不是「探针没插」，是「interface 选错了」，两类错误必须分开。
+- `templates/openocd/stm32c0x.cfg` 一直是内置的（0.13→0.12 适配版：`-tap` 改 `-chain-position`、CPUTAPID `0x0bc11477`、stm32l4x flash bank），`chooseOpenocdTarget` 按族取它。用户工程里那份手写的 `openocd.cfg` 优先级更高，把它盖掉了——于是「C0 没有烧录后端」的观感成立，事实不成立。**自带模板存在 ≠ 用户没覆盖它**，两条都要在结论里分开说。
+- CubeProgrammer v2.19.0（`D:/app/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe`）：从 exe/dll 的 UTF-16 字符串表里取出真实消息串（`Data downloaded successfully` / `Download verified successfully` / `Download verification failed` / `No ST-Link detected!`），当前没插探针时 `-l` 正好报最后一条。它的退出码不参与成败判定——按日志串判。
+
+### 实现：一个公共入口 + 两段兜底
+
+- `parseProbeVidPid(text)`（doctor.ts）：从 pnputil 输出抓 `USB\VID_xxxx&PID_yyyy`，ST-LINK 认 3744/3748/374b/374d/374e/374f/3752/3753/3754，`0d28`→CMSIS-DAP，`c251`→DAPLink，`1a86`→CH340 串口桥（历史契约：串口桥仍算 ok，但 detail 改成「只供电/BOOT0」话术，不再冒充调试探针）。
+- `preferredInterfaceConfig(probes)` 给出 cfg 与理由；`liveProbeChoice(subprocess, signal?, force?)` 是 flash / debug / regs / 会话四处的**唯一**兜底入口，60 s 进程内缓存——一次烧录里「探测→换接口重试→CLI 兜底」最多问一次 pnputil（0.5–2 s），不拿它拖慢每个工具。
+- `probe-error.ts` 新增 `probe-interface-mismatch`（`unable to find a matching (cmsis-dap|stlink|st-link) device`），**排在 no-probe 之前**：先判「选错 interface」，再判「没探针」。no-probe 收窄成 `no device found` / `open failed`。9 类。
+- `flash.ts` 拆成 `runOpenocdFlash`（原逻辑，多一个 interface 覆盖参数）+ `runFlash` 编排：实见探针选 interface（工程自带 openocd.cfg 则不插手，notes 写明「以它为准」）→ 失败且是 interface 不匹配、又没手写 cfg 时**换另一个 interface 重试一次** → 仍失败、错误不属无解类（swd-locked / no-power / flash-protected / probe-busy）、实见 ST-LINK、CLI 在，则 CubeProgrammer 兜底。DAPLink 全败时 notes 明说「CLI 只认 ST-LINK」，不假装还有一条腿。
+- `cube-programmer.ts`（新）：`findCubeProgrammerCli` / `buildCubeProgrammerArgs`（`-c port=SWD[ freq=] -d <elf> -v -rst`）/ `parseCubeProgrammerLog` / `runCubeProgrammerFlash` / `cubeProgrammerBackendNote`。search-roots 加 `cubePrgBins` 发现链（默认装法 + `STM32_CUBE_PRG_ROOT`，认安装根也认 bin），probe 清单加非必需条目 `cubeprogrammer`。
+
+### 教训
+
+- **字面量 interface 是第三种「手搓快照」**：前两次是寄存器名清单和 RM 主题清单，这次是 `"interface/cmsis-dap.cfg"` 被复制到四个文件。凡「同一个事实在多处重复写」的地方，迟早有一处没跟上。
+- **错误归类决定能否自愈**：把「interface 选错」混进「没有探针」，编排层就永远不知道该换一条路试。新增一个 kind 的成本远低于让用户去猜。
+- **兜底要有明确的准入条件**（实见 ST-LINK + CLI 在 + 错误可解 + 窗口内），否则第二后端会把「探针没插」也拖成两倍耗时。
+
+### 验收
+
+- tsc 0；TOTAL **pass=898 fail=0**（新 `flash-orchestrator-units` 7 条全注入假 subprocess：实见选 stlink / 自动换 interface 重试 / 手写 cfg 不重试 / CLI 兜底成功 / DAPLink 不派 CLI / swd-locked 不兜底 / 显式 interface 不探 USB；probe-error 扩到 27 条）；pack-size 666.5 KB / 上限 1171.9 KB。
+- 真机：`parseProbeVidPid` 吃真 pnputil 输出（84,848 B，GBK 乱码前缀不影响）认出 0483:3752；`diagnoseUsb` 输出「探针在线：ST-Link（VID:PID 0483:3752）；openocd 应用 interface/stlink.cfg」；probeAll 真机 found=true 自动发现 `STM32_Programmer_CLI.exe`。
+- 待用户：插上 ST-Link 跑一次真烧（预期 notes 里能看到「实见 ST-Link → interface/stlink.cfg」），再故意把工程里的 openocd.cfg 留着验证「以它为准」那条分支。
