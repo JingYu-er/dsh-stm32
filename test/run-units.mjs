@@ -8,6 +8,33 @@
 // 解析不到用例数时不再默默报 0（之前 TOTAL 只算出 46，实际 80），而是标红并贴出该套件结尾几行。
 // 套件退出码非 0 一律算失败，即使它自己打印了 fail=0。
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// lib/ 是入库的编译产物，套件 import 的是 lib/ 而不是 src/。src 比 lib 新 = 正在测上一版代码，
+// 之前就吃过一次亏（报 898 pass，实际跑的是改动前的 lib）。这里只警告不失败：CI 先 build 再测，
+// 本地偶尔只改 src 跑一遍也不该被拦死，但绝不能让「测的不是这次改动」静默通过。
+{
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const newest = (dir) => {
+    let best = 0;
+    const walk = (d) => {
+      for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, ent.name);
+        if (ent.isDirectory()) walk(p);
+        else if (ent.name.endsWith(".ts") || ent.name.endsWith(".js")) best = Math.max(best, fs.statSync(p).mtimeMs);
+      }
+    };
+    if (fs.existsSync(dir)) walk(dir);
+    return best;
+  };
+  const srcNew = newest(path.join(root, "src"));
+  const libOld = newest(path.join(root, "lib"));
+  if (srcNew > libOld + 1000) {
+    console.warn("[warn] src/ 比 lib/ 新：套件 import 的是 lib/，当前结果不代表 src 的最新改动。先 npm run build 再跑。");
+  }
+}
 
 const suites = [
   "build-units.test.mjs",

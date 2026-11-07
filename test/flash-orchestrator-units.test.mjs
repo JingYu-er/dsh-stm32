@@ -170,3 +170,15 @@ t("显式 interfaceConfig 参数：尊重用户指定，不探测 USB（省一�
   assert.equal(report.ok, true, report.message);
   assert.equal(fake.calls.some((c) => /pnputil/i.test(c)), false, "给了显式 interface 就不该再探 USB");
 });
+
+t("连续两次烧录不共享探针结论：第二颗实见 DAPLink 就按 DAPLink 走", async () => {
+  // 回归：第一版把实见结果缓存在模块里 60 s，CI 上 2 条用例正是这么挂的——
+  // 同进程先烧 ST-LINK 再烧 DAPLink，第二颗芯片会拿到第一颗的结论（重试方向还算反）。
+  const first = fakeSpawner({ pnputil: PNPUTIL_STLINK, openocdLogs: GOOD, openocdExits: [0] });
+  const r1 = await runFlash(first, { projectDir: makeProject(false), timeoutMs: 10_000 });
+  assert.ok(r1.configs.includes("interface/stlink.cfg"), "第一次按 ST-LINK：" + r1.configs.join(","));
+  const second = fakeSpawner({ pnputil: PNPUTIL_DAPLINK, openocdLogs: GOOD, openocdExits: [0] });
+  const r2 = await runFlash(second, { projectDir: makeProject(false), timeoutMs: 10_000 });
+  assert.ok(second.calls.some((c) => /pnputil/i.test(c)), "第二次必须重新探 USB，不能吃上一次的缓存");
+  assert.ok(r2.configs.includes("interface/cmsis-dap.cfg"), "第二次按 DAPLink：" + r2.configs.join(","));
+});

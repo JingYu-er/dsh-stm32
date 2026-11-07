@@ -184,36 +184,21 @@ export async function usbDiagnosis(subprocess: SubprocessService, signal?: Abort
   }
 }
 
-let liveProbeCache: { at: number; probes: DetectedProbe[] } | null = null;
-const LIVE_PROBE_TTL_MS = 60_000;
-
 /**
- * 引擎各处（flash / debug / regs / 会话）兜底 interface 的统一入口：
- * 60 s 内复用一次 pnputil 实见结果——一次烧录里"探测→重试→兜底"最多问一次 USB，
- * 不拿 pnputil（~0.5–2 s）反复拖慢工具。force=true（换接口重试前）绕开缓存。
+ * 引擎各处（flash / debug / regs / 会话）兜底 interface 的统一入口。
  *
- * 返回的 swdProbes 供调用方决定「CubeProgrammer 这条腿有没有得走」（只认 ST-LINK）。
+ * 刻意**不做模块级缓存**：第一版把 60 s 的结果缓存在模块里，同进程连烧两颗不同芯片时
+ * 第二颗会拿到第一颗的探针结论（重试方向还会因此算反），测试里表现为用例互相污染。
+ * 现在一次工具调用只探一次（调用方自己复用返回值），跨调用永远重新看。
  */
 export async function liveProbeChoice(
   subprocess: SubprocessService,
   signal?: AbortSignal,
-  force = false,
 ): Promise<{ cfg: string; why: string; probes: DetectedProbe[]; swdProbes: DetectedProbe[] }> {
-  if (!force && liveProbeCache !== null && Date.now() - liveProbeCache.at < LIVE_PROBE_TTL_MS) {
-    const swd = liveProbeCache.probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
-    const pref = preferredInterfaceConfig(swd);
-    return { ...pref, probes: liveProbeCache.probes, swdProbes: swd };
-  }
   const usb = await usbDiagnosis(subprocess, signal);
-  liveProbeCache = { at: Date.now(), probes: usb.probes };
   const swd = usb.probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
   const pref = preferredInterfaceConfig(swd);
   return { ...pref, probes: usb.probes, swdProbes: swd };
-}
-
-/** 清缓存（单测 / 换探针后强制重见）。 */
-export function resetLiveProbeCache(): void {
-  liveProbeCache = null;
 }
 
 /** 探测结果压成「能干什么」的四项能力（只由 found 决定，与 required 无关）。 */

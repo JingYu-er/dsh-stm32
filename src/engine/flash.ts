@@ -454,7 +454,13 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
 
   // 2) 接口不匹配 → 换另一个 interface 重试一次（仅插件兜底配置的工程；手写 cfg 的让用户按 hint 改）
   if (!report.ok && !hasProjectCfg && report.probeError !== null && report.probeError.kind === "probe-interface-mismatch") {
-    const other = (ifaceOverride ?? "interface/cmsis-dap.cfg") === "interface/cmsis-dap.cfg" ? "interface/stlink.cfg" : "interface/cmsis-dap.cfg";
+    // 换哪条由**实见探针**决定，不是"把当前值取反"：取反在探针结论过期/缺失时会把重试引向
+    // 与真实硬件无关的方向（CI 上 2 条用例就是这么挂的）。实见 ST-LINK 就先试 stlink。
+    const firstIface = ifaceOverride ?? "interface/cmsis-dap.cfg";
+    const guided = sawStLink ? "interface/stlink.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : "";
+    const other = guided !== "" && guided !== firstIface
+      ? guided
+      : firstIface === "interface/cmsis-dap.cfg" ? "interface/stlink.cfg" : "interface/cmsis-dap.cfg";
     const firstMessage = report.message;
     const retry = await runOpenocdFlash(subprocess, request, other);
     // notes 归属：retry 是新报告——探针实见行、换接口说明、第一次失败原因都得挂到它身上
