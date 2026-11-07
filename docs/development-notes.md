@@ -5213,3 +5213,28 @@ CubeMX 无头命令行里 `swmgr` 子命令有 `refresh` / `connection` / `insta
 ### 顺带
 
 `project_create` 缺固件包时的拒绝文案（`src/engine/scaffold.ts`）改成指到 `stm32_firmware_install`：传 `mcu`，真装要 `dryRun: false` + `confirm: true`，先官网后 GitHub。
+
+## 74. facts 获取自动化：SVD 本地→缓存→联网，RM 按线分级拒收套用（2026-11-07）
+上一节做完事实层，留下两个洞：facts 靠人手喂 SVD 路径与 rm-facts，换机器就断；更要命的是自动化本身有风险——CLI 一顺，「把 C011/C031 的 RM0490 语义喂给 C051」这种错用会静默通过 flash 门禁（semantics>0 就放行）。这一节把获取做成链路，同时把分级门禁补上。
+
+### 上游取证（全部实测，零手搓）
+
+- SVD 源：本机 `D:/JingYu/STM32/cmsis-svd-stm32` 的 origin 就是 `github.com/modm-io/cmsis-svd-stm32`；GitHub API 实测 default_branch=main、261★、未归档、pushed_at=2026-07-09。contents API 实测布局 `<族小写>/<线>.svd`（stm32c0 6 份、stm32f1 5 份、stm32l4 16 份、stm32h5 10 份，命名同规则），候选顺序沿用 cmsis-sources 的老结论：fastly jsDelivr → cdn jsDelivr → raw.githubusercontent → ghproxy（前两条 200 实测）。
+- **SVD 不锁 sha256**：同名文件本机快照与 main 已漂移（STM32C031.svd 本地 2,332,557 B / 远端 2,281,605 B，哈希不同）。锁哈希=每次上游 "Update STM32 SVD files" 就全线报错；改锁形状——`minBytes` + markers `<device`/`<cpu>`（真 SVD 必带），实际取到内容算 sha256 **记进 sources**（可追溯、不拦人）。这跟 CMSIS 下载缓存逐文件钉哈希的口径相反，是有意的：那边钉的是版本，这边上游本来就漂。
+- RM 源：`https://www.st.com/resource/en/reference_manual/rm0490-<全标题小写>.pdf` 实测 200（11,536,384 B，application/pdf），短 slug `rm0490.pdf` 404，`rm0490.html` 产品页也 404。slug 含整篇标题，只能人从官网复制——所以插件**不建「RM 号→URL」表**（那就是又一张某版事实的快照），RM 通道只留 `--rm-pdf`（本机文件，含中文 PDF）与 `--rm-url`（人给的直链，下载按 `%PDF` 头校验后缓存到 `<facts>/rm/`）两个入口；`DSH_STM32_OFFLINE=1`/`--no-network` 时跳过并明说。
+
+### 获取链路（src/engine/facts-acquire.ts）
+
+`acquireSvd`：`--svd` 显式文件 → 每个 `--svd-root` 的 `<族>/<线>.svd` → `<facts>/svd/` 下载缓存 →（允许时）联网下到缓存。下载失败把**每个源的尝试**列出来；本地文件存在但解析不出 FLASH_OPTR/ACR/SECR 也明说「内容对不上」，不猜。缓存命中后二次调用零网络（离线复用，单测验证）。
+`acquireRm`：rm-facts JSON（语义唯一来源）+ 载体登记；坏 JSON 记 error 不炸。
+`buildFacts` 组装 schema 2：`sources` 带 origin（local/URL）、`rmDoc`、`rmAppliesTo`、`needs`。`facts.ts` 的 `readFactsFor` 优先读回 `pkg.needs`，缺省兜底文案也改成指路 `build-facts.mjs --part <型号>`。
+
+### 按线分级：语义套用必须拒收
+
+`facts-acquire` 的 `rmLines`（CLI `--rm-lines`）优先、rm-facts 的 `doc.lines` 兜底：声明过且不含目标线 → 语义**整批拒收**（0 条）、needs 写明「rm-facts 声明只覆盖 STM32C011/STM32C031，不含 STM32C051」。fixtures 与本机 rm-facts-c0.json 都补了 `doc.lines`。没声明 → 照常采信但在 notes 提醒「抽取的人要自己核对覆盖范围」——旧数据不能因为新校验突然全灭。真 CLI 验证：C051+同一份 rm-facts → 语义 0 条 + needs；C031 → 7 条正常。flash 门禁不用改：它只看 `verified`，而 verified 现在套不上假语义了。
+
+### 验收与遗留
+
+- `test/facts-units.test.mjs` 6 条黄金样本改 import 到 `lib/engine`（结构解析归引擎，CLI 只是壳）；新套 `test/facts-acquire-units.test.mjs` 11 条全注入假 fetch：候选表、本地命中、svdRoots 布局、离线缺内容、缓存复用、404 换源、坏 rm-facts、schema2 全链路、缺语义降级、**跨线拒收**、needs 指路。全量 `TOTAL pass=853 fail=0`、tsc 0、pack-size 642.3 KB 通过。真链路实测：本地根/联网下载/离线失败/降级/RM PDF 登记 5 条 CLI 路径各跑一遍（`demo/.dsh-stm32/facts-cli-test/`）。
+- 一条单测翻车记录：「svdRoots 找不到就明说」先写成走默认缓存，而先前 CLI 实测已把 C051 下进默认缓存 → 命中成功、断言炸。测试前提被真实副作用污染，修法是给用例独立空 `cacheDir`（离线复用本来就是另一条用例）。
+- 遗留：RM 语义仍是人工 rm-facts，PDF→语义自动解析 = 第 5 步（黄金样本扩到 RM 抽取）；C051/C071/C091/C092 的 RM 与 rm-facts 待补（第 3 步）；`facts` 还没接进 generate/project-create（第 4 步）。

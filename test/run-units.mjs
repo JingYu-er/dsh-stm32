@@ -20,6 +20,7 @@ const suites = [
 "family-units.test.mjs",
   "family-facts-units.test.mjs",
   "facts-units.test.mjs",
+  "facts-acquire-units.test.mjs",
   "db-presets-units.test.mjs",
   "rtt-units.test.mjs",
   "svd-units.test.mjs",

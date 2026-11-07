@@ -4,7 +4,11 @@
   "rev": "Rev 1 / English Rev 3",
   "title": "STM32C0x1 参考手册（中文）",
   "pages": 755,
-  "file": "D:\\JingYu\\Obsidian\\MyObsidian\\学习\\砖块\\参考手册\\st-STM32C0x1 基于 Arm® 内核的 32 位高级 MCU.pdf"
+  "file": "D:\\JingYu\\Obsidian\\MyObsidian\\学习\\砖块\\参考手册\\st-STM32C0x1 基于 Arm® 内核的 32 位高级 MCU.pdf",
+  "lines": [
+   "STM32C011",
+   "STM32C031"
+  ]
  },
  "items": [
   {

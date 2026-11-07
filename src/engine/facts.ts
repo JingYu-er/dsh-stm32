@@ -15,9 +15,13 @@ export interface FactsPackage {
   part: string;
   family: string;
   line: string;
-  sources?: { kind: string; file?: string; sha256?: string }[];
+  sources?: { kind: string; file?: string; sha256?: string; bytes?: number; path?: string; url?: string; origin?: string }[];
   registers?: Record<string, { description?: string; fields?: { name: string; bitOffset: number; bitWidth: number }[] }>;
   semantics?: FactsSemantic[];
+  /** 生成时写下的缺口说明（schema 2 起由 build-facts 写入）。 */
+  needs?: string[];
+  /** rm-facts 的 doc 字段（人工核对过的手册信息）。 */
+  rmDoc?: Record<string, unknown>;
 }
 
 export interface FactsSummary {
@@ -81,7 +85,7 @@ export function readFactsFor(part: string, env: NodeJS.ProcessEnv = process.env)
       semantics: 0,
       verified: false,
       lines: [],
-      needs: ["facts 未生成（可运行 scripts/facts/build-facts.mjs，或提供该线的 RM 手册）"],
+      needs: ["facts 未生成：node scripts/facts/build-facts.mjs --part " + part.toUpperCase() + "（SVD 会自动本地找→下载缓存→联网取；语义另需该线 rm-facts）"],
     };
   }
   let pkg: FactsPackage;
@@ -99,7 +103,10 @@ export function readFactsFor(part: string, env: NodeJS.ProcessEnv = process.env)
       lines.push("  " + item.table.map((row) => Object.values(row).join("/")).join(" | "));
     }
   }
-  const needs = semantics.length === 0 ? ["本线只有结构、语义未核实：需要该线对应的 RM 手册"] : [];
+  const declared = Array.isArray(pkg.needs) ? pkg.needs.filter((n) => typeof n === "string" && n !== "") : [];
+  const needs = semantics.length === 0
+    ? (declared.length > 0 ? declared : ["本线只有结构、语义未核实：需要该线对应的 RM 手册与 rm-facts 抽取"])
+    : declared;
   return { found: true, path: file, part: pkg.part ?? part, line: pkg.line ?? target.line, semantics: semantics.length, verified: semantics.length > 0, lines, needs };
 }
 

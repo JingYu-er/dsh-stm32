@@ -1,17 +1,19 @@
 // 黄金样本：facts 生成链路（SVD 结构 + RM 语义）一旦改坏必须在这里炸。
 // 运行：node --test test/facts-units.test.mjs
+// 结构解析在 lib/engine/facts-acquire.js、型号解析在 lib/engine/facts.js（scripts/facts/build-facts.mjs 只是 CLI 壳）。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { parseSvd, partToFamilyLine } from "../scripts/facts/build-facts.mjs";
+import { parseSvdStructure } from "../lib/engine/facts-acquire.js";
+import { partToFamilyLine } from "../lib/engine/facts.js";
 
 const SVD = fileURLToPath(new URL("./fixtures/svd/stm32c031-excerpt.svd", import.meta.url));
 const RM = fileURLToPath(new URL("./fixtures/rm-facts-c0.json", import.meta.url));
-const regs = parseSvd(readFileSync(SVD, "utf8"));
+const regs = parseSvdStructure(readFileSync(SVD, "utf8"));
 
-test("partToFamilyLine：STM32C031F6P6 → family C0 / line STM32C031 / dir stm32c0", () => {
-  assert.deepEqual(partToFamilyLine("STM32C031F6P6"), { family: "C0", line: "STM32C031", dir: "stm32c0" });
+test("partToFamilyLine：STM32C031F6P6 → family stm32c0 / line STM32C031", () => {
+  assert.deepEqual(partToFamilyLine("STM32C031F6P6"), { family: "stm32c0", line: "STM32C031" });
   assert.equal(partToFamilyLine("not-a-part"), null);
 });
 
