@@ -5222,6 +5222,7 @@ CubeMX 无头命令行里 `swmgr` 子命令有 `refresh` / `connection` / `insta
 - SVD 源：本机 `D:/JingYu/STM32/cmsis-svd-stm32` 的 origin 就是 `github.com/modm-io/cmsis-svd-stm32`；GitHub API 实测 default_branch=main、261★、未归档、pushed_at=2026-07-09。contents API 实测布局 `<族小写>/<线>.svd`（stm32c0 6 份、stm32f1 5 份、stm32l4 16 份、stm32h5 10 份，命名同规则），候选顺序沿用 cmsis-sources 的老结论：fastly jsDelivr → cdn jsDelivr → raw.githubusercontent → ghproxy（前两条 200 实测）。
 - **SVD 不锁 sha256**：同名文件本机快照与 main 已漂移（STM32C031.svd 本地 2,332,557 B / 远端 2,281,605 B，哈希不同）。锁哈希=每次上游 "Update STM32 SVD files" 就全线报错；改锁形状——`minBytes` + markers `<device`/`<cpu>`（真 SVD 必带），实际取到内容算 sha256 **记进 sources**（可追溯、不拦人）。这跟 CMSIS 下载缓存逐文件钉哈希的口径相反，是有意的：那边钉的是版本，这边上游本来就漂。
 - RM 源：`https://www.st.com/resource/en/reference_manual/rm0490-<全标题小写>.pdf` 实测 200（11,536,384 B，application/pdf），短 slug `rm0490.pdf` 404，`rm0490.html` 产品页也 404。slug 含整篇标题，只能人从官网复制——所以插件**不建「RM 号→URL」表**（那就是又一张某版事实的快照），RM 通道只留 `--rm-pdf`（本机文件，含中文 PDF）与 `--rm-url`（人给的直链，下载按 `%PDF` 头校验后缓存到 `<facts>/rm/`）两个入口；`DSH_STM32_OFFLINE=1`/`--no-network` 时跳过并明说。
+> **§75 更正（同日）**：「只能人从官网复制」被证伪——ST 官方 `sitemap1..10.xml` 匿名可取、直接列出全部 132 条英文 reference_manual 直链；RM 载体由此做成双通道自动（sitemap 主 + stmcu CCC 备案）。仍然不建静态表：清单每次现取，不焊进代码——本节对「不焊快照表」的坚持是对的，错在以为没有机器可读的动态源。
 
 ### 获取链路（src/engine/facts-acquire.ts）
 
@@ -5237,7 +5238,7 @@ CubeMX 无头命令行里 `swmgr` 子命令有 `refresh` / `connection` / `insta
 
 - `test/facts-units.test.mjs` 6 条黄金样本改 import 到 `lib/engine`（结构解析归引擎，CLI 只是壳）；新套 `test/facts-acquire-units.test.mjs` 11 条全注入假 fetch：候选表、本地命中、svdRoots 布局、离线缺内容、缓存复用、404 换源、坏 rm-facts、schema2 全链路、缺语义降级、**跨线拒收**、needs 指路。全量 `TOTAL pass=853 fail=0`、tsc 0、pack-size 642.3 KB 通过。真链路实测：本地根/联网下载/离线失败/降级/RM PDF 登记 5 条 CLI 路径各跑一遍（`demo/.dsh-stm32/facts-cli-test/`）。
 - 一条单测翻车记录：「svdRoots 找不到就明说」先写成走默认缓存，而先前 CLI 实测已把 C051 下进默认缓存 → 命中成功、断言炸。测试前提被真实副作用污染，修法是给用例独立空 `cacheDir`（离线复用本来就是另一条用例）。
-- 遗留：RM 语义仍是人工 rm-facts，PDF→语义自动解析 = 第 5 步（黄金样本扩到 RM 抽取）；C051/C071/C091/C092 的 RM 与 rm-facts 待补（第 3 步）；`facts` 还没接进 generate/project-create（第 4 步）。
+- 遗留：RM 语义仍是人工 rm-facts，PDF→语义自动解析 = 第 5 步（黄金样本扩到 RM 抽取）；~~C051/C071/C091/C092 的 RM 与 rm-facts 待补（第 3 步）~~（§75 取证：现行 EN RM0490 六线全覆盖，不存在「各自的 RM」）；`facts` 还没接进 generate/project-create（第 4 步）。
 
 ## 75. RM 载体双通道：sitemap 主源 + stmcu 备案，覆盖验证替代人核（2026-11-07）
 
