@@ -173,11 +173,11 @@ test("stm32_flash 失败报告带 probeError 时仍符合 output schema（B2 回
   const wire = flashReportForHost(report);
   reportProblems("stm32_flash", flashSchema, { message: report.message, report: wire });
   assert.equal(report.ok, false);
-  assert.equal(report.probeError?.kind, "no-probe", "拿不到探针时要归到 no-probe：" + JSON.stringify(report.errors));
+  assert.equal(report.probeError?.kind, "probe-interface-mismatch", "matching … device 句式归接口不匹配（2026-11-08）：" + JSON.stringify(report.errors));
   assert.equal(report.probeError?.retryable, true);
   assert.ok((report.probeError?.evidence.length ?? 0) > 0, "evidence 要留下原始日志行");
   assert.ok(wire.probeError !== undefined, "失败报告必须把 probeError 交给宿主");
-  assert.match(formatFlashReport(report).join("\n"), /错误：no-probe — /u);
+  assert.match(formatFlashReport(report).join("\n"), /错误：probe-interface-mismatch — /u);
 });
 
 test("stm32_debug_run 失败报告符合 output schema", () => {

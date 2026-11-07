@@ -43,6 +43,8 @@ export interface DoctorProcess {
 /** USB/探针形态诊断的结论（④：区分"没插"与"这台机器根本没有 USB"）。 */
 export type UsbDiagnosis = {
   kind: "no-usb" | "no-dap" | "driver-error" | "ok" | "unknown";
+  /** 按 VID:PID 认出的探针清单（2026-11-08 教训：只报"有 DAP"会把 ST-Link 说成 CMSIS-DAP）。 */
+  probes: DetectedProbe[];
   detail: string;
 };
 
@@ -53,44 +55,104 @@ export type UsbDiagnosis = {
  * 这和"没插板 / 线只供电 / 驱动没装 / 被占"是四种完全不同的回答，混成一句"找不到探针"
  * 会让用户白折腾。诊断只读、失败不阻塞（unknown 也会给一句手查指引）。
  */
+/** 一把 USB 探针：VID:PID 实测值 + 类型 + 展示名（型号后缀能拿到就带上）。 */
+export interface DetectedProbe {
+  vid: string;
+  pid: string;
+  /** st-link | cmsis-dap | daplink | ch341-serial | unknown */
+  kind: string;
+  label: string;
+}
+
+/** ST-LINK 全系 VID_0483 的这些 PID（openocd interface/stlink.cfg 的 hla_vid_pid 实测同一张表）。 */
+const STLINK_PIDS = new Set(["3744", "3748", "374b", "374d", "374e", "374f", "3752", "3753", "3754"]);
+/** DAPLink 系（板载探针常以 CMSIS-DAP 名义枚举，openocd 却走 cmsis-dap.cfg）。 */
+const DAPLINK_PIDS = new Set(["f111"]);
+
+/**
+ * 从 pnputil 输出解析所有 USB 设备的 VID:PID 并分类。
+ * 只依赖 ASCII（USB\VID_xxxx&PID_yyyy），中文系统的本地化字段不参与匹配（历史教训）。
+ */
+export function parseProbeVidPid(text: string): DetectedProbe[] {
+  const out: DetectedProbe[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/USB\\VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})/gi)) {
+    const vid = (m[1] ?? "").toLowerCase();
+    const pid = (m[2] ?? "").toLowerCase();
+    const key = vid + ":" + pid;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let kind = "unknown";
+    let label = "USB 设备 " + key;
+    if (vid === "0483") {
+      if (STLINK_PIDS.has(pid)) { kind = "st-link"; label = "ST-Link（VID:PID " + key + "）"; }
+      else { kind = "unknown"; label = "ST 设备 " + key + "（不在 ST-LINK PID 表，多半是串口/DFU）"; }
+    } else if (vid === "0d28") { kind = "cmsis-dap"; label = "CMSIS-DAP（VID:PID " + key + "）"; }
+    else if (vid === "c251") { kind = "daplink"; label = "DAPLink（VID:PID " + key + "，走 CMSIS-DAP 协议）"; }
+    else if (vid === "1a86") { kind = "ch341-serial"; label = "CH341 串口桥（VID:PID " + key + "，不是 SWD 探针）"; }
+    out.push({ vid, pid, kind, label });
+  }
+  return out;
+}
+
+/** 实见探针 → openocd 该用哪个 interface 配置。ST-LINK 优先（官方探针，且 hla 与 cmsis-dap 互斥）。 */
+export function preferredInterfaceConfig(probes: DetectedProbe[]): { cfg: string; why: string } {
+  if (probes.some((p) => p.kind === "st-link")) return { cfg: "interface/stlink.cfg", why: "USB 里实见 ST-LINK（0483:37xx）" };
+  if (probes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink")) return { cfg: "interface/cmsis-dap.cfg", why: "USB 里实见 CMSIS-DAP/DAPLink" };
+  return { cfg: "interface/cmsis-dap.cfg", why: "没认出已知探针，维持历史默认 cmsis-dap" };
+}
+
 export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
   // 不依赖本地化字段名（中文系统的 pnputil 字段名是 GBK，读出来是乱码）：
   // 只要任意一行里出现 USB\VID_、USB\ROOT_HUB、或 VID_xxxx&PID 形态的 USB 实例，
-  // 就认定这台机器有 USB 控制器/设备；纯 ASCII 部分（USB、VID、PID、ROOT_HUB）不受编码影响。
+  // 就认定这台机器有 USB 控制器/设备；纯 ASCII 部分不受编码影响。
   const hasUsbController =
     /USB\\(?:VID_|ROOT_HUB|VID\w{4}&PID)/iu.test(pnputilText) ||
     /\\USB\\/u.test(pnputilText);
-    // VID 集（2a）：CMSIS-DAP 是 ARM 官方 VID 0x0D28；ST-Link 全系 VID_0483；
-  // DAPLink 是 VID_C251；CH340 串口桥接的国产探针常见 VID_1A86。ASCII 本体不受编码影响。
-  const hasDap =
-    /CMSIS-DAP|VID_0D28|VID_0483|VID_C251|VID_1A86/iu.test(pnputilText) ||
-    /\\usb\\vid_(?:0d28|0483|c251|1a86)/iu.test(pnputilText);
+  const probes = parseProbeVidPid(pnputilText);
+  const swdProbes = probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
+  // CH341/CH340 串口桥：2a 扩表的历史契约——"板载探针走串口透传"的形态真实存在，算在线；
+  // 但它不是 SWD 驱动，不参与 interface 选择（preferredInterfaceConfig 也不认它）。
+  const serialBridges = probes.filter((p) => p.kind === "ch341-serial");
   const hasDriverProblem = /(?:Problem Code|问题代码)\s*[:：]?\s*(?:1[0-9]|2[0-8]|3[0-9]|4[0-3]|5[0-2])/iu.test(pnputilText);
+  const list = swdProbes.map((p) => p.label).join("、");
   if (!hasUsbController) {
     return {
       kind: "no-usb",
+      probes,
       detail:
         "系统里枚举不到任何 USB 控制器：这台机器多半是云服务器/虚拟机，物理上没有 USB 口，" +
         "插线、换线、装驱动都解决不了。要么换一台有 USB 的物理机，要么用 USB over IP（usbipd/USBIP）把探针从别的机器转发过来" +
         "（注意 SWD 对延迟敏感，转发方案只建议实验用）。",
     };
   }
-  if (hasDap && hasDriverProblem) {
+  if ((swdProbes.length > 0 || serialBridges.length > 0) && hasDriverProblem) {
     return {
       kind: "driver-error",
-      detail:
-        "能看到 CMSIS-DAP 设备但驱动状态异常（Problem Code 非 0）：在设备管理器里找到该设备，" +
-        "重装或回退驱动（CMSIS-DAP 用 WinUSB/HID 通用驱动即可；装过 DAPLink 官方驱动的先卸载它）。",
+      probes,
+      detail: "能看到探针/桥设备（" + (list || serialBridges.map((p) => p.label).join("、")) + "）但驱动状态异常（Problem Code 非 0）：设备管理器里重装/回退驱动（CMSIS-DAP 与 ST-Link 走 WinUSB/HID 通用驱动即可）。",
     };
   }
-  if (hasDap) {
-    return { kind: "ok", detail: "能看到 CMSIS-DAP 设备且驱动正常：探针在线，烧录/调试应当能直接找到它。" };
+  if (swdProbes.length > 0) {
+    // 文案必须报出具体类型：ST-Link 说成 CMSIS-DAP 会让人写错 openocd interface（2026-11-08 实测教训）
+    const iface = preferredInterfaceConfig(swdProbes);
+    return { kind: "ok", probes, detail: "探针在线：" + list + "；openocd 应用 " + iface.cfg + "。" };
+  }
+  if (serialBridges.length > 0) {
+    return {
+      kind: "ok",
+      probes,
+      detail: "USB 里只有串口桥（" + serialBridges.map((p) => p.label).join("、") + "）：串口烧录/bootloader 通路可用；" +
+        "若指望 SWD，需要探针本身（ST-LINK / CMSIS-DAP / DAPLink）出现在枚举里，或板载 DAP 的 USB 口接好。",
+    };
   }
   return {
     kind: "no-dap",
+    probes,
     detail:
-      "有 USB 控制器但没看到常见探针（CMSIS-DAP / ST-Link / DAPLink / CH340 桥接）：检查探针有没有插好（有的线只能供电不能传数据）、" +
-        "板上调试器的跳线/开关位置、以及 BOOT0 是否接错（BOOT0=1 会进系统 bootloader，SWD 不响应）。",
+      "有 USB 控制器但没看到 SWD 探针（ST-LINK 0483:3744-54 / CMSIS-DAP 0D28 / DAPLink C251）" +
+      (probes.length > 0 ? "；看到的其他 USB 设备：" + probes.map((p) => p.label).join("、") : "") +
+      "：检查探针有没有插好（有的线只能供电不能传数据）、板上调试器的跳线/开关位置、以及 BOOT0 是否接错（BOOT0=1 会进系统 bootloader，SWD 不响应）。",
   };
 }
 
@@ -106,6 +168,7 @@ export async function usbDiagnosis(subprocess: SubprocessService, signal?: Abort
     if (outcome.spawnError !== null || outcome.exitCode !== 0) {
       return {
         kind: "unknown",
+        probes: [],
         detail: "跑不了 pnputil /enum-devices（" +
           (outcome.spawnError !== null ? outcome.spawnError : "退出码 " + String(outcome.exitCode)) +
           "），无法判断 USB/探针形态；可在设备管理器里人工核对。",
@@ -115,9 +178,42 @@ export async function usbDiagnosis(subprocess: SubprocessService, signal?: Abort
   } catch (error) {
     return {
       kind: "unknown",
+      probes: [],
       detail: "USB/探针诊断异常终止（" + (error instanceof Error ? error.message : String(error)) + "），可忽略；设备管理器里人工核对。",
     };
   }
+}
+
+let liveProbeCache: { at: number; probes: DetectedProbe[] } | null = null;
+const LIVE_PROBE_TTL_MS = 60_000;
+
+/**
+ * 引擎各处（flash / debug / regs / 会话）兜底 interface 的统一入口：
+ * 60 s 内复用一次 pnputil 实见结果——一次烧录里"探测→重试→兜底"最多问一次 USB，
+ * 不拿 pnputil（~0.5–2 s）反复拖慢工具。force=true（换接口重试前）绕开缓存。
+ *
+ * 返回的 swdProbes 供调用方决定「CubeProgrammer 这条腿有没有得走」（只认 ST-LINK）。
+ */
+export async function liveProbeChoice(
+  subprocess: SubprocessService,
+  signal?: AbortSignal,
+  force = false,
+): Promise<{ cfg: string; why: string; probes: DetectedProbe[]; swdProbes: DetectedProbe[] }> {
+  if (!force && liveProbeCache !== null && Date.now() - liveProbeCache.at < LIVE_PROBE_TTL_MS) {
+    const swd = liveProbeCache.probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
+    const pref = preferredInterfaceConfig(swd);
+    return { ...pref, probes: liveProbeCache.probes, swdProbes: swd };
+  }
+  const usb = await usbDiagnosis(subprocess, signal);
+  liveProbeCache = { at: Date.now(), probes: usb.probes };
+  const swd = usb.probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
+  const pref = preferredInterfaceConfig(swd);
+  return { ...pref, probes: usb.probes, swdProbes: swd };
+}
+
+/** 清缓存（单测 / 换探针后强制重见）。 */
+export function resetLiveProbeCache(): void {
+  liveProbeCache = null;
 }
 
 /** 探测结果压成「能干什么」的四项能力（只由 found 决定，与 required 无关）。 */

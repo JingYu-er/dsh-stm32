@@ -65,7 +65,7 @@ test("parseFlashLog：只报写入/校验结果与失败行，归类交给 probe
   assert.equal(fail.programmed, false);
   assert.ok(fail.errors.some((line) => line.includes("CMSIS-DAP")));
   assert.equal("errorCode" in fail, false, "旧 errorCode 字段已删（不做兼容别名）");
-  assert.equal(classifyProbeFailure({ lines: fail.errors, stage: "flash" }).kind, "no-probe");
+  assert.equal(classifyProbeFailure({ lines: fail.errors, stage: "flash" }).kind, "probe-interface-mismatch", "matching CMSIS-DAP 句式归接口不匹配（2026-11-08）");
 
   const okLog = parseFlashLog(["** Programming Finished **", "** Verified OK **"].join("\n"));
   assert.deepEqual(okLog.errors, []);

@@ -26,6 +26,7 @@ const suites = [
   "rm-topics-units.test.mjs",
   "ensure-facts-units.test.mjs",
   "generation-risk-units.test.mjs",
+  "flash-orchestrator-units.test.mjs",
   "db-presets-units.test.mjs",
   "rtt-units.test.mjs",
   "svd-units.test.mjs",

@@ -26,10 +26,17 @@ function kindOf(lines, extra = {}) {
 
 // ── 8 个 kind 的正例：每条都是 openocd/gdb 真会打出来的那行 ─────────────────────
 
-test("kind=no-probe：找不到 CMSIS-DAP 设备", () => {
-  assert.equal(kindOf(["Error: unable to find a matching CMSIS-DAP device"]), "no-probe");
-  // 同一类的第二句式也归一：openocd 有时候只说 no device found。
+test("kind=no-probe：openocd 说没有设备", () => {
   assert.equal(kindOf(["Error: no device found"]), "no-probe");
+});
+
+test("kind=probe-interface-mismatch：指定驱动的探针找不到（2026-11-08 教训）", () => {
+  // 这句以前归 no-probe，害 ST-Link 用户被引导去查"没插好"，实为 interface 写错
+  assert.equal(kindOf(["Error: unable to find a matching CMSIS-DAP device"]), "probe-interface-mismatch");
+  assert.equal(kindOf(["Error: unable to find a matching ST-LINK device"]), "probe-interface-mismatch");
+  const e = classifyProbeFailure({ lines: ["Error: unable to find a matching CMSIS-DAP device"], exitCode: 1, stage: "flash" });
+  assert.match(e.hint, /interface/u, "hint 要指向换 interface 这条动作");
+  assert.equal(e.retryable, true, "引擎会自动换 interface 重试");
 });
 
 test("kind=probe-busy：适配器被占用（命令行报锁 + 真机的事务错位两种形态）", () => {
@@ -200,6 +207,7 @@ test("四类真机故障的 hint 都在，且与 kind 一一对应", () => {
 test("每个 kind 都有非空 hint / cause，且 retryable 是布尔", () => {
   const probes = {
     "no-probe": ["Error: no device found"],
+    "probe-interface-mismatch": ["Error: unable to find a matching CMSIS-DAP device"],
     "probe-busy": ["libusb_error_busy"],
     "swd-locked": ["Error: Error connecting DP: cannot read IDR"],
     "flash-protected": ["Error: read protected"],
@@ -208,7 +216,7 @@ test("每个 kind 都有非空 hint / cause，且 retryable 是布尔", () => {
     timeout: [],
     unknown: ["Error: mystery"],
   };
-  assert.deepEqual([...PROBE_ERROR_KINDS].sort(), Object.keys(probes).sort(), "8 类一个都不能少");
+  assert.deepEqual([...PROBE_ERROR_KINDS].sort(), Object.keys(probes).sort(), "9 类一个都不能少");
   for (const [kind, lines] of Object.entries(probes)) {
     const error = classifyProbeFailure({ lines, stage: "flash", ...(kind === "timeout" ? { timedOut: true } : {}) });
     assert.equal(error.kind, kind);
@@ -243,7 +251,7 @@ test("同一故障在 flash 与 debug 两条路径归到同一个 kind", () => {
 
 test("归类顺序：先 no-probe 再 probe-busy，锁片特征比超时优先", () => {
   const mixed = ["Error: Error connecting DP: cannot read IDR", "Error: unable to find a matching CMSIS-DAP device"];
-  assert.equal(kindOf(mixed), "no-probe", "别把'被占用/没插'读成'锁片'");
+  assert.equal(kindOf(mixed), "probe-interface-mismatch", "接口不匹配排最前：没跑对驱动时后面的 IDR 错全是噪声");
   const lockedAndTimeout = classifyProbeFailure({ lines: ["Error: Error connecting DP: cannot read IDR"], stage: "flash", timedOut: true });
   assert.equal(lockedAndTimeout.kind, "swd-locked", "既报错又超时时说要紧的那个");
 });

@@ -14,7 +14,7 @@ import { resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
-import { usbDiagnosis } from "./doctor.js";
+import { liveProbeChoice, usbDiagnosis } from "./doctor.js";
 import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
 import { findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
 import { collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
@@ -277,7 +277,8 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
         durationMs: Date.now() - startedAt,
       };
     }
-    const interfaceConfig = request.interfaceConfig ?? "interface/cmsis-dap.cfg";
+    const live = request.interfaceConfig === undefined ? await liveProbeChoice(subprocess, request.signal) : null;
+    const interfaceConfig = request.interfaceConfig ?? (live !== null && live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg");
     const targetConfig = request.targetConfig ?? choice.targetConfig;
     openOcdArgs.push("-f", interfaceConfig, "-f", targetConfig);
     notes.push("工程里没有 openocd 配置文件，回退到 " + interfaceConfig + " + " + targetConfig);

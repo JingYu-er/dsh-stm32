@@ -90,8 +90,22 @@ export const outputSchema: JsonSchema = {
           properties: {
             kind: { type: "string", enum: ["no-usb", "no-dap", "driver-error", "ok", "unknown"] },
             detail: { type: "string" },
+            /** 按 VID:PID 认出的探针清单（含非 SWD 的 ST/CH341 设备，供人核对）。 */
+            probes: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  vid: { type: "string" },
+                  pid: { type: "string" },
+                  kind: { type: "string", enum: ["st-link", "cmsis-dap", "daplink", "ch341-serial", "unknown"] },
+                  label: { type: "string" },
+                },
+                required: ["vid", "pid", "kind", "label"],
+              },
+            },
           },
-          required: ["kind", "detail"],
+          required: ["kind", "detail", "probes"],
         },
         port: { type: "number" },
         portBusy: { type: "boolean" },
@@ -205,7 +219,7 @@ export function registerDoctor(ctx: DshContext): void {
             capabilities: { build: false, flash: false, debug: false, generate: false },
             recommendations: ["宿主缺少 subprocess 服务：插件没法跑任何外部程序，先确认 DSH 宿主正常启动。"],
             searched: [],
-            processes: [], usb: { kind: "unknown", detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,
+            processes: [], usb: { kind: "unknown", probes: [], detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,
             buildDir: "", elfPath: "", elfSize: 0, iocPath: "", iocWarnings: [], blockers: ["宿主缺少 subprocess 服务"], notes: [],
           },
         };

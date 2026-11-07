@@ -42,6 +42,7 @@ import {
 import type { WatchEntry, WatchKind } from "./watch.js";
 import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
 import { findProjectConfig, toOpenOcdPath } from "./flash.js";
+import { liveProbeChoice } from "./doctor.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
 import { waitForListening } from "./debug.js";
@@ -471,7 +472,8 @@ export class DebugSessionManager {
           "没开会话：" + (family === null ? "认不出芯片族" : "本机 openocd 没有 " + family.id + " 的 target 脚本"),
         );
       }
-      argv.push("-f", "interface/cmsis-dap.cfg", "-f", choice.targetConfig);
+      const live = await liveProbeChoice(subprocess);
+      argv.push("-f", live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg", "-f", choice.targetConfig);
     }
     if (request.adapterSpeed !== undefined) argv.push("-c", "adapter speed " + String(request.adapterSpeed));
     argv.push("-c", "gdb_port " + String(port));

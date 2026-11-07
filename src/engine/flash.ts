@@ -14,7 +14,8 @@ import type { Stm32FamilyProfile } from "../data/family.js";
 import { describeSearchScope, resolveSearchConfig } from "../data/search-roots.js";
 import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
-import { usbDiagnosis } from "./doctor.js";
+import { liveProbeChoice, usbDiagnosis } from "./doctor.js";
+import { cubeProgrammerBackendNote, findCubeProgrammerCli, runCubeProgrammerFlash } from "./cube-programmer.js";
 import { classifyProbeFailure, probeMissingLines, usbNoteFor } from "./probe-error.js";
 import type { ProbeError } from "./probe-error.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
@@ -265,7 +266,8 @@ export function parseFlashLog(text: string): FlashLogVerdict {
   return { programmed, verified, errors, noise };
 }
 
-export async function runFlash(subprocess: SubprocessService, request: FlashRequest): Promise<FlashReport> {
+/** openocd 后端主体；ifaceOverride 只在工程没有自己的 openocd.cfg 时参与兜底 interface 选择。 */
+async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequest, ifaceOverride?: string): Promise<FlashReport> {
   const projectDir = resolve(request.projectDir);
   const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
   const notes: string[] = [];
@@ -336,7 +338,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
         notes,
       };
     }
-    configs.push(request.interfaceConfig ?? "interface/cmsis-dap.cfg", request.targetConfig ?? choice.targetConfig);
+    configs.push(request.interfaceConfig ?? ifaceOverride ?? "interface/cmsis-dap.cfg", request.targetConfig ?? choice.targetConfig);
     notes.push("工程里没有 openocd 配置文件，回退到 " + configs.join(" + "));
     if (family !== null) notes.push("芯片族按 .ioc 判定：" + family.id + "（内核 " + family.core + "）");
     if (choice.note !== "") notes.push(choice.note);
@@ -416,4 +418,98 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     probeError,
     errors, message, logTail: log.split(/\r?\n/u).slice(-25).join("\n"), notes,
   };
+}
+
+
+/**
+ * 烧录编排器（2026-11-08 复盘后的两层修复）：
+ *
+ * 1. **interface 先探后选**：以前兜底硬编码 cmsis-dap（规格 §13 的旧前提），插 ST-Link 的
+ *    用户直接被带偏——openocd 报 "unable to find a matching CMSIS-DAP device"，还得人肉猜。
+ *    现在先 usbDiagnosis（VID:PID 分流）按实见探针选 interface；工程自带 openocd.cfg 时不插手
+ *    （那是用户显式配置，只在失败后提示改哪一行）。
+ * 2. **换 interface 自动重试一次**：仍报 probe-interface-mismatch 就切另一个驱动再跑。
+ * 3. **CubeProgrammer 兜底**：openocd 两条都失败、实见探针是 ST-LINK、本机装了 CubeProgrammer、
+ *    且失败不是「换后端也没用」类（swd-locked/no-power/flash-protected）时，走 CLI 第二后端。
+ *    DAPLink 用户没有这条腿（CLI 只认 ST-LINK），报告里如实说。
+ */
+export async function runFlash(subprocess: SubprocessService, request: FlashRequest): Promise<FlashReport> {
+  const hasProjectCfg = findProjectConfig(request.projectDir, request.configFile) !== null;
+  let ifaceOverride: string | undefined;
+  let probeNote = "";
+  let sawStLink = false;
+  let sawDapFamily = false;
+  if (request.interfaceConfig === undefined) {
+    const live = await liveProbeChoice(subprocess, request.signal);
+    sawStLink = live.swdProbes.some((p) => p.kind === "st-link");
+    sawDapFamily = live.swdProbes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink");
+    if (live.swdProbes.length > 0) {
+      if (!hasProjectCfg) ifaceOverride = live.cfg;
+      probeNote = "探针实见：" + live.swdProbes.map((p) => p.label).join("、") +
+        (hasProjectCfg ? "（工程自带 openocd.cfg，interface 以它为准）" : "；interface 用 " + live.cfg + "（" + live.why + "）");
+    }
+  }
+  let report = await runOpenocdFlash(subprocess, request, ifaceOverride);
+  if (probeNote !== "") report.notes.unshift(probeNote);
+
+  // 2) 接口不匹配 → 换另一个 interface 重试一次（仅插件兜底配置的工程；手写 cfg 的让用户按 hint 改）
+  if (!report.ok && !hasProjectCfg && report.probeError !== null && report.probeError.kind === "probe-interface-mismatch") {
+    const other = (ifaceOverride ?? "interface/cmsis-dap.cfg") === "interface/cmsis-dap.cfg" ? "interface/stlink.cfg" : "interface/cmsis-dap.cfg";
+    const firstMessage = report.message;
+    const retry = await runOpenocdFlash(subprocess, request, other);
+    // notes 归属：retry 是新报告——探针实见行、换接口说明、第一次失败原因都得挂到它身上
+    // （第一版把"自动换…"push 进了旧 report，随对象丢弃，测试当场抓到）。
+    if (probeNote !== "") retry.notes.unshift(probeNote);
+    retry.notes.push("openocd 报探针驱动不匹配，自动换 " + other + " 重试一次（第 1 次：" + firstMessage + "）");
+    report = retry;
+  }
+
+  // 3) CubeProgrammer 第二后端
+  const futile = report.probeError !== null && ["swd-locked", "no-power", "flash-protected", "probe-busy"].includes(report.probeError.kind);
+  if (!report.ok && !futile && report.elfPath !== "" && sawStLink) {
+    const config = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
+    const cli = findCubeProgrammerCli(config.cubePrgBins);
+    if (cli !== null) {
+      report.notes.push("openocd 两条 interface 都没烧成，试 CubeProgrammer CLI（ST-LINK 后端）…");
+      const alt = await runCubeProgrammerFlash(subprocess, {
+        projectDir: request.projectDir,
+        elfPath: report.elfPath,
+        cliPath: cli,
+        ...(request.adapterSpeed === undefined ? {} : { adapterSpeed: request.adapterSpeed }),
+        runAfterReset: request.runAfterReset !== false,
+        timeoutMs: request.timeoutMs ?? 120_000,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+        ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
+      });
+      if (alt.ok) {
+        return {
+          ok: true,
+          projectDir: report.projectDir,
+          elfPath: report.elfPath,
+          elfSize: report.elfSize,
+          command: alt.command,
+          args: alt.args,
+          configs: [],
+          durationMs: report.durationMs + alt.durationMs,
+          ...(alt.exitCode === null ? {} : { exitCode: alt.exitCode }),
+          programmed: alt.programmed,
+          verified: alt.verified,
+          probeError: null,
+          errors: [],
+          message: alt.message,
+          logTail: alt.logTail,
+          notes: [...report.notes, cubeProgrammerBackendNote(cli)],
+        };
+      }
+      report.notes.push("CubeProgrammer 兜底也没成：" + alt.message + "（查过 " + alt.searched + "）");
+    }
+  }
+  if (!report.ok && !futile && report.probeError !== null && report.probeError.kind === "no-probe" && sawDapFamily && !sawStLink) {
+    // DAPLink 用户走不了 CLI 这条腿，别让人以为还有救
+    const config = resolveSearchConfig(process.env, {});
+    if (findCubeProgrammerCli(config.cubePrgBins) !== null) {
+      report.notes.push("本机装了 CubeProgrammer，但它的 SWD 路径只认 ST-LINK：你插的是 CMSIS-DAP/DAPLink 类探针，这条路帮不上（docs §79）。");
+    }
+  }
+  return report;
 }

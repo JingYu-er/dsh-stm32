@@ -1655,7 +1655,7 @@ export async function planOrInstallMsys2(
     let cubemxReady = false;
     if (binDir !== "" && existsSync(binDir)) {
       const searchConfig = resolveSearchConfig(env);
-      const probeConfig = { binDirs: [binDir], cubeMxRoots: [...searchConfig.cubeMxRoots] };
+      const probeConfig = { binDirs: [binDir], cubeMxRoots: [...searchConfig.cubeMxRoots], cubePrgBins: [] };
       const wanted = buildTargets(probeConfig);
       const probeWanted = wanted.filter((item) => VERIFY_IDS.includes(item.id));
       planProbed = await probeAll(subprocess, probeWanted, probeConfig, {
@@ -2205,7 +2205,7 @@ export async function planOrInstallMsys2(
   // f) 自检
   beginStep(steps, verifyStep, request.onProgress);
   if (isAborted(request.signal)) return abortRest(verifyStep);
-  const probeConfig = { binDirs: [binDir], cubeMxRoots: [] };
+  const probeConfig = { binDirs: [binDir], cubeMxRoots: [], cubePrgBins: [] };
   const targets = buildTargets(probeConfig).filter((item) => VERIFY_IDS.includes(item.id));
   const probed = await probeAll(subprocess, targets, probeConfig, {
     timeoutMs: PROBE_TIMEOUT_MS,

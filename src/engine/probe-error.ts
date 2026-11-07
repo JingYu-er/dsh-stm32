@@ -15,9 +15,10 @@
 
 import type { JsonSchema } from "../types.js";
 
-/** 探针失败的八类：前六类是日志特征，timeout 由调用方给，unknown 是兜底。 */
+/** 探针失败的九类：前七类是日志特征，timeout 由调用方给，unknown 是兜底。 */
 export type ProbeErrorKind =
   | "no-probe"
+  | "probe-interface-mismatch"
   | "probe-busy"
   | "swd-locked"
   | "flash-protected"
@@ -29,6 +30,7 @@ export type ProbeErrorKind =
 /** 枚举的运行时形态（工具 schema 的 enum 也用它，避免第二个真相）。 */
 export const PROBE_ERROR_KINDS: readonly ProbeErrorKind[] = [
   "no-probe",
+  "probe-interface-mismatch",
   "probe-busy",
   "swd-locked",
   "flash-protected",
@@ -80,8 +82,14 @@ export const HINT_TIMEOUT =
 export const HINT_UNKNOWN =
   "日志里没有能归类的特征：把 evidence 或日志尾部贴出来核对，并用 stm32_doctor 看探针占用与工具链状态，别盲目重试。";
 
+const HINT_INTERFACE_MISMATCH =
+  "interface 配置与实插探针不匹配：跑 stm32_doctor 看「USB：探针在线（…）」那行报的类型，" +
+  "把工程 openocd.cfg 里的 interface/ 那行换成对应驱动（ST-Link→interface/stlink.cfg，CMSIS-DAP/DAPLink→interface/cmsis-dap.cfg）；" +
+  "工程没有 openocd.cfg 时插件会按 doctor 实见类型自动选，不用手写。stm32_flash 遇到本错误也会先换另一个 interface 自动重试一次。";
+
 const HINT_BY_KIND: Record<ProbeErrorKind, string> = {
   "no-probe": HINT_PROBE,
+  "probe-interface-mismatch": HINT_INTERFACE_MISMATCH,
   "probe-busy": HINT_BUSY,
   "swd-locked": HINT_DP,
   "flash-protected": HINT_FLASH_PROTECTED,
@@ -97,6 +105,7 @@ const HINT_BY_KIND: Record<ProbeErrorKind, string> = {
  */
 const RETRYABLE_BY_KIND: Record<ProbeErrorKind, boolean> = {
   "no-probe": true, // 插好线 / 停掉占用就能再烧
+  "probe-interface-mismatch": true, // flash 引擎换另一个 interface 自动重试；手写配置时改一行即可
   "probe-busy": true, // 让出探针即可重试
   "swd-locked": true, // 按 hint 用 BOOT0 进 bootloader 后同一条命令能成
   "flash-protected": false, // 要先解保护，不属于"再试一次"
@@ -124,9 +133,16 @@ interface Matcher {
  */
 const MATCHERS: readonly Matcher[] = [
   {
+    // 2026-11-08 实测教训：工程里的 openocd.cfg 写死了 interface/cmsis-dap.cfg，
+    // 插的却是 ST-Link（或反是）——这跟"没插"是两种答案：前者换一行配置就好。
+    kind: "probe-interface-mismatch",
+    cause: "openocd 找不到配置里指定的探针驱动（interface 配置与实插的探针类型不匹配）",
+    re: /unable to find a matching (cmsis-dap|stlink|st-link) device/u,
+  },
+  {
     kind: "no-probe",
-    cause: "openocd 找不到 CMSIS-DAP 探针（没插好 / 被占用 / 本机没认到 USB 设备）",
-    re: /unable to find a matching cmsis-dap device|no device found/u,
+    cause: "openocd 找不到探针（没插好 / 被占用 / 本机没认到 USB 设备）",
+    re: /no device found|open failed/u,
   },
   {
     kind: "probe-busy",
@@ -209,7 +225,8 @@ export function usbNoteFor(kind: string, detail: string): string | null {
 
 /** 每一类的默认根因（调用方没给更准的说法时用它，避免出现"未知原因"这种废话）。 */
 const CAUSE_BY_KIND: Record<ProbeErrorKind, string> = {
-  "no-probe": "找不到 CMSIS-DAP 探针（没插好 / 被占用 / 本机没认到 USB 设备）",
+  "no-probe": "找不到探针（没插好 / 被占用 / 本机没认到 USB 设备）",
+  "probe-interface-mismatch": "openocd 找不到配置里指定的探针驱动（interface 与实插类型不匹配）",
   "probe-busy": "探针或探针口被另一个进程占着",
   "swd-locked": "芯片侧 SWD 连不上（固件关了调试口 / 调试访问口被锁）",
   "flash-protected": "Flash 被写保护/读保护挡住",

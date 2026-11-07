@@ -23,12 +23,15 @@ export interface SearchConfig {
   binDirs: string[];
   /** STM32CubeMX 安装根目录候选。 */
   cubeMxRoots: string[];
+  /** STM32CubeProgrammer 的 bin 目录候选（烧录第二后端 STM32_Programmer_CLI）。 */
+  cubePrgBins: string[];
 }
 
 /** 自动发现到的安装位置（与默认值/环境变量分开，便于 doctor 展示）。 */
 export interface DiscoveredInstalls {
   binDirs: string[];
   cubeMxRoots: string[];
+  cubePrgBins: string[];
 }
 
 /**
@@ -129,6 +132,34 @@ export function discoverBinDirs(probe: DiscoverProbe): string[] {
       const dir = base + "/" + variant;
       if (looksLikeBinDir(dir, probe.exists)) found.push(dir);
     }
+  }
+  return dedupePaths(found);
+}
+
+/** CubeProgrammer CLI 在任何机器上的 Windows 默认安装位置（与 CubeMX 同风格：只放通用位置）。 */
+export const DEFAULT_CUBE_PRG_BINS: readonly string[] = [
+  "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin",
+];
+
+/** 一个目录是不是 CubeProgrammer 的 bin：认它的 CLI 主程序（32 位子目录不算，本插件只在 64 位路径找）。 */
+export function looksLikeCubePrgBin(dir: string, exists: (path: string) => boolean = existsSync): boolean {
+  return exists(dir + "/STM32_Programmer_CLI.exe");
+}
+
+/** CubeProgrammer 安装散布在 ST 系目录旁边（CubeMX 的兄弟目录最常见），复用同一套 bases。 */
+export function discoverCubePrgBins(probe: DiscoverProbe): string[] {
+  const found: string[] = [];
+  for (const base of cubeMxBases(probe)) {
+    const direct = base.replace(/\/+$/u, "") + "/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin";
+    if (looksLikeCubePrgBin(direct, probe.exists)) found.push(direct);
+    for (const child of probe.listDirs(base + "/STMicroelectronics/STM32Cube")) {
+      const bin = child + "/STM32CubeProgrammer/bin";
+      if (looksLikeCubePrgBin(bin, probe.exists)) found.push(bin);
+    }
+  }
+  for (const dir of probe.registryInstallDirs()) {
+    const normalized = normalizePathEntry(dir);
+    if (normalized !== "" && looksLikeCubePrgBin(normalized, probe.exists)) found.push(normalized);
   }
   return dedupePaths(found);
 }
@@ -310,6 +341,7 @@ export function discoverInstalls(): DiscoveredInstalls {
     cached = {
       binDirs: discoverBinDirs(probe),
       cubeMxRoots: discoverCubeMxRoots(probe),
+      cubePrgBins: discoverCubePrgBins(probe),
     };
   }
   return cached;
@@ -400,11 +432,12 @@ export function resolveSearchConfig(
 ): SearchConfig {
   const binFromEnv = splitList(env["STM32_BIN_DIRS"]);
   const rootsFromEnv = splitList(env["STM32_CUBEMX_ROOT"]);
+  const prgFromEnv = splitList(env["STM32_CUBE_PRG_ROOT"]);
   const userConfig = configReadingDisabled(env) ? null : readToolchainConfig(env).config;
   const binFromConfig = binDirsFromConfig(userConfig);
   const rootsFromConfig = cubeMxRootsFromConfig(userConfig);
   const discovered = discoveryDisabled(env)
-    ? { binDirs: [], cubeMxRoots: [] }
+    ? { binDirs: [], cubeMxRoots: [], cubePrgBins: [] }
     : (discoveredOverride ?? discoverInstalls());
   const binBase = overrides.binDirs
     ?? (binFromEnv.length > 0
@@ -414,8 +447,18 @@ export function resolveSearchConfig(
     ?? (rootsFromEnv.length > 0
       ? rootsFromEnv
       : (rootsFromConfig.length > 0 ? rootsFromConfig : [...DEFAULT_CUBEMX_ROOTS]));
+  const prgBase = overrides.cubePrgBins
+    ?? (prgFromEnv.length > 0
+      ? prgFromEnv.map((dir) => {
+        const n = dir.replace(/\/+$/u, "");
+        if (looksLikeCubePrgBin(n)) return n;
+        const asBin = n + "/STM32CubeProgrammer/bin";
+        return looksLikeCubePrgBin(asBin) ? asBin : n; // 都没命中就原样保留（让 searchConfigWarnings 去报告不存在）
+      })
+      : [...DEFAULT_CUBE_PRG_BINS]);
   return {
     binDirs: dedupePaths([...binBase, ...(overrides.binDirs === undefined ? discovered.binDirs : [])]),
     cubeMxRoots: dedupePaths([...rootsBase, ...(overrides.cubeMxRoots === undefined ? discovered.cubeMxRoots : [])]),
+    cubePrgBins: dedupePaths([...prgBase, ...(overrides.cubePrgBins === undefined ? discovered.cubePrgBins ?? [] : [])]),
   };
 }

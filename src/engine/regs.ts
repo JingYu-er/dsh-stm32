@@ -16,6 +16,7 @@ import type { SubprocessService } from "../types.js";
 import { STATE_DIR } from "./generate.js";
 import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
 import { findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
+import { liveProbeChoice } from "./doctor.js";
 import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 import type { RunOutcome } from "./subprocess-runner.js";
@@ -172,7 +173,8 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
         message: "没读：" + (family === null ? "认不出芯片族" : "本机 openocd 没有 " + family.id + " 的 target 脚本"),
       };
     }
-    configs.push("interface/cmsis-dap.cfg", choice.targetConfig);
+    const live = await liveProbeChoice(subprocess, request.signal);
+    configs.push(live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg", choice.targetConfig);
     notes.push("工程里没有 openocd 配置文件，回退到 " + configs.join(" + "));
     if (choice.note !== "") notes.push(choice.note);
   }
