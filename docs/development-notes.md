@@ -5356,9 +5356,11 @@ R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先�
 - **字面量 interface 是第三种「手搓快照」**：前两次是寄存器名清单和 RM 主题清单，这次是 `"interface/cmsis-dap.cfg"` 被复制到四个文件。凡「同一个事实在多处重复写」的地方，迟早有一处没跟上。
 - **错误归类决定能否自愈**：把「interface 选错」混进「没有探针」，编排层就永远不知道该换一条路试。新增一个 kind 的成本远低于让用户去猜。
 - **兜底要有明确的准入条件**（实见 ST-LINK + CLI 在 + 错误可解 + 窗口内），否则第二后端会把「探针没插」也拖成两倍耗时。
+- **模块级缓存是最阴的一类隐藏状态**（CI 抓到）：第一版把「实见探针」在模块里缓存 60 s，本意是省掉重复 pnputil，结果同进程连烧两颗不同芯片时，第二颗拿到第一颗的结论，「换另一个 interface」这个取反还会因此算反、把重试引回同一个配置；`sawStLink` 一起被污染，DAPLink 用例凭空走了 CubeProgrammer。**决定行为的事实不能活在模块状态里**——一次工具调用内复用返回值就够，跨调用永远重新看。
+- **测试跑的必须是这一版代码**：一轮报「898 pass」，其实 `tsc --noEmit` 不产出 `lib/`，套件 import 的仍是改动前的 lib，全绿是假的。`test/run-units.mjs` 现在比较 src/lib 最新 mtime，src 更新就喊「先 npm run build」。凡是「产物入库 + 测试读产物」的仓库，这条必须自动化。
 
 ### 验收
 
-- tsc 0；TOTAL **pass=898 fail=0**（新 `flash-orchestrator-units` 7 条全注入假 subprocess：实见选 stlink / 自动换 interface 重试 / 手写 cfg 不重试 / CLI 兜底成功 / DAPLink 不派 CLI / swd-locked 不兜底 / 显式 interface 不探 USB；probe-error 扩到 27 条）；pack-size 666.5 KB / 上限 1171.9 KB。
+- tsc 0；TOTAL **pass=899 fail=0**（新 `flash-orchestrator-units` 8 条全注入假 subprocess：实见选 stlink / 自动换 interface 重试 / 手写 cfg 不重试 / CLI 兜底成功 / DAPLink 不派 CLI / swd-locked 不兜底 / 显式 interface 不探 USB / 连烧两颗不共享探针结论；probe-error 扩到 27 条）；pack-size 666.5 KB / 上限 1171.9 KB。CI（`1215fc6`）绿。
 - 真机：`parseProbeVidPid` 吃真 pnputil 输出（84,848 B，GBK 乱码前缀不影响）认出 0483:3752；`diagnoseUsb` 输出「探针在线：ST-Link（VID:PID 0483:3752）；openocd 应用 interface/stlink.cfg」；probeAll 真机 found=true 自动发现 `STM32_Programmer_CLI.exe`。
 - 待用户：插上 ST-Link 跑一次真烧（预期 notes 里能看到「实见 ST-Link → interface/stlink.cfg」），再故意把工程里的 openocd.cfg 留着验证「以它为准」那条分支。
