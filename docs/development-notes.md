@@ -5238,3 +5238,32 @@ CubeMX 无头命令行里 `swmgr` 子命令有 `refresh` / `connection` / `insta
 - `test/facts-units.test.mjs` 6 条黄金样本改 import 到 `lib/engine`（结构解析归引擎，CLI 只是壳）；新套 `test/facts-acquire-units.test.mjs` 11 条全注入假 fetch：候选表、本地命中、svdRoots 布局、离线缺内容、缓存复用、404 换源、坏 rm-facts、schema2 全链路、缺语义降级、**跨线拒收**、needs 指路。全量 `TOTAL pass=853 fail=0`、tsc 0、pack-size 642.3 KB 通过。真链路实测：本地根/联网下载/离线失败/降级/RM PDF 登记 5 条 CLI 路径各跑一遍（`demo/.dsh-stm32/facts-cli-test/`）。
 - 一条单测翻车记录：「svdRoots 找不到就明说」先写成走默认缓存，而先前 CLI 实测已把 C051 下进默认缓存 → 命中成功、断言炸。测试前提被真实副作用污染，修法是给用例独立空 `cacheDir`（离线复用本来就是另一条用例）。
 - 遗留：RM 语义仍是人工 rm-facts，PDF→语义自动解析 = 第 5 步（黄金样本扩到 RM 抽取）；C051/C071/C091/C092 的 RM 与 rm-facts 待补（第 3 步）；`facts` 还没接进 generate/project-create（第 4 步）。
+
+## 75. RM 载体双通道：sitemap 主源 + stmcu 备案，覆盖验证替代人核（2026-11-07）
+
+§74 把 SVD 获取自动化之后，RM 一直是人喂。这轮把 RM 载体也做成自动，并且回答了一个更根本的问题：**C051/C071/C091/C092「各自的 RM」根本不存在**——EN RM0490 现行版标题就是 stm32c0-series，正文 Table 3..6 是逐线边界地址表，六线全覆盖（pdfCoverageIndex 实测六线线名全命中）。交接文档说「只覆盖 C0x1」来自中文 Rev 1，那是旧版；§4 的按线分级结论仍然对（老版本确实窄），但事实要按版本重新取证。
+
+### 通道取证（全部匿名实测，先证伪再选路）
+
+- **semiee.com 出局**：真实接口 bdxx-api/chip/v5/rich/search 匿名回 code:1「请登录」，浏览器里也一样（弹窗要登录）。
+- **立创（用户指定试的站）：分类页可解析、token 端点不可用**。overseas.szlcsc.com 的聚合搜索匿名可用但代理来的 PDF 是**商品 datasheet 不是 RM**（mm.digikey.com 那条 2,585,296 B 实测是 DS14721 Datasheet，BOOT_LOCK/OPTKEY/Option bytes 全文 0 命中）；stmcu 自己的 design_resource_download token 端点冷静后单发 303 跳 SSO。**但详情页内联 JS 明文暴露 ST 中国官网 CCC 直链**（is_outside_file 分支的 window.open），那条匿名 200、15,851,579 B、与本地中文 RM0490 逐字节同哈希——立创的价值成了「备案 URL 提供者」。
+- **主源：ST 官方 sitemap**。www.st.com/content/st_com/sitemap1..10.xml 匿名 200，37,647 条里 132 条英文 reference_manual 直链；不建「号→URL」表，清单每次现取。
+- **产品页/搜索页/文档导出全试过**：产品页静态只有 datasheet、搜索页浏览器里 HTTP2 协议错、search.st.com 只有 UI config、四个导出端点全 404。
+
+### 匹配与验证（rm-sources.ts）
+
+打分制（线名 100 / 线号首位 60 / 族级 series 40 / 族名 20）——单测钉住 rm0394(l41xxx) 必须赢过 rm0432(l4-series)；线号首位来自 ln.slice(fam.length)，slice(0,7) 恰好等于族名是个坑。stmcu 侧：按 RM 号筛、标题须含族名（分类页混入 RM0434 他族条目与 CubeMonitor 帖），zh→en 翻译替换（两版实测都匿名 200）；politeGet 3 s 节流 + 429 退避 8/16 s 至多重试 2 次（实测连打 3 次必 429）。
+
+**覆盖验证只信英文 PDF**：Node 抽 content stream 字面量 → 压平（只留字母数字小写）→ 找 <线>xx。EN RM0490 六线全中；中文是 CID 编码字体，抽出来是空索引——判不出=不放行，方向保守不会假阳（假 zh fixture 钉住）。载体记录进 facts.sources：kind=rm-pdf + doc + sha256 + bytes + url + origin:auto:<通道> + coveredLines。
+
+### 又修一个真 bug（间距判定写反）
+
+TJ 数组的真实形状是 (a) -578 (b)：数字**前面**是右括号。旧实现判「数字后面是右括号」，大间距从未还原成空格（Wide 422 Ok 粘成 wideok）；kerning 小数 (a)-5(b) 后面正好是左括号…也不该插。修正：数字前必须是右括号、后接左括号或右方括号，|n|>=200 才插空格。fixture 同时钉住三件事：kerning 不粘、大间距插空格、坐标数不误判。
+
+### 验收
+
+tsc 0；TOTAL pass=863 fail=0（rm-sources-units 10 条全离线）；pack-size 648.6 KB。真链路：C051 auto → sitemap 下到真 EN RM0490（sha256 b5af48dc…，与手工 probe 逐字节一致）、coveredLines 六线全中、语义按 doc.lines 照旧拒收；off 降级正常；stmcu 专通道实测撞 429（退避加强后待再验，失败信息完整）。
+
+### 遗留
+
+R3 自动抽取 rm-facts（引文逐字回查 + 与本线 SVD 位域交叉两道机检替代人核）；R4 用 EN RM0490 重抽并把 doc.lines 放宽到六线；R5 facts 摘要接进 generate/project_create。run_code 的 execFile env 是空壳（APPDATA/USERPROFILE 未设），python user-site 探测必须补 env，否则 pymupdf 假阴性——本轮踩过后定位：pymupdf 2.1 装在 AppData/Roaming/Python/Python314/site-packages。

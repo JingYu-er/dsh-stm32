@@ -4,13 +4,17 @@
 // 用法：
 //   node scripts/facts/build-facts.mjs --part STM32C031F6P6 
 //     [--rm-facts <rm.json>] [--rm-pdf <a.pdf>] [--rm-url <https 直链>] [--rm-lines STM32C011,STM32C031]
-//     [--svd <x.svd>] [--svd-root <dir>]... [--out <dir>] [--no-network] [--no-write]
+//     [--svd <x.svd>] [--svd-root <dir>]... [--out <dir>]
+//     [--rm-auto auto|sitemap|stmcu|off] [--no-network] [--no-write]
 //
 // SVD 来源顺序：--svd → 每个 --svd-root 下的 <族>/<线>.svd → ~/.dsh-stm32/facts/svd/ 缓存 →
 // 联网从 modm-io/cmsis-svd-stm32@main 取（jsDelivr → raw → ghproxy，见 src/engine/facts-acquire.ts）。
 // 没有 --svd-root 也不报错：直接走下载缓存/网络，第一次联网之后离线复用。
 // RM 语义仍只认人工抽取的 --rm-facts；--rm-pdf/--rm-url 只是登记载体（哈希/大小/来源），
 // 不做 PDF 解析（那是下一项工作）。缺语义 → facts.needs 写明缺什么，flash/doctor 自动只读降级。
+// RM 载体默认自动取（--rm-auto auto）：先 ST 官方 sitemap（132 条英文 reference_manual 直链，
+// 按族匹配 + 下载后逐线覆盖验证），失败退 stmcu.com.cn 中国官网（分类页→详情页→CCC 直链，
+// zh→en 换英文版）；两路都挂只降级不拦语义。off/DSH_STM32_OFFLINE=1/--no-network 不联网。
 // --rm-lines 声明这份 rm-facts 适用哪些线（RM 按线分级：RM0490 只覆盖 STM32C0x1=C011/C031）；
 // 目标线不在其中时语义一律拒收，只留结构。rm-facts 自带 doc.lines 时可以不传。
 import { buildFacts } from "../../lib/engine/facts-acquire.js";
@@ -54,6 +58,7 @@ async function main() {
     rmFactsPath: typeof args["rm-facts"] === "string" ? args["rm-facts"] : undefined,
     rmPdfPath: typeof args["rm-pdf"] === "string" ? args["rm-pdf"] : undefined,
     rmUrl: typeof args["rm-url"] === "string" ? args["rm-url"] : undefined,
+    rmAuto: typeof args["rm-auto"] === "string" ? args["rm-auto"] : undefined,
     rmLines: (Array.isArray(args["rm-lines"]) ? args["rm-lines"] : [])
       .join(",")
       .split(",")

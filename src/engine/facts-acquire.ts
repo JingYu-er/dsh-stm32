@@ -27,6 +27,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fetchOne } from "./fetch.js";
+import { acquireRmViaSitemap, acquireRmViaStmcu } from "./rm-sources.js";
+import type { RmAcquired } from "./rm-sources.js";
 import { factsRoot, partToFamilyLine } from "./facts.js";
 import type { FactsSemantic } from "./facts.js";
 
@@ -212,8 +214,17 @@ export interface RmAcquireOptions {
   rmFactsPath?: string;
   rmPdfPath?: string;
   rmUrl?: string;
+  /**
+   * 自动载体通道：auto（默认；显式 --rm-pdf/--rm-url 之外再试 sitemap→stmcu）
+   * /sitemap/stmcu/off（只用人给的）。离线模式（allowNetwork=false）一律等同 off。
+   */
+  rmAuto?: "auto" | "sitemap" | "stmcu" | "off";
   /** PDF 下载落盘目录；默认 <factsRoot>/rm。 */
   cacheDir?: string;
+  /** 自动通道下载落盘目录；缺省沿用 cacheDir（<factsRoot>/rm）。 */
+  rmCacheDir?: string;
+  /** stmcu 节流下限（单测传 0）。 */
+  minGapMs?: number;
   env?: NodeJS.ProcessEnv;
   allowNetwork?: boolean;
   fetchImpl?: typeof fetch;
@@ -331,6 +342,28 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
   }
   const rm = await acquireRm(o);
   const notes: string[] = [...rm.notes];
+  // 自动载体通道：rm-facts 只给语义，PDF 本体（含哈希/页码定位）由这里补齐。
+  const rmAuto = o.rmAuto ?? "auto";
+  const allowNet = o.allowNetwork ?? ((o.env ?? process.env).DSH_STM32_OFFLINE ?? "").trim() !== "1";
+  let acquired: RmAcquired | null = null;
+  if (rmAuto !== "off" && allowNet) {
+    const hasPdfSource = rm.sources.some((s) => s.kind === "rm-pdf");
+    if (!hasPdfSource) {
+      const channelOpts = { fetchImpl: o.fetchImpl, cacheDir: o.rmCacheDir, env, timeoutMs: o.timeoutMs, signal: o.signal, minGapMs: o.minGapMs };
+      const order = rmAuto === "sitemap" ? (["sitemap"] as const) : rmAuto === "stmcu" ? (["stmcu"] as const) : (["sitemap", "stmcu"] as const);
+      for (const ch of order) {
+        const attempt = ch === "sitemap"
+          ? await acquireRmViaSitemap(target.family, target.line, channelOpts)
+          : await acquireRmViaStmcu(target.family, target.line, channelOpts);
+        if (attempt.ok) { acquired = attempt; break; }
+        notes.push("RM 自动通道 " + ch + " 失败：" + attempt.error);
+        if (attempt.url !== "") acquired = attempt; // 失败但也带着哈希/覆盖信息，留给 notes
+      }
+    }
+  }
+  const pdfSource = acquired !== null && acquired.ok
+    ? { kind: "rm-pdf", doc: acquired.docId, file: acquired.file.split(/[\\/]/).pop() ?? "", sha256: acquired.sha256, bytes: acquired.bytes, url: acquired.url, origin: "auto:" + acquired.channel, coveredLines: Object.keys(acquired.coverage) }
+    : null;
   // 语义按线分级：声明过的适用范围（--rm-lines 优先，其次 rm-facts 的 doc.lines）
   // 不含目标线时一律拒收，宁可降级只读也不把别的线的 RM 结论套过来。
   const declaredLines = (o.rmLines !== undefined && o.rmLines.length > 0 ? o.rmLines : [])
@@ -361,6 +394,7 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
     sources: [
       { kind: "svd", file: path.basename(svd.file), sha256: svd.sha256, bytes: svd.bytes, path: svd.file, origin: svd.source === "remote" ? svd.url : "local" },
       ...rm.sources,
+      ...(pdfSource === null ? [] : [pdfSource]),
     ],
     registers: svd.structure,
     semantics: items,

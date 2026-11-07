@@ -21,6 +21,7 @@ const suites = [
   "family-facts-units.test.mjs",
   "facts-units.test.mjs",
   "facts-acquire-units.test.mjs",
+  "rm-sources-units.test.mjs",
   "db-presets-units.test.mjs",
   "rtt-units.test.mjs",
   "svd-units.test.mjs",
