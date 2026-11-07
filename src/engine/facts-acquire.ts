@@ -29,8 +29,12 @@ import path from "node:path";
 import { fetchOne } from "./fetch.js";
 import { acquireRmViaSitemap, acquireRmViaStmcu } from "./rm-sources.js";
 import type { RmAcquired } from "./rm-sources.js";
-import { factsRoot, partToFamilyLine } from "./facts.js";
+import { factsRoot, partToFamilyLine, readFactsFor } from "./facts.js";
+import type { FactsSummary } from "./facts.js";
 import type { FactsSemantic } from "./facts.js";
+import { loadRmTopics } from "../data/rm-topics.js";
+import { defaultPdfTextBridge, type PdfTextBridge } from "./rm-text.js";
+import { extractRmFacts, assembleRmFacts } from "./rm-extract.js";
 
 /** SVD 上游仓库与引用（实测见文件头）。 */
 export const SVD_REPO = "modm-io/cmsis-svd-stm32";
@@ -60,32 +64,51 @@ function nodeText(node: string, tag: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-/** 从 SVD XML 抽 FLASH_OPTR / FLASH_ACR / FLASH_SECR 的字段结构（含枚举）。 */
+/**
+ * 从 SVD XML 抽 FLASH 外设的寄存器结构（含枚举）。
+ *
+ * 收集策略两级（2026-11-07 实测教训）：
+ *   A. 首选按外设收：<peripheral> 的 name==FLASH 下的**全部** <register>。
+ *      modm 的寄存器命名逐族不同——C0 带前缀（FLASH_ACR/FLASH_OPTR/FLASH_SECR）、
+ *      F1 不带（ACR/OBR/CR…）；写死名字清单等于拿 C0 约定套全族，F1 会解析出 0 寄存器
+ *      （自愈真链路就是这么炸的）。名字清单只是兜底口径，不是主口径。
+ *   B. 退回全局按 FACTS_REGISTERS 名单过滤：微型片段 SVD 可能没有 peripheral 包装
+ *      （单测夹具就是那形状）。
+ */
 export function parseSvdStructure(xml: string, registers: readonly string[] = FACTS_REGISTERS): SvdStructure {
   const result: SvdStructure = {};
-  for (const m of xml.matchAll(/<register>([\s\S]*?)<\/register>/g)) {
-    const reg = m?.[1] ?? "";
-    const name = nodeText(reg, "name");
-    if (!registers.includes(name)) continue;
-    const fields: SvdFieldInfo[] = [];
-    for (const fm of reg.matchAll(/<field>([\s\S]*?)<\/field>/g)) {
-      const f = fm?.[1] ?? "";
-      const enums: { value: string; description: string }[] = [];
-      for (const em of f.matchAll(/<enumeratedValue>([\s\S]*?)<\/enumeratedValue>/g)) {
-        const ebody = em?.[1] ?? "";
-        enums.push({ value: nodeText(ebody, "value"), description: nodeText(ebody, "description") });
+  const collectFrom = (chunk: string, filterByName: boolean): void => {
+    for (const m of chunk.matchAll(/<register>([\s\S]*?)<\/register>/g)) {
+      const reg = m?.[1] ?? "";
+      const name = nodeText(reg, "name");
+      if (name === "") continue;
+      if (filterByName && !registers.includes(name)) continue;
+      const fields: SvdFieldInfo[] = [];
+      for (const fm of reg.matchAll(/<field>([\s\S]*?)<\/field>/g)) {
+        const fl = fm?.[1] ?? "";
+        const enums: { value: string; description: string }[] = [];
+        for (const em of fl.matchAll(/<enumeratedValue>([\s\S]*?)<\/enumeratedValue>/g)) {
+          const ebody = em?.[1] ?? "";
+          enums.push({ value: nodeText(ebody, "value"), description: nodeText(ebody, "description") });
+        }
+        fields.push({
+          name: nodeText(fl, "name"),
+          bitOffset: Number(nodeText(fl, "bitOffset")),
+          bitWidth: Number(nodeText(fl, "bitWidth")),
+          description: nodeText(fl, "description"),
+          enums,
+        });
       }
-      fields.push({
-        name: nodeText(f, "name"),
-        bitOffset: Number(nodeText(f, "bitOffset")),
-        bitWidth: Number(nodeText(f, "bitWidth")),
-        description: nodeText(f, "description"),
-        enums,
-      });
+      fields.sort((a, b) => a.bitOffset - b.bitOffset);
+      result[name] = { description: nodeText(reg, "description"), fields };
     }
-    fields.sort((a, b) => a.bitOffset - b.bitOffset);
-    result[name] = { description: nodeText(reg, "description"), fields };
+  };
+  for (const pm of xml.matchAll(/<peripheral>([\s\S]*?)<\/peripheral>/g)) {
+    const block = pm?.[1] ?? "";
+    if (nodeText(block, "name").toUpperCase() !== "FLASH") continue;
+    collectFrom(block, false);
   }
+  if (Object.keys(result).length === 0) collectFrom(xml, true);
   return result;
 }
 
@@ -306,6 +329,12 @@ export interface BuildFactsOptions extends SvdAcquireOptions, RmAcquireOptions {
    * notes 里提醒适用范围没声明；rm-facts 自带的 lines 字段同样会被采信。
    */
   rmLines?: string[];
+  /**
+   * spec 自动抽取：没有 --rm-facts 而且这颗芯片有 rm-topics（插件族级或用户芯片级）时，
+   * 用刚下好的载体 PDF + pymupdf 桥走「抽取+双机检」直接产 semantics。默认开。
+   */
+  autoSpec?: boolean;
+  pdfTextBridge?: PdfTextBridge;
 }
 
 export interface BuildFactsReport {
@@ -362,8 +391,39 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
     }
   }
   const pdfSource = acquired !== null && acquired.ok
-    ? { kind: "rm-pdf", doc: acquired.docId, file: acquired.file.split(/[\\/]/).pop() ?? "", sha256: acquired.sha256, bytes: acquired.bytes, url: acquired.url, origin: "auto:" + acquired.channel, coveredLines: Object.keys(acquired.coverage) }
+    ? { kind: "rm-pdf", doc: acquired.docId, file: acquired.file.split(/[\\/]/).pop() ?? "", path: acquired.file, sha256: acquired.sha256, bytes: acquired.bytes, url: acquired.url, origin: "auto:" + acquired.channel, coveredLines: Object.keys(acquired.coverage) }
     : null;
+  // spec 自动抽取：人没喂 rm-facts 而且这颗芯片有主题清单时，用可用的载体 PDF 自动抽取。
+  // 载体两种都要认：双通道自动下的，和显式 --rm-pdf/--rm-url 给的（用户本地手册场景）。
+  const explicitPdfSource = rm.sources.find((s) => s.kind === "rm-pdf" && typeof s.path === "string" && s.path !== "");
+  const explicitPdfPath = typeof explicitPdfSource?.path === "string" ? explicitPdfSource.path : "";
+  const specPdf = acquired !== null && acquired.ok ? acquired.file : explicitPdfPath;
+  if (rm.items.length === 0 && specPdf !== "" && fs.existsSync(specPdf) && o.autoSpec !== false) {
+    const loaded = loadRmTopics(target.family, target.line, factsRoot(env));
+    if (loaded.hasSpec) {
+      const pageSet = new Set<number>();
+      for (const tp of loaded.topics) for (let n = Math.max(1, tp.page - 3); n <= tp.page + 3; n += 1) pageSet.add(n);
+      const bridge = o.pdfTextBridge ?? defaultPdfTextBridge;
+      const got = await bridge(specPdf, [...pageSet]);
+      if (got.ok) {
+        // SVD 交叉要 spec 里每条线的结构；目标线现成，其余线懒取（取不到记「该线 SVD 没取到」，不炸）
+        const svdByLine: Record<string, SvdStructure> = { [target.line]: svd.structure };
+        for (const l of loaded.lines) {
+          if (svdByLine[l] !== undefined) continue;
+          const one = await acquireSvd(l, o);
+          if (one.ok) svdByLine[l] = one.structure;
+        }
+        const rep = extractRmFacts({ family: target.family, lines: loaded.lines, topics: loaded.topics }, got.pages, svdByLine);
+        const asm = assembleRmFacts({ id: loaded.docId !== "" ? loaded.docId : (acquired?.docId ?? "RM?"), source: "auto:rm-topics", origins: loaded.origins }, rep.items);
+        rm.items.push(...(asm.items as unknown as FactsSemantic[]));
+        if (rm.doc === null) rm.doc = asm.doc;
+        notes.push("spec 自动抽取：" + String(rep.items.length) + " 条采信 / " + String(rep.rejected.length) + " 条拒收（清单 " + loaded.origins.join(" + ") + "）");
+        for (const x of rep.rejected) notes.push("  REJECT " + x.id + "：" + x.reason);
+      } else {
+        notes.push("有 rm-topics 清单但 pymupdf 桥不可用：" + got.error + "（" + got.tried.join("；") + "）");
+      }
+    }
+  }
   // 语义按线分级：声明过的适用范围（--rm-lines 优先，其次 rm-facts 的 doc.lines）
   // 不含目标线时一律拒收，宁可降级只读也不把别的线的 RM 结论套过来。
   const declaredLines = (o.rmLines !== undefined && o.rmLines.length > 0 ? o.rmLines : [])
@@ -391,7 +451,15 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
     notes.push("提醒：rm-facts 没声明适用线（doc.lines/--rm-lines/条目 appliesTo），本次按目标线 " + target.line + " 原样采信；抽取语义的人要自己核对 RM 是否覆盖该线");
   }
   if (items.length === 0 && rm.items.length === 0) {
-    needs.push("本线只有结构、语义未核实：需要 " + target.line + " 的 RM 手册与 rm-facts 抽取（SVD 只给结构，不给组合规则/流程/引脚）");
+    if (acquired !== null && acquired.ok) {
+      // 载体已经到位：要么这颗芯片没主题清单（不拦烧录，路径可反查），要么有清单但机检没过。
+      const hasSpecHere = loadRmTopics(target.family, target.line, factsRoot(env)).hasSpec;
+      needs.push(hasSpecHere
+        ? target.line + " 有 rm-topics 清单但机检没过/桥不可用：逐条原因见 notes；修好清单或 PDF 改版前，本线按只读对待"
+        : "这颗芯片没有 rm-topics 主题清单：只有结构、无语义（不拦烧录）；RM 已缓存在本地，调试遇怪行为可按 sources.rm-pdf 的路径反查原文");
+    } else {
+      needs.push("本线只有结构、语义未核实：需要 " + target.line + " 的 RM 手册与 rm-facts 抽取（SVD 只给结构，不给组合规则/流程/引脚）");
+    }
   }
 
   const outDir = o.outDir !== undefined && o.outDir !== "" ? path.resolve(o.outDir) : path.join(factsRoot(env), target.family, target.line);
@@ -434,4 +502,37 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
     notes,
     sources: facts.sources,
   };
+}
+
+/**
+ * 自愈读：查到就信，查不到/有清单但没核过就当场补一次书（SVD+RM 载体+结构，
+ * 有 rm-topics 还带语义抽取），再读一遍返回。用户决定（2026-11-07）：
+ * 各族一律自动准备资产、无需人为干预；门禁严格与否由「这颗芯片有没有主题清单」决定。
+ *
+ * 何时重建：facts 不存在，或有清单但没 verified（常见于用户刚放了芯片级 spec）。
+ * 已经 verified 的直接返回，不反复下载。构建失败不炸——返回失败后的现状，
+ * 由调用方（flash 门禁/风险行）按三态处理。
+ */
+export async function ensureFacts(
+  part: string,
+  env: NodeJS.ProcessEnv = process.env,
+  o: { timeoutMs?: number; allowNetwork?: boolean; signal?: AbortSignal; fetchImpl?: typeof fetch; pdfTextBridge?: PdfTextBridge; svdPath?: string; svdRoots?: string[]; rmPdfPath?: string } = {},
+): Promise<{ summary: FactsSummary; built: { attempted: boolean; ok: boolean; message: string } }> {
+  const first = readFactsFor(part, env);
+  const needsBuild = !first.found || (first.hasSpec && !first.verified);
+  if (!needsBuild) return { summary: first, built: { attempted: false, ok: true, message: "" } };
+  const rep = await buildFacts({
+    part,
+    env,
+    ...(o.timeoutMs === undefined ? {} : { timeoutMs: o.timeoutMs }),
+    ...(o.allowNetwork === undefined ? {} : { allowNetwork: o.allowNetwork }),
+    ...(o.signal === undefined ? {} : { signal: o.signal }),
+    ...(o.fetchImpl === undefined ? {} : { fetchImpl: o.fetchImpl }),
+    ...(o.pdfTextBridge === undefined ? {} : { pdfTextBridge: o.pdfTextBridge }),
+    ...(o.svdPath === undefined ? {} : { svdPath: o.svdPath }),
+    ...(o.svdRoots === undefined ? {} : { svdRoots: o.svdRoots }),
+    ...(o.rmPdfPath === undefined ? {} : { rmPdfPath: o.rmPdfPath }),
+  });
+  const after = readFactsFor(part, env);
+  return { summary: after, built: { attempted: true, ok: rep.ok, message: rep.message } };
 }

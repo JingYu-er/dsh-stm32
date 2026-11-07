@@ -23,7 +23,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs && node scripts/copy-data.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/run-units.mjs",
     "prepublishOnly": "npm run build",

@@ -20,6 +20,7 @@ import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { generationRiskNotes } from "../engine/facts.js";
+import { ensureFacts } from "../engine/facts-acquire.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { validateToolArgs } from "./project-dir.js";
 
@@ -349,7 +350,10 @@ export function registerProjectCreate(ctx: DshContext): void {
         if (gate !== null && !gate.ok) normalized.warnings.unshift(gate.message);
         if (assets.status === "refreshed") normalized.warnings.unshift(assets.message);
         // R5：建完骨架就把烧录门禁的三态摆出来（寄存器路线的 mcu 由 scaffold 决议带回）
-        if (normalized.ok) for (const n of generationRiskNotes(normalized.mcu ?? null)) normalized.warnings.push(n);
+        if (normalized.ok && normalized.mcu !== undefined && normalized.mcu !== null) {
+          await ensureFacts(normalized.mcu, process.env, { timeoutMs: 180_000, signal: exec.signal });
+          for (const n of generationRiskNotes(normalized.mcu)) normalized.warnings.push(n);
+        }
         return { message: normalized.message, report: normalized };
       }
 
@@ -384,7 +388,13 @@ export function registerProjectCreate(ctx: DshContext): void {
         ...(scaffold.deviceDefine === undefined ? {} : { deviceDefine: scaffold.deviceDefine }),
         ...(scaffold.linkerScript === undefined ? {} : { linkerScript: scaffold.linkerScript }),
       };
-      if (halReport.ok) for (const n of generationRiskNotes(scaffold.mcu ?? args.mcu ?? null)) halReport.warnings.push(n);
+      if (halReport.ok) {
+        const halMcu = scaffold.mcu ?? args.mcu ?? null;
+        if (halMcu !== null) {
+          await ensureFacts(halMcu, process.env, { timeoutMs: 180_000, signal: exec.signal });
+          for (const n of generationRiskNotes(halMcu)) halReport.warnings.push(n);
+        }
+      }
       return { message: halReport.message, report: halReport };
     },
   });

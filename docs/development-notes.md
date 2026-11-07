@@ -5309,3 +5309,25 @@ R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先�
 接入点：generate 前台 report.notes、后台 job handle.append（开工横幅里）、**门禁 block 分支也带**（用户接下来去装 CubeMX，重跑前就该一并看到 facts 状态——第一版漏了 blocked 分支，同样是活体撞出来的）；project-create 两条路线都进 warnings（register 用决议后的 report.mcu、hal 用 scaffold.mcu ?? args.mcu，ok=false 时不打扰）。型号来源 generate 侧是 `mcuFromIoc(projectDir)`，工程没 .ioc 就返回空数组不硬凑。
 
 验收：tsc 0；TOTAL **pass=880 fail=0**（新套 generation-risk-units 5 条 + 话术回归）；pack-size 652.6 KB。活体三场景全过：F103 register → 未生成行；C051 HAL（默认 facts 根，六线 verified）→ 已核实行；generate blocked（离线 spawn）→ notes 带未生成行。至此 §5 的 1/2/3/5 与 R5 全部闭环，facts 链路端到端：SVD/载体自动获取 → 覆盖验证 → 双机检抽取 → 门禁采信 → 工具面暴露。
+
+## 78. 资产自愈 + 芯片级 spec 门禁：各族自动写书，只有踩过坑的才拦（2026-11-07）
+
+用户四条决定合成这一版：① 各族一律自动准备资产、无需人为干预；② RM 载体先下载、暴露本地路径，调试遇怪行为可 pdf_scan/pdf_read_page 反查原文；③ 只有踩过坑的族/芯片需要机检背书，其余直接烧；④ spec 允许用户踩坑后自行生成，**按芯片不按族**（我不可能把坑全部踩一遍）。
+
+### 三态门禁取代「found && !verified 就拦」
+
+`FactsSummary` 加两个维度：`hasSpec`（`src/data/rm-topics.ts`：插件族级 `lib/data/rm-topics/<族>.json` + 用户芯片级 `<facts>/topics/<族>/<线>.json` 两层合并、同 id 用户赢）与 `rmPath`（已缓存 RM 的本机路径）。flash 门禁改成 `hasSpec && !verified` 才拒烧（`allowUnknownFacts` 保留）。上一轮担心的「自愈接上 F1 反被拦」没有发生：旧的「族没 facts 只提示」被「芯片没 spec 只提示」等价替换，判据还更准了——坑本来就是芯片级的（C071 的小写 nBOOT_SEL 与 C031 的大写 NBOOT_SEL 是两个故事）。用户放一份芯片级 spec（几条锚点 + 页码的 JSON），这颗芯片下次烧录前就必须过机检；没放过的其它芯片不受影响。
+
+### ensureFacts 自愈与两个真 bug（一个活体一个单测）
+
+`ensureFacts(part)`（facts-acquire.ts）：查无书或「有清单没核过」→ 当场 `buildFacts`（SVD→RM 载体→结构→有 spec 就连语义双机检抽取），再读回；已 verified 不重跑。flash（150 s 护栏）/generate（180 s）/project-create 两条路线全接；`generationRiskNotes` 按三态重写，口径一致性测试钉死「hasSpec=true 必含拒烧、false 必不含」。
+- **bug①（活体抓到，最有价值）**：`parseSvdStructure` 写死 `FLASH_ACR/OPTR/SECR` 名字清单——那是 C0 命名约定。F103 真 SVD 的寄存器名是 `ACR/OBR/WRPR/KEYR…`，解析出 0 寄存器、自愈整条炸掉。改成两级：首选 `<peripheral> name==FLASH` 下的**全部**寄存器，退回名单过滤（单测微型夹具无 peripheral 包装，靠它兜底）。改完 F103 真链路自愈通过：8 个真实寄存器入 facts、载体 RM0008 经 sitemap 到位、风险行「只有结构、没有主题清单：不拦烧录，直接烧即可；RM 载体：本地 …rm0008.pdf」。**「名字清单」就是又一种手搓快照**——铁律 1 以新形态复发过一次。
+- **bug②（单测抓到）**：自动通道的 rm-pdf source 只写 `file`（basename）没写 `path`，`rmPath` 反查入口永远空。补字段并钉进 ensure-facts 测试。
+- 内置 C0 spec 从仓外搬进 `src/data/rm-topics/stm32c0.json`（随包发布；新 `scripts/copy-data.mjs` 复制进 lib，并入 build 链——tsc 不搬 JSON，npm files 只带 lib）。曾有「开发态退回 src」的兜底路径，在真实安装位置永不存在、只会把「没跑 copy-data」伪装成「清单在但读不到」——删掉，rm-topics 测试当场先抓住了它。
+- spec 抽取认双载体来源：自动通道下的与显式 `--rm-pdf` 给的（用户本地手册场景从此免 CLI）。
+
+### 验收
+
+- tsc 0；TOTAL **pass=890 fail=0**（新 rm-topics-units 4 + ensure-facts-units 4 + generation-risk 重写为 7 条三态）；pack-size 659.9 KB。
+- 真链路（干净 facts 根）：C071 → 自愈全程无人、verified、10 条语义、rmPath 指本地 RM0490；F103 → 结构 8 寄存器 + 载体 RM0008 路径暴露、不拦烧。中途一次 rmPath 空是 sitemap 网络抖动，降级文案正确、重跑恢复——自愈的失败形态就是「如实说没拿到」，不是「假装不需要」。
+- 待用户：重启 dsh 后真机烧 C051（预期直接过）与 F103（预期只提示）；给常用的别的芯片放芯片级 spec 试一轮拒烧→修 spec→放行闭环。

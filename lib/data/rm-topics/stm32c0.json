@@ -1,0 +1,227 @@
+{
+ "family": "stm32c0",
+ "lines": [
+  "STM32C011",
+  "STM32C031",
+  "STM32C051",
+  "STM32C071",
+  "STM32C091",
+  "STM32C092"
+ ],
+ "doc": {
+  "id": "RM0490",
+  "rev": "Rev 6",
+  "title": "RM0490: STM32C0 series advanced Arm-based 32-bit MCUs",
+  "lang": "en",
+  "pages": 1023
+ },
+ "topics": [
+  {
+   "id": "c0.boot.table",
+   "statement": "自举区域由 BOOT_LOCK / nBOOT1 / BOOT0 引脚 / nBOOT_SEL / nBOOT0 共同选择（RM0490 Rev 6 表 9，7 行组合）",
+   "page": 53,
+   "anchors": [
+    "select the boot area through the boot configuration pin BOOT0 and bits"
+   ],
+   "rows": [
+    [
+     "0",
+     "x",
+     "0",
+     "0",
+     "x",
+     "Main flash"
+    ],
+    [
+     "0",
+     "1",
+     "1",
+     "0",
+     "x",
+     "System memory"
+    ],
+    [
+     "0",
+     "0",
+     "1",
+     "0",
+     "x",
+     "Embedded SRAM"
+    ],
+    [
+     "0",
+     "x",
+     "x",
+     "1",
+     "1",
+     "Main flash"
+    ],
+    [
+     "0",
+     "1",
+     "x",
+     "1",
+     "0",
+     "System memory"
+    ],
+    [
+     "0",
+     "0",
+     "x",
+     "1",
+     "0",
+     "Embedded SRAM"
+    ],
+    [
+     "1",
+     "x",
+     "x",
+     "x",
+     "x",
+     "Main flash memory"
+    ]
+   ],
+   "svd": [
+    {
+     "reg": "FLASH_OPTR",
+     "field": "nBOOT_SEL",
+     "bitOffset": 24
+    },
+    {
+     "reg": "FLASH_OPTR",
+     "field": "nBOOT1",
+     "bitOffset": 25
+    },
+    {
+     "reg": "FLASH_OPTR",
+     "field": "nBOOT0",
+     "bitOffset": 26
+    },
+    {
+     "reg": "FLASH_SECR",
+     "field": "BOOT_LOCK",
+     "bitOffset": 16
+    }
+   ]
+  },
+  {
+   "id": "c0.boot.latch",
+   "statement": "boot mode 配置在 reset 后锁存（latched after a reset）；退出 Standby 时重新采样，Standby 期间要保持所需自举配置",
+   "page": 53,
+   "anchors": [
+    "boot mode configuration is latched after a reset",
+    "sampled when exiting Standby mode"
+   ]
+  },
+  {
+   "id": "c0.boot.nrst-sample",
+   "statement": "BOOT0 引脚采样发生在 NRST（外部复位）上升沿；PF2-NRST 引脚模式影响采样（p.54 Caution）",
+   "page": 54,
+   "anchors": [
+    "BOOT0 pin sampling is done on NRST (external reset) rising edge"
+   ]
+  },
+  {
+   "id": "c0.boot.empty",
+   "statement": "FLASH_ACR.EMPTY=1 时强制从系统存储器自举（表 9 脚注 1：Boot forced to system memory when EMPTY flag is set）；首次编程若 EMPTY 未更新，复位后仍选系统存储器",
+   "page": 53,
+   "anchors": [
+    "EMPTY flag in the FLASH access control register (FLASH_ACR) is set"
+   ],
+   "svd": [
+    {
+     "reg": "FLASH_ACR",
+     "field": "EMPTY",
+     "bitOffset": 16
+    }
+   ]
+  },
+  {
+   "id": "c0.boot.swd",
+   "statement": "BOOT0 引脚与 SWD 时钟 SWCLK 共用同一 GPIO（C0 即 PA14）；检测到调试器访问时硬件强制 BOOT0 低（从用户 Flash 自举）以保证 SWCLK 可用于调试，直到下一次上电",
+   "page": 53,
+   "anchors": [
+    "BOOT0 pin shares the same GPIO with serial wire clock (SWCLK)",
+    "hardware mechanism to force BOOT0 low"
+   ]
+  },
+  {
+   "id": "c0.bootloader.interface",
+   "statement": "嵌入式 bootloader 位于 system memory，串口为 USART / I2C / SPI（仅 C051/C071/C091/92）/ USB DFU（仅 C071）/ FDCAN（仅 C092），详见 AN2606",
+   "page": 54,
+   "anchors": [
+    "embedded bootloader is located in the system memory",
+    "application note AN2606"
+   ]
+  },
+  {
+   "id": "c0.bootlock",
+   "statement": "BOOT_LOCK（FLASH_SECR）置 1 强制从主 Flash 唯一入口自举，无视其余自举配置与 EMPTY；用于建立信任链（4.5.6）",
+   "page": 54,
+   "anchors": [
+    "Setting the BOOT_LOCK bit forces the boot from a unique entry point in the main flash memory"
+   ],
+   "svd": [
+    {
+     "reg": "FLASH_SECR",
+     "field": "BOOT_LOCK",
+     "bitOffset": 16,
+     "enums": [
+      "0x0",
+      "0x1"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c0.dbg.swen",
+   "statement": "FLASH_ACR.DBG_SWEN 由软件控制内核调试访问：0 关（敏感代码/可保护存储区场景）、1 开（4.5.5，Figure 4）",
+   "page": 75,
+   "anchors": [
+    "Disabling core debug access",
+    "DBG_SWEN = 0"
+   ],
+   "svd": [
+    {
+     "reg": "FLASH_ACR",
+     "field": "DBG_SWEN",
+     "bitOffset": 18,
+     "enums": [
+      "0x0",
+      "0x1"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c0.ob.program",
+   "statement": "选项字节编程：先清 FLASH_CR.OPTLOCK（含 LOCK 解锁序列），再向 FLASH_OPTKEYR 依次写 OPTKEY1=0x0819 2A3B、OPTKEY2=0x4C5D 6E7F；错序锁死到下次复位并触发总线错误/HardFault（4.4.2）",
+   "page": 67,
+   "anchors": [
+    "Write OPTKEY1 = 0x0819 2A3B of the FLASH option key register",
+    "Write OPTKEY2 = 0x4C5D 6E7F"
+   ]
+  },
+  {
+   "id": "c0.rdp.default",
+   "statement": "RDP[7:0]：0xAA=Level 0 不保护、0xCC=Level 2 全片保护、Other（除 0xAA/0xCC 的一切值）=Level 1（4.7.x FLASH_OPTR 位域）",
+   "page": 85,
+   "anchors": [
+    "0xAA: Level 0, read protection not active",
+    "0xCC: Level 2, chip read protection active",
+    "Other: Level 1, memories read protection active"
+   ],
+   "svd": [
+    {
+     "reg": "FLASH_OPTR",
+     "field": "RDP",
+     "bitOffset": 0,
+     "enums": [
+      "0xAA",
+      "0xCC"
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadRmTopics } from "../data/rm-topics.js";
 
 /** facts 包里的语义条目（由 RM 抽取，带页码）。 */
 export interface FactsSemantic {
@@ -37,6 +38,14 @@ export interface FactsSummary {
   verified: boolean;
   lines: string[];
   needs: string[];
+  /**
+   * 这颗芯片有没有 rm-topics 主题清单（族级或芯片级）。门禁判据：
+   * 有清单 → 必须 verified 才放行烧录；没清单 → 只提示不拦（用户决定 2026-11-07：
+   * 只有踩过坑的族/芯片需要机检背书，其余直接烧）。
+   */
+  hasSpec: boolean;
+  /** 已缓存的 RM PDF 本地路径（反查用）；没有就空串。 */
+  rmPath: string;
 }
 
 /** facts 缓存根（可用 DSH_STM32_FACTS 覆盖）。 */
@@ -72,7 +81,27 @@ export function mcuFromIoc(projectDir: string): string | null {
   return null;
 }
 
+/** 给 summary 补 spec/载体两个维度（readFactsFor 的每条出口都过这里）。 */
+function withSpecFields(s: Omit<FactsSummary, "hasSpec" | "rmPath">, part: string, env: NodeJS.ProcessEnv): FactsSummary {
+  const t = partToFamilyLine(part);
+  if (t === null) return { ...s, hasSpec: false, rmPath: "" };
+  const loaded = loadRmTopics(t.family, t.line, factsRoot(env));
+  let rmPath = "";
+  try {
+    const raw = JSON.parse(readFileSync(join(factsRoot(env), t.family, t.line, "facts.json"), "utf8")) as FactsPackage;
+    const pdf = (raw.sources ?? []).find((x) => x.kind === "rm-pdf" && typeof x.path === "string" && existsSync(x.path as string));
+    rmPath = typeof pdf?.path === "string" ? pdf.path : "";
+  } catch {
+    // facts 还没生成或读不动：rmPath 保持空串，不影响门禁
+  }
+  return { ...s, hasSpec: loaded.hasSpec, rmPath };
+}
+
 export function readFactsFor(part: string, env: NodeJS.ProcessEnv = process.env): FactsSummary {
+  return withSpecFields(readFactsRaw(part, env), part, env);
+}
+
+function readFactsRaw(part: string, env: NodeJS.ProcessEnv): Omit<FactsSummary, "hasSpec" | "rmPath"> {
   const target = partToFamilyLine(part);
   if (target === null) {
     return { found: false, path: "", part, line: "", semantics: 0, verified: false, lines: [], needs: ["无法从型号 " + part + " 解析出族/线"] };
@@ -114,9 +143,13 @@ export function readFactsFor(part: string, env: NodeJS.ProcessEnv = process.env)
 
 /** 给工具输出用的摘要行（带结论语气）。 */
 export function describeFacts(summary: FactsSummary): string[] {
-  if (!summary.found) return ["事实层：" + (summary.needs[0] ?? "未生成") + "（只读建议）"];
-  if (!summary.verified) return ["事实层：" + summary.line + " 仅结构、无语义（只读建议；" + summary.needs.join("；") + "）"];
-  const out = ["事实层：" + summary.line + "（" + String(summary.semantics) + " 条语义，已验证）"];
+  if (!summary.found) return ["事实层：" + (summary.needs[0] ?? "未生成") + (summary.hasSpec ? "（这颗芯片有清单，烧录门禁会拦）" : "（这颗芯片没清单，不拦烧录）")];
+  const rm = summary.rmPath === "" ? "" : "｜RM 载体本地路径：" + summary.rmPath;
+  if (!summary.verified) {
+    if (summary.hasSpec) return ["事实层：" + summary.line + " 有清单但机检没过：" + summary.needs.join("；") + "（stm32_flash 拒烧，allowUnknownFacts=true 可强制）" + rm];
+    return ["事实层：" + summary.line + " 仅结构、无主题清单：不拦烧录" + rm];
+  }
+  const out = ["事实层：" + summary.line + "（" + String(summary.semantics) + " 条语义，已验证）" + rm];
   for (const line of summary.lines) out.push("  · " + line);
   return out;
 }
@@ -129,13 +162,16 @@ export function describeFacts(summary: FactsSummary): string[] {
 export function generationRiskNotes(part: string | null, env: NodeJS.ProcessEnv = process.env): string[] {
   if (part === null || part.trim() === "") return [];
   const s = readFactsFor(part, env);
+  const rm = s.rmPath === "" ? "" : "；RM 载体：本地 " + s.rmPath + "（调试怪行为可 pdf_scan/pdf_read_page 反查原文）";
+  if (s.found && s.verified) {
+    return ["事实层 " + s.line + " 已核实 " + String(s.semantics) + " 条语义（自举/调试门控/选项字节）→ stm32_flash 不会因只读门禁拦；逐条摘要见 stm32_doctor" + rm];
+  }
+  if (s.hasSpec) {
+    return ["事实层 " + (s.found ? s.line : part) + " 有 rm-topics 主题清单但机检没过/书没建起来 → stm32_flash 会拒烧（allowUnknownFacts=true 可强制）" + (s.needs.length > 0 ? "：" + s.needs[0] : "") + rm];
+  }
   if (!s.found) {
-    // 口径必须跟 flash 的门禁一致：facts 完全不存在时 flash 只提示不拦（§7 已知限制）；
-    // 拦的是「facts 存在但语义 0」——那是另一行文案。这里不能吓唬人说会拒烧。
-    return ["事实层（RM/SVD）未生成：node scripts/facts/build-facts.mjs --part " + s.part + "——不补也能烧（stm32_flash 对无 facts 的族只提示），但启动/调试门禁类结论没有 RM 依据可查"];
+    return ["事实层（RM/SVD）未生成（stm32_flash 对没清单的芯片只提示不拦；工具会自动补，补失败多半是离线，可跑 build-facts.mjs --part " + s.part + "）"];
   }
-  if (!s.verified) {
-    return ["事实层 " + s.line + " 只有结构、语义未核实 → stm32_flash 默认拒烧（allowUnknownFacts=true 可强制）；缺的是该线 RM 的 rm-facts 抽取" + (s.needs.length > 0 ? "（" + s.needs[0] + "）" : "")];
-  }
-  return ["事实层 " + s.line + " 已核实 " + String(s.semantics) + " 条语义（自举/调试门控/选项字节）→ stm32_flash 不会因只读门禁拦；逐条摘要见 stm32_doctor"];
+  return ["事实层 " + s.line + " 只有结构、没有主题清单：不拦烧录，直接烧即可" + rm];
 }
+

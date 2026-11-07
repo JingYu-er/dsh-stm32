@@ -16,6 +16,7 @@ import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 import { generationRiskNotes, mcuFromIoc } from "../engine/facts.js";
+import { ensureFacts } from "../engine/facts-acquire.js";
 
 export const GENERATE_TOOL = "stm32_generate";
 
@@ -232,7 +233,16 @@ export function registerGenerate(ctx: DshContext): void {
       const projectDir = resolution.projectDir;
       // R5：生成前把「这块板烧录门禁会怎样」摆出来——CubeMX 跑 3–4 分钟之前，
       // 用户/agent 就该知道 facts 缺不缺、烧录会不会被只读门禁拦。
-      const riskNotes = generationRiskNotes(mcuFromIoc(projectDir));
+      let riskNotes: string[] = [];
+      {
+        const mcu = mcuFromIoc(projectDir);
+        if (mcu !== null) {
+          // 自愈：没书当场补（有主题的还要连语义一起抽）。失败不拦生成，风险行会照实说。
+          const ensured = await ensureFacts(mcu, process.env, { timeoutMs: 180_000, signal: exec.signal });
+          riskNotes = generationRiskNotes(mcu);
+          void ensured;
+        }
+      }
       // 门禁：无头生成要 CubeMX 启动器 + 它自带的 JRE。缺件时不必等 3–4 分钟才报错。
       const gate = await ensureToolchain(ctx, {
         capability: "generate",

@@ -15,7 +15,8 @@ import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
-import { describeFacts, mcuFromIoc, readFactsFor } from "../engine/facts.js";
+import { describeFacts, mcuFromIoc } from "../engine/facts.js";
+import { ensureFacts } from "../engine/facts-acquire.js";
 
 export const FLASH_TOOL = "stm32_flash";
 
@@ -164,12 +165,19 @@ export function registerFlash(ctx: DshContext): void {
         const blocked = blockedReport(resolution.projectDir, gate);
         return { message: blocked.message, report: flashReportForHost(blocked) };
       }
-      // 事实层门禁：facts 存在但语义为 0（只有结构）时只读，避免拿别的线的事实套用。
+      let flashFactsNote = "";
+      // 事实层门禁（2026-11-07 用户决定改成三态）：先自愈补书，再按「这颗芯片有没有
+      // rm-topics 主题清单」判——有清单必须机检过（verified）才烧；没清单直接放行，
+      // 载体照下、路径照报（族级判据太粗：坑是芯片级的，用户踩坑就给他这颗建 spec）。
       const mcu = mcuFromIoc(resolution.projectDir);
-      const facts = mcu === null ? null : readFactsFor(mcu);
-      if (facts !== null && facts.found && !facts.verified && args.allowUnknownFacts !== true) {
+      const ensured = mcu === null ? null : await ensureFacts(mcu, process.env, { timeoutMs: 150_000, signal: exec.signal });
+      const facts = ensured === null ? null : ensured.summary;
+      if (ensured !== null && ensured.built.attempted) {
+        flashFactsNote = (ensured.built.ok ? "facts 已自动补齐" : "facts 自动补齐没成功（不拦烧录，除非这颗芯片有主题清单）：" + ensured.built.message);
+      }
+      if (facts !== null && facts.hasSpec && !facts.verified && args.allowUnknownFacts !== true) {
         const blocked = emptyReport(
-          "没烧：" + facts.line + " 的事实只有结构、语义未核实（只读建议）。补该线 RM 后重新生成 facts，或传 allowUnknownFacts=true 强制烧录。",
+          "没烧：" + facts.line + " 有 rm-topics 主题清单但机检没过——这颗芯片的 RM 结论没被逐字核实，烧下去出坑没人兜底。修清单/重跑 build-facts，或传 allowUnknownFacts=true 强制烧。",
         );
         blocked.notes.push(...describeFacts(facts));
         return { message: blocked.message, report: flashReportForHost(blocked) };
@@ -188,6 +196,7 @@ export function registerFlash(ctx: DshContext): void {
         ...(args.allowNoDebug === undefined ? {} : { allowNoDebug: args.allowNoDebug }),
         signal: exec.signal,
       });
+      if (flashFactsNote !== "") report.notes.push(flashFactsNote);
       if (facts !== null) report.notes.push(...describeFacts(facts));
       if (!gate.ok) report.notes.unshift(gate.message);
       if (released !== null) report.notes.push(released);
