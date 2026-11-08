@@ -5508,4 +5508,4 @@ f0 736 B / f1 1404 B / f2 932 B / f3 948 B / f4 960 B / f7、c0、g0、g4、l0�
 ### 三、验收
 
 - tsc 0；新增 2 条回归用例：scaffold 失败文案必须含 CubeMX 链接与 route=register 说明；`backend=cubeprogrammer` 缺 CLI 时必须含 CubeProgrammer 链接且不调 CLI。
-- `flash-orchestrator-units` 12 条、`scaffold-patch-units` 26 条全绿；全量 TOTAL **pass=908 fail=0**；`pack-smoke` 全过；包体 678.8 KB / 上限 1171.9 KB（136 文件）。
+- `flash-orchestrator-units` 14 条（含 2 条 J-Link：实见 1366 就选 `interface/jlink.cfg` 且参数顺序 interface → `-c transport select swd` → target；J-Link 失败不派 CubeProgrammer 并提示 transport）、`scaffold-patch-units` 26 条全绿；全量 TOTAL **pass=910 fail=0**；`pack-smoke` 全过；包体 678.8 KB / 上限 1171.9 KB（136 文件）。

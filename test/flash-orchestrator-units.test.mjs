@@ -247,3 +247,37 @@ t("backend=openocd：ST-LINK 两败也不派 CLI（用户明确只要 openocd）
     assert.ok(!fake.calls.some((c) => /Programmer_CLI/.test(c)), "openocd 后端不该调 CLI：" + fake.calls.join(" ;; "));
   });
 });
+
+// ---- 第三类探针：J-Link（用户 2026-11-08 要求 ST-Link / DAPLink / J-Link 都能用）----
+
+const PNPUTIL_JLINK = [
+  "Instance ID:                USB\\VID_1366&PID_1051\\000000123456",
+  "Device Description:         J-Link",
+  "Status:                     0x18",
+].join("\r\n");
+
+t("实见 J-Link：interface 用 jlink.cfg，且必须在 interface 与 target 之间补 transport select swd", async () => {
+  // openocd 0.12 的 interface/jlink.cfg 只有 adapter driver jlink，默认选 jtag；
+  // 不给 "transport select swd" 会连到 jtag 上然后报 No J-Link device found（实测）。
+  const fake = fakeSpawner({ pnputil: PNPUTIL_JLINK, openocdLogs: GOOD, openocdExits: [0] });
+  const report = await runFlash(fake, { projectDir: makeProject(false), timeoutMs: 10_000 });
+  assert.equal(report.ok, true, report.message + " | " + report.errors.join(" / "));
+  assert.ok(report.configs.includes("interface/jlink.cfg"), "按实见探针选 jlink：" + report.configs.join(","));
+  const ocCall = fake.calls.find((c) => /openocd/i.test(c) && !/pnputil|Programmer/i.test(c)) ?? "";
+  const iIface = ocCall.indexOf("interface/jlink.cfg");
+  const iTransport = ocCall.indexOf("transport select swd");
+  const iTarget = ocCall.indexOf("target/");
+  assert.ok(iIface >= 0 && iTransport > iIface, "transport 必须在 interface 之后：" + ocCall);
+  assert.ok(iTarget > iTransport, "transport 必须在 target 之前：" + ocCall);
+  assert.ok(report.notes.some((n) => /J-Link/u.test(n)), "notes 要说清用的是 J-Link：" + report.notes.join(" | "));
+});
+
+t("实见 J-Link 且 openocd 失败：不派 CubeProgrammer（CLI 只认 ST-LINK），并说明缺 transport 的可能", async () => {
+  await withCli(async () => {
+    const fake = fakeSpawner({ pnputil: PNPUTIL_JLINK, openocdLogs: ["Error: No J-Link device found"], cliText: CLI_GOOD, cliExit: 0 });
+    const report = await runFlash(fake, { projectDir: makeProject(false), timeoutMs: 10_000 });
+    assert.equal(report.ok, false);
+    assert.equal(fake.calls.some((c) => /Programmer_CLI/.test(c)), false, "J-Link 没有 CLI 兜底腿：" + fake.calls.join(" ;; "));
+    assert.ok(report.notes.some((n) => /transport select swd/u.test(n)), report.notes.join(" | "));
+  });
+});
