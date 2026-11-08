@@ -5364,3 +5364,24 @@ R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先�
 - tsc 0；TOTAL **pass=899 fail=0**（新 `flash-orchestrator-units` 8 条全注入假 subprocess：实见选 stlink / 自动换 interface 重试 / 手写 cfg 不重试 / CLI 兜底成功 / DAPLink 不派 CLI / swd-locked 不兜底 / 显式 interface 不探 USB / 连烧两颗不共享探针结论；probe-error 扩到 27 条）；pack-size 666.5 KB / 上限 1171.9 KB。CI（`1215fc6`）绿。
 - 真机：`parseProbeVidPid` 吃真 pnputil 输出（84,848 B，GBK 乱码前缀不影响）认出 0483:3752；`diagnoseUsb` 输出「探针在线：ST-Link（VID:PID 0483:3752）；openocd 应用 interface/stlink.cfg」；probeAll 真机 found=true 自动发现 `STM32_Programmer_CLI.exe`。
 - 待用户：插上 ST-Link 跑一次真烧（预期 notes 里能看到「实见 ST-Link → interface/stlink.cfg」），再故意把工程里的 openocd.cfg 留着验证「以它为准」那条分支。
+
+## 80. 工具描述对齐实现：模型读的是 description，不是代码（2026-11-08）
+
+§79 把烧录改成「实见探针选 interface → 换另一个重试 → CubeProgrammer 兜底」之后，`stm32_flash` 的 `description` 还留着上一版的话：「没有则回退 CMSIS-DAP + stm32f1x」。代码是对的，描述是错的，而**模型做决策时读的是描述**——它会以为插件仍然写死 CMSIS-DAP、以为没有第二后端，于是在用户接 ST-Link 报错时给出错误的归因。同类滞后还有三处：`doctor` 的「占着 CMSIS-DAP 探针」、skill 里的「本机验证板……CMSIS-DAP 探针」、以及参数说明 `allowUnknownFacts`（实际判据是「有 rm-topics 清单且没机检过」，不是「只有结构」）。
+
+改动（纯文案，不动行为）：
+
+- `stm32_flash` description 重写为完整链路：三道门禁（工具链 / Serial Wire / 芯片级 spec）→ 实见探针选 interface → 工程自带 `openocd.cfg` 以它为准 → 驱动不匹配自动换一次 → ST-Link + CLI 兜底 → 成功证据是 `Programming Finished` + `Verified OK`。
+- 参数说明补上真实约束：`configFile` 给了且存在时「不按探针改 interface、不自动换 interface 重试」；`allowUnknownFacts` 改成本芯片有主题清单但机检没过时才生效；`adapterSpeed` 注明 openocd 与 CLI 兜底共用。
+- `doctor` 描述改「占着探针（CMSIS-DAP / ST-Link）」，不再把探针当成 CMSIS-DAP 的同义词。
+- skill（`src/skill/stm32-workflow.ts`）：验证板那句改成「CMSIS-DAP 与 ST-Link 都支持，按 USB 实见选 interface」；R6 补「型号不必手选、RTT/debug_session 会占探针先 stop、只有手写 `openocd.cfg` 才以它为准」。
+
+### 教训
+
+- **接口描述是契约的一部分**：参数 schema 与 description 是模型能看到的全部真相，它们比实现更容易腐坏，因为改实现时没人会去读一遍文案。功能改动涉及「行为变了」时，description 要和代码一起改，并在验收清单里单列一项。
+- **用户能看到的两份文档也要一起改**：skill 是随插件下发的运行时文本，它对用户和模型同时生效，比 README 更容易被忘。
+
+### 验收
+
+- `npm run build` 0；TOTAL **pass=899 fail=0**；`pack-smoke` 全过；包体 667.6 KB / 上限 1171.9 KB。
+- 只改文案与 skill 文本，无行为变更；`lib/` 随 src 重建后一并提交（CI 会校验两者同步）。

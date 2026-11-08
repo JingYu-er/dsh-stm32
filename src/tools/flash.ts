@@ -117,7 +117,7 @@ export function registerFlash(ctx: DshContext): void {
   ctx.tools.register({
     name: FLASH_TOOL,
     description:
-      "只烧录不调试：用 openocd 执行 program <elf> verify reset exit，烧完复位运行并立刻释放探针（不会拉起调试会话，也不停在 main）。自动复用工程里的 openocd.cfg；没有则回退 CMSIS-DAP + stm32f1x。烧录前会检查 .ioc 是否启用了 Serial Wire，没有就拒绝（避免烧完 SWD 失联），确实要烧带 allowNoDebug=true。",
+      "只烧录不调试：用 openocd 执行 program <elf> verify reset exit，烧完复位运行并立刻释放探针（不会拉起调试会话，也不停在 main）。烧录前过三道门禁：工具链缺件直接拒；.ioc 没启用 Serial Wire 也拒（会把 SWD 烧失联，确实要烧带 allowNoDebug=true）；这颗芯片有 rm-topics 主题清单但 facts 机检没过同样拒（allowUnknownFacts=true 强制）。探针按 USB 实见结果选 interface（ST-Link → interface/stlink.cfg，DAPLink/CMSIS-DAP → interface/cmsis-dap.cfg），工程自带 openocd.cfg 时以它为准；没自带时 openocd 报驱动不匹配会自动换另一个 interface 重试一次，实见 ST-Link 且装了 STM32CubeProgrammer 时两条都失败再用 CLI 兜底。成功的证据是 Programming Finished + Verified OK。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -125,12 +125,12 @@ export function registerFlash(ctx: DshContext): void {
         projectDir: { type: "string", description: "工程根目录；缺省为当前工作目录。" },
         elfPath: { type: "string", description: "显式指定要烧的 .elf；缺省从构建目录推断。" },
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先 Debug）。" },
-        configFile: { type: "string", description: "openocd 配置文件（相对工程目录）；缺省找 openocd.cfg。" },
+        configFile: { type: "string", description: "openocd 配置文件（相对工程目录）；缺省找 openocd.cfg。给了且存在时以它为准：不按探针改 interface，也不自动换 interface 重试。" },
         iocPath: { type: "string", description: "SWD 守卫要看的 .ioc（工程里有多个 .ioc 时用它指定）。" },
-        adapterSpeed: { type: "number", description: "adapter speed（kHz）；连不上时可降到 1000 或 100。" },
+        adapterSpeed: { type: "number", description: "adapter speed（kHz）；连不上时可降到 1000 或 100。openocd 与 CubeProgrammer 兜底都用它。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 120000。" },
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
-        allowUnknownFacts: { type: "boolean", description: "本型号 facts 只有结构、语义未核实时是否仍然烧录（默认 false：拒绝，只读建议）。" },
+        allowUnknownFacts: { type: "boolean", description: "这颗芯片有 rm-topics 主题清单（踩过坑）但 facts 语义没机检通过时，是否仍然烧录（默认 false：拒绝）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值。" },
         envCheck: ENV_CHECK_SCHEMA,
       },
