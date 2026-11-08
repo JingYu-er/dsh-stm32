@@ -97,7 +97,9 @@ export function parseProbeVidPid(text: string): DetectedProbe[] {
 
 /** 实见探针 → openocd 该用哪个 interface 配置。ST-LINK 优先（官方探针，且 hla 与 cmsis-dap 互斥）。 */
 export function preferredInterfaceConfig(probes: DetectedProbe[]): { cfg: string; why: string } {
-  if (probes.some((p) => p.kind === "st-link")) return { cfg: "interface/stlink.cfg", why: "USB 里实见 ST-LINK（0483:37xx）" };
+  if (probes.some((p) => p.kind === "st-link")) {
+    return { cfg: "interface/stlink-dap.cfg", why: "USB 里实见 ST-LINK（0483:37xx）；走 dapdirect 而不是 hla——C0/U0 这类新族的 target 脚本用的是 swj-dp.tcl 那一套，hla 会报 transport 不支持" };
+  }
   if (probes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink")) return { cfg: "interface/cmsis-dap.cfg", why: "USB 里实见 CMSIS-DAP/DAPLink" };
   return { cfg: "interface/cmsis-dap.cfg", why: "没认出已知探针，维持历史默认 cmsis-dap" };
 }

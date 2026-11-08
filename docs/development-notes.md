@@ -5385,3 +5385,43 @@ R5 收尾。动机：facts 门禁长在 `stm32_flash` 上，但用户往往先�
 
 - `npm run build` 0；TOTAL **pass=899 fail=0**；`pack-smoke` 全过；包体 667.6 KB / 上限 1171.9 KB。
 - 只改文案与 skill 文本，无行为变更；`lib/` 随 src 重建后一并提交（CI 会校验两者同步）。
+
+## 81. CubeProgrammer 升为 ST-Link 正式后端；新建工程自带 .vscode/launch.json（2026-11-08）
+
+用户选了方案 B：把 CubeProgrammer 从「openocd 失败后的兜底」提升为 ST-Link 的**正式后端**（`backend: auto | openocd | cubeprogrammer`），并要求新建工程自动生成 `.vscode/launch.json`。顺手修掉 §79 遗留的第三处问题：内置 C0/U0 脚本在 0.12 上其实加载不了。
+
+### 一、内置 C0/U0 脚本：上一版只适配了一半
+
+§78 说「内置一份适配 0.12 的脚本」，实际只把 `-tap` 改成了 `-chain-position`，另两处 0.13 写法还在——用 ST-Link 实测第 11 行就报 `Debug adapter doesn't support 'swd' transport`（0.12 的 st-link 驱动只有 `hla_swd`/`dapdirect_swd`），去掉后第 39 行报 `invalid command name "swd"`。
+
+改成三处真适配：`source [find target/swj-dp.tcl]` 替代 `transport select swd`；`swj_newdap ... -irlen 4 -ircapture 0x1 -irmask 0xf` 替代 `swd newdap`；`-chain-position` 保持不变。改后 cmsis-dap / stlink-dap / stlink(hla) 三种都能加载到「连探针」这一步，报错退化为 `open failed` / `unable to find a matching CMSIS-DAP device`（因为没插探针）。
+
+顺带统一 ST-Link 的 interface：`preferredInterfaceConfig` 从 `interface/stlink.cfg`（hla）改成 `interface/stlink-dap.cfg`（dapdirect）——新族 target 脚本走 swj-dp.tcl，hla 会撞 transport 不支持。所有断言与文案同步。
+
+### 二、backend 三态
+
+- `auto`（默认）：openocd 先烧 → 失败且不属无解类 → 实见 ST-Link 且装了 CLI 就兜底。
+- `openocd`：只用 openocd，失败就报错（用户明确不要第二后端时不偷偷换工具）。
+- `cubeprogrammer`：直接走 `STM32_Programmer_CLI`（`-c port=SWD -d elf -v -rst`），不依赖 openocd 的 target/flash 脚本——H5/WBA/WB0/WL3 这类上游连脚本和 flash 驱动都没有的族只能走它；实见 CMSIS-DAP/DAPLink 时直接拒绝（CLI 只认 ST-LINK），不白跑一趟。
+
+实现：`FlashRequest.backend`；`prepareFlashTarget()` 抽出两条后端共用的「找 elf + SWD 守卫」；`runCubeProgrammerBackend()`；`cliFailureProbeError()` 把 CLI 日志归成 `no-probe`（No ST-Link detected）或 `target-mismatch`（Unable to connect）。auto 的兜底文案按「openocd 根本没起来（没有 target 脚本）」与「N 个配置都试过」分开；CLI 没装时明确说「装上它，ST-Link 就多一条不依赖 openocd 的后端」。工具层在 cubeprogrammer 后端下把工具链门禁降为 off（CLI 不需要 openocd）。
+
+### 三、.vscode 自动生成：register 路线过去完全没有
+
+HAL 路线一直有 `.vscode/{launch,settings,c_cpp_properties}.json`；register 路线不走 scaffold，所以建出来的工程**没有 launch.json**，用户在 VSCode 里按 F5 只能自己写。
+
+- 新增 `scaffold.writeVscodeConfigs({targetDir, projectName, interfaceConfig?, binDirs?})`：与 HAL 同源（`templates/scaffold/vscode/`），填占位符、替换工程名，已存在的文件不覆盖只给 warning。
+- `createRegisterProject` 建完后自动调用它（放在引擎而不是工具里：直接调引擎的调用方也拿到同样的工程），`templateFiles` 9 → 12。
+- `openocd.cfg` 与 `launch.json` 的 interface 都按**实见探针**写：建工程时探一次（pnputil 0.5–2 s），实见 ST-Link 写 `interface/stlink-dap.cfg`，否则沿用 cmsis-dap。HAL 路线同样支持（`ScaffoldRequest.interfaceConfig`）。
+
+### 教训
+
+- **「适配旧版本」要按行验证，不是按注释**：上一版注释写着「适配 0.12」，实际只改了一处；结论一直在文档里，直到拿 ST-Link 真跑才暴露。凡「声称支持某版本」的地方，验收必须是「用那个版本跑一遍并贴输出」。
+- **同一个事实两处写就会分叉**：interface 同时出现在 openocd.cfg 与 launch.json，register 路线的 openocd.cfg 由 `SHARED_TEMPLATE_FILES` 直接 `copyFileSync`——不加替换就会一半 stlink-dap 一半 cmsis-dap。
+
+### 验收
+
+- tsc 0；TOTAL **pass=907 fail=0**（新增 8 条：backend 直连/拒绝/不兜底 3 条、writeVscodeConfigs 3 条、register 路线 .vscode 与 interface 一致性 2 条；原有 register 文件数断言 9 → 12）。
+- 引擎级真建工程：HAL（STM32F103C8T6，`cubeMxRoots=D:/app/STM32CubeMX`）与 register 都产出 `.vscode/launch.json`，`openocd.cfg` 与 `launch.json` 同时写 `interface/stlink-dap.cfg`。
+- `pack-smoke` 全过；包体 670.3 KB / 上限 1171.9 KB（135 文件）。
+- 待真机：C031F6P6 + ST-Link 分别跑 `backend: auto` 与 `backend: "cubeprogrammer"`；F5 用新工程的 launch.json 烧一次。

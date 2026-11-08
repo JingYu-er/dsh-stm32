@@ -19,7 +19,7 @@ import { cacheRootInfo, checkCacheEntry, readCacheIndex, resolveCacheEntry, sha2
 import { fetchAll, type FetchOptions, type FetchOutcome } from "./fetch.js";
 import { planRegisterClock, renderClockInit } from "./register-clock.js";
 import { planRegisterLinker, renderLinkerScript } from "./register-linker.js";
-import { backupBeforeOverwrite, backupWarning, cleanupAfterFailure, mkdirTracked, preflightTarget, templateDir, type OverwriteBackup } from "./scaffold.js";
+import { backupBeforeOverwrite, backupWarning, cleanupAfterFailure, mkdirTracked, preflightTarget, templateDir, writeVscodeConfigs, type OverwriteBackup } from "./scaffold.js";
 
 /** 寄存器版模板目录：lib/engine/register-template.js → ../../templates/register。 */
 export function registerTemplateDir(): string {
@@ -282,6 +282,8 @@ export interface RegisterProjectRequest {
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
   download?: boolean;
+  /** 探针实见决定的 openocd interface（实见 ST-Link 时写 stlink-dap）；缺省沿用模板的 cmsis-dap。 */
+  interfaceConfig?: string;
 }
 
 export interface RegisterProjectReport {
@@ -318,7 +320,7 @@ export interface RegisterProjectReport {
  * 链接脚本不在这张表里：它是寄存器路线里唯一必须按型号改的模板（ST 那份写死
  * 64K FLASH / 20K RAM），所以从 HAL 骨架读原文本、改 MEMORY 两行、另存为
  * <DeviceId>_FLASH.ld（见 register-linker.ts）。这四个文件数目固定；工程文件总数由
- * templateFiles 计数（CMakeLists + main.c + rtt.c/rtt.h + 这四个 + 链接脚本 = 9）。
+ * templateFiles 计数（CMakeLists + main.c + rtt.c/rtt.h + 这四个 + 链接脚本 + .vscode 三份 = 12）。
  */
 const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "cmake/gcc-arm-none-eabi.cmake", "openocd.cfg"];
 
@@ -509,7 +511,13 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
       if (rel === ".gitignore" && missingOptional.includes(rel)) continue;
       const dest = path.join(targetDir, rel);
       mkdirTracked(path.dirname(dest), createdDirs);
-      fs.copyFileSync(path.join(halTpl, rel), dest);
+      if (rel === "openocd.cfg" && request.interfaceConfig !== undefined && request.interfaceConfig !== "" && request.interfaceConfig !== "interface/cmsis-dap.cfg") {
+        // 与 .vscode/launch.json 同口径：实见 ST-Link 却写 cmsis-dap，F5 会撞 transport 不支持。
+        const text = fs.readFileSync(path.join(halTpl, rel), "utf8").split("interface/cmsis-dap.cfg").join(request.interfaceConfig);
+        fs.writeFileSync(dest, text, "utf8");
+      } else {
+        fs.copyFileSync(path.join(halTpl, rel), dest);
+      }
       templateFiles += 1;
     }
 
@@ -536,6 +544,16 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   }
   const driverFiles = countFiles(path.join(targetDir, "Drivers"));
 
+  // .vscode：register 路线不走 scaffold，但用户在 VSCode 里按 F5 烧录/调试靠的就是这三份文件。
+  // 放在引擎里而不是工具里，是为了让直接调引擎的调用方（测试、别的工具）也拿到同样的工程。
+  const vscode = writeVscodeConfigs({
+    targetDir,
+    projectName,
+    ...(request.interfaceConfig === undefined ? {} : { interfaceConfig: request.interfaceConfig }),
+    binDirs: [],
+  });
+  templateFiles += vscode.files.length;
+
   const warnings: string[] = [];
   if (missingOptional.includes(".gitignore")) {
     warnings.push(
@@ -545,6 +563,8 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
   }
   // 备份清单放第一条：用户看到"覆盖成功"时，第一眼得知道旧文件去哪了。
   if (backupNote !== null) warnings.push(backupNote);
+  if (vscode.error !== "") warnings.push(vscode.error);
+  for (const w of vscode.warnings) warnings.push(w);
   warnings.push(
     "模板里的 LED 是蓝丸的 PC13；换板子改 Core/Src/main.c 顶部的 LED_PORT / LED_PIN。",
     "寄存器版没有 .ioc：不需要 CubeMX，也不需要固件包；要换成 HAL 版就用 stm32_project_create route=hal。",

@@ -18,6 +18,7 @@ import {
   detectVscodeFill,
   fillVscodeTemplate,
 } from "../lib/engine/vscode-config.js";
+import { writeVscodeConfigs } from "../lib/engine/scaffold.js";
 
 const TEMPLATE_VSCODE = fileURLToPath(new URL("../templates/scaffold/vscode/", import.meta.url));
 
@@ -172,4 +173,41 @@ test("填进 JSON 字符串的 Windows 路径必须是合法 JSON（反斜杠要
   const parsed = JSON.parse(filled);
   assert.equal(parsed.gdbPath, "D:/app/msys64/ucrt64/bin/gdb-multiarch.exe");
   assert.equal(parsed["cmake.cmakePath"], "D:/app/msys64/ucrt64/bin/cmake.exe");
+});
+
+// ---- 寄存器路线也要有 .vscode（用户 2026-11-08：新建工程没 launch.json，VSCode 里没法 F5） ----
+test("writeVscodeConfigs：register 路线补齐 launch/settings/c_cpp_properties", () => {
+  const dir = tempDir("reg-vscode");
+  const wrote = writeVscodeConfigs({ targetDir: dir, projectName: "regproj", binDirs: [] });
+  assert.equal(wrote.error, "");
+  assert.ok(wrote.files.includes(".vscode/launch.json"), wrote.files.join(","));
+  assert.ok(fs.existsSync(path.join(dir, ".vscode", "settings.json")));
+  const launch = fs.readFileSync(path.join(dir, ".vscode", "launch.json"), "utf8");
+  assert.ok(launch.includes("regproj.elf"), "executable 要指向本工程：" + launch);
+  assert.ok(launch.includes("interface/cmsis-dap.cfg"), "没探到 ST-Link 就沿用 cmsis-dap");
+  assert.ok(!launch.includes("__PROJECT_NAME__"));
+});
+
+test("writeVscodeConfigs：实见 ST-Link 就写 stlink-dap（和 openocd.cfg 口径一致）", () => {
+  const dir = tempDir("stlink-vscode");
+  const wrote = writeVscodeConfigs({
+    targetDir: dir,
+    projectName: "regproj",
+    interfaceConfig: "interface/stlink-dap.cfg",
+    binDirs: [],
+  });
+  assert.equal(wrote.error, "");
+  const launch = fs.readFileSync(path.join(dir, ".vscode", "launch.json"), "utf8");
+  assert.ok(launch.includes("interface/stlink-dap.cfg"), launch);
+  assert.ok(!launch.includes("interface/cmsis-dap.cfg"), "不该两套 interface 同时出现");
+});
+
+test("writeVscodeConfigs：已有的 .vscode 文件不覆盖，只给 warning", () => {
+  const dir = tempDir("keep-vscode");
+  fs.mkdirSync(path.join(dir, ".vscode"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".vscode", "launch.json"), "{\"mine\":true}", "utf8");
+  const wrote = writeVscodeConfigs({ targetDir: dir, projectName: "regproj", binDirs: [] });
+  assert.equal(fs.readFileSync(path.join(dir, ".vscode", "launch.json"), "utf8"), "{\"mine\":true}");
+  assert.ok(wrote.warnings.some((w) => w.includes("已存在")), wrote.warnings.join(" | "));
+  assert.ok(!wrote.files.includes(".vscode/launch.json"));
 });

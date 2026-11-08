@@ -574,7 +574,7 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.equal(report.startup, "startup_stm32f103xb.s");
     assert.equal(report.deviceDefine, "STM32F103xB");
     // 2(CMakeLists+main.c) + 2(rtt.c/rtt.h) + 3(公共文件) + 1(.gitignore) + 1(链接脚本)
-    assert.equal(report.templateFiles, 9);
+    assert.equal(report.templateFiles, 12);
     assert.equal(report.driverFiles, 10);
 
     // RTT 随寄存器工程就位：CMakeLists 编它、main.c include 它，缺了会 link/编译失败
@@ -893,7 +893,7 @@ test("createRegisterProject：F1 全系三种 line 各自的链接脚本 / 时�
       assert.equal(report.deviceId, item.deviceId);
       assert.equal(report.linkerScript, item.deviceId + "_FLASH.ld");
       assert.equal(report.sysclkHz, item.sysclk, item.mcu + " 的 SYSCLK");
-      assert.equal(report.templateFiles, 9);
+      assert.equal(report.templateFiles, 12);
       assert.equal(report.driverFiles, 10);
       assert.equal(existsSync(join(targetDir, "Core", "Src", "rtt.c")), true, item.mcu + " 也要带 rtt.c");
 

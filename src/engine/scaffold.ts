@@ -65,6 +65,11 @@ export interface ScaffoldRequest {
    * 只影响 .vscode 模板的填充：模板里的路径占位符按这里探测，探不到就整行删掉。
    */
   binDirs?: string[];
+  /**
+   * 探针实见决定的 openocd interface（例如实见 ST-Link → interface/stlink-dap.cfg）。
+   * 只替换 openocd.cfg 与 .vscode/launch.json 里的 interface 行；不给就沿用模板的 cmsis-dap。
+   */
+  interfaceConfig?: string;
 }
 
 export interface ScaffoldReport {
@@ -520,6 +525,14 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
         text = rendered.text;
         if (rendered.note !== "") openocdNote = rendered.note;
       }
+      // 探针型号决定 interface：实见 ST-Link 却写 cmsis-dap，用户按 F5 会拿到
+      // "Debug adapter doesn't support 'swd' transport"（C0/U0 的 target 脚本尤其）。
+      if (destRel === "openocd.cfg" || destRel === ".vscode/launch.json") {
+        const iface = request.interfaceConfig;
+        if (iface !== undefined && iface !== "" && iface !== "interface/cmsis-dap.cfg") {
+          text = text.split("interface/cmsis-dap.cfg").join(iface);
+        }
+      }
       if (destRel.startsWith(".vscode/")) {
         const filled = fillVscodeTemplate(text, vscodeFill);
         text = filled.text;
@@ -633,4 +646,52 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
       "工程骨架已建好（" + String(templateFiles) + " 个工程文件 + " + String(driverFiles) + " 个固件文件）：" + targetDir +
       "；芯片 " + describeHalChip(facts) + (backupNote === null ? "" : "；" + backupNote),
   };
+}
+
+/**
+ * 只补 .vscode 配置（register 路线用）。
+ *
+ * HAL 路线的 .vscode 来自 scaffold 模板；寄存器路线不走 scaffold（不需要 CubeMX 固件包），
+ * 但用户在 VSCode 里按 F5 烧录/调试靠的就是这三份文件——所以单独补一份，
+ * 模板与填法跟 HAL 路线**同源**（templates/scaffold/vscode），避免两条路线行为分叉。
+ *
+ * 已存在的文件不覆盖（register 路线正常情况下目录是空的；用户手工改过就更不该动）。
+ */
+export interface VscodeScaffoldRequest {
+  targetDir: string;
+  projectName: string;
+  /** 实见探针决定的 interface；不给就沿用模板的 interface/cmsis-dap.cfg。 */
+  interfaceConfig?: string;
+  binDirs?: string[];
+}
+
+export function writeVscodeConfigs(request: VscodeScaffoldRequest): { files: string[]; warnings: string[]; error: string } {
+  const files: string[] = [];
+  const warnings: string[] = [];
+  const dropped = new Set<string>();
+  const source = path.join(templateDir(), "vscode");
+  const destDir = path.join(request.targetDir, ".vscode");
+  const fill = detectVscodeFill(request.binDirs ?? []);
+  const iface = request.interfaceConfig !== undefined && request.interfaceConfig !== "" ? request.interfaceConfig : "interface/cmsis-dap.cfg";
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const name of fs.readdirSync(source).sort()) {
+      const dest = path.join(destDir, name);
+      if (fs.existsSync(dest)) {
+        warnings.push(".vscode/" + name + " 已存在，未覆盖");
+        continue;
+      }
+      let text = fs.readFileSync(path.join(source, name), "utf8");
+      text = text.split("__PROJECT_NAME__").join(request.projectName);
+      if (iface !== "interface/cmsis-dap.cfg") text = text.split("interface/cmsis-dap.cfg").join(iface);
+      const filled = fillVscodeTemplate(text, fill);
+      for (const token of filled.dropped) dropped.add(token);
+      fs.writeFileSync(dest, filled.text, "utf8");
+      files.push(".vscode/" + name);
+    }
+  } catch (error) {
+    return { files, warnings, error: "写 .vscode 配置失败：" + String((error as Error).message) };
+  }
+  for (const token of dropped) warnings.push(describeDroppedPlaceholder(token));
+  return { files, warnings, error: "" };
 }

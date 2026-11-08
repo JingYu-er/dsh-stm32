@@ -21,7 +21,8 @@ import type { GateResult } from "../engine/toolchain-gate.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { generationRiskNotes } from "../engine/facts.js";
 import { ensureFacts } from "../engine/facts-acquire.js";
-import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { liveProbeChoice } from "../engine/doctor.js";
+import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { validateToolArgs } from "./project-dir.js";
 
 export const PROJECT_CREATE_TOOL = "stm32_project_create";
@@ -314,6 +315,20 @@ export function registerProjectCreate(ctx: DshContext): void {
         return { message: blocked.message, report: blocked };
       }
 
+      // 探针实见决定 .vscode/launch.json 与 openocd.cfg 里的 interface。
+      // 不探也能建工程（探不到就沿用模板的 cmsis-dap），但实见 ST-Link 却写 cmsis-dap
+      // 会让用户按 F5 直接撞 transport 错误——建工程时顺手探一次（pnputil 0.5–2 s）。
+      let interfaceConfig: string | undefined;
+      const subprocess = ctx.get<SubprocessService>("subprocess");
+      if (subprocess !== undefined) {
+        try {
+          const live = await liveProbeChoice(subprocess, exec.signal);
+          if (live.swdProbes.some((p) => p.kind === "st-link")) interfaceConfig = live.cfg;
+        } catch {
+          interfaceConfig = undefined;
+        }
+      }
+
       if (route === "register") {
         const report = await createRegisterProject({
           targetDir: args.targetDir,
@@ -321,6 +336,7 @@ export function registerProjectCreate(ctx: DshContext): void {
           ...(args.mcu === undefined ? {} : { mcu: args.mcu }),
           ...(args.family === undefined ? {} : { family: args.family }),
           ...(args.overwrite === undefined ? {} : { overwrite: args.overwrite }),
+          ...(interfaceConfig === undefined ? {} : { interfaceConfig }),
           onProgress: () => undefined,
         });
         const normalized: ProjectReport = {
@@ -366,6 +382,7 @@ export function registerProjectCreate(ctx: DshContext): void {
         ...(args.overwrite === undefined ? {} : { overwrite: args.overwrite }),
         cubeMxRoots: config.cubeMxRoots,
         binDirs: config.binDirs,
+        ...(interfaceConfig === undefined ? {} : { interfaceConfig }),
       });
       // ScaffoldReport 没有 notes 字段，warn 档的警告并进 warnings（卡片照样打出来）。
       if (gate !== null && !gate.ok) scaffold.warnings.unshift(gate.message);

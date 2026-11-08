@@ -74,6 +74,7 @@ interface FlashArgs {
   binDirs?: string[];
   allowNoDebug?: boolean;
   allowUnknownFacts?: boolean;
+  backend?: string;
   envCheck?: string;
 }
 
@@ -117,7 +118,7 @@ export function registerFlash(ctx: DshContext): void {
   ctx.tools.register({
     name: FLASH_TOOL,
     description:
-      "只烧录不调试：用 openocd 执行 program <elf> verify reset exit，烧完复位运行并立刻释放探针（不会拉起调试会话，也不停在 main）。烧录前过三道门禁：工具链缺件直接拒；.ioc 没启用 Serial Wire 也拒（会把 SWD 烧失联，确实要烧带 allowNoDebug=true）；这颗芯片有 rm-topics 主题清单但 facts 机检没过同样拒（allowUnknownFacts=true 强制）。探针按 USB 实见结果选 interface（ST-Link → interface/stlink.cfg，DAPLink/CMSIS-DAP → interface/cmsis-dap.cfg），工程自带 openocd.cfg 时以它为准；没自带时 openocd 报驱动不匹配会自动换另一个 interface 重试一次，实见 ST-Link 且装了 STM32CubeProgrammer 时两条都失败再用 CLI 兜底。成功的证据是 Programming Finished + Verified OK。",
+      "只烧录不调试，烧完复位运行并立刻释放探针（不拉调试会话、不停在 main）。后端三选一（backend）：auto（默认）= openocd 先烧、失败再试 STM32CubeProgrammer CLI；openocd = 只用 openocd；cubeprogrammer = 直接用 CLI（只认 ST-LINK，不依赖 openocd 的 target/flash 脚本——H5/WBA/WB0/WL3 只能走它）。烧录前过三道门禁：工具链缺件直接拒（cubeprogrammer 后端不看 openocd）；.ioc 没启用 Serial Wire 也拒（会把 SWD 烧失联，确实要烧带 allowNoDebug=true）；这颗芯片有 rm-topics 主题清单但 facts 机检没过同样拒（allowUnknownFacts=true 强制）。openocd 路径按 USB 实见探针选 interface（ST-Link → interface/stlink-dap.cfg，DAPLink/CMSIS-DAP → interface/cmsis-dap.cfg），工程自带 openocd.cfg 时以它为准；没自带时驱动不匹配会自动换另一个 interface 重试一次。成功证据：openocd 是 Programming Finished + Verified OK，CLI 是 Data downloaded successfully + Download verified successfully。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -132,6 +133,11 @@ export function registerFlash(ctx: DshContext): void {
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
         allowUnknownFacts: { type: "boolean", description: "这颗芯片有 rm-topics 主题清单（踩过坑）但 facts 语义没机检通过时，是否仍然烧录（默认 false：拒绝）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值。" },
+        backend: {
+          type: "string",
+          enum: ["auto", "openocd", "cubeprogrammer"],
+          description: "烧录后端：auto（默认，openocd 失败再试 CubeProgrammer CLI 兜底）/ openocd（只用 openocd）/ cubeprogrammer（直接走 STM32_Programmer_CLI，只认 ST-LINK）。",
+        },
         envCheck: ENV_CHECK_SCHEMA,
       },
       required: [],
@@ -158,7 +164,7 @@ export function registerFlash(ctx: DshContext): void {
       const gate = await ensureToolchain(ctx, {
         capability: "flash",
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
-        envCheck: args.envCheck,
+        envCheck: args.backend === "cubeprogrammer" ? "off" : args.envCheck,
         signal: exec.signal,
       });
       if (!gate.ok && gate.mode === "block") {
@@ -194,6 +200,7 @@ export function registerFlash(ctx: DshContext): void {
         ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
         ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
         ...(args.allowNoDebug === undefined ? {} : { allowNoDebug: args.allowNoDebug }),
+        ...(args.backend === "auto" || args.backend === "openocd" || args.backend === "cubeprogrammer" ? { backend: args.backend } : {}),
         signal: exec.signal,
       });
       if (flashFactsNote !== "") report.notes.push(flashFactsNote);

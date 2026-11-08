@@ -72,7 +72,7 @@ t("实见 ST-LINK + 工程无 openocd.cfg：兜底 interface 用 stlink（不再
   const fake = fakeSpawner({ pnputil: PNPUTIL_STLINK, openocdLogs: GOOD, openocdExits: [0] });
   const report = await runFlash(fake, { projectDir: makeProject(false), timeoutMs: 10_000 });
   assert.equal(report.ok, true, report.message);
-  assert.ok(report.configs.includes("interface/stlink.cfg"), "interface 按实见探针选：" + report.configs.join(","));
+  assert.ok(report.configs.includes("interface/stlink-dap.cfg"), "interface 按实见探针选（ST-LINK 走 dapdirect）：" + report.configs.join(","));
   assert.ok(report.notes.some((n) => n.includes("ST-LINK") && n.includes("探针实见")), report.notes.join(" | "));
 });
 
@@ -86,8 +86,8 @@ t("mismatch 自动换 interface 重试：第一次 cmsis-dap 失败、第二次 
   assert.equal(report.ok, true, report.message);
   const ocCalls = fake.calls.filter((c) => /openocd/i.test(c) && !/pnputil|Programmer/i.test(c));
   assert.equal(ocCalls.length, 2, "必须恰好重试一次");
-  assert.ok(ocCalls[1].includes("interface/stlink.cfg"), "第二次换 stlink：" + ocCalls[1]);
-  assert.ok(report.notes.some((n) => n.includes("自动换 interface/stlink.cfg 重试") && n.includes("第 1 次")), report.notes.join(" | "));
+  assert.ok(ocCalls[1].includes("interface/stlink-dap.cfg"), "第二次换 stlink-dap：" + ocCalls[1]);
+  assert.ok(report.notes.some((n) => n.includes("自动换 interface/stlink-dap.cfg 重试") && n.includes("第 1 次")), report.notes.join(" | "));
 });
 
 t("工程自带 openocd.cfg：不插手 interface、不自动重试（手写配置交给 hint 让人改）", async () => {
@@ -176,9 +176,60 @@ t("连续两次烧录不共享探针结论：第二颗实见 DAPLink 就按 DAPL
   // 同进程先烧 ST-LINK 再烧 DAPLink，第二颗芯片会拿到第一颗的结论（重试方向还算反）。
   const first = fakeSpawner({ pnputil: PNPUTIL_STLINK, openocdLogs: GOOD, openocdExits: [0] });
   const r1 = await runFlash(first, { projectDir: makeProject(false), timeoutMs: 10_000 });
-  assert.ok(r1.configs.includes("interface/stlink.cfg"), "第一次按 ST-LINK：" + r1.configs.join(","));
+  assert.ok(r1.configs.includes("interface/stlink-dap.cfg"), "第一次按 ST-LINK（dapdirect）：" + r1.configs.join(","));
   const second = fakeSpawner({ pnputil: PNPUTIL_DAPLINK, openocdLogs: GOOD, openocdExits: [0] });
   const r2 = await runFlash(second, { projectDir: makeProject(false), timeoutMs: 10_000 });
   assert.ok(second.calls.some((c) => /pnputil/i.test(c)), "第二次必须重新探 USB，不能吃上一次的缓存");
   assert.ok(r2.configs.includes("interface/cmsis-dap.cfg"), "第二次按 DAPLink：" + r2.configs.join(","));
+});
+
+// ---- backend 三态（B 方案）：auto / openocd / cubeprogrammer ----
+
+function withCli(fn) {
+  const prgBin = tmp("prg");
+  fs.writeFileSync(path.join(prgBin, "STM32_Programmer_CLI.exe"), "MZ");
+  process.env.STM32_CUBE_PRG_ROOT = prgBin;
+  process.env.STM32_NO_DISCOVER = "1";
+  return Promise.resolve().then(fn).finally(() => {
+    delete process.env.STM32_CUBE_PRG_ROOT;
+    delete process.env.STM32_NO_DISCOVER;
+  });
+}
+
+const CLI_GOOD = "     File : demo.elf\nData downloaded successfully\nVerifying ...\nDownload verified successfully\nReset system";
+
+t("backend=cubeprogrammer：ST-LINK 直接走 CLI，不启 openocd", async () => {
+  await withCli(async () => {
+    const fake = fakeSpawner({ pnputil: PNPUTIL_STLINK, cliText: CLI_GOOD, cliExit: 0 });
+    const report = await runFlash(fake, { projectDir: makeProject(false), backend: "cubeprogrammer", timeoutMs: 10_000 });
+    assert.equal(report.ok, true, report.message + " | " + report.errors.join(" / "));
+    assert.equal(report.configs.length, 0, "CLI 后端不产生 openocd 配置");
+    assert.ok(fake.calls.some((c) => /Programmer_CLI/.test(c)), "必须调 CLI：" + fake.calls.join(" ;; "));
+    assert.ok(!fake.calls.some((c) => /openocd/i.test(c) && !/pnputil|Programmer/i.test(c)), "不该起 openocd");
+    assert.ok(report.notes.some((n) => /CubeProgrammer/.test(n)), report.notes.join(" | "));
+  });
+});
+
+t("backend=cubeprogrammer + DAPLink：直接拒绝，不派 CLI 去撞墙", async () => {
+  await withCli(async () => {
+    const fake = fakeSpawner({ pnputil: PNPUTIL_DAPLINK, cliText: CLI_GOOD, cliExit: 0 });
+    const report = await runFlash(fake, { projectDir: makeProject(false), backend: "cubeprogrammer", timeoutMs: 10_000 });
+    assert.equal(report.ok, false);
+    assert.ok(/只认 ST-LINK/.test(report.message), report.message);
+    assert.ok(!fake.calls.some((c) => /Programmer_CLI/.test(c)), "不该调 CLI：" + fake.calls.join(" ;; "));
+  });
+});
+
+t("backend=openocd：ST-LINK 两败也不派 CLI（用户明确只要 openocd）", async () => {
+  await withCli(async () => {
+    const fake = fakeSpawner({
+      pnputil: PNPUTIL_STLINK,
+      openocdLogs: ["Error: unable to find a matching ST-LINK device", "Error: unable to find a matching CMSIS-DAP device"],
+      cliText: CLI_GOOD,
+      cliExit: 0,
+    });
+    const report = await runFlash(fake, { projectDir: makeProject(false), backend: "openocd", timeoutMs: 10_000 });
+    assert.equal(report.ok, false);
+    assert.ok(!fake.calls.some((c) => /Programmer_CLI/.test(c)), "openocd 后端不该调 CLI：" + fake.calls.join(" ;; "));
+  });
 });

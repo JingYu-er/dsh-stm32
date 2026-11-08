@@ -16,13 +16,15 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { SubprocessService } from "../types.js";
 import { liveProbeChoice, usbDiagnosis } from "./doctor.js";
 import { cubeProgrammerBackendNote, findCubeProgrammerCli, runCubeProgrammerFlash } from "./cube-programmer.js";
-import { classifyProbeFailure, probeMissingLines, usbNoteFor } from "./probe-error.js";
+import { classifyProbeFailure, makeProbeError, probeMissingLines, usbNoteFor } from "./probe-error.js";
 import type { ProbeError } from "./probe-error.js";
 import { detectBuildDir, elfSelectionNote, findElf } from "./build.js";
 import { findIocFile } from "./generate.js";
 import { summarizeIoc } from "./ioc.js";
 import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
+
+export type FlashBackend = "auto" | "openocd" | "cubeprogrammer";
 
 export interface FlashRequest {
   projectDir: string;
@@ -40,6 +42,11 @@ export interface FlashRequest {
   targetConfig?: string;
   /** -c "adapter speed <kHz>"；缺省不加（用探针默认）。 */
   adapterSpeed?: number;
+  /**
+   * 烧录后端：auto（默认，openocd 先烧、失败再试 CubeProgrammer CLI）/ openocd / cubeprogrammer。
+   * CLI 只认 ST-LINK；H5/WBA/WB0/WL3 这类 openocd 根本没有 flash 驱动的族只能走它。
+   */
+  backend?: FlashBackend;
   /** 烧完是否复位并运行；默认 true（= "只烧录"，不进调试）。 */
   runAfterReset?: boolean;
   /** .ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，见 A5）。 */
@@ -266,25 +273,35 @@ export function parseFlashLog(text: string): FlashLogVerdict {
   return { programmed, verified, errors, noise };
 }
 
-/** openocd 后端主体；ifaceOverride 只在工程没有自己的 openocd.cfg 时参与兜底 interface 选择。 */
-async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequest, ifaceOverride?: string): Promise<FlashReport> {
-  const projectDir = resolve(request.projectDir);
-  const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
-  const notes: string[] = [];
-  const startedAt = Date.now();
+interface FlashTarget {
+  ok: true;
+  projectDir: string;
+  elfPath: string;
+  elfSize: number;
+  notes: string[];
+}
 
+/**
+ * 两条后端共用的前置：找 .elf、按 .ioc 过 SWD 守卫、把"烧的是哪一个"说清楚。
+ * 后端只决定"字节怎么进 Flash"；这些判断与后端无关——CubeProgrammer 同样会把 SWD 烧失联。
+ */
+function prepareFlashTarget(projectDir: string, request: FlashRequest, startedAt: number): FlashTarget | { ok: false; report: FlashReport } {
+  const notes: string[] = [];
   const elfResolved = resolveElf(projectDir, request);
   if (elfResolved.elf === null) {
     return {
-      ok: false, projectDir, elfPath: "", elfSize: 0, command: "", args: [], configs: [],
-      durationMs: Date.now() - startedAt, programmed: false, verified: false,
-      probeError: null,
-      errors: [elfResolved.note], message: "没烧：找不到要烧的 .elf", logTail: "", notes,
+      ok: false,
+      report: {
+        ok: false, projectDir, elfPath: "", elfSize: 0, command: "", args: [], configs: [],
+        durationMs: Date.now() - startedAt, programmed: false, verified: false,
+        probeError: null,
+        errors: [elfResolved.note], message: "没烧：找不到要烧的 .elf", logTail: "", notes,
+      },
     };
   }
   const elfPath = elfResolved.elf;
   const elfSize = statSync(elfPath).size;
-  // F1：多个 .elf 并存时说清"烧的是哪一个、为什么是它"。
+  // 多个 .elf 并存时说清"烧的是哪一个、为什么是它"。
   const selectionNote = elfSelectionNote(dirname(elfPath));
   if (selectionNote !== "") notes.push(selectionNote);
 
@@ -293,14 +310,98 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
   if (!guard.blocked && guard.notes.length > 0) notes.push(...guard.notes);
   if (guard.blocked) {
     return {
-      ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
-      durationMs: Date.now() - startedAt, programmed: false, verified: false,
-      // 守卫拒绝不是探针故障：这次连 openocd 都没起，probeError 保持 null。
-      probeError: null,
-      errors: guard.errors, message: "没烧：.ioc 里没启用 Serial Wire（SWD 会被关掉）",
-      logTail: "", notes: [...notes, ...guard.notes], guard: "no-debug",
+      ok: false,
+      report: {
+        ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
+        durationMs: Date.now() - startedAt, programmed: false, verified: false,
+        // 守卫拒绝不是探针故障：这次连烧录器都没起，probeError 保持 null。
+        probeError: null,
+        errors: guard.errors, message: "没烧：.ioc 里没启用 Serial Wire（SWD 会被关掉）",
+        logTail: "", notes: [...notes, ...guard.notes], guard: "no-debug",
+      },
     };
   }
+  return { ok: true, projectDir, elfPath, elfSize, notes };
+}
+
+/**
+ * CLI 的失败文本不在 openocd 的错误字符串里，classifyProbeFailure 认不出，
+ * 这里只归两类有把握的：没看见 ST-Link（换探针/插好）与连不上目标（供电/接线/芯片）。
+ */
+function cliFailureProbeError(errors: readonly string[]): ProbeError | null {
+  const text = errors.join("\n");
+  if (/No ST-Link detected|no st-link/iu.test(text)) {
+    return makeProbeError("no-probe", { cause: "CubeProgrammer 没看到 ST-LINK", evidence: errors.slice(0, 3) });
+  }
+  if (/Unable to connect|Cannot connect/iu.test(text)) {
+    return makeProbeError("target-mismatch", { cause: "CubeProgrammer 连不上目标", evidence: errors.slice(0, 3) });
+  }
+  return null;
+}
+
+/** CubeProgrammer 后端（ST-LINK 官方 CLI）：不经过 openocd，也不依赖 target/flash 脚本。 */
+async function runCubeProgrammerBackend(subprocess: SubprocessService, request: FlashRequest, probeNote: string): Promise<FlashReport> {
+  const projectDir = resolve(request.projectDir);
+  const startedAt = Date.now();
+  const target = prepareFlashTarget(projectDir, request, startedAt);
+  if (!target.ok) return target.report;
+  const { elfPath, elfSize } = target;
+  const notes = target.notes;
+  if (probeNote !== "") notes.unshift(probeNote);
+
+  const config = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
+  const cli = findCubeProgrammerCli(config.cubePrgBins);
+  if (cli === null) {
+    const searched = describeSearchScope(config.cubePrgBins, "STM32_CUBE_PRG_ROOT");
+    return {
+      ok: false, projectDir, elfPath, elfSize, command: "", args: [], configs: [],
+      durationMs: Date.now() - startedAt, programmed: false, verified: false,
+      probeError: null,
+      errors: ["没找到 STM32_Programmer_CLI.exe（查过 " + searched + "）"],
+      message: "没烧：backend=cubeprogrammer 需要 STM32CubeProgrammer 的 CLI，本机没找到",
+      logTail: "", notes,
+    };
+  }
+  const alt = await runCubeProgrammerFlash(subprocess, {
+    projectDir,
+    elfPath,
+    cliPath: cli,
+    ...(request.adapterSpeed === undefined ? {} : { adapterSpeed: request.adapterSpeed }),
+    runAfterReset: request.runAfterReset !== false,
+    timeoutMs: request.timeoutMs ?? 120_000,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+    ...(request.onProgress === undefined ? {} : { onProgress: request.onProgress }),
+  });
+  if (alt.ok) notes.push(cubeProgrammerBackendNote(cli));
+  return {
+    ok: alt.ok,
+    projectDir,
+    elfPath,
+    elfSize,
+    command: alt.command,
+    args: alt.args,
+    configs: [],
+    durationMs: Date.now() - startedAt,
+    ...(alt.exitCode === null ? {} : { exitCode: alt.exitCode }),
+    programmed: alt.programmed,
+    verified: alt.verified,
+    probeError: alt.ok ? null : cliFailureProbeError(alt.errors),
+    errors: alt.errors,
+    message: alt.message,
+    logTail: alt.logTail,
+    notes,
+  };
+}
+
+/** openocd 后端主体；ifaceOverride 只在工程没有自己的 openocd.cfg 时参与兜底 interface 选择。 */
+async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequest, ifaceOverride?: string): Promise<FlashReport> {
+  const projectDir = resolve(request.projectDir);
+  const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
+  const startedAt = Date.now();
+  const target = prepareFlashTarget(projectDir, request, startedAt);
+  if (!target.ok) return target.report;
+  const { elfPath, elfSize } = target;
+  const notes = target.notes;
 
   const openOcd = request.openOcdPath !== undefined && request.openOcdPath !== ""
     ? request.openOcdPath
@@ -434,21 +535,42 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
  *    DAPLink 用户没有这条腿（CLI 只认 ST-LINK），报告里如实说。
  */
 export async function runFlash(subprocess: SubprocessService, request: FlashRequest): Promise<FlashReport> {
+  const backend: FlashBackend = request.backend ?? "auto";
   const hasProjectCfg = findProjectConfig(request.projectDir, request.configFile) !== null;
   let ifaceOverride: string | undefined;
   let probeNote = "";
   let sawStLink = false;
   let sawDapFamily = false;
-  if (request.interfaceConfig === undefined) {
+  // CLI 后端也要知道探针类型（它只认 ST-LINK），所以不能只按 interfaceConfig 是否显式给来决定探不探。
+  if (request.interfaceConfig === undefined || backend === "cubeprogrammer") {
     const live = await liveProbeChoice(subprocess, request.signal);
     sawStLink = live.swdProbes.some((p) => p.kind === "st-link");
     sawDapFamily = live.swdProbes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink");
     if (live.swdProbes.length > 0) {
-      if (!hasProjectCfg) ifaceOverride = live.cfg;
+      if (request.interfaceConfig === undefined && !hasProjectCfg) ifaceOverride = live.cfg;
       probeNote = "探针实见：" + live.swdProbes.map((p) => p.label).join("、") +
-        (hasProjectCfg ? "（工程自带 openocd.cfg，interface 以它为准）" : "；interface 用 " + live.cfg + "（" + live.why + "）");
+        (backend === "cubeprogrammer"
+          ? ""
+          : hasProjectCfg
+            ? "（工程自带 openocd.cfg，interface 以它为准）"
+            : "；interface 用 " + live.cfg + "（" + live.why + "）");
     }
   }
+
+  if (backend === "cubeprogrammer") {
+    // 实见的是 DAPLink/CMSIS-DAP：CLI 这条路根本不通，别让它跑一遍再报一句含糊的 "no ST-Link"。
+    if (sawDapFamily && !sawStLink) {
+      return {
+        ok: false, projectDir: resolve(request.projectDir), elfPath: "", elfSize: 0, command: "", args: [], configs: [],
+        durationMs: 0, programmed: false, verified: false, probeError: null,
+        errors: ["CubeProgrammer CLI 的 SWD 路径只认 ST-LINK，实见的是 CMSIS-DAP/DAPLink 类探针"],
+        message: "没烧：backend=cubeprogrammer 只认 ST-LINK；这块探针请用 backend=auto（openocd）",
+        logTail: "", notes: probeNote === "" ? [] : [probeNote],
+      };
+    }
+    return runCubeProgrammerBackend(subprocess, request, probeNote);
+  }
+
   let report = await runOpenocdFlash(subprocess, request, ifaceOverride);
   if (probeNote !== "") report.notes.unshift(probeNote);
 
@@ -457,10 +579,10 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     // 换哪条由**实见探针**决定，不是"把当前值取反"：取反在探针结论过期/缺失时会把重试引向
     // 与真实硬件无关的方向（CI 上 2 条用例就是这么挂的）。实见 ST-LINK 就先试 stlink。
     const firstIface = ifaceOverride ?? "interface/cmsis-dap.cfg";
-    const guided = sawStLink ? "interface/stlink.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : "";
+    const guided = sawStLink ? "interface/stlink-dap.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : "";
     const other = guided !== "" && guided !== firstIface
       ? guided
-      : firstIface === "interface/cmsis-dap.cfg" ? "interface/stlink.cfg" : "interface/cmsis-dap.cfg";
+      : firstIface === "interface/cmsis-dap.cfg" ? "interface/stlink-dap.cfg" : "interface/cmsis-dap.cfg";
     const firstMessage = report.message;
     const retry = await runOpenocdFlash(subprocess, request, other);
     // notes 归属：retry 是新报告——探针实见行、换接口说明、第一次失败原因都得挂到它身上
@@ -472,11 +594,16 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
 
   // 3) CubeProgrammer 第二后端
   const futile = report.probeError !== null && ["swd-locked", "no-power", "flash-protected", "probe-busy"].includes(report.probeError.kind);
-  if (!report.ok && !futile && report.elfPath !== "" && sawStLink) {
+  const fallbackAllowed = backend !== "openocd" && !futile && report.elfPath !== "" && sawStLink;
+  if (!report.ok && fallbackAllowed) {
     const config = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
     const cli = findCubeProgrammerCli(config.cubePrgBins);
     if (cli !== null) {
-      report.notes.push("openocd 两条 interface 都没烧成，试 CubeProgrammer CLI（ST-LINK 后端）…");
+      report.notes.push(
+        report.configs.length === 0
+          ? "openocd 根本没起来（没有可用的 target 脚本），直接试 CubeProgrammer CLI（ST-LINK 后端）…"
+          : "openocd 没烧成（" + String(report.configs.length) + " 个配置都试过），改试 CubeProgrammer CLI（ST-LINK 后端）…",
+      );
       const alt = await runCubeProgrammerFlash(subprocess, {
         projectDir: request.projectDir,
         elfPath: report.elfPath,
@@ -508,6 +635,11 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
         };
       }
       report.notes.push("CubeProgrammer 兜底也没成：" + alt.message + "（查过 " + alt.searched + "）");
+    } else {
+      report.notes.push(
+        "实见 ST-LINK 但本机没装 STM32CubeProgrammer（CLI 没找到）：装上它，ST-Link 就多一条不依赖 openocd target 脚本的后端" +
+          "（backend=cubeprogrammer 可直连；H5/WBA/WB0/WL3 只能走它）。",
+      );
     }
   }
   if (!report.ok && !futile && report.probeError !== null && report.probeError.kind === "no-probe" && sawDapFamily && !sawStLink) {

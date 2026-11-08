@@ -604,3 +604,46 @@ test("A31：rawArgs 为 undefined 时四个工具给报告而不是 TypeError", 
   }
 });
 
+
+test("register 路线：建完就有 .vscode/launch.json（用户 2026-11-08：没它就没法在 VSCode 里 F5）", async () => {
+  const root = tempDir("reg-vscode");
+  const { env } = seedCmsisCache(root);
+  const targetDir = path.join(root, "blink");
+  try {
+    const report = await createRegisterProject({ targetDir, projectName: "blink", mcu: "STM32F103C8T6", env, download: false });
+    assert.equal(report.ok, true, report.message);
+    const launchPath = path.join(targetDir, ".vscode", "launch.json");
+    assert.ok(fs.existsSync(launchPath), "register 路线必须生成 .vscode/launch.json");
+    const launch = fs.readFileSync(launchPath, "utf8");
+    assert.ok(launch.includes("blink.elf"), "executable 要指向本工程：" + launch.slice(0, 200));
+    assert.ok(launch.includes("interface/cmsis-dap.cfg"), "没给 interfaceConfig 时沿用 cmsis-dap");
+    assert.ok(fs.existsSync(path.join(targetDir, ".vscode", "settings.json")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("register 路线：实见 ST-Link 时 launch.json 与 openocd.cfg 同用 stlink-dap", async () => {
+  const root = tempDir("reg-vscode-stlink");
+  const { env } = seedCmsisCache(root);
+  const targetDir = path.join(root, "blink");
+  try {
+    const report = await createRegisterProject({
+      targetDir,
+      projectName: "blink",
+      mcu: "STM32F103C8T6",
+      env,
+      download: false,
+      interfaceConfig: "interface/stlink-dap.cfg",
+    });
+    assert.equal(report.ok, true, report.message);
+    const launch = fs.readFileSync(path.join(targetDir, ".vscode", "launch.json"), "utf8");
+    const openocd = fs.readFileSync(path.join(targetDir, "openocd.cfg"), "utf8");
+    assert.ok(launch.includes("interface/stlink-dap.cfg"), launch);
+    assert.ok(openocd.includes("interface/stlink-dap.cfg"), openocd);
+    assert.ok(!launch.includes("interface/cmsis-dap.cfg"), "launch.json 不该还写 cmsis-dap");
+    assert.ok(!openocd.includes("interface/cmsis-dap.cfg"), "openocd.cfg 不该还写 cmsis-dap");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
