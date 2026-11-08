@@ -210,6 +210,20 @@ t("backend=cubeprogrammer：ST-LINK 直接走 CLI，不启 openocd", async () =>
   });
 });
 
+t("backend=cubeprogrammer 但没装 CLI：报错里给 ST 官网下载链接（用户 2026-11-08 要求提示下载）", async () => {
+  process.env.STM32_NO_DISCOVER = "1";
+  delete process.env.STM32_CUBE_PRG_ROOT;
+  try {
+    const fake = fakeSpawner({ pnputil: PNPUTIL_STLINK });
+    const report = await runFlash(fake, { projectDir: makeProject(false), backend: "cubeprogrammer", timeoutMs: 10_000 });
+    assert.equal(report.ok, false);
+    assert.match(report.message, /stm32cubeprog\.html/u, "缺 CLI 要指路下载：" + report.message);
+    assert.ok(!fake.calls.some((c) => /Programmer_CLI/.test(c)), "没 CLI 就不该调：" + fake.calls.join(" ;; "));
+  } finally {
+    delete process.env.STM32_NO_DISCOVER;
+  }
+});
+
 t("backend=cubeprogrammer + DAPLink：直接拒绝，不派 CLI 去撞墙", async () => {
   await withCli(async () => {
     const fake = fakeSpawner({ pnputil: PNPUTIL_DAPLINK, cliText: CLI_GOOD, cliExit: 0 });

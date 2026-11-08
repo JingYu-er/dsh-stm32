@@ -498,6 +498,11 @@ test("B15 hal 路线不再要 CubeMX 启动器：缺 CubeMX 时报「找不到�
   assert.match(value.message, /找不到 .*CubeMX 固件包/u, value.message);
   assert.match(value.message, /STM32Cube_FW_F1_V1\.8\.7/u, "显式包名要原样报出来（不加 _V*）：" + value.message);
   assert.ok(!value.message.includes("缺 STM32CubeMX"), "拷文件不需要 CubeMX 启动器：" + value.message);
+  // 用户 2026-11-08：缺 CubeMX 要提示去下载。HAL 路线确实离不开它（固件包管理器 + stm32_generate），
+  // 所以失败文案末尾要给官网链接，而不是只报一个"找不到固件包"。
+  assert.match(value.message, /没找到 STM32CubeMX 安装/u, "要说明本机没装 CubeMX：" + value.message);
+  assert.match(value.message, /https:\/\/www\.st\.com\/en\/development-tools\/stm32cubemx\.html/u, "要给下载链接：" + value.message);
+  assert.match(value.message, /route=register/u, "要说明寄存器路线不需要它：" + value.message);
   assert.ok(!fs.existsSync(path.join(dir, "CMakeLists.txt")), "失败时不该留下半成品");
   fs.rmSync(dir, { recursive: true, force: true });
 });

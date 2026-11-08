@@ -128,7 +128,9 @@ export async function runCubeProgrammerFlash(
   if (cli === null) {
     return empty(
       ["没找到 STM32_Programmer_CLI.exe"],
-      "烧不了：本机找不到 STM32CubeProgrammer 的 CLI（查过 " + describeSearchScope(config.cubePrgBins, "STM32_CUBE_PRG_ROOT") + "）",
+      "烧不了：本机找不到 STM32CubeProgrammer 的 CLI（查过 " + describeSearchScope(config.cubePrgBins, "STM32_CUBE_PRG_ROOT") + "）。" +
+        "装上它就有了不依赖 openocd target 脚本的第二条后端（H5/WBA/WB0/WL3 只能走它）：" +
+        "https://www.st.com/en/development-tools/stm32cubeprog.html（默认安装路径会被自动发现；已装在别处就设 STM32_CUBE_PRG_ROOT 指到安装根或 bin）",
     );
   }
   const args = [cli, ...buildCubeProgrammerArgs(request.elfPath, {

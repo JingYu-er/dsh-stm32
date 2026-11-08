@@ -40,6 +40,9 @@ import { readLocalManifest } from "./assets.js";
 import { bundledOpenocdConfig, familyProfileOf } from "../data/family.js";
 
 export const DEFAULT_FIRMWARE_PACKAGE = "STM32Cube_FW_F1_V1.8.7";
+
+/** ST 官网的 CubeMX 下载页：缺件提示直接给链接，别只说"去装"。 */
+export const CUBEMX_DOWNLOAD_URL = "https://www.st.com/en/development-tools/stm32cubemx.html";
 export const SCAFFOLD_PROJECT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 /**
@@ -445,6 +448,16 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
 
   // 固件包按族找（F1 的默认版本仍是 V1.8.7；其它族取本机已装的最高版本，用户也可显式指定包名）。
   // F1 不给包名时仍按历史默认（V1.8.7）：同一台机器上装了 1.8.4/1.8.5 时，"最高版本"会让老工程换基线。
+  // HAL 路线离不开 CubeMX：固件包由它的包管理器维护，Core/ 的 MX_*_Init 也要 stm32_generate 调无头 CubeMX 生成。
+  // 缺它时不能只说"找不到固件包"——用户会以为是网络问题，而不是"这台机器根本没装 CubeMX"。
+  const cubeMxRoots = request.cubeMxRoots ?? [];
+  const cubeMxFound = cubeMxRoots.some((root) => fs.existsSync(root));
+  const cubeMxHint = cubeMxFound
+    ? ""
+    : "本机没找到 STM32CubeMX 安装（找过：" + (cubeMxRoots.length === 0 ? "（没有候选目录）" : cubeMxRoots.join("；")) + "）。" +
+      "HAL 路线离不开它：① 固件包只由 CubeMX 的包管理器维护；② Core/ 下的 MX_*_Init 要 stm32_generate 调无头 CubeMX 生成。" +
+      "官网下载安装（含内置 JRE，约 1.5 GB，装到默认目录会被自动发现）：" + CUBEMX_DOWNLOAD_URL +
+      "。只写寄存器程序不需要它（route=register）。";
   const explicitPackage = request.firmwarePackage ?? (facts.familyLine === "F1" ? DEFAULT_FIRMWARE_PACKAGE : "");
   const firmware = resolveFamilyFirmwareRoot(facts.familyLine, request.cubeMxRoots ?? [], firmwareExtraDirs(), explicitPackage);
   const firmwarePackage = firmware.packageName;
@@ -456,7 +469,8 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
         "固件包是 Drivers/ 与 startup 的唯一合法来源，插件不内嵌 ST 代码。两条路任选：" +
         "① 直接调 stm32_firmware_install（传 mcu:" + facts.mcu + "，真装要给 dryRun:false + confirm:true）——" +
         "它会先从 ST 官网下官方 zip 交给 CubeMX 装进 Repository，走不通再回退 GitHub 拼包；" +
-        "② 在 CubeMX 里用包管理器（Help → Manage embedded software packages）自己装这个族的固件包，然后重跑 stm32_project_create。",
+        "② 在 CubeMX 里用包管理器（Help → Manage embedded software packages）自己装这个族的固件包，然后重跑 stm32_project_create。" +
+        (cubeMxHint === "" ? "" : "\n" + cubeMxHint),
     );
   }
 
@@ -623,6 +637,7 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
   }
   for (const token of droppedVscode) warnings.push(describeDroppedPlaceholder(token));
   if (openocdNote !== "") warnings.push(openocdNote);
+  if (cubeMxHint !== "") warnings.push(cubeMxHint);
   warnings.push(
     "没有生成 .mxproject：那是 CubeMX GUI 的工程元数据，插件不伪造；用 GUI 打开并生成一次即可补上。",
     "Core/ 下的 main.c 等还没生成：接着调 stm32_generate（3–4 分钟，需要 CubeMX 全权限）。",

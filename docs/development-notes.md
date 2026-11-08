@@ -5486,3 +5486,26 @@ f0 736 B / f1 1404 B / f2 932 B / f3 948 B / f4 960 B / f7、c0、g0、g4、l0�
 
 - tsc 0；TOTAL **pass=907 fail=0**；`pack-smoke` 全过；包体 678.0 KB / 上限 1171.9 KB（136 文件）。
 - 生成 + 编译 13 族全过（见上）；HAL 路线未回归真建（本批只动 register 模板与族画像，HAL 用例全绿）。
+
+## 84. 缺件不只报"缺"，还要给出下载入口（CubeMX / CubeProgrammer）（2026-11-08）
+
+用户要求（m00556 第 2、3 条）：没有 CubeMX 就写不了 HAL；缺 CubeMX 要提示去下载，用到 CubeProgrammer 但没装也要提示。第 2 条本来是事实（HAL 的固件包与 `stm32_generate` 都依赖 CubeMX），缺口在第 3 条——**探测层**（`stm32_doctor` / `stm32_env_install` / 工具链门禁）早就带官网链接，但**运行时**真正失败的这一刻只说"找不到固件包"或"本机没找到 CLI"，用户不知道下一步该干什么。
+
+### 一、CubeMX：HAL 失败文案里说清"为什么离不开它"
+
+- `scaffold.ts` 新增 `CUBEMX_DOWNLOAD_URL`，并在找不到固件包时追加一段：本机没找到 STM32CubeMX 安装（列出扫过的候选）+ 两条理由（固件包只由 CubeMX 包管理器维护；`Core/` 下的 `MX_*_Init` 要 `stm32_generate` 调无头 CubeMX 生成）+ 官网链接（约 1.5 GB，含内置 JRE）+ 一句"只写寄存器程序不需要它（route=register）"。
+- 建工程**成功**时也检查：cubeMxRoots 一个都不存在 → warnings 里同样放这段（否则用户建完才在 generate 那步撞墙）。
+- 刻意不把 HAL 建工程的门禁改成 generate 能力：拷 CMake 文件与 Drivers 不需要 CubeMX 启动器（B15 仍是"找不到固件包"而不是"缺 STM32CubeMX"），提示是**附加信息**，不是新增门禁。
+
+### 二、CubeProgrammer：三条失败路径都带链接
+
+缺 CLI 有三处会撞上，全部补 `https://www.st.com/en/development-tools/stm32cubeprog.html` 与"默认路径即可被自动发现，装在别处设 STM32_CUBE_PRG_ROOT"：
+
+- `cube-programmer.ts` 的 `runCubeProgrammerFlash`（任何调用方）；
+- `flash.ts` 的 `runCubeProgrammerBackend`（`backend=cubeprogrammer` 直连）；
+- `flash.ts` 的 auto 兜底分支（实见 ST-LINK 但没装 CLI 的那条 note）。
+
+### 三、验收
+
+- tsc 0；新增 2 条回归用例：scaffold 失败文案必须含 CubeMX 链接与 route=register 说明；`backend=cubeprogrammer` 缺 CLI 时必须含 CubeProgrammer 链接且不调 CLI。
+- `flash-orchestrator-units` 12 条、`scaffold-patch-units` 26 条全绿；全量 TOTAL **pass=908 fail=0**；`pack-smoke` 全过；包体 678.8 KB / 上限 1171.9 KB（136 文件）。
