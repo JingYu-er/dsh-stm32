@@ -184,11 +184,13 @@ test("writeVscodeConfigs：register 路线补齐 launch/settings/c_cpp_propertie
   assert.ok(fs.existsSync(path.join(dir, ".vscode", "settings.json")));
   const launch = fs.readFileSync(path.join(dir, ".vscode", "launch.json"), "utf8");
   assert.ok(launch.includes("regproj.elf"), "executable 要指向本工程：" + launch);
-  assert.ok(launch.includes("interface/cmsis-dap.cfg"), "没探到 ST-Link 就沿用 cmsis-dap");
+  // launch.json 只引用工程 openocd.cfg：interface/transport/target 由那一份文件按顺序负责
+  assert.ok(launch.includes("${workspaceFolder}/openocd.cfg"), "launch.json 要引用工程 openocd.cfg：" + launch);
+  assert.ok(!launch.includes("interface/cmsis-dap.cfg"), "launch.json 不该重复写 interface");
   assert.ok(!launch.includes("__PROJECT_NAME__"));
 });
 
-test("writeVscodeConfigs：实见 ST-Link 就写 stlink-dap（和 openocd.cfg 口径一致）", () => {
+test("writeVscodeConfigs：interface 只写在 openocd.cfg，launch.json 不重复", () => {
   const dir = tempDir("stlink-vscode");
   const wrote = writeVscodeConfigs({
     targetDir: dir,
@@ -198,8 +200,9 @@ test("writeVscodeConfigs：实见 ST-Link 就写 stlink-dap（和 openocd.cfg �
   });
   assert.equal(wrote.error, "");
   const launch = fs.readFileSync(path.join(dir, ".vscode", "launch.json"), "utf8");
-  assert.ok(launch.includes("interface/stlink-dap.cfg"), launch);
-  assert.ok(!launch.includes("interface/cmsis-dap.cfg"), "不该两套 interface 同时出现");
+  assert.ok(!launch.includes("interface/"), "launch.json 不该再写 interface（会和 openocd.cfg 打架）：" + launch);
+  // 这份 helper 只写 .vscode，不写 openocd.cfg；interface 的实际落点在 register-template 的模板拷贝那一步
+  assert.ok(wrote.files.includes(".vscode/launch.json"), wrote.files.join(","));
 });
 
 test("writeVscodeConfigs：已有的 .vscode 文件不覆盖，只给 warning", () => {

@@ -299,24 +299,26 @@ test("scaffold：工程名不是 C 标识符时拒绝", () => {
 
 // —— 批 1（A1/A5）：overwrite 覆盖前必须备份、.ioc 不许被模板覆盖、写盘/备份失败要干净收场 ——
 
-const CACHE_TEST_FILES = [
-  ["Drivers/CMSIS/Include/core_cm3.h", "/* core */\n"],
-  ["Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h", "/* device */\n"],
-  ["Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s", "/* startup */\n"],
-];
-
-/** 在临时目录里种一份"已经下好"的 CMSIS 缓存条目：register 路线因此不联网，测试也就与网络无关。 */
+/**
+ * 在临时目录里种一份"已经下好"的 CMSIS 缓存条目：register 路线因此不联网，测试也就与网络无关。
+ *
+ * 必须按 cmsisTemplatePlan 的清单逐个落盘，不能只种三个文件：ensureCmsisTemplate 现在会按当前清单
+ * 核对缓存（插件升级给同一族加文件时旧缓存要能自愈），清单里有而盘上没有就走下载；测试里
+ * download=false，那就直接判"不在缓存里"。
+ */
 function seedCmsisCache(root) {
   const cacheRoot = path.join(root, "cache");
   const entryDir = path.join(root, "tpl");
   const files = [];
-  for (const [rel, text] of CACHE_TEST_FILES) {
+  const plan = cmsisTemplatePlan(startupChoiceFor("STM32F103C8T6"));
+  for (const target of plan.targets) {
+    const rel = target.path;
+    const text = "/* " + rel + " */\n";
     const abs = path.join(entryDir, rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, text);
     files.push({ path: rel, bytes: Buffer.byteLength(text), url: "https://example.invalid/" + rel });
   }
-  const plan = cmsisTemplatePlan(startupChoiceFor("STM32F103C8T6"));
   const env = { ...process.env, DSH_STM32_CACHE: cacheRoot };
   upsertCacheEntry(
     {
@@ -616,7 +618,11 @@ test("register 路线：建完就有 .vscode/launch.json（用户 2026-11-08：�
     assert.ok(fs.existsSync(launchPath), "register 路线必须生成 .vscode/launch.json");
     const launch = fs.readFileSync(launchPath, "utf8");
     assert.ok(launch.includes("blink.elf"), "executable 要指向本工程：" + launch.slice(0, 200));
-    assert.ok(launch.includes("interface/cmsis-dap.cfg"), "没给 interfaceConfig 时沿用 cmsis-dap");
+    // 2026-11-09：launch.json 不再重复写 interface/target，统一引用工程 openocd.cfg
+    // （J-Link 必须在 interface 与 target 之间插 transport，拆成两条 cortex-debug 没处放）。
+    assert.ok(launch.includes("${workspaceFolder}/openocd.cfg"), "launch.json 要引用工程 openocd.cfg：" + launch);
+    const openocd = fs.readFileSync(path.join(targetDir, "openocd.cfg"), "utf8");
+    assert.ok(openocd.includes("interface/cmsis-dap.cfg"), "没给 interfaceConfig 时沿用 cmsis-dap");
     assert.ok(fs.existsSync(path.join(targetDir, ".vscode", "settings.json")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -639,10 +645,10 @@ test("register 路线：实见 ST-Link 时 launch.json 与 openocd.cfg 同用 st
     assert.equal(report.ok, true, report.message);
     const launch = fs.readFileSync(path.join(targetDir, ".vscode", "launch.json"), "utf8");
     const openocd = fs.readFileSync(path.join(targetDir, "openocd.cfg"), "utf8");
-    assert.ok(launch.includes("interface/stlink-dap.cfg"), launch);
+    assert.ok(launch.includes("${workspaceFolder}/openocd.cfg"), "launch.json 只引用 openocd.cfg：" + launch);
     assert.ok(openocd.includes("interface/stlink-dap.cfg"), openocd);
-    assert.ok(!launch.includes("interface/cmsis-dap.cfg"), "launch.json 不该还写 cmsis-dap");
     assert.ok(!openocd.includes("interface/cmsis-dap.cfg"), "openocd.cfg 不该还写 cmsis-dap");
+    assert.ok(!launch.includes("interface/"), "launch.json 里不该再有 interface 字面量（两处会打架）");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

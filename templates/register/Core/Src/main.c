@@ -2,7 +2,7 @@
  * 寄存器版 main.c（dsh-stm32 生成，模板来源 templates/register/Core/Src/main.c）
  *
  * 目标芯片：__MCU_BANNER__
- * 板子假设：板载 LED 在 PC13（低电平点亮），引脚不同只改下面两行。
+ * 板子假设：板载 LED 在 PC13（低电平点亮），引脚不同改下面的 LED_PIN 与 led_init()。
  *
  * 这条路线不用 HAL、不用 CubeMX 生成物、也不需要 STM32Cube 固件包：
  * 设备头 + 启动文件 + CMSIS 内核头都在 dsh-stm32 的下载缓存里（第一次联网，之后复用）。
@@ -12,11 +12,10 @@
 
 #include <stdint.h>
 
-#include "stm32f1xx.h"
+#include "__DEVICE_UMBRELLA__"
 #include "rtt.h"   /* 模板自带的极简 RTT；不用就把这行和下面 USER CODE BEGIN 2 的示例一起删掉 */
 
-/* 换板子改这两行 */
-#define LED_PORT GPIOC
+/* 换板子改这一行（PC13 是蓝丸/多数最小系统板的 LED；引脚不同见 led_init() 里的 #error 提示） */
 #define LED_PIN  13u
 
 /* 便于用 gdb / 串口观察：每闪一次 +1 */
@@ -48,26 +47,10 @@ static void delay_ms(uint32_t ms)
     SysTick->CTRL = ctrl_save;
 }
 
-static void led_init(void)
-{
-#if LED_PIN == 13u
-    RCC->APB2ENR |= RCC_APB2ENR_IOPCEN;
-    GPIOC->CRH &= ~(GPIO_CRH_MODE13 | GPIO_CRH_CNF13);
-    GPIOC->CRH |= GPIO_CRH_MODE13_0;   /* 推挽输出 10 MHz */
-    GPIOC->BSRR = GPIO_BSRR_BS13;      /* 先给高电平：PC13 低电平点亮 → LED 灭 */
-#else
-#error "只写好了 PC13 的初始化；换引脚请在 led_init() 里补对应的 CRL/CRH 设置"
-#endif
-}
-
-static void led_toggle(void)
-{
-#if LED_PIN == 13u
-    GPIOC->ODR ^= GPIO_ODR_ODR13;
-#else
-#error "只写好了 PC13 的翻转；换引脚请改这里"
-#endif
-}
+/* 按族生成的 GPIO 写法（F1 是 CRL/CRH，其它族是 MODER + 各自的时钟门）。
+ * 注意：注释里别再写占位符名字——替换是按字面量做的，注释里出现一次就会把整段代码塞进注释，
+ * 里层代码自带的注释结束符会提前闭合外层注释，编译报的是一堆莫名其妙的 "#else without #if"。 */
+__LED_INIT__
 
 int main(void)
 {

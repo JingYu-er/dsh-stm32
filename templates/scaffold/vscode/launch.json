@@ -12,9 +12,11 @@
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
+            // configFiles 只给工程自带的 openocd.cfg：里面按顺序写了 interface → transport → target
+            // （J-Link 必须显式 transport select swd；ST-Link/CMSIS-DAP 的 interface 自带 transport）。
+            // 拆成 interface + target 两条时 cortex-debug 没处插 transport，J-Link 会默认走 jtag 而连不上。
             "configFiles": [
-                "interface/cmsis-dap.cfg",
-                "target/stm32f1x.cfg"
+                "${workspaceFolder}/openocd.cfg"
             ],
             // 想看外设寄存器（可选）：自己加一行 "svdPath": "<对应芯片的 .svd 绝对路径>"。
             // 不给也能调试，只是没有外设寄存器视图；插件不替你选 SVD。
@@ -33,9 +35,11 @@
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
+            // configFiles 只给工程自带的 openocd.cfg：里面按顺序写了 interface → transport → target
+            // （J-Link 必须显式 transport select swd；ST-Link/CMSIS-DAP 的 interface 自带 transport）。
+            // 拆成 interface + target 两条时 cortex-debug 没处插 transport，J-Link 会默认走 jtag 而连不上。
             "configFiles": [
-                "interface/cmsis-dap.cfg",
-                "target/stm32f1x.cfg"
+                "${workspaceFolder}/openocd.cfg"
             ],
             // 想看外设寄存器（可选）：自己加一行 "svdPath": "<对应芯片的 .svd 绝对路径>"。
             // 不给也能调试，只是没有外设寄存器视图；插件不替你选 SVD。

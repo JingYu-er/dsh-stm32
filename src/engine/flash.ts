@@ -446,7 +446,23 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
   }
 
   const args: string[] = [openOcd];
-  for (const cfg of configs) args.push("-f", cfg);
+  for (let i = 0; i < configs.length; i += 1) {
+    const cfg = configs[i] ?? "";
+    args.push("-f", cfg);
+    // J-Link 的 interface/jlink.cfg 只写 `adapter driver jlink`：不显式选 transport 时 openocd
+    // 默认 jtag，SWD 目标会报 "No J-Link device found"。工程自带 cfg 时按它 source 的 interface 判断。
+    if (projectConfig !== null && i === 0) {
+      let projectText = "";
+      try {
+        projectText = readFileSync(projectConfig, "utf8");
+      } catch {
+        projectText = "";
+      }
+      if (/interface\/jlink\.cfg/u.test(projectText)) args.push("-c", "transport select swd");
+    } else if (/jlink/iu.test(cfg)) {
+      args.push("-c", "transport select swd");
+    }
+  }
   if (request.adapterSpeed !== undefined) args.push("-c", "adapter speed " + String(request.adapterSpeed));
   args.push("-c", buildProgramCommand(elfPath, { reset: request.runAfterReset !== false }));
 
@@ -541,11 +557,13 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   let probeNote = "";
   let sawStLink = false;
   let sawDapFamily = false;
+  let sawJlink = false;
   // CLI 后端也要知道探针类型（它只认 ST-LINK），所以不能只按 interfaceConfig 是否显式给来决定探不探。
   if (request.interfaceConfig === undefined || backend === "cubeprogrammer") {
     const live = await liveProbeChoice(subprocess, request.signal);
     sawStLink = live.swdProbes.some((p) => p.kind === "st-link");
     sawDapFamily = live.swdProbes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink");
+    sawJlink = live.swdProbes.some((p) => p.kind === "jlink");
     if (live.swdProbes.length > 0) {
       if (request.interfaceConfig === undefined && !hasProjectCfg) ifaceOverride = live.cfg;
       probeNote = "探针实见：" + live.swdProbes.map((p) => p.label).join("、") +
@@ -579,7 +597,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
     // 换哪条由**实见探针**决定，不是"把当前值取反"：取反在探针结论过期/缺失时会把重试引向
     // 与真实硬件无关的方向（CI 上 2 条用例就是这么挂的）。实见 ST-LINK 就先试 stlink。
     const firstIface = ifaceOverride ?? "interface/cmsis-dap.cfg";
-    const guided = sawStLink ? "interface/stlink-dap.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : "";
+    const guided = sawStLink ? "interface/stlink-dap.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : sawJlink ? "interface/jlink.cfg" : "";
     const other = guided !== "" && guided !== firstIface
       ? guided
       : firstIface === "interface/cmsis-dap.cfg" ? "interface/stlink-dap.cfg" : "interface/cmsis-dap.cfg";
@@ -641,6 +659,10 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
           "（backend=cubeprogrammer 可直连；H5/WBA/WB0/WL3 只能走它）。",
       );
     }
+  }
+  if (!report.ok && sawJlink && !sawStLink) {
+    // J-Link 也没有 CLI 腿（CubeProgrammer 的 SWD 路径只认 ST-LINK）
+    report.notes.push("J-Link 没有 CubeProgrammer 兜底腿（CLI 只认 ST-LINK）：openocd 的 jlink 驱动需要 `-c \"transport select swd\"`，插着 J-Link 时若仍失败，先确认 J-Link 驱动（SEGGER 的 USB Driver）与 openocd 版本。");
   }
   if (!report.ok && !futile && report.probeError !== null && report.probeError.kind === "no-probe" && sawDapFamily && !sawStLink) {
     // DAPLink 用户走不了 CLI 这条腿，别让人以为还有救

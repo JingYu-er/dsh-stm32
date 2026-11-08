@@ -42,7 +42,7 @@ import {
 import type { WatchEntry, WatchKind } from "./watch.js";
 import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
 import { findProjectConfig, toOpenOcdPath } from "./flash.js";
-import { liveProbeChoice } from "./doctor.js";
+import { liveProbeChoice, openocdTransportArgs } from "./doctor.js";
 import { resolveToolIn } from "./probe.js";
 import { runCapture } from "./subprocess-runner.js";
 import { waitForListening } from "./debug.js";
@@ -473,7 +473,8 @@ export class DebugSessionManager {
         );
       }
       const live = await liveProbeChoice(subprocess);
-      argv.push("-f", live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg", "-f", choice.targetConfig);
+      const interfaceConfig = live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg";
+      argv.push("-f", interfaceConfig, ...openocdTransportArgs(interfaceConfig), "-f", choice.targetConfig);
     }
     if (request.adapterSpeed !== undefined) argv.push("-c", "adapter speed " + String(request.adapterSpeed));
     argv.push("-c", "gdb_port " + String(port));

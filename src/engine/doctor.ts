@@ -59,7 +59,7 @@ export type UsbDiagnosis = {
 export interface DetectedProbe {
   vid: string;
   pid: string;
-  /** st-link | cmsis-dap | daplink | ch341-serial | unknown */
+  /** st-link | jlink | cmsis-dap | daplink | ch341-serial | unknown */
   kind: string;
   label: string;
 }
@@ -68,6 +68,12 @@ export interface DetectedProbe {
 const STLINK_PIDS = new Set(["3744", "3748", "374b", "374d", "374e", "374f", "3752", "3753", "3754"]);
 /** DAPLink 系（板载探针常以 CMSIS-DAP 名义枚举，openocd 却走 cmsis-dap.cfg）。 */
 const DAPLINK_PIDS = new Set(["f111"]);
+/**
+ * SEGGER 的 USB VID（J-Link / J-Trace 全系共用，PID 随型号变：靠 VID 认，不列举 PID）。
+ * openocd 的 interface/jlink.cfg 只有 `adapter driver jlink`——没有 vid_pid 表、也不选 transport，
+ * 所以 J-Link 必须由调用方追加 `-c "transport select swd"`（否则默认 jtag，SWD 目标连不上）。
+ */
+const SEGGER_VID = "1366";
 
 /**
  * 从 pnputil 输出解析所有 USB 设备的 VID:PID 并分类。
@@ -87,7 +93,8 @@ export function parseProbeVidPid(text: string): DetectedProbe[] {
     if (vid === "0483") {
       if (STLINK_PIDS.has(pid)) { kind = "st-link"; label = "ST-Link（VID:PID " + key + "）"; }
       else { kind = "unknown"; label = "ST 设备 " + key + "（不在 ST-LINK PID 表，多半是串口/DFU）"; }
-    } else if (vid === "0d28") { kind = "cmsis-dap"; label = "CMSIS-DAP（VID:PID " + key + "）"; }
+    } else if (vid === SEGGER_VID) { kind = "jlink"; label = "J-Link（VID:PID " + key + "，SEGGER）"; }
+    else if (vid === "0d28") { kind = "cmsis-dap"; label = "CMSIS-DAP（VID:PID " + key + "）"; }
     else if (vid === "c251") { kind = "daplink"; label = "DAPLink（VID:PID " + key + "，走 CMSIS-DAP 协议）"; }
     else if (vid === "1a86") { kind = "ch341-serial"; label = "CH341 串口桥（VID:PID " + key + "，不是 SWD 探针）"; }
     out.push({ vid, pid, kind, label });
@@ -99,6 +106,9 @@ export function parseProbeVidPid(text: string): DetectedProbe[] {
 export function preferredInterfaceConfig(probes: DetectedProbe[]): { cfg: string; why: string } {
   if (probes.some((p) => p.kind === "st-link")) {
     return { cfg: "interface/stlink-dap.cfg", why: "USB 里实见 ST-LINK（0483:37xx）；走 dapdirect 而不是 hla——C0/U0 这类新族的 target 脚本用的是 swj-dp.tcl 那一套，hla 会报 transport 不支持" };
+  }
+  if (probes.some((p) => p.kind === "jlink")) {
+    return { cfg: "interface/jlink.cfg", why: "USB 里实见 SEGGER J-Link（1366:xxxx）；openocd 的 jlink 驱动默认选 jtag，SWD 目标必须再跟一条 -c \"transport select swd\"" };
   }
   if (probes.some((p) => p.kind === "cmsis-dap" || p.kind === "daplink")) return { cfg: "interface/cmsis-dap.cfg", why: "USB 里实见 CMSIS-DAP/DAPLink" };
   return { cfg: "interface/cmsis-dap.cfg", why: "没认出已知探针，维持历史默认 cmsis-dap" };
@@ -112,7 +122,7 @@ export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
     /USB\\(?:VID_|ROOT_HUB|VID\w{4}&PID)/iu.test(pnputilText) ||
     /\\USB\\/u.test(pnputilText);
   const probes = parseProbeVidPid(pnputilText);
-  const swdProbes = probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
+  const swdProbes = probes.filter((p) => p.kind === "st-link" || p.kind === "jlink" || p.kind === "cmsis-dap" || p.kind === "daplink");
   // CH341/CH340 串口桥：2a 扩表的历史契约——"板载探针走串口透传"的形态真实存在，算在线；
   // 但它不是 SWD 驱动，不参与 interface 选择（preferredInterfaceConfig 也不认它）。
   const serialBridges = probes.filter((p) => p.kind === "ch341-serial");
@@ -145,14 +155,14 @@ export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
       kind: "ok",
       probes,
       detail: "USB 里只有串口桥（" + serialBridges.map((p) => p.label).join("、") + "）：串口烧录/bootloader 通路可用；" +
-        "若指望 SWD，需要探针本身（ST-LINK / CMSIS-DAP / DAPLink）出现在枚举里，或板载 DAP 的 USB 口接好。",
+        "若指望 SWD，需要探针本身（ST-LINK / J-Link / CMSIS-DAP / DAPLink）出现在枚举里，或板载 DAP 的 USB 口接好。",
     };
   }
   return {
     kind: "no-dap",
     probes,
     detail:
-      "有 USB 控制器但没看到 SWD 探针（ST-LINK 0483:3744-54 / CMSIS-DAP 0D28 / DAPLink C251）" +
+      "有 USB 控制器但没看到 SWD 探针（ST-LINK 0483:3744-54 / J-Link 1366 / CMSIS-DAP 0D28 / DAPLink C251）" +
       (probes.length > 0 ? "；看到的其他 USB 设备：" + probes.map((p) => p.label).join("、") : "") +
       "：检查探针有没有插好（有的线只能供电不能传数据）、板上调试器的跳线/开关位置、以及 BOOT0 是否接错（BOOT0=1 会进系统 bootloader，SWD 不响应）。",
   };
@@ -198,9 +208,20 @@ export async function liveProbeChoice(
   signal?: AbortSignal,
 ): Promise<{ cfg: string; why: string; probes: DetectedProbe[]; swdProbes: DetectedProbe[] }> {
   const usb = await usbDiagnosis(subprocess, signal);
-  const swd = usb.probes.filter((p) => p.kind === "st-link" || p.kind === "cmsis-dap" || p.kind === "daplink");
+  const swd = usb.probes.filter((p) => p.kind === "st-link" || p.kind === "jlink" || p.kind === "cmsis-dap" || p.kind === "daplink");
   const pref = preferredInterfaceConfig(swd);
   return { ...pref, probes: usb.probes, swdProbes: swd };
+}
+
+/**
+ * interface 配置决定的额外 openocd 参数（插在 interface 与 target 之间）。
+ *
+ * 只有 J-Link 需要：interface/jlink.cfg 不选 transport，openocd 会默认 jtag，
+ * 结果是「No J-Link device found」或者连上了却读不到 SWD 目标。其余 interface
+ * 自带 transport（cmsis-dap 走 dapdirect_swd、stlink-dap 同理），多写一条反而报错。
+ */
+export function openocdTransportArgs(interfaceConfig: string): string[] {
+  return /jlink/iu.test(interfaceConfig) ? ["-c", "transport select swd"] : [];
 }
 
 /** 探测结果压成「能干什么」的四项能力（只由 found 决定，与 required 无关）。 */

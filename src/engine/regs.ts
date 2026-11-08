@@ -8,7 +8,7 @@
  * "只读一眼"就变成了副作用（实测 led_prg 的计数器被清零）。halt 只是暂停，resume 原样继续跑。
  */
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -16,7 +16,7 @@ import type { SubprocessService } from "../types.js";
 import { STATE_DIR } from "./generate.js";
 import { chooseOpenocdTarget, readProjectFamily } from "../data/family.js";
 import { findProjectConfig, quoteForDisplay, toOpenOcdPath } from "./flash.js";
-import { liveProbeChoice } from "./doctor.js";
+import { liveProbeChoice, openocdTransportArgs } from "./doctor.js";
 import { resolveToolIn } from "./probe.js";
 import { runStreaming } from "./subprocess-runner.js";
 import type { RunOutcome } from "./subprocess-runner.js";
@@ -174,7 +174,8 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
       };
     }
     const live = await liveProbeChoice(subprocess, request.signal);
-    configs.push(live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg", choice.targetConfig);
+    const interfaceConfig = live.swdProbes.length > 0 ? live.cfg : "interface/cmsis-dap.cfg";
+    configs.push(interfaceConfig, choice.targetConfig);
     notes.push("工程里没有 openocd 配置文件，回退到 " + configs.join(" + "));
     if (choice.note !== "") notes.push(choice.note);
   }
@@ -199,7 +200,24 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
   }
 
   const args: string[] = [openOcd];
-  for (const cfg of configs) args.push("-f", cfg);
+  for (let i = 0; i < configs.length; i += 1) {
+    const cfg = configs[i] ?? "";
+    args.push("-f", cfg);
+    if (i !== 0) continue;
+    // J-Link 要在 interface 与 target 之间补 transport：它的 interface 配置不选 transport，openocd 默认 jtag。
+    const transport = openocdTransportArgs(cfg);
+    if (transport.length > 0) {
+      args.push(...transport);
+    } else if (projectConfig !== null) {
+      let projectText = "";
+      try {
+        projectText = readFileSync(projectConfig, "utf8");
+      } catch {
+        projectText = "";
+      }
+      if (/interface\/jlink\.cfg/u.test(projectText)) args.push("-c", "transport select swd");
+    }
+  }
   if (request.adapterSpeed !== undefined) args.push("-c", "adapter speed " + String(request.adapterSpeed));
   args.push("-c", "source " + toOpenOcdPath(scriptPath));
   const command = args.map(quoteForDisplay).join(" ");

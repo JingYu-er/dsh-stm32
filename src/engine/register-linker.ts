@@ -10,7 +10,20 @@
  * 时间/复杂度上这也是最省的做法：链接脚本是 ASCII 文本，改两行比引一个链接脚本生成器简单。
  */
 
-import type { F1Chip } from "../data/stm32f1.js";
+/**
+ * 链接脚本只需要这几项事实：Flash/RAM 尺寸 + 一个像样的器件代号。
+ * F1Chip 与 chips.json 的 DeviceFactsChip 都满足它（后者带 deviceId，直接用它）。
+ */
+export interface RegisterLinkerChip {
+  readonly cpn: string;
+  /** F1Chip 才有：STM32F103。用于推 line 与器件代号。 */
+  readonly prefix?: string;
+  readonly group: string;
+  /** chips.json 里的 ST 器件代号，例如 STM32F401CBUx。 */
+  readonly deviceId?: string;
+  readonly flashBytes: number | null;
+  readonly ramBytes: number | null;
+}
 
 /**
  * F100/F101/F102 的 RAM 兜底表（KB），取值来自 STM32CubeMX 的 db/mcu/*.xml：
@@ -52,9 +65,9 @@ export interface RegisterLinkerPlan {
   warnings: string[];
 }
 
-/** line 代号：STM32F103 → 103。 */
-function lineOf(chip: F1Chip): string {
-  return chip.prefix.slice(6);
+/** line 代号：STM32F103 → 103；通用事实没有 prefix 时给空串。 */
+function lineOf(chip: RegisterLinkerChip): string {
+  return (chip.prefix ?? "").slice(6);
 }
 
 /**
@@ -63,14 +76,18 @@ function lineOf(chip: F1Chip): string {
  * 为什么要凑出这个名字：CubeMX 生成工程里链接脚本就叫 <DeviceId>_FLASH.ld，
  * 沿用同一约定，用户从 HAL 工程切过来时一眼认得出这是哪颗芯片的脚本。
  */
-export function deviceIdFor(chip: F1Chip): string {
+export function deviceIdFor(chip: RegisterLinkerChip): string {
+  // chips.json 已经把 CubeMX 的 DeviceId 算好了（STM32F401CBUx 这种），直接用；
+  // 只有 F1Chip 走下面按型号命名的兜底。
+  if (chip.deviceId !== undefined && chip.deviceId !== "") return chip.deviceId;
+  const prefix = chip.prefix ?? chip.cpn.slice(0, "STM32F103".length);
   const cpn = chip.cpn.toUpperCase();
   if (/^STM32F\d{3}[A-Z][0-9A-G]/u.test(cpn) && cpn.length >= 11) {
     if (/[67]$/u.test(cpn) && cpn.length >= 12) return cpn.slice(0, -1) + "x";
     if (/^STM32F\d{3}[A-Z][0-9A-G]$/u.test(cpn)) return cpn + "Tx";
     return cpn.slice(0, -1) + "x";
   }
-  return chip.prefix + "x" + chip.group.slice(1).toUpperCase();
+  return prefix + "x" + chip.group.slice(1).toUpperCase();
 }
 
 function kbOf(bytes: number): number {
@@ -78,23 +95,23 @@ function kbOf(bytes: number): number {
 }
 
 /** 给一颗芯片算链接脚本参数（只读、纯函数）。 */
-export function planRegisterLinker(chip: F1Chip): RegisterLinkerPlan {
+export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan {
   const warnings: string[] = [];
   const line = lineOf(chip);
-  const key = chip.prefix.slice(6) + chip.group;
+  const key = line + chip.group;
   const deviceId = deviceIdFor(chip);
 
   const flashBytes = chip.flashBytes ?? 0;
   if (flashBytes <= 0) {
-    warnings.push("这颗芯片的 Flash 大小没收录（stm32f1.ts 的 FLASH_BY_LETTER 里查不到档位 " + chip.group + "），链接脚本按 64K 生成；确认后请补表。");
+    warnings.push("这颗芯片的 Flash 大小没收录（资源包 chips.json 里这一档没有 flashBytes），链接脚本按 64K 生成；确认后请更新资源包。");
   }
   const exactRam = chip.ramBytes ?? null;
   const fallbackKb = RAM_FALLBACK_KB[key];
   const ramBytes = exactRam !== null ? exactRam : (fallbackKb ?? 20) * 1024;
   if (exactRam === null && fallbackKb === undefined) {
-    warnings.push("F" + line + " 的档位 " + chip.group + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请补 stm32f1.ts 的 RAM_BY_LINE_LETTER 或 register-linker.ts 的 RAM_FALLBACK_KB。");
+    warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请更新资源包（chips.json 的 ramBytes）。");
   } else if (exactRam === null) {
-    warnings.push("F" + line + " 的档位 " + chip.group + " 的 RAM 没收录在 stm32f1.ts 里，链接脚本按 CubeMX db 的最小值 " + kbOf(ramBytes) + "K 生成（宁可小，栈不会越界）；封装更大时可以把 LENGTH 改大。");
+    warnings.push("F" + line + " 的档位 " + chip.group + " 的 RAM 没收录，链接脚本按 CubeMX db 的最小值 " + kbOf(ramBytes) + "K 生成（宁可小，栈不会越界）；封装更大时可以把 LENGTH 改大。");
   }
   if (ramBytes > 0 && ramBytes <= 8 * 1024) {
     warnings.push("这颗芯片只有 " + kbOf(ramBytes) + "K RAM，链接脚本仍保留默认的 1K 栈 + 512B 堆（_Min_Stack_Size/_Min_Heap_Size），紧张时请调小。");

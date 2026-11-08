@@ -5425,3 +5425,64 @@ HAL 路线一直有 `.vscode/{launch,settings,c_cpp_properties}.json`；register
 - 引擎级真建工程：HAL（STM32F103C8T6，`cubeMxRoots=D:/app/STM32CubeMX`）与 register 都产出 `.vscode/launch.json`，`openocd.cfg` 与 `launch.json` 同时写 `interface/stlink-dap.cfg`。
 - `pack-smoke` 全过；包体 670.3 KB / 上限 1171.9 KB（135 文件）。
 - 待真机：C031F6P6 + ST-Link 分别跑 `backend: auto` 与 `backend: "cubeprogrammer"`；F5 用新工程的 launch.json 烧一次。
+
+## 82. 三类探针都能用：J-Link 要外补 transport；launch.json 改指工程自带 openocd.cfg（2026-11-08）
+
+用户要求（m00556 第 1 条）：ST-Link、DAPLink、J-Link 的用户都要能用插件。ST-Link（0483:37xx）与 DAPLink/CMSIS-DAP（0d28 / c251）此前已按 USB 实见分流，缺的是 J-Link。
+
+### 一、J-Link：认 VID 之外，还必须显式选 SWD
+
+- 识别：`doctor.ts` 新增 `SEGGER_VID = "1366"`，`parseProbeVidPid` 把 1366:xxxx 归为 `jlink`（J-Link 与 J-Trace 共用这个 VID）；`preferredInterfaceConfig` 返回 `interface/jlink.cfg`（排在 st-link 之后、cmsis-dap 之前）；`swdProbes` 过滤与 `diagnoseUsb` 的 no-dap 文案同步加 J-Link。
+- **transport 是硬约束**：实测 openocd 0.12 的 `interface/jlink.cfg` 只有一行 `adapter driver jlink`，不选 transport；`openocd -f interface/jlink.cfg -f target/stm32f1x.cfg -c 'init; exit'` 打印 `Info : auto-selecting first available session transport "jtag"` 后报 `Error: No J-Link device found`——默认走 JTAG，SWD 目标连不上。加 `-c "transport select swd"` 且顺序为 interface → transport → target 时才落到 SWD（同样报 No J-Link device found 是因为当时没插探针）。
+- 实现：`doctor.ts` 导出 `openocdTransportArgs(interfaceConfig)`（`/jlink/iu` 命中才返回 `["-c", "transport select swd"]`）；四个起 openocd 的地方全部改用它——`flash.ts`、`debug.ts`、`regs.ts`、`debug-session.ts`。工程自带 `openocd.cfg` 时读文件内容判 `interface/jlink.cfg` 再补 transport。
+- 兜底差异：CubeProgrammer CLI 只认 ST-LINK，所以 J-Link 全败时 notes 明说「没有 CLI 兜底腿」，不假装还有第二条路。
+
+### 二、launch.json 不再拆两份 configFiles
+
+原模板是 `configFiles: ["interface/cmsis-dap.cfg", "target/stm32f1x.cfg"]`——cortex-debug 按顺序 `-f` 加载，**中间没有地方插 `-c transport select swd`**，J-Link 用户在 VSCode 里按 F5 必然连不上；而且 interface 与 openocd.cfg 各写一份，早晚分叉。
+
+改为 `configFiles: ["${workspaceFolder}/openocd.cfg"]`：工程根目录的 openocd.cfg 里按 interface → transport → target 顺序写全（scaffold 生成的 openocd.cfg 本来就含 `transport select swd`）。实测 cwd=工程目录时 `source [find openocd/stm32c0x.cfg]` 能解析（没插探针时报 `unable to find a matching CMSIS-DAP device`，说明脚本已加载）。HAL 与 register 两条路线、`writeVscodeConfigs` 与 `createProjectScaffold` 同一口径；interface 只写在 openocd.cfg 一处。
+
+### 三、验收
+
+- tsc 0；`flash-orchestrator-units` 11 条、`vscode-units` 13 条、`scaffold-patch-units` 26 条全绿（断言从「launch 里有 interface 字面量」改成「launch 只引用 openocd.cfg」）。
+- 真机未验：J-Link 手上没有，接口只到「脚本加载 + transport 顺序正确」；DAPLink 与 ST-Link 的历史实测仍有效。
+
+## 83. 寄存器版从 F1 扩到 13 族：建工程 + 真编译闭环，时钟故意留复位默认（2026-11-08）
+
+用户要求（m00556 第 4 条）：HAL 能写哪些芯片，寄存器版也要跟进。做法是**芯片事实全部来自资源包**（`device/<族>/chips.json`：startup / deviceHeader / deviceDefine / deviceId / flashBytes / ramBytes），插件不内置任何型号表；族清单从 1 条扩到资源包已有的 13 族：C0/F0/F1/F2/F3/F4/F7/G0/G4/L0/L1/L4/U0。
+
+### 一、族级清单（`src/data/cmsis-sources.ts`）
+
+- `CmsisFamilySpec` 增 `systemC`（`system_stm32f4xx.c` 这类）与可选 `mpuHeader`；13 条 spec 的 device 仓、cube 仓、include 目录、设备头、宏前缀按族填。
+- 设备头与启动文件走 `findChipFact(cpn)`：资源包里没有这颗芯片 → 直接拒绝（文案列 13 族并指路 `stm32_assets refresh`），**绝不猜文件名**——同族不同 line 的启动文件与设备头完全不同（G431 是 `stm32g431xx.h`，G474 是 `stm32g474xx.h`）。
+- 只给族不给型号时 register 路线拒绝（HAL 可以），理由同上。
+- 哈希口径：只有 F1 保留逐文件 sha256（`CORE_HEADER_SHA256` 等实测值），其它族只锁形状（minBytes + markers），真实哈希由下载时登记进缓存索引——与 SVD 同一口径。若把 F1 的哈希套到别的族会直接报 `sha256 对不上（期望 03ab80c4…，实际 b51963d2…）`，这是本段真踩到的。
+- 内核头按 spec 选（core_cm0 / cm0plus / cm3 / cm4 / cm7 / cm33），`mpu_armv7.h` / `mpu_armv8.h` 按内核头自动带上（`cm33 → mpu_armv8.h`，`cm0 → 无`）：漏了它 C0 编译报 `core_cm0plus.h:1007:10: fatal error: mpu_armv7.h: No such file or directory`。
+
+### 二、按族生成的三块代码
+
+- **GPIO/LED**（`src/engine/register-gpio.ts`）：`STYLE_BY_FAMILY` 分五套写法——F1 的 CRL/CRH + APB2ENR；F2/F4/F7 的 MODER + AHB1ENR；F0/F3/L1 的 MODER + AHBENR；G4/L4 的 MODER + AHB2ENR；C0/G0/L0/U0 的 MODER + IOPENR。表是拿编译器纠正出来的：F2 原按 F1 写会报 `'RCC_APB2ENR_IOPCEN' undeclared`、`'GPIO_TypeDef' has no member named 'CRH'`；F3 原按 AHB1 写会报 `'RCC_TypeDef' has no member named 'AHB1ENR'; did you mean 'AHBENR'?`。
+- **时钟**（`register-clock.ts` 的 `planGenericClock` / `renderGenericClockInit`）：非 F1 **刻意不配 PLL**，`clock_init()` 生成空函数（保持 system_<族>xx.c 里 SystemInit 的复位时钟），报告写「复位时钟（未配 PLL）」。理由：PLL 源/字段/Flash 等待周期/电压调节各代不同，HSE 频率还随板子变；猜一个配方比留复位默认更危险（能编译、能跑，只是慢）。F1 仍走原来的 72 MHz 配方，`sysclkHz=72`。
+- **链接脚本**（`register-linker.ts`）：`RegisterLinkerChip` 接受 chips.json 事实，`deviceIdFor` 优先用 `deviceId`（`STM32F401CBUx`），FLASH/RAM 取 `flashBytes`/`ramBytes`；F1 的 RAM 兜底表只对 F1 档位生效。
+
+### 三、缓存自愈：清单变长时不能只信索引
+
+索引只记「上次写了哪些文件」，清单加文件（这次加了 `mpu_armv7.h`）后旧缓存按索引看是完整的、实际缺文件 → C0 编译缺头。`ensureCmsisTemplate` 改为按**当前清单**逐个 `existsSync` 核对，缺什么下什么（`reuseRoot` 复用旧目录），索引合并已有文件（排除本次重下的同路径与 THIRD_PARTY_NOTICES.md）与新下载，`totalBytes` 一并重算；失败文案分母用待下条数。
+
+另一类「网页当文件」也踩了：C0/G0 的伞头守卫是 `STM32C0xx_H`/`STM32G0xx_H`（无前导下划线），markers 原来只有 `#ifndef __STM32` → 全部源判「内容对不上」。markers 是「至少命中一个」，两代守卫都列上即可。
+
+### 四、13 族真编译矩阵（`stm32_build`，msys64 ucrt64）
+
+f0 736 B / f1 1404 B / f2 932 B / f3 948 B / f4 960 B / f7、c0、g0、g4、l0、l1、l4、u0 全部 ok=true，RAM 均 1576 B（无错误行）。生成到 `demo/.tmp-reg/v6/<族>`，芯片取资源包首条：C011D6Y6 / F030C6T6 / F103C8T6 / F205RBT6 / F301C6T6 / F401CBU6 / F722ICK6 / G030C6T6 / G411C6T6 / L010C6T6 / L100C6U6 / L412C8T6 / U031C6T6。
+
+### 五、教训
+
+- **模板注释里连占位符名与注释结束符都不能出现**：main.c 原写「见 __LED_INIT__」后紧跟占位符，全局字面量替换把整段 led_init() 塞进注释，里层注释结束符提前闭合外层，报 `#else without #if` 与 `redefinition of 'led_toggle'`。第一次修时又在注释里写了反引号包住的结束符，再踩一次（`missing terminating ' character`）。
+- **过时单测是能力升级的镜子**：「G431CBT6 不支持」在扩族后必然翻车；认不出的用例改用资源包没有的 H5（`STM32H563ZIT6`）。同理 `seedCmsisCache` 种固定 3 个文件不再够用，改成按 `cmsisTemplatePlan` 的 targets 逐条落盘。
+- **能力表要跟清单一起改**：`family.ts` 新增 `HAL_REG_CAPS`，13 族画像改用它，`PENDING_REG` 与 `CAPABILITY_GAPS.registerScaffold` 文案同步；否则 `route_plan` 会把已支持的族判成 hal-only。
+
+### 六、验收
+
+- tsc 0；TOTAL **pass=907 fail=0**；`pack-smoke` 全过；包体 678.0 KB / 上限 1171.9 KB（136 文件）。
+- 生成 + 编译 13 族全过（见上）；HAL 路线未回归真建（本批只动 register 模板与族画像，HAL 用例全绿）。

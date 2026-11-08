@@ -32,7 +32,7 @@ message("Linker script: " ${DSH_LINKER_SCRIPT})
 enable_language(C ASM)
 
 # ---------------- 可执行文件 ----------------
-# 编译四个源：用户 main.c、可选的 RTT（Core/Src/rtt.c）、CMSIS 的 system_stm32f1xx.c、启动文件。
+# 编译四个源：用户 main.c、可选的 RTT（Core/Src/rtt.c）、CMSIS 的 system_<族>xx.c、启动文件。
 # 设备头与内核头通过下面两个 include 目录提供，全部来自下载缓存。
 #
 # RTT 是"编进来但不默认启用"：模板的 main.c 里 rtt_init() 是注释掉的，工具链又开了
@@ -42,7 +42,7 @@ enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
     Core/Src/main.c
     Core/Src/rtt.c
-    Drivers/CMSIS/Device/ST/__FAMILY_DIR__/Source/Templates/system_stm32f1xx.c
+    Drivers/CMSIS/Device/ST/__FAMILY_DIR__/Source/Templates/__SYSTEM_C__
     Drivers/CMSIS/Device/ST/__FAMILY_DIR__/Source/Templates/gcc/__STARTUP_FILE__
 )
 

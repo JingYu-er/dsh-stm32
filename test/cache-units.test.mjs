@@ -476,7 +476,9 @@ test("启动文件映射：F1 六条 line × 容量档，落到 ST 真实的 14 
   assert.equal(startupChoiceFor("F1:B").startup, "startup_stm32f103xb.s");
   assert.equal(startupChoiceFor("F1:C").startup, "startup_stm32f103xe.s");
   assert.equal(startupChoiceFor("F103:xb").startup, "startup_stm32f103xb.s");
-  assert.equal(startupChoiceFor("STM32G431CBT6"), null);
+  // 认不出的族（这里 H5：没有 CMSIS 下载清单）必须返回 null，而不是编一个启动文件名。
+  // 已支持的族（G4 等）在 family-facts / cache 的建工程用例里覆盖——那几条显式给了资源包环境。
+  assert.equal(startupChoiceFor("STM32H563ZIT6"), null);
   assert.equal(startupChoiceFor("不认识"), null);
   assert.equal(resolveStartupChoice({}).startup, "startup_stm32f103xb.s");
 });
@@ -629,9 +631,9 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.equal(readFileSync(join(env.DSH_STM32_CACHE, "F1", "103xb", "THIRD_PARTY_NOTICES.md"), "utf8").length > 0, true);
 
     // 认不出的芯片：拒绝，而不是编一个启动文件
-    const unsupported = await createRegisterProject({ targetDir: join(root, "g4"), projectName: "g4", mcu: "STM32G431CBT6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
+    const unsupported = await createRegisterProject({ targetDir: join(root, "h5"), projectName: "h5", mcu: "STM32H563ZIT6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(unsupported.ok, false);
-    assert.match(unsupported.message, /认不出/u);
+    assert.match(unsupported.message, /暂时不支持/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
