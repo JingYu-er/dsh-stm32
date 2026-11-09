@@ -22,6 +22,7 @@ import { registerCache } from "../lib/tools/cache.js";
 import { fetchAll, fetchOne } from "../lib/engine/fetch.js";
 import { cmsisTemplatePlan, sourceUrls, startupChoiceFor } from "../lib/data/cmsis-sources.js";
 import { createRegisterProject, ensureCmsisTemplate, resolveStartupChoice } from "../lib/engine/register-template.js";
+import { renderLedFunctions } from "../lib/engine/register-gpio.js";
 
 import { FIXTURE_ASSETS } from "./fixtures.mjs";
 
@@ -74,6 +75,7 @@ function markerFor(name) {
   if (name === "cmsis_gcc.h") return "#ifndef __CMSIS_GCC_H";
   if (name === "cmsis_version.h") return "#define __CMSIS_VERSION";
   if (name === "mpu_armv7.h") return "#ifndef ARM_MPU_ARMV7_H"; // ARM 原版守卫，没有前导下划线
+  if (name === "cachel1_armv7.h") return "#ifndef ARM_CACHEL1_ARMV7_H"; // core_cm7.h 条件 include 的缓存头
   if (name === "stm32f1xx.h") return "#ifndef __STM32F1XX_H";
   if (name === "stm32f103xb.h") return "#ifndef __STM32F103xB_H";
   if (name === "system_stm32f1xx.h") return "#ifndef __SYSTEM_STM32F1XX_H";
@@ -476,8 +478,9 @@ test("启动文件映射：F1 六条 line × 容量档，落到 ST 真实的 14 
   assert.equal(startupChoiceFor("F1:B").startup, "startup_stm32f103xb.s");
   assert.equal(startupChoiceFor("F1:C").startup, "startup_stm32f103xe.s");
   assert.equal(startupChoiceFor("F103:xb").startup, "startup_stm32f103xb.s");
-  // 认不出的族（这里 H5：没有 CMSIS 下载清单）必须返回 null，而不是编一个启动文件名。
-  // 已支持的族（G4 等）在 family-facts / cache 的建工程用例里覆盖——那几条显式给了资源包环境。
+  // 夹具资源只有 F1/F4 的芯片表（test/fixtures/assets），所以表里没有的型号必须返回 null，
+  // 而不是编一个启动文件名。H5 现在有 CMSIS 清单了，但夹具里没有 H5 的 chips.json——
+  // 这条断言钉的是"查不到型号事实"，不是"这一族不支持"；8 族清单本身由下面合成 choice 的用例直接钉 spec 表。
   assert.equal(startupChoiceFor("STM32H563ZIT6"), null);
   assert.equal(startupChoiceFor("不认识"), null);
   assert.equal(resolveStartupChoice({}).startup, "startup_stm32f103xb.s");
@@ -513,6 +516,75 @@ test("模板清单：10 个文件、路径按 ST 固件包布局、id 可检索"
     assert.equal(files.includes(startup), true, mcu + " 要下载自己的启动文件");
     assert.equal(files.includes("stm32f103xb.h"), false, "不许串到别的 line 的头文件");
     assert.equal(other.choice.define, define);
+  }
+});
+
+test("寄存器模板：补的 8 族（H5/H7/L4+/L5/U3/U5/WBA/WL）清单与按族 GPIO 写法", () => {
+  // 夹具资源只有 F1/F4 的芯片表，这 8 族走不了 startupChoiceFor（见上面那条用例）；
+  // 这里直接给合成 choice，把 spec 表钉住：族 → 设备头仓库 / 内核头 / MPU 头 / 设备头目录（前缀），
+  // 以及 RCC 时钟门写法。路径错了的后果是"下载成功但 include 找不到"，所以断言完整路径而不是只数个数。
+  const cases = [
+    // family, 前缀, 内核头, MPU 头, 启动文件, 型号头, 设备宏, line, group, 时钟门, 设备仓库, 代表型号
+    ["H5", "STM32H5", "core_cm33.h", "mpu_armv8.h", "startup_stm32h503xx.s", "stm32h503xx.h", "STM32H503xx", "503", "xx", "RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;", "cmsis-device-h5", "STM32H503CBT6"],
+    ["H7", "STM32H7", "core_cm7.h", "mpu_armv7.h", "startup_stm32h723xx.s", "stm32h723xx.h", "STM32H723xx", "723", "xx", "RCC->AHB4ENR |= RCC_AHB4ENR_GPIOCEN;", "cmsis-device-h7", "STM32H723VGT6"],
+    ["L4+", "STM32L4", "core_cm4.h", "mpu_armv7.h", "startup_stm32l4p5xx.s", "stm32l4p5xx.h", "STM32L4P5xx", "4P5", "xx", "RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;", "cmsis-device-l4", "STM32L4P5AGI6"],
+    ["L5", "STM32L5", "core_cm33.h", "mpu_armv8.h", "startup_stm32l552xx.s", "stm32l552xx.h", "STM32L552xx", "552", "xx", "RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;", "cmsis-device-l5", "STM32L552CET6"],
+    ["U3", "STM32U3", "core_cm33.h", "mpu_armv8.h", "startup_stm32u375xx.s", "stm32u375xx.h", "STM32U375xx", "375", "xx", "RCC->AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;", "cmsis-device-u3", "STM32U375CET6"],
+    ["U5", "STM32U5", "core_cm33.h", "mpu_armv8.h", "startup_stm32u535xx.s", "stm32u535xx.h", "STM32U535xx", "535", "xx", "RCC->AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;", "cmsis-device-u5", "STM32U535CBT6"],
+    ["WBA", "STM32WBA", "core_cm33.h", "mpu_armv8.h", "startup_stm32wba50xx.s", "stm32wba50xx.h", "STM32WBA50xx", "50", "xx", "RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;", "cmsis-device-wba", "STM32WBA50KGU6"],
+    ["WL", "STM32WL", "core_cm4.h", "mpu_armv7.h", "startup_stm32wle4xx.s", "stm32wle4xx.h", "STM32WLE4xx", "E4", "xx", "RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;", "cmsis-device-wl", "STM32WLE4CBU6"],
+  ];
+  for (const [family, prefix, core, mpu, startup, header, define, line, group, clock, deviceRepo, cpn] of cases) {
+    // 合成的事实只用到 line/group（缓存 id 与目录名）和 startup/header/define；
+    // 其余字段照 DeviceFactsChip 填，保持与真实 chips.json 同形状。
+    const facts = {
+      cpn,
+      line,
+      group,
+      packageName: "LQFP48",
+      pinCount: 48,
+      flashBytes: 262144,
+      ramBytes: 65536,
+      deviceId: define.replace(/xx$/u, "x"),
+      mcuName: define,
+      startup,
+      deviceHeader: header,
+      deviceDefine: define,
+    };
+    const plan = cmsisTemplatePlan({ family, startup, define, deviceHeader: header, facts });
+    const label = family + "（" + cpn + "）";
+    assert.ok(plan, label + " 要有 CMSIS 下载清单");
+    // H7 多一个 cachel1_armv7.h（core_cm7.h 在 __DCACHE_PRESENT 时 include 它）；
+    // 其余族是 10 个（2 个族头 + 型号头 + system.c + 启动文件 + 5 个内核头）。
+    assert.equal(plan.targets.length, family === "H7" ? 11 : 10, label + " 的下载清单文件数");
+    if (family === "H7") {
+      assert.equal(plan.targets.some((item) => item.path === "Drivers/CMSIS/Include/cachel1_armv7.h"), true, label + " 必须带 cachel1_armv7.h");
+    }
+    const groupKey = line + group;
+    assert.equal(plan.id, "cmsis:" + family + ":" + groupKey, label + " 的缓存 id");
+    assert.equal(plan.dirName, family + "/" + groupKey, label + " 的缓存目录");
+    const lower = prefix.toLowerCase();
+    const base = "Drivers/CMSIS/Device/ST/" + prefix + "xx";
+    const paths = plan.targets.map((item) => item.path);
+    assert.equal(paths.includes(base + "/Include/" + header), true, label + " 的型号头路径");
+    // L4+ 与 L4 共用 stm32l4xx.h（前缀 STM32L4）：这一条就是"L4+ 仍落在 STM32L4xx"的回归锁。
+    assert.equal(paths.includes(base + "/Include/" + lower + "xx.h"), true, label + " 的 umbrella 头路径");
+    assert.equal(paths.includes(base + "/Include/system_" + lower + "xx.h"), true, label + " 的 system 头路径");
+    assert.equal(paths.includes(base + "/Source/Templates/system_" + lower + "xx.c"), true, label + " 的 system.c 路径");
+    assert.equal(paths.includes(base + "/Source/Templates/gcc/" + startup), true, label + " 的启动文件路径");
+    assert.equal(paths.includes("Drivers/CMSIS/Include/" + core), true, label + " 的内核头");
+    assert.equal(paths.includes("Drivers/CMSIS/Include/" + mpu), true, label + " 的 MPU 头（core_cm33 → mpu_armv8，其余 mpu_armv7）");
+    assert.equal(plan.targets.every((item) => item.urls.length === 4), true, label + " 每个文件 4 条下载路线");
+    const coreTarget = plan.targets.find((item) => item.path === "Drivers/CMSIS/Include/" + core);
+    assert.equal(coreTarget.markers.includes("__" + core.replace(/\.h$/u, "").toUpperCase() + "_H"), true, label + " 的内核头守卫标记");
+    assert.equal(plan.license.includes(deviceRepo), true, label + " 的许可证说明要写明设备头仓库");
+
+    // GPIO：这 8 族的 LED 初始化必须是真写法（不是 none 的空函数），且时钟门寄存器名按族不同。
+    const led = renderLedFunctions(family);
+    assert.deepEqual(led.warnings, [], label + " 的 GPIO 写法已实测编译过，不该有 warning");
+    assert.equal(led.text.includes(clock), true, label + " 的 RCC 时钟门");
+
+    assert.equal(led.text.includes("GPIOC->MODER"), true, label + " 用 MODER（不是 F1 的 CRL/CRH）");
   }
 });
 
@@ -630,10 +702,13 @@ test("createRegisterProject：生成的工程是齐的（CMakeLists / main.c / D
     assert.equal(second.cacheHit, true);
     assert.equal(readFileSync(join(env.DSH_STM32_CACHE, "F1", "103xb", "THIRD_PARTY_NOTICES.md"), "utf8").length > 0, true);
 
-    // 认不出的芯片：拒绝，而不是编一个启动文件
-    const unsupported = await createRegisterProject({ targetDir: join(root, "h5"), projectName: "h5", mcu: "STM32H563ZIT6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
+    // 认不出的芯片（这里 WB55：双核族，内置资源还没收 device/wb/chips.json）：拒绝，而不是编一个启动文件。
+    // H5 从 0.1.5 起已经支持了（见上面 8 族清单用例），不能再用 H5 当"不支持的族"的例子。
+    const unsupported = await createRegisterProject({ targetDir: join(root, "wb"), projectName: "wb", mcu: "STM32WB55CGU6", env, fetchImpl: fakeFetch(), hashes: contentHashes() });
     assert.equal(unsupported.ok, false);
     assert.match(unsupported.message, /暂时不支持/u);
+    // 文案里的族数必须与 CMSIS_FAMILIES 一致：0.1.5 是 21 族，别再说 13。
+    assert.match(unsupported.message, /这 21 族/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

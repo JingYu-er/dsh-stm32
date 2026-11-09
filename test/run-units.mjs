@@ -85,6 +85,7 @@ const suites = [
   "route-plan-units.test.mjs",
   "scaffold-patch-units.test.mjs",
   "search-roots-units.test.mjs",
+  "serial-units.test.mjs",
   "session-units.test.mjs",
   "text-encoding-units.test.mjs",
   "thirdparty-units.test.mjs",

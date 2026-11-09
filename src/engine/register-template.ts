@@ -358,6 +358,25 @@ const SHARED_TEMPLATE_FILES = ["CMakePresets.json", ".gitignore", "cmake/gcc-arm
 /** 链接脚本的"源模板"（HAL 骨架里那份，按型号渲染后另存）。 */
 const LINKER_TEMPLATE_FILE = "STM32F103XX_FLASH.ld";
 
+/**
+ * 内核头 → GCC 的 -mcpu 值。
+ *
+ * 模板工具链文件是为蓝丸写的（-mcpu=cortex-m3）；寄存器路线要按这一代的内核替换，
+ * 否则 H7/M33 的启动文件与内核头会被当成 M3 编译：cache 指令（cachel1_armv7.h 的内联汇编）
+ * 与 M33 的启动序列都会在汇编阶段报错。HAL 路线不在这里改（它按 .ioc 配置走 CubeMX 的工程）。
+ */
+function coreFlagOf(coreHeader: string): string {
+  switch (coreHeader) {
+    case "core_cm0.h": return "cortex-m0";
+    case "core_cm0plus.h": return "cortex-m0plus";
+    case "core_cm3.h": return "cortex-m3";
+    case "core_cm4.h": return "cortex-m4";
+    case "core_cm7.h": return "cortex-m7";
+    case "core_cm33.h": return "cortex-m33";
+    default: return "cortex-m3";
+  }
+}
+
 function countFiles(root: string): number {
   let count = 0;
   const walk = (dir: string): void => {
@@ -552,7 +571,12 @@ export async function createRegisterProject(request: RegisterProjectRequest): Pr
       if (rel === ".gitignore" && missingOptional.includes(rel)) continue;
       const dest = path.join(targetDir, rel);
       mkdirTracked(path.dirname(dest), createdDirs);
-      if (rel === "openocd.cfg" && request.interfaceConfig !== undefined && request.interfaceConfig !== "" && request.interfaceConfig !== "interface/cmsis-dap.cfg") {
+      if (rel === "cmake/gcc-arm-none-eabi.cmake") {
+        // 工具链文件里的 -mcpu=cortex-m3 是按内核头换掉的（H7 → cortex-m7，M33 族 → cortex-m33）。
+        const cpu = coreFlagOf(spec.coreHeader);
+        const text = fs.readFileSync(path.join(halTpl, rel), "utf8").split("-mcpu=cortex-m3").join("-mcpu=" + cpu);
+        fs.writeFileSync(dest, text, "utf8");
+      } else if (rel === "openocd.cfg" && request.interfaceConfig !== undefined && request.interfaceConfig !== "" && request.interfaceConfig !== "interface/cmsis-dap.cfg") {
         // 与 .vscode/launch.json 同口径：实见 ST-Link 却写 cmsis-dap，F5 会撞 transport 不支持。
         const text = fs.readFileSync(path.join(halTpl, rel), "utf8").split("interface/cmsis-dap.cfg").join(request.interfaceConfig);
         fs.writeFileSync(dest, text, "utf8");

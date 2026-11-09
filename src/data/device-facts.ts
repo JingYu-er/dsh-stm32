@@ -55,6 +55,24 @@ export interface DeviceFactsChip {
   readonly breakpoints?: number;
   /** 可选：数据观察点数量（DWT 数据比较器）；没写就按 F1 默认 4 算。 */
   readonly watchpoints?: number;
+  /**
+   * 可选：链接脚本真正可用的连续 RAM 窗口（起始地址 + 字节数 + 区域名）。
+   *
+   * 为什么不能只用 ramBytes：db 的 <Ram> 是「芯片共有多少 RAM」，可能跨不连续区域——
+   * H7 是 DTCM 128K@0x20000000 + AXI SRAM@0x24000000；U5 是主 SRAM + SRAM4 16K@0x28000000
+   * + 2K backup。按 ramBytes 整块写进 MEMORY，_estack 就会落在空洞里，链接能过、烧进去 HardFault。
+   * 有 linkerRam 时 planRegisterLinker 优先用它；没有（F1 等连续族）保持原行为。
+   */
+  readonly linkerRam?: DeviceLinkerRam;
+}
+
+/** 一段连续 RAM 的真值（见 chips.json 的 linkerRam 字段）。 */
+export interface DeviceLinkerRam {
+  /** 起始地址，例如 0x20000000。 */
+  readonly origin: number;
+  readonly sizeBytes: number;
+  /** 区域名，例如 DTCM；只用于摘要/警告文案。 */
+  readonly region?: string;
 }
 
 /** 一次性读完的整份设备事实。 */
@@ -97,6 +115,16 @@ function textOf(value: unknown): string {
 
 function countOf(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** chips.json 的可选 linkerRam → 结构化窗口；字段不合法就当没写（回退 ramBytes，不猜）。 */
+function linkerRamOf(value: unknown): DeviceLinkerRam | null {
+  if (!isRecord(value)) return null;
+  const origin = countOf(value["origin"]);
+  const sizeBytes = countOf(value["sizeBytes"]);
+  if (origin === null || sizeBytes === null || sizeBytes <= 0) return null;
+  const region = textOf(value["region"]);
+  return region === "" ? { origin, sizeBytes } : { origin, sizeBytes, region };
 }
 
 /**
@@ -166,6 +194,8 @@ function chipFrom(value: unknown): DeviceFactsChip | null {
   // B4：断点预算（可选字段，chips.json 没写就是没有，调用方回退 F1 默认）。
   const breakpoints = countOf(value["breakpoints"]);
   const watchpoints = countOf(value["watchpoints"]);
+  // 链接脚本连续 RAM 窗口（可选；H7/U5 这类 RAM 分区的族必须写，否则 _estack 会落进空洞）。
+  const linkerRam = linkerRamOf(value["linkerRam"]);
   if (cpn === "" || line === "" || group === "" || startup === "" || deviceDefine === "" || deviceHeader === "") return null;
   if (pinCount === null || flashBytes === null || ramBytes === null) return null;
   return {
@@ -184,6 +214,7 @@ function chipFrom(value: unknown): DeviceFactsChip | null {
     linkerScript: textOf(value["linkerScript"]) || derived.linkerScript,
     ...(breakpoints === null || breakpoints <= 0 ? {} : { breakpoints: Math.trunc(breakpoints) }),
     ...(watchpoints === null || watchpoints <= 0 ? {} : { watchpoints: Math.trunc(watchpoints) }),
+    ...(linkerRam === null ? {} : { linkerRam }),
   };
 }
 

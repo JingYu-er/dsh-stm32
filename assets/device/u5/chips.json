@@ -7,9 +7,10 @@
   "notes": [
     "生成物，不要手改：改数据跑 node scripts/build-assets.mjs（--check 只校验不写盘）。",
     "只写 db 与固件包能算出来的 9 个字段：启动文件 / 设备宏 / 设备头 / 链接脚本名由插件按 line+group 现算（规则见 dsh-stm32 src/data/device-facts.ts 的 namingFrom 与 assets scripts/family-assets.mjs 的 namingOf，两边必须逐字一致）。",
-    "ramBytes 取 db 的 <Ram>：该族官方固件包不带 gcc 链接脚本，没有第二个权威来源；分组跨多个容量字母时这是最小档的值（偏保守）。",
+    "ramBytes 取 db 的 <Ram>：U5 的 RAM 含主 SRAM + SRAM4 16K@0x28000000 + 2K backup，<Ram> 是总和且不连续；分组跨多个容量字母时这是最小档的值（偏保守）。",
     "flashBytes 取 db 的 <Flash>（按分组内容量字母顺序一一对应）；pinCount 取 db 的 Package 属性里的数字（封装总引脚数）。",
-    "group 从该族固件包的启动文件名反推（startup_stm32g431xx.s → xx），不按族级假设。"
+    "group 从该族固件包的启动文件名反推（startup_stm32g431xx.s → xx），不按族级假设。",
+    "linkerRam = 连续主 SRAM 窗口：按官方 cmsis-device-u5 Source/Templates/gcc/linker/STM32U5xx_FLASH.ld 的 RAM 行（U535/U545 256K、U575/U585 768K、U595/U599/U5A5/U5A9/U5F7/U5F9/U5G7 2496K、U5G9 3008K），ORIGIN=0x20000000，region=SRAM。SRAM4 不在窗口里。"
   ],
   "chips": [
     {
@@ -24,7 +25,12 @@
       "mcuName": "STM32U535CBTx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535CBU6",
@@ -38,7 +44,12 @@
       "mcuName": "STM32U535CBUx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535CCT6",
@@ -52,7 +63,12 @@
       "mcuName": "STM32U535CCTx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535CCU6",
@@ -66,7 +82,12 @@
       "mcuName": "STM32U535CCUx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535CET6",
@@ -80,7 +101,12 @@
       "mcuName": "STM32U535CETx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535CEU6",
@@ -94,7 +120,12 @@
       "mcuName": "STM32U535CEUx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535RBI6",
@@ -108,7 +139,12 @@
       "mcuName": "STM32U535RBIx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535RBT6",
@@ -122,7 +158,12 @@
       "mcuName": "STM32U535RBTx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535RCI6",
@@ -136,7 +177,12 @@
       "mcuName": "STM32U535RCIx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535RCT6",
@@ -150,7 +196,12 @@
       "mcuName": "STM32U535RCTx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535REI6",
@@ -164,7 +215,12 @@
       "mcuName": "STM32U535REIx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535RET6",
@@ -178,7 +234,12 @@
       "mcuName": "STM32U535RETx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535VCI6",
@@ -192,7 +253,12 @@
       "mcuName": "STM32U535VCIx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535VCT6",
@@ -206,7 +272,12 @@
       "mcuName": "STM32U535VCTx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535VEI6",
@@ -220,7 +291,12 @@
       "mcuName": "STM32U535VEIx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U535VET6",
@@ -234,7 +310,12 @@
       "mcuName": "STM32U535VETx",
       "startup": "startup_stm32u535xx.s",
       "deviceHeader": "stm32u535xx.h",
-      "deviceDefine": "STM32U535xx"
+      "deviceDefine": "STM32U535xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545CET6",
@@ -248,7 +329,12 @@
       "mcuName": "STM32U545CETx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545CEU6",
@@ -262,7 +348,12 @@
       "mcuName": "STM32U545CEUx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545REI6",
@@ -276,7 +367,12 @@
       "mcuName": "STM32U545REIx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545RET6",
@@ -290,7 +386,12 @@
       "mcuName": "STM32U545RETx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545VEI6",
@@ -304,7 +405,12 @@
       "mcuName": "STM32U545VEIx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U545VET6",
@@ -318,7 +424,12 @@
       "mcuName": "STM32U545VETx",
       "startup": "startup_stm32u545xx.s",
       "deviceHeader": "stm32u545xx.h",
-      "deviceDefine": "STM32U545xx"
+      "deviceDefine": "STM32U545xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 262144,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575AGI6",
@@ -332,7 +443,12 @@
       "mcuName": "STM32U575AGIx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575AII6",
@@ -346,7 +462,12 @@
       "mcuName": "STM32U575AIIx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575CGT6",
@@ -360,7 +481,12 @@
       "mcuName": "STM32U575CGTx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575CGU6",
@@ -374,7 +500,12 @@
       "mcuName": "STM32U575CGUx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575CIT6",
@@ -388,7 +519,12 @@
       "mcuName": "STM32U575CITx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575CIU6",
@@ -402,7 +538,12 @@
       "mcuName": "STM32U575CIUx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575QGI6",
@@ -416,7 +557,12 @@
       "mcuName": "STM32U575QGIx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575QII6",
@@ -430,7 +576,12 @@
       "mcuName": "STM32U575QIIx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575RGT6",
@@ -444,7 +595,12 @@
       "mcuName": "STM32U575RGTx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575RIT6",
@@ -458,7 +614,12 @@
       "mcuName": "STM32U575RITx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575VGT6",
@@ -472,7 +633,12 @@
       "mcuName": "STM32U575VGTx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575VIT6",
@@ -486,7 +652,12 @@
       "mcuName": "STM32U575VITx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575ZGT6",
@@ -500,7 +671,12 @@
       "mcuName": "STM32U575ZGTx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U575ZIT6",
@@ -514,7 +690,12 @@
       "mcuName": "STM32U575ZITx",
       "startup": "startup_stm32u575xx.s",
       "deviceHeader": "stm32u575xx.h",
-      "deviceDefine": "STM32U575xx"
+      "deviceDefine": "STM32U575xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585AII6",
@@ -528,7 +709,12 @@
       "mcuName": "STM32U585AIIx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585CIT6",
@@ -542,7 +728,12 @@
       "mcuName": "STM32U585CITx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585CIU6",
@@ -556,7 +747,12 @@
       "mcuName": "STM32U585CIUx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585QII6",
@@ -570,7 +766,12 @@
       "mcuName": "STM32U585QIIx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585RIT6",
@@ -584,7 +785,12 @@
       "mcuName": "STM32U585RITx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585VIT6",
@@ -598,7 +804,12 @@
       "mcuName": "STM32U585VITx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U585ZIT6",
@@ -612,7 +823,12 @@
       "mcuName": "STM32U585ZITx",
       "startup": "startup_stm32u585xx.s",
       "deviceHeader": "stm32u585xx.h",
-      "deviceDefine": "STM32U585xx"
+      "deviceDefine": "STM32U585xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 786432,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595AIH6",
@@ -626,7 +842,12 @@
       "mcuName": "STM32U595AIHx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595AJH6",
@@ -640,7 +861,12 @@
       "mcuName": "STM32U595AJHx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595QII6",
@@ -654,7 +880,12 @@
       "mcuName": "STM32U595QIIx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595QJI6",
@@ -668,7 +899,12 @@
       "mcuName": "STM32U595QJIx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595RIT6",
@@ -682,7 +918,12 @@
       "mcuName": "STM32U595RITx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595RJT6",
@@ -696,7 +937,12 @@
       "mcuName": "STM32U595RJTx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595VIT6",
@@ -710,7 +956,12 @@
       "mcuName": "STM32U595VITx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595VJT6",
@@ -724,7 +975,12 @@
       "mcuName": "STM32U595VJTx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595ZIT6",
@@ -738,7 +994,12 @@
       "mcuName": "STM32U595ZITx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U595ZJT6",
@@ -752,7 +1013,12 @@
       "mcuName": "STM32U595ZJTx",
       "startup": "startup_stm32u595xx.s",
       "deviceHeader": "stm32u595xx.h",
-      "deviceDefine": "STM32U595xx"
+      "deviceDefine": "STM32U595xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U599VJT6",
@@ -766,7 +1032,12 @@
       "mcuName": "STM32U599VJTx",
       "startup": "startup_stm32u599xx.s",
       "deviceHeader": "stm32u599xx.h",
-      "deviceDefine": "STM32U599xx"
+      "deviceDefine": "STM32U599xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5A5AJH6",
@@ -780,7 +1051,12 @@
       "mcuName": "STM32U5A5AJHx",
       "startup": "startup_stm32u5a5xx.s",
       "deviceHeader": "stm32u5a5xx.h",
-      "deviceDefine": "STM32U5A5xx"
+      "deviceDefine": "STM32U5A5xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5A5QJI6",
@@ -794,7 +1070,12 @@
       "mcuName": "STM32U5A5QJIx",
       "startup": "startup_stm32u5a5xx.s",
       "deviceHeader": "stm32u5a5xx.h",
-      "deviceDefine": "STM32U5A5xx"
+      "deviceDefine": "STM32U5A5xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5A5RJT6",
@@ -808,7 +1089,12 @@
       "mcuName": "STM32U5A5RJTx",
       "startup": "startup_stm32u5a5xx.s",
       "deviceHeader": "stm32u5a5xx.h",
-      "deviceDefine": "STM32U5A5xx"
+      "deviceDefine": "STM32U5A5xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5A5VJT6",
@@ -822,7 +1108,12 @@
       "mcuName": "STM32U5A5VJTx",
       "startup": "startup_stm32u5a5xx.s",
       "deviceHeader": "stm32u5a5xx.h",
-      "deviceDefine": "STM32U5A5xx"
+      "deviceDefine": "STM32U5A5xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5A5ZJT6",
@@ -836,7 +1127,12 @@
       "mcuName": "STM32U5A5ZJTx",
       "startup": "startup_stm32u5a5xx.s",
       "deviceHeader": "stm32u5a5xx.h",
-      "deviceDefine": "STM32U5A5xx"
+      "deviceDefine": "STM32U5A5xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5F7VIT6",
@@ -850,7 +1146,12 @@
       "mcuName": "STM32U5F7VITx",
       "startup": "startup_stm32u5f7xx.s",
       "deviceHeader": "stm32u5f7xx.h",
-      "deviceDefine": "STM32U5F7xx"
+      "deviceDefine": "STM32U5F7xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5F7VJT6",
@@ -864,7 +1165,12 @@
       "mcuName": "STM32U5F7VJTx",
       "startup": "startup_stm32u5f7xx.s",
       "deviceHeader": "stm32u5f7xx.h",
-      "deviceDefine": "STM32U5F7xx"
+      "deviceDefine": "STM32U5F7xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     },
     {
       "cpn": "STM32U5G7VJT6",
@@ -878,7 +1184,12 @@
       "mcuName": "STM32U5G7VJTx",
       "startup": "startup_stm32u5g7xx.s",
       "deviceHeader": "stm32u5g7xx.h",
-      "deviceDefine": "STM32U5G7xx"
+      "deviceDefine": "STM32U5G7xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 2555904,
+        "region": "SRAM"
+      }
     }
   ]
 }

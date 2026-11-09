@@ -8,7 +8,13 @@
  * 内存上，烧进去就是 HardFault。所以寄存器路线不从模板拷死脚本，而是改 MEMORY 两行。
  *
  * 时间/复杂度上这也是最省的做法：链接脚本是 ASCII 文本，改两行比引一个链接脚本生成器简单。
+ *
+ * 例外：H7/U5 的 RAM 不是一块连续内存（H7 = DTCM 128K + AXI SRAM；U5 = 主 SRAM + SRAM4@0x28000000）。
+ * 这时 chips.json 的 ramBytes 会把不相邻的区域加在一起，按它写 LENGTH 会让 _estack 落进空洞。
+ * 这类族在 chips.json 里带 linkerRam（连续窗口的 origin/sizeBytes），本文件优先用它并同时改 ORIGIN。
  */
+
+import type { DeviceLinkerRam } from "../data/device-facts.js";
 
 /**
  * 链接脚本只需要这几项事实：Flash/RAM 尺寸 + 一个像样的器件代号。
@@ -23,6 +29,11 @@ export interface RegisterLinkerChip {
   readonly deviceId?: string;
   readonly flashBytes: number | null;
   readonly ramBytes: number | null;
+  /**
+   * 可选：链接脚本真正可用的连续 RAM 窗口（chips.json 的 linkerRam）。
+   * H7/U5 这类 RAM 分区的族必须给；没有就按 ramBytes 整块生成（F1 等连续族的行为不变）。
+   */
+  readonly linkerRam?: DeviceLinkerRam;
 }
 
 /**
@@ -58,6 +69,10 @@ export interface RegisterLinkerPlan {
   fileName: string;
   flashBytes: number;
   ramBytes: number;
+  /** 链接脚本 RAM 的起始地址（F1 等连续族是 0x20000000；H7 是 DTCM 起点）。 */
+  ramOrigin: number;
+  /** linkerRam 的区域名（DTCM / SRAM），只用于摘要与警告文案。 */
+  ramRegion?: string;
   /** RAM 是不是从兜底表来的（false 表示不是精确值，要提醒）。 */
   ramExact: boolean;
   /** 一行摘要（进 main.c 注释与 report）：64K FLASH + 20K RAM。 */
@@ -106,8 +121,18 @@ export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan
     warnings.push("这颗芯片的 Flash 大小没收录（内置资源 chips.json 里这一档没有 flashBytes），链接脚本按 64K 生成；确认后请更新内置资源。");
   }
   const exactRam = chip.ramBytes ?? null;
+  // 连续窗口优先：ramBytes 只是「芯片共有多少 RAM」，H7/U5 里包含不相邻区域。
+  const window = chip.linkerRam !== undefined && chip.linkerRam.sizeBytes > 0 ? chip.linkerRam : null;
   const fallbackKb = RAM_FALLBACK_KB[key];
-  const ramBytes = exactRam !== null ? exactRam : (fallbackKb ?? 20) * 1024;
+  const ramBytes = window !== null ? window.sizeBytes : (exactRam !== null ? exactRam : (fallbackKb ?? 20) * 1024);
+  if (window !== null && exactRam !== null && exactRam > window.sizeBytes) {
+    warnings.push(
+      "这颗芯片共 " + kbOf(exactRam) + "K RAM，但其中有不连续区域；链接脚本按官方连续窗口 0x" +
+        window.origin.toString(16).toUpperCase().padStart(8, "0") + " 起 " + kbOf(window.sizeBytes) + "K 生成，栈顶 = 0x" +
+        (window.origin + window.sizeBytes).toString(16).toUpperCase().padStart(8, "0") +
+        "（" + (window.region ?? "连续 RAM") + "）。需要更多 RAM 时手工在 MEMORY 里加分区，别直接把 LENGTH 改大。",
+    );
+  }
   if (exactRam === null && fallbackKb === undefined) {
     warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请更新内置资源（chips.json 的 ramBytes）。");
   } else if (exactRam === null) {
@@ -119,14 +144,17 @@ export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan
 
   const flashKb = flashBytes > 0 ? kbOf(flashBytes) : 64;
   const ramKb = kbOf(ramBytes);
+  const ramRegion = window?.region;
   return {
     mcu: chip.cpn,
     deviceId,
     fileName: deviceId + "_FLASH.ld",
     flashBytes: flashKb * 1024,
     ramBytes: ramBytes,
-    ramExact: exactRam !== null,
-    summary: flashKb + "K FLASH + " + ramKb + "K RAM",
+    ramOrigin: window?.origin ?? 0x20000000,
+    ...(ramRegion === undefined || ramRegion === "" ? {} : { ramRegion }),
+    ramExact: window !== null || exactRam !== null,
+    summary: flashKb + "K FLASH + " + ramKb + "K RAM" + (ramRegion === undefined || ramRegion === "" ? "" : "（" + ramRegion + "）"),
     warnings,
   };
 }
@@ -135,8 +163,10 @@ export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan
  * 把模板链接脚本里写死 C8T6 的四处改掉：
  *   注释 :9 "Linker script for STM32F103C8Tx series"
  *   注释 :10 "64Kbytes FLASH and 20Kbytes RAM"
- *   MEMORY :58 RAM  LENGTH = 20K
+ *   MEMORY :58 RAM  ORIGIN = 0x20000000, LENGTH = 20K
  *   MEMORY :59 FLASH LENGTH = 64K
+ * RAM 的 ORIGIN 也要改：H7 的连续窗口虽然从 0x20000000 起，但别的族可能有偏移；
+ * 统一按 plan.ramOrigin 写，F1 的输出逐字不变（还是 0x20000000）。
  * 任何一处找不到（模板被人改过）就返回 null，让调用方明确报错，而不是生成一个尺寸错的脚本。
  */
 export function renderLinkerScript(plan: RegisterLinkerPlan, template: string): string | null {
@@ -155,9 +185,11 @@ export function renderLinkerScript(plan: RegisterLinkerPlan, template: string): 
     text = text.replace(commentSizes, "$1" + flashKb + "Kbytes FLASH and " + ramKb + "Kbytes RAM");
     patched++;
   }
-  const ramLine = /^([ \t]*RAM \(xrw\)[ \t]*:[ \t]*ORIGIN = 0x20000000, LENGTH = )[0-9]+[KM][ \t]*$/mu;
+  // ORIGIN 与 LENGTH 一起改：模板写死的 0x20000000 只对连续族成立（H7/U5 靠 linkerRam 给真值）。
+  const ramLine = /^([ \t]*RAM \(xrw\)[ \t]*:[ \t]*ORIGIN = )0x[0-9A-Fa-f]+, LENGTH = [0-9]+[KM][ \t]*$/mu;
   if (ramLine.test(text)) {
-    text = text.replace(ramLine, "$1" + ramKb + "K");
+    const origin = "0x" + Math.trunc(plan.ramOrigin).toString(16).toUpperCase().padStart(8, "0");
+    text = text.replace(ramLine, "$1" + origin + ", LENGTH = " + ramKb + "K");
     patched++;
   }
   const flashLine = /^([ \t]*FLASH \(rx\)[ \t]*:[ \t]*ORIGIN = 0x8000000, LENGTH = )[0-9]+[KM][ \t]*$/mu;

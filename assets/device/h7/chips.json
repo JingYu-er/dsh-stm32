@@ -7,9 +7,10 @@
   "notes": [
     "生成物，不要手改：改数据跑 node scripts/build-assets.mjs（--check 只校验不写盘）。",
     "只写 db 与固件包能算出来的 9 个字段：启动文件 / 设备宏 / 设备头 / 链接脚本名由插件按 line+group 现算（规则见 dsh-stm32 src/data/device-facts.ts 的 namingFrom 与 assets scripts/family-assets.mjs 的 namingOf，两边必须逐字一致）。",
-    "ramBytes 取 db 的 <Ram>：该族官方固件包不带 gcc 链接脚本，没有第二个权威来源；分组跨多个容量字母时这是最小档的值（偏保守）。",
+    "ramBytes 取 db 的 <Ram>：H7 的 RAM 分好几块（DTCM 128K@0x20000000、AXI SRAM@0x24000000、D2/D3 SRAM 各自独立），<Ram> 是它们的总和；分组跨多个容量字母时这是最小档的值（偏保守）。",
     "flashBytes 取 db 的 <Flash>（按分组内容量字母顺序一一对应）；pinCount 取 db 的 Package 属性里的数字（封装总引脚数）。",
-    "group 从该族固件包的启动文件名反推（startup_stm32g431xx.s → xx），不按族级假设。"
+    "group 从该族固件包的启动文件名反推（startup_stm32g431xx.s → xx），不按族级假设。",
+    "linkerRam = 连续 RAM 窗口（H7 全系 128K DTCM@0x20000000，region=DTCM）：取自 ST 官方链接脚本（NUCLEO-H723ZG、NUCLEO-H743ZI 的 DTCM 脚本、NUCLEO-H7A3ZI-Q 的 RAM 行都是 ORIGIN=0x20000000 LENGTH=128K）。_estack 因此是 0x20020000；禁止按 ramBytes 整块生成。"
   ],
   "chips": [
     {
@@ -24,7 +25,12 @@
       "mcuName": "STM32H723VEHx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723VET6",
@@ -38,7 +44,12 @@
       "mcuName": "STM32H723VETx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723VGH6",
@@ -52,7 +63,12 @@
       "mcuName": "STM32H723VGHx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723VGT6",
@@ -66,7 +82,12 @@
       "mcuName": "STM32H723VGTx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723ZEI6",
@@ -80,7 +101,12 @@
       "mcuName": "STM32H723ZEIx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723ZET6",
@@ -94,7 +120,12 @@
       "mcuName": "STM32H723ZETx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723ZGI6",
@@ -108,7 +139,12 @@
       "mcuName": "STM32H723ZGIx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H723ZGT6",
@@ -122,7 +158,12 @@
       "mcuName": "STM32H723ZGTx",
       "startup": "startup_stm32h723xx.s",
       "deviceHeader": "stm32h723xx.h",
-      "deviceDefine": "STM32H723xx"
+      "deviceDefine": "STM32H723xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725AEI6",
@@ -136,7 +177,12 @@
       "mcuName": "STM32H725AEIx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725AGI6",
@@ -150,7 +196,12 @@
       "mcuName": "STM32H725AGIx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725IEK6",
@@ -164,7 +215,12 @@
       "mcuName": "STM32H725IEKx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725IET6",
@@ -178,7 +234,12 @@
       "mcuName": "STM32H725IETx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725IGK6",
@@ -192,7 +253,12 @@
       "mcuName": "STM32H725IGKx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725IGT6",
@@ -206,7 +272,12 @@
       "mcuName": "STM32H725IGTx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725REV6",
@@ -220,7 +291,12 @@
       "mcuName": "STM32H725REVx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725RGV6",
@@ -234,7 +310,12 @@
       "mcuName": "STM32H725RGVx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725VEH6",
@@ -248,7 +329,12 @@
       "mcuName": "STM32H725VEHx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725VET6",
@@ -262,7 +348,12 @@
       "mcuName": "STM32H725VETx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725VGH6",
@@ -276,7 +367,12 @@
       "mcuName": "STM32H725VGHx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725VGT6",
@@ -290,7 +386,12 @@
       "mcuName": "STM32H725VGTx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725VGY6",
@@ -304,7 +405,12 @@
       "mcuName": "STM32H725VGYx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725ZET6",
@@ -318,7 +424,12 @@
       "mcuName": "STM32H725ZETx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H725ZGT6",
@@ -332,7 +443,12 @@
       "mcuName": "STM32H725ZGTx",
       "startup": "startup_stm32h725xx.s",
       "deviceHeader": "stm32h725xx.h",
-      "deviceDefine": "STM32H725xx"
+      "deviceDefine": "STM32H725xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H730VBH6",
@@ -346,7 +462,12 @@
       "mcuName": "STM32H730VBHx",
       "startup": "startup_stm32h730xx.s",
       "deviceHeader": "stm32h730xx.h",
-      "deviceDefine": "STM32H730xx"
+      "deviceDefine": "STM32H730xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H730VBT6",
@@ -360,7 +481,12 @@
       "mcuName": "STM32H730VBTx",
       "startup": "startup_stm32h730xx.s",
       "deviceHeader": "stm32h730xx.h",
-      "deviceDefine": "STM32H730xx"
+      "deviceDefine": "STM32H730xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H730ZBI6",
@@ -374,7 +500,12 @@
       "mcuName": "STM32H730ZBIx",
       "startup": "startup_stm32h730xx.s",
       "deviceHeader": "stm32h730xx.h",
-      "deviceDefine": "STM32H730xx"
+      "deviceDefine": "STM32H730xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H730ZBT6",
@@ -388,7 +519,12 @@
       "mcuName": "STM32H730ZBTx",
       "startup": "startup_stm32h730xx.s",
       "deviceHeader": "stm32h730xx.h",
-      "deviceDefine": "STM32H730xx"
+      "deviceDefine": "STM32H730xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H733VGH6",
@@ -402,7 +538,12 @@
       "mcuName": "STM32H733VGHx",
       "startup": "startup_stm32h733xx.s",
       "deviceHeader": "stm32h733xx.h",
-      "deviceDefine": "STM32H733xx"
+      "deviceDefine": "STM32H733xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H733VGT6",
@@ -416,7 +557,12 @@
       "mcuName": "STM32H733VGTx",
       "startup": "startup_stm32h733xx.s",
       "deviceHeader": "stm32h733xx.h",
-      "deviceDefine": "STM32H733xx"
+      "deviceDefine": "STM32H733xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H733ZGI6",
@@ -430,7 +576,12 @@
       "mcuName": "STM32H733ZGIx",
       "startup": "startup_stm32h733xx.s",
       "deviceHeader": "stm32h733xx.h",
-      "deviceDefine": "STM32H733xx"
+      "deviceDefine": "STM32H733xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H733ZGT6",
@@ -444,7 +595,12 @@
       "mcuName": "STM32H733ZGTx",
       "startup": "startup_stm32h733xx.s",
       "deviceHeader": "stm32h733xx.h",
-      "deviceDefine": "STM32H733xx"
+      "deviceDefine": "STM32H733xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735AGI6",
@@ -458,7 +614,12 @@
       "mcuName": "STM32H735AGIx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735IGK6",
@@ -472,7 +633,12 @@
       "mcuName": "STM32H735IGKx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735IGT6",
@@ -486,7 +652,12 @@
       "mcuName": "STM32H735IGTx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735RGV6",
@@ -500,7 +671,12 @@
       "mcuName": "STM32H735RGVx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735VGH6",
@@ -514,7 +690,12 @@
       "mcuName": "STM32H735VGHx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735VGT6",
@@ -528,7 +709,12 @@
       "mcuName": "STM32H735VGTx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735VGY6",
@@ -542,7 +728,12 @@
       "mcuName": "STM32H735VGYx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H735ZGT6",
@@ -556,7 +747,12 @@
       "mcuName": "STM32H735ZGTx",
       "startup": "startup_stm32h735xx.s",
       "deviceHeader": "stm32h735xx.h",
-      "deviceDefine": "STM32H735xx"
+      "deviceDefine": "STM32H735xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742AGI6",
@@ -570,7 +766,12 @@
       "mcuName": "STM32H742A(G-I)Ix",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742AII6",
@@ -584,7 +785,12 @@
       "mcuName": "STM32H742A(G-I)Ix",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742BGT6",
@@ -598,7 +804,12 @@
       "mcuName": "STM32H742B(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742BIT6",
@@ -612,7 +823,12 @@
       "mcuName": "STM32H742B(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742IGK6",
@@ -626,7 +842,12 @@
       "mcuName": "STM32H742I(G-I)Kx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742IGT6",
@@ -640,7 +861,12 @@
       "mcuName": "STM32H742I(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742IIK6",
@@ -654,7 +880,12 @@
       "mcuName": "STM32H742I(G-I)Kx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742IIT6",
@@ -668,7 +899,12 @@
       "mcuName": "STM32H742I(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742VGH6",
@@ -682,7 +918,12 @@
       "mcuName": "STM32H742V(G-I)Hx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742VGT6",
@@ -696,7 +937,12 @@
       "mcuName": "STM32H742V(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742VIH6",
@@ -710,7 +956,12 @@
       "mcuName": "STM32H742V(G-I)Hx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742VIT6",
@@ -724,7 +975,12 @@
       "mcuName": "STM32H742V(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742XGH6",
@@ -738,7 +994,12 @@
       "mcuName": "STM32H742X(G-I)Hx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742XIH6",
@@ -752,7 +1013,12 @@
       "mcuName": "STM32H742X(G-I)Hx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742ZGT6",
@@ -766,7 +1032,12 @@
       "mcuName": "STM32H742Z(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H742ZIT6",
@@ -780,7 +1051,12 @@
       "mcuName": "STM32H742Z(G-I)Tx",
       "startup": "startup_stm32h742xx.s",
       "deviceHeader": "stm32h742xx.h",
-      "deviceDefine": "STM32H742xx"
+      "deviceDefine": "STM32H742xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743AGI6",
@@ -794,7 +1070,12 @@
       "mcuName": "STM32H743A(G-I)Ix",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743AII6",
@@ -808,7 +1089,12 @@
       "mcuName": "STM32H743A(G-I)Ix",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743BGT6",
@@ -822,7 +1108,12 @@
       "mcuName": "STM32H743BGTx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743BIT6",
@@ -836,7 +1127,12 @@
       "mcuName": "STM32H743BITx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743IGK6",
@@ -850,7 +1146,12 @@
       "mcuName": "STM32H743IGKx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743IGT6",
@@ -864,7 +1165,12 @@
       "mcuName": "STM32H743IGTx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743IIK6",
@@ -878,7 +1184,12 @@
       "mcuName": "STM32H743IIKx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743IIT6",
@@ -892,7 +1203,12 @@
       "mcuName": "STM32H743IITx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743VGH6",
@@ -906,7 +1222,12 @@
       "mcuName": "STM32H743V(G-I)Hx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743VGT6",
@@ -920,7 +1241,12 @@
       "mcuName": "STM32H743VGTx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743VIH6",
@@ -934,7 +1260,12 @@
       "mcuName": "STM32H743V(G-I)Hx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743VIT6",
@@ -948,7 +1279,12 @@
       "mcuName": "STM32H743VITx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743XGH6",
@@ -962,7 +1298,12 @@
       "mcuName": "STM32H743XGHx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743XIH6",
@@ -976,7 +1317,12 @@
       "mcuName": "STM32H743XIHx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743ZGT6",
@@ -990,7 +1336,12 @@
       "mcuName": "STM32H743ZGTx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H743ZIT6",
@@ -1004,7 +1355,12 @@
       "mcuName": "STM32H743ZITx",
       "startup": "startup_stm32h743xx.s",
       "deviceHeader": "stm32h743xx.h",
-      "deviceDefine": "STM32H743xx"
+      "deviceDefine": "STM32H743xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745BGT6",
@@ -1018,7 +1374,12 @@
       "mcuName": "STM32H745BGTx",
       "startup": "startup_stm32h745xg.s",
       "deviceHeader": "stm32h745xg.h",
-      "deviceDefine": "STM32H745xG"
+      "deviceDefine": "STM32H745xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745BIT6",
@@ -1032,7 +1393,12 @@
       "mcuName": "STM32H745BITx",
       "startup": "startup_stm32h745xx.s",
       "deviceHeader": "stm32h745xx.h",
-      "deviceDefine": "STM32H745xx"
+      "deviceDefine": "STM32H745xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745IGK6",
@@ -1046,7 +1412,12 @@
       "mcuName": "STM32H745IGKx",
       "startup": "startup_stm32h745xg.s",
       "deviceHeader": "stm32h745xg.h",
-      "deviceDefine": "STM32H745xG"
+      "deviceDefine": "STM32H745xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745IGT6",
@@ -1060,7 +1431,12 @@
       "mcuName": "STM32H745IGTx",
       "startup": "startup_stm32h745xg.s",
       "deviceHeader": "stm32h745xg.h",
-      "deviceDefine": "STM32H745xG"
+      "deviceDefine": "STM32H745xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745IIK6",
@@ -1074,7 +1450,12 @@
       "mcuName": "STM32H745IIKx",
       "startup": "startup_stm32h745xx.s",
       "deviceHeader": "stm32h745xx.h",
-      "deviceDefine": "STM32H745xx"
+      "deviceDefine": "STM32H745xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745IIT6",
@@ -1088,7 +1469,12 @@
       "mcuName": "STM32H745IITx",
       "startup": "startup_stm32h745xx.s",
       "deviceHeader": "stm32h745xx.h",
-      "deviceDefine": "STM32H745xx"
+      "deviceDefine": "STM32H745xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745XGH6",
@@ -1102,7 +1488,12 @@
       "mcuName": "STM32H745XGHx",
       "startup": "startup_stm32h745xg.s",
       "deviceHeader": "stm32h745xg.h",
-      "deviceDefine": "STM32H745xG"
+      "deviceDefine": "STM32H745xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745XIH6",
@@ -1116,7 +1507,12 @@
       "mcuName": "STM32H745XIHx",
       "startup": "startup_stm32h745xx.s",
       "deviceHeader": "stm32h745xx.h",
-      "deviceDefine": "STM32H745xx"
+      "deviceDefine": "STM32H745xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745ZGT6",
@@ -1130,7 +1526,12 @@
       "mcuName": "STM32H745ZGTx",
       "startup": "startup_stm32h745xg.s",
       "deviceHeader": "stm32h745xg.h",
-      "deviceDefine": "STM32H745xG"
+      "deviceDefine": "STM32H745xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H745ZIT6",
@@ -1144,7 +1545,12 @@
       "mcuName": "STM32H745ZITx",
       "startup": "startup_stm32h745xx.s",
       "deviceHeader": "stm32h745xx.h",
-      "deviceDefine": "STM32H745xx"
+      "deviceDefine": "STM32H745xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747AGI6",
@@ -1158,7 +1564,12 @@
       "mcuName": "STM32H747A(G-I)Ix",
       "startup": "startup_stm32h747xg.s",
       "deviceHeader": "stm32h747xg.h",
-      "deviceDefine": "STM32H747xG"
+      "deviceDefine": "STM32H747xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747AII6",
@@ -1172,7 +1583,12 @@
       "mcuName": "STM32H747A(G-I)Ix",
       "startup": "startup_stm32h747xx.s",
       "deviceHeader": "stm32h747xx.h",
-      "deviceDefine": "STM32H747xx"
+      "deviceDefine": "STM32H747xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747BGT6",
@@ -1186,7 +1602,12 @@
       "mcuName": "STM32H747BGTx",
       "startup": "startup_stm32h747xg.s",
       "deviceHeader": "stm32h747xg.h",
-      "deviceDefine": "STM32H747xG"
+      "deviceDefine": "STM32H747xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747BIT6",
@@ -1200,7 +1621,12 @@
       "mcuName": "STM32H747BITx",
       "startup": "startup_stm32h747xx.s",
       "deviceHeader": "stm32h747xx.h",
-      "deviceDefine": "STM32H747xx"
+      "deviceDefine": "STM32H747xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747IGT6",
@@ -1214,7 +1640,12 @@
       "mcuName": "STM32H747IGTx",
       "startup": "startup_stm32h747xg.s",
       "deviceHeader": "stm32h747xg.h",
-      "deviceDefine": "STM32H747xG"
+      "deviceDefine": "STM32H747xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747IIT6",
@@ -1228,7 +1659,12 @@
       "mcuName": "STM32H747IITx",
       "startup": "startup_stm32h747xx.s",
       "deviceHeader": "stm32h747xx.h",
-      "deviceDefine": "STM32H747xx"
+      "deviceDefine": "STM32H747xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747XGH6",
@@ -1242,7 +1678,12 @@
       "mcuName": "STM32H747XGHx",
       "startup": "startup_stm32h747xg.s",
       "deviceHeader": "stm32h747xg.h",
-      "deviceDefine": "STM32H747xG"
+      "deviceDefine": "STM32H747xG",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747XIH6",
@@ -1256,7 +1697,12 @@
       "mcuName": "STM32H747XIHx",
       "startup": "startup_stm32h747xx.s",
       "deviceHeader": "stm32h747xx.h",
-      "deviceDefine": "STM32H747xx"
+      "deviceDefine": "STM32H747xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H747ZIY6",
@@ -1270,7 +1716,12 @@
       "mcuName": "STM32H747ZIYx",
       "startup": "startup_stm32h747xx.s",
       "deviceHeader": "stm32h747xx.h",
-      "deviceDefine": "STM32H747xx"
+      "deviceDefine": "STM32H747xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H750IBK6",
@@ -1284,7 +1735,12 @@
       "mcuName": "STM32H750IBKx",
       "startup": "startup_stm32h750xx.s",
       "deviceHeader": "stm32h750xx.h",
-      "deviceDefine": "STM32H750xx"
+      "deviceDefine": "STM32H750xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H750IBT6",
@@ -1298,7 +1754,12 @@
       "mcuName": "STM32H750IBTx",
       "startup": "startup_stm32h750xx.s",
       "deviceHeader": "stm32h750xx.h",
-      "deviceDefine": "STM32H750xx"
+      "deviceDefine": "STM32H750xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H750VBT6",
@@ -1312,7 +1773,12 @@
       "mcuName": "STM32H750VBTx",
       "startup": "startup_stm32h750xx.s",
       "deviceHeader": "stm32h750xx.h",
-      "deviceDefine": "STM32H750xx"
+      "deviceDefine": "STM32H750xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H750XBH6",
@@ -1326,7 +1792,12 @@
       "mcuName": "STM32H750XBHx",
       "startup": "startup_stm32h750xx.s",
       "deviceHeader": "stm32h750xx.h",
-      "deviceDefine": "STM32H750xx"
+      "deviceDefine": "STM32H750xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H750ZBT6",
@@ -1340,7 +1811,12 @@
       "mcuName": "STM32H750ZBTx",
       "startup": "startup_stm32h750xx.s",
       "deviceHeader": "stm32h750xx.h",
-      "deviceDefine": "STM32H750xx"
+      "deviceDefine": "STM32H750xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753AII6",
@@ -1354,7 +1830,12 @@
       "mcuName": "STM32H753AIIx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753BIT6",
@@ -1368,7 +1849,12 @@
       "mcuName": "STM32H753BITx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753IIK6",
@@ -1382,7 +1868,12 @@
       "mcuName": "STM32H753IIKx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753IIT6",
@@ -1396,7 +1887,12 @@
       "mcuName": "STM32H753IITx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753VIH6",
@@ -1410,7 +1906,12 @@
       "mcuName": "STM32H753VIHx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753VIT6",
@@ -1424,7 +1925,12 @@
       "mcuName": "STM32H753VITx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753XIH6",
@@ -1438,7 +1944,12 @@
       "mcuName": "STM32H753XIHx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H753ZIT6",
@@ -1452,7 +1963,12 @@
       "mcuName": "STM32H753ZITx",
       "startup": "startup_stm32h753xx.s",
       "deviceHeader": "stm32h753xx.h",
-      "deviceDefine": "STM32H753xx"
+      "deviceDefine": "STM32H753xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H755BIT6",
@@ -1466,7 +1982,12 @@
       "mcuName": "STM32H755BITx",
       "startup": "startup_stm32h755xx.s",
       "deviceHeader": "stm32h755xx.h",
-      "deviceDefine": "STM32H755xx"
+      "deviceDefine": "STM32H755xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H755IIK6",
@@ -1480,7 +2001,12 @@
       "mcuName": "STM32H755IIKx",
       "startup": "startup_stm32h755xx.s",
       "deviceHeader": "stm32h755xx.h",
-      "deviceDefine": "STM32H755xx"
+      "deviceDefine": "STM32H755xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H755IIT6",
@@ -1494,7 +2020,12 @@
       "mcuName": "STM32H755IITx",
       "startup": "startup_stm32h755xx.s",
       "deviceHeader": "stm32h755xx.h",
-      "deviceDefine": "STM32H755xx"
+      "deviceDefine": "STM32H755xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H755XIH6",
@@ -1508,7 +2039,12 @@
       "mcuName": "STM32H755XIHx",
       "startup": "startup_stm32h755xx.s",
       "deviceHeader": "stm32h755xx.h",
-      "deviceDefine": "STM32H755xx"
+      "deviceDefine": "STM32H755xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H755ZIT6",
@@ -1522,7 +2058,12 @@
       "mcuName": "STM32H755ZITx",
       "startup": "startup_stm32h755xx.s",
       "deviceHeader": "stm32h755xx.h",
-      "deviceDefine": "STM32H755xx"
+      "deviceDefine": "STM32H755xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H757AII6",
@@ -1536,7 +2077,12 @@
       "mcuName": "STM32H757AIIx",
       "startup": "startup_stm32h757xx.s",
       "deviceHeader": "stm32h757xx.h",
-      "deviceDefine": "STM32H757xx"
+      "deviceDefine": "STM32H757xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H757BIT6",
@@ -1550,7 +2096,12 @@
       "mcuName": "STM32H757BITx",
       "startup": "startup_stm32h757xx.s",
       "deviceHeader": "stm32h757xx.h",
-      "deviceDefine": "STM32H757xx"
+      "deviceDefine": "STM32H757xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H757IIT6",
@@ -1564,7 +2115,12 @@
       "mcuName": "STM32H757IITx",
       "startup": "startup_stm32h757xx.s",
       "deviceHeader": "stm32h757xx.h",
-      "deviceDefine": "STM32H757xx"
+      "deviceDefine": "STM32H757xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H757XIH6",
@@ -1578,7 +2134,12 @@
       "mcuName": "STM32H757XIHx",
       "startup": "startup_stm32h757xx.s",
       "deviceHeader": "stm32h757xx.h",
-      "deviceDefine": "STM32H757xx"
+      "deviceDefine": "STM32H757xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H757ZIY6",
@@ -1592,7 +2153,12 @@
       "mcuName": "STM32H757ZIYx",
       "startup": "startup_stm32h757xx.s",
       "deviceHeader": "stm32h757xx.h",
-      "deviceDefine": "STM32H757xx"
+      "deviceDefine": "STM32H757xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3IGK6",
@@ -1606,7 +2172,12 @@
       "mcuName": "STM32H7A3I(G-I)Kx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3IGT6",
@@ -1620,7 +2191,12 @@
       "mcuName": "STM32H7A3I(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3IIK6",
@@ -1634,7 +2210,12 @@
       "mcuName": "STM32H7A3I(G-I)Kx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3IIT6",
@@ -1648,7 +2229,12 @@
       "mcuName": "STM32H7A3I(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3NGH6",
@@ -1662,7 +2248,12 @@
       "mcuName": "STM32H7A3N(G-I)Hx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3NIH6",
@@ -1676,7 +2267,12 @@
       "mcuName": "STM32H7A3N(G-I)Hx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3RGT6",
@@ -1690,7 +2286,12 @@
       "mcuName": "STM32H7A3R(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3RIT6",
@@ -1704,7 +2305,12 @@
       "mcuName": "STM32H7A3R(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3VGH6",
@@ -1718,7 +2324,12 @@
       "mcuName": "STM32H7A3V(G-I)Hx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3VGT6",
@@ -1732,7 +2343,12 @@
       "mcuName": "STM32H7A3V(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3VIH6",
@@ -1746,7 +2362,12 @@
       "mcuName": "STM32H7A3V(G-I)Hx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3VIT6",
@@ -1760,7 +2381,12 @@
       "mcuName": "STM32H7A3V(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3ZGT6",
@@ -1774,7 +2400,12 @@
       "mcuName": "STM32H7A3Z(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7A3ZIT6",
@@ -1788,7 +2419,12 @@
       "mcuName": "STM32H7A3Z(G-I)Tx",
       "startup": "startup_stm32h7a3xx.s",
       "deviceHeader": "stm32h7a3xx.h",
-      "deviceDefine": "STM32H7A3xx"
+      "deviceDefine": "STM32H7A3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B0IBT6",
@@ -1802,7 +2438,12 @@
       "mcuName": "STM32H7B0IBTx",
       "startup": "startup_stm32h7b0xx.s",
       "deviceHeader": "stm32h7b0xx.h",
-      "deviceDefine": "STM32H7B0xx"
+      "deviceDefine": "STM32H7B0xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B0RBT6",
@@ -1816,7 +2457,12 @@
       "mcuName": "STM32H7B0RBTx",
       "startup": "startup_stm32h7b0xx.s",
       "deviceHeader": "stm32h7b0xx.h",
-      "deviceDefine": "STM32H7B0xx"
+      "deviceDefine": "STM32H7B0xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B0VBT6",
@@ -1830,7 +2476,12 @@
       "mcuName": "STM32H7B0VBTx",
       "startup": "startup_stm32h7b0xx.s",
       "deviceHeader": "stm32h7b0xx.h",
-      "deviceDefine": "STM32H7B0xx"
+      "deviceDefine": "STM32H7B0xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B0ZBT6",
@@ -1844,7 +2495,12 @@
       "mcuName": "STM32H7B0ZBTx",
       "startup": "startup_stm32h7b0xx.s",
       "deviceHeader": "stm32h7b0xx.h",
-      "deviceDefine": "STM32H7B0xx"
+      "deviceDefine": "STM32H7B0xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3IIK6",
@@ -1858,7 +2514,12 @@
       "mcuName": "STM32H7B3IIKx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3IIT6",
@@ -1872,7 +2533,12 @@
       "mcuName": "STM32H7B3IITx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3NIH6",
@@ -1886,7 +2552,12 @@
       "mcuName": "STM32H7B3NIHx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3RIT6",
@@ -1900,7 +2571,12 @@
       "mcuName": "STM32H7B3RITx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3VIH6",
@@ -1914,7 +2590,12 @@
       "mcuName": "STM32H7B3VIHx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3VIT6",
@@ -1928,7 +2609,12 @@
       "mcuName": "STM32H7B3VITx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     },
     {
       "cpn": "STM32H7B3ZIT6",
@@ -1942,7 +2628,12 @@
       "mcuName": "STM32H7B3ZITx",
       "startup": "startup_stm32h7b3xx.s",
       "deviceHeader": "stm32h7b3xx.h",
-      "deviceDefine": "STM32H7B3xx"
+      "deviceDefine": "STM32H7B3xx",
+      "linkerRam": {
+        "origin": 536870912,
+        "sizeBytes": 131072,
+        "region": "DTCM"
+      }
     }
   ]
 }

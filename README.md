@@ -1,8 +1,8 @@
 # dsh-stm32
 
-> 让 DSH 接管 **STM32 全系列**（27 个族：C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3）的整条开发链：探测工具链 → 建工程 → 改 .ioc（含时钟） → 生成代码 → 编译 → 调试 → 烧录。族画像从 `.ioc` 的 `Mcu.Family` 判定：引脚名、SWD 调试信号名、EXTI 的 NVIC 向量分组、openocd target、硬件断点/观察点预算都随族与内核走；**HAL 建工程**（固件包 / 启动文件 / 设备宏 / 链接脚本 / .ioc 模板 / cmake 与调试配置）已按族实现并覆盖 21 个单核族（C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL）；寄存器版覆盖 13 族（C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / L0 / L1 / L4 / U0）；时钟规划覆盖 18 族（其中 PLL1 四族 H5 / U5 / WBA / L4+），.ioc 外设预设已改为按 CubeMX db 派生；SVD 校验仍只有 F1 —— 未覆盖的能力会**明确拒绝并说明原因**，不会悄悄套 F1 的表（见[已知限制](#已知限制)）。
+> 让 DSH 接管 **STM32 全系列**（27 个族：C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3）的整条开发链：探测工具链 → 建工程 → 改 .ioc（含时钟） → 生成代码 → 编译 → 调试 → 烧录，以及串口交互（`stm32_serial`，Windows P1）。族画像从 `.ioc` 的 `Mcu.Family` 判定：引脚名、SWD 调试信号名、EXTI 的 NVIC 向量分组、openocd target、硬件断点/观察点预算都随族与内核走；**HAL 建工程**（固件包 / 启动文件 / 设备宏 / 链接脚本 / .ioc 模板 / cmake 与调试配置）已按族实现并覆盖 21 个单核族（C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL）；寄存器版覆盖 21 族（C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL；21 族都过了 create→build 编译矩阵，新增 8 族的逐族结果见 development-notes §87.5）；时钟规划覆盖 18 族（其中 PLL1 四族 H5 / U5 / WBA / L4+），.ioc 外设预设已改为按 CubeMX db 派生；SVD 校验仍只有 F1 —— 未覆盖的能力会**明确拒绝并说明原因**，不会悄悄套 F1 的表（见[已知限制](#已知限制)）。
 
-**English:** STM32 across 27 families (C0 / F0 / F1 / … / WL3) for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it. Pin names, SWD debug signals, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint budget all follow the family and its core; HAL scaffolding covers 21 single-core families, the register route 13, clock planning 18 (PLL1 on four families), and .ioc peripheral presets are derived from the CubeMX db; SVD validation is still F1-only, and uncovered capabilities are refused explicitly instead of silently reusing F1 tables.
+**English:** STM32 across 27 families (C0 / F0 / F1 / … / WL3) for DeepSeek Harness — probe the toolchain, scaffold a CMake project, edit .ioc as a transaction, build, flash without starting a debug session, and debug only when you ask for it. Pin names, SWD debug signals, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint budget all follow the family and its core; HAL scaffolding covers 21 single-core families, the register route 21, clock planning 18 (PLL1 on four families), and .ioc peripheral presets are derived from the CubeMX db; SVD validation is still F1-only, and uncovered capabilities are refused explicitly instead of silently reusing F1 tables.
 
 [English](./README_EN.md) · [快速开始](#快速开始最小验证空目录到灯在闪) · [功能一览](#功能一览) · [工具参考](#工具参考) · [斜杠命令](#斜杠命令) · [设计要点](#设计要点) · [已知限制](#已知限制) · [排错](#排错) · [规格书](docs/dsh-stm32-plugin-规格.md)
 
@@ -10,9 +10,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.4-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.5-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 23 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
+这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 24 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
 ## 为什么需要它
 
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
 
-装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.4`；重启后 `/stm32-doctor` 有输出。
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.5`；重启后 `/stm32-doctor` 有输出。
 
 > **芯片事实随插件内置**：设备事实（型号 → 启动文件 / 设备宏 / Flash·RAM 容量）来自包内的 `assets/device/<族>/chips.json`（core 75 个文件、full 105 个文件：芯片表 + 内存布局 + `.ioc` 模板 + 链接脚本 + SVD），装好即可离线使用，不需要联网拉资源包。`stm32_assets verify` 可校验完整性；缺文件通常意味着安装不完整。
 
@@ -70,7 +70,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：736 个离线用例、43 个套件，不需要板子
+npm test                            # 可选：932 个离线用例、59 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
 npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
@@ -128,7 +128,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器——符号名 `TIM2.CNT` / `USART1.SR` / `ADC1.DR`…或物理地址 `0x40000024`；只写外设名 `GPIOC` 就把它的 7 个寄存器整体 dump。也可以 `stm32_debug_eval` 读变量 | 地址写法已上板实测（`0x4001100C` / `0x40010004`）；符号名与位域解释用真实内置 SVD + 假探针验证，**真机待复测**（开发笔记 §31.11） |
 | 出问题要看现场 | `stm32_debug_run` 停在 `main` 抓一次；要连续调就开 `stm32_debug_session` + `stm32_debug_eval` | 已实测（停在 `main () at main.c:67`） |
 
-所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——芯片支持 F1 全系（F100/101/102/103/105/107，本机验证板是 C8T6）但只到 F1、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
+所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——HAL 建工程覆盖 21 个单核族、寄存器建工程覆盖 21 族（本机验证板是 C8T6）、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
 
 ## 功能一览
 
@@ -150,6 +150,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 验证"真的在跑" | `stm32_regs_read`：按地址或符号名（`GPIOC.ODR`）把任意外设寄存器读回来，有 SVD 时顺带解位域（`→ ODR5=1`）；halt 读值后 `resume`，不复位芯片 |
 | 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
 | 变量监视 / 观察点 | `stm32_watch`：`action=add` 登记表达式（`kind=value` 只是采样，不用开会话）；`action=sample` 停下→逐项求值→算 delta→原本在跑就放回；`kind=write/read/access` 装成硬件观察点（gdb `watch`/`rwatch`/`awatch`），受 F1 的 4 个数据比较器预算约束 |
+| 串口交互（Windows P1） | `stm32_serial`：`list` / `open` / `read` / `send` / `transact` / `status` / `close` 七个动作；零 npm 依赖（PowerShell 5.1 + `System.IO.Ports` 常驻桥持有 COM 口），默认 115200 8N1、DTR/RTS 不拉高、`persist=false`、单会话；**不含 GUI 面板、SSE、Linux/macOS 与自动重连**（见[串口](#串口windows-p1)） |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
 ## 工具参考
@@ -162,7 +163,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
-| `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——F1 全系都吃；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
+| `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——21 族都吃（F1 走内置 `stm32f1.ts`，其余走 `CMSIS_FAMILIES`），按芯片给启动文件 / 设备宏 / Flash-RAM 布局；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
 | `stm32_assets` | 管**插件内置资源**（21 个族的芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "list"` / `"verify"` 查看与逐文件校验内置 `assets/`（core 75 个文件、full 105 个文件，随包分发，离线可用）；`"refresh"` 是 `verify` 的别名（不做下载）；`"prune"` 只清 `DSH_STM32_ASSETS` 下遗留的历史版本。缺文件说明安装不完整，重装插件即可 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
@@ -225,6 +226,37 @@ stm32_rtt action=stop                      # 释放端口；turn 结束也会自
 
 启用后 RAM 从 1576 B 涨到 5232 B（3 个 1 KB 环 + 控制块，约占 C8T6 20 KB 的 1/4），FLASH 随 `rtt_printf` 变大（大头是 newlib 的 `vsnprintf`；只要纯文本就改用 `rtt_write` 可以省掉它）。HAL 工程不自带这份源：按 `templates/scaffold/RTT.md` 把 `templates/register/Core/Src/rtt.c` 拷成 `App/rtt.c`、挂进 `cmake/user/CMakeLists.txt`，再照上面三行放进 USER CODE 块。环满时是**整条丢弃**（不写半条），固件侧 `rtt_dropped_count()` 能查丢了多少。
 
+## 串口（Windows P1）
+
+`stm32_serial` 让模型自己开串口、收发、等回包——不用你先开串口助手再复制粘贴。它是 **P1**：只做 Windows 上的最小可用闭环，边界写在下面，不假装能做全。
+
+| 动作 | 做什么 |
+| --- | --- |
+| `list` | 列所有 COM 口：PnP 名称、VID/PID、序列号、位置，以及每个口记住的参数（按 USB 身份记忆，换 USB 口 / 换 COM 号也能复用上次的波特率） |
+| `open` | 起一个常驻 PowerShell 桥并等 `state=open`（最多 5 s）；省略 `port` 时用 `serial.json` 里上次成功的口 |
+| `read` | 读收到的行（`rx.ndjson` 尾部）；给 `cursor`（上次返回的 `nextCursor`）就只拿新行，AI 不会每轮把历史重贴进上下文 |
+| `send` | 发一行，等桥的 `done` 回执（最多 2 s）；默认自动补 CRLF，`raw: true` 原样发 |
+| `transact` | 发一行并等期望的回包：`until` 是正则（如 `OK|ERROR`），命中返回 `matched` / `matchedLine`，等到超时只报 `timedOut` 不算失败 |
+| `status` | 只读快照：会话、桥 pid、`rx.ndjson` / `tx.ndjson` 大小、可能残留的会话目录 |
+| `close` | 先礼后兵：发 `close` 等 3 s，还不退就杀 pid |
+
+默认参数：**115200 8N1、无流控、DTR/RTS 都不拉高（拉高很多板子会复位）、UTF-8、发送补 CRLF**；`persist=false` 表示 turn 结束时自动关口（`persist=true` 才跨 turn 保留）。**单会话**：一个进程同时只开一个口，重复 `open` 报 `already-open` 并提示先 `close`——「同一个口被两个逻辑会话抢」这种最难查的问题在源头就不存在。
+
+```text
+stm32_serial action=list
+stm32_serial action=open port=COM3 baudRate=115200
+stm32_serial action=send text="AT"
+stm32_serial action=transact text="AT" until="OK|ERROR" timeoutMs=1000
+stm32_serial action=read cursor=0
+stm32_serial action=close
+```
+
+**为什么是 PowerShell 桥**：插件有硬性的零 npm 依赖要求，而 Node 没有内建串口；Windows 自带 PowerShell 5.1 + `System.IO.Ports.SerialPort`。所以真正握着 COM 口的是一个独立于工具调用的桥进程（`templates/serial/bridge.ps1`，`spawn` + `unref`——Windows 上不能用 `detached`，那会翻成 `DETACHED_PROCESS`，PowerShell 5.1 直接退出），Node 侧只通过一个目录里的文件跟它说话（`cmd/<id>.json` 进、`done/<id>.json` 回、`rx.ndjson` / `tx.ndjson` 记流水、`status.json` 报状态）。桥每 5 s 查一次父进程：DSH 被杀（关窗口 / 重启宿主）时它自己放口退出——否则那个 COM 口会永远「被占用」。文件位置：`%USERPROFILE%\.dsh-stm32\serial\<sessionId>\`（`DSH_STM32_SERIAL_HOME` 可改根）。
+
+端口参数记忆在 `%USERPROFILE%\.dsh-stm32\serial.json`（`DSH_STM32_SERIAL_CONFIG` 可改），身份按 `usb:VID:PID:序列号` → `usb:VID:PID@位置` → `com:COMx` 三档降级；只有成功的 `open` 才写记忆。失败会带 11 类结构化错误（`unsupported-platform` / `powershell-missing` / `port-not-found` / `port-busy` / `access-denied` / `settings-invalid` / `bridge-start-timeout` / `bridge-crashed` / `disconnected` / `already-open` / `no-session`），每类都给中文 `cause` / `hint`。
+
+**P1 明确不含**：右侧串口面板（本工具只出文本报告，前端不画 UI）、SSE / WebSocket 推流（`read` 是拉取式）、Linux / macOS（桥是 PowerShell，非 Windows 直接 `unsupported-platform`）、**自动重连**（断开后由调用方重新 `open`）。真机成功路径（`state=open`、真实收数、DTR/RTS 实际电平）在 0.1.5 里只有假桥与失败路径证据，见[已知限制](#已知限制)与 development-notes §86。
+
 ## 斜杠命令
 
 工具是给模型调的；你要自己动手时用命令，一条命令一个动作，不经过模型决策。
@@ -255,6 +287,8 @@ stm32_rtt action=stop                      # 释放端口；turn 结束也会自
 - **链接脚本按 `DeviceId` 命名：`<DeviceId>_FLASH.ld`。** C8T6 → `STM32F103C8Tx_FLASH.ld`（64 KiB Flash / 20 KiB RAM），RCT6 → `STM32F103RCTx_FLASH.ld`（256 / 48），F107VCT6 → `STM32F107VCTx_FLASH.ld`（256 / 64）。模板里那份旧的 `STM32F103XX_FLASH.ld` 只作 C8T6 的兼容副本；CMake 的 `-T` 一律指向按型号渲染的那份（`pointLinkerFlagAt()` 把工具链文件里的旧名改指过去，避免两个 `-T` 让 ld 取错脚本）。
 - **时钟就近，不可达就明说。** `stm32_ioc_plan` 的 `clock: { targetHz }`（也可 `pllMul` 钉死倍频、`pllSource` 选 HSE / HSI）枚举全部可行的 PLL 组合，取 |SYSCLK − 目标| 最小的一档，并把差距写进结论：要 60 MHz 时 F1 的 PLL 只能整数倍频、HSE 8 MHz 拼不出这一档，于是选 64 MHz 并标注「不可达，已选 64 MHz（+4 MHz）」（同距取更高档）。同一次 plan 里把 `SYSCLKFreq_VALUE` / `HCLKFre` / `PLLMUL` / APB1·APB2·ADC 分频这些派生键**全量重算**——只改 SYSCLK 不动它们，CubeMX 会按旧值重算或干脆不认；同时列出逐外设频率、UART 波特率的整除误差与几个备选档。超限（SYSCLK > 72 MHz、APB1 > 36 MHz、ADC > 14 MHz、USB 要 48 MHz 却不在 PLLCLK/1.5 这条路上）时**一个键都不写**。
 - **烧前五项一致。** `stm32_doctor` 核对「`.ioc` 型号 ↔ 启动文件名 ↔ cmake 里的设备宏 ↔ `.ld` 的 MEMORY 容量 ↔ `.elf` 的 Flash 占用」，任一错配报 blocker。`.elf` 那份占用是读 ELF program header 的 `p_filesz` 累加，不是文件大小——带 `-g3` 时 20 KiB 固件的 `.elf` 能有 600 KB，按文件大小判会误报「超 Flash」。
+- **寄存器路线按芯片给内存映射，不按族套一张表。** 21 族的启动文件、设备宏、Flash/RAM 都来自 `assets/device/<族>/chips.json`；H7 默认只用 DTCM 128 KiB（`0x20000000`，138 颗都带 `linkerRam`），U5 按 line 给 256 KiB / 768 KiB / 2496 KiB 的 SRAM 窗口，L4+ 与 L5 是单块连续（L5 的 192+64 KiB 相邻，合并成 256 KiB）。链接脚本的 `MEMORY` ORIGIN/LENGTH 随之渲染，`_estack` 落在窗口顶上——不会出现「编译过、上电 HardFault」的静默越界（见 development-notes §87）。
+
 ## 配置
 
 ### 用户配置文件（`~/.dsh-stm32/config.json`）
@@ -370,13 +404,16 @@ C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配�
 | --- | --- | --- |
 | 只在 **Windows** 上验证 | `stm32_generate` 依赖 `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`，Linux/macOS 上的 CubeMX 不是这个形态 | 暂无；烧录/调试/读寄存器在 Linux 上若 openocd 与 gdb 齐全可能可用，但未验证 |
 | **C0 / U0 的 target 脚本是插件自带的** | openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`，插件内置适配版（只把 `dap create … -tap` 换成 `-chain-position`），建工程时复制进工程 `openocd/` | 已用 openocd 0.12 验证脚本能完整加载（只差探针）；**没有 C0/U0 真板烧写证据** |
-| **HAL 建工程覆盖 21 个单核族** | C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL 已按族实现：固件包按族找（`resolveFamilyFirmwareRoot`）、启动文件/设备宏/链接脚本来自内置资源 `assets/device/<族>/chips.json`、`.ioc` 用 `assets/ioc/family/<族>.ioc` 模板（逐族时钟树）、cmake 与 openocd/launch.json 里的 `STM32F1xx`/`stm32f1x` 按族替换。已实测 F4（407VGT6）create→generate→build 出 elf；寄存器路线覆盖 13 族，13 族都过了 create→generate→build 编译验收 | 双核 WB、MP1/MP2/N6、WB0/WL3 不在 HAL 建工程范围；内置资源里没有的族会明确拒绝（`stm32_assets verify` 定位缺件） |
-| 深层能力按族分级 | 族画像覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走；HAL 建工程 21 个单核族，寄存器版 13 族；`.ioc` 外设预设全部查 db（`src/data/db-presets.ts`：串口 / TIM PWM / ADC，手写表只剩 db 表达不了的三类与离线兜底）；时钟规划从 db 派生（`src/data/clock-db.ts`）：pllmul 族 F1/F0/L0 与 pllmn 族 F4/F7/G4/L4 已做往返，PLL1 族 H5/U5/WBA/L4+ 已接入，共 18 族；仍只有 F1 的是 SVD 校验（内置资源只有 `device/f1/svd`） | 未覆盖的能力会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false，或逐条报「这一条为什么不行」），不会悄悄套 F1 表 |
+| **HAL 建工程覆盖 21 个单核族** | C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL 已按族实现：固件包按族找（`resolveFamilyFirmwareRoot`）、启动文件/设备宏/链接脚本来自内置资源 `assets/device/<族>/chips.json`、`.ioc` 用 `assets/ioc/family/<族>.ioc` 模板（逐族时钟树）、cmake 与 openocd/launch.json 里的 `STM32F1xx`/`stm32f1x` 按族替换。已实测 F4（407VGT6）create→generate→build 出 elf；寄存器路线覆盖 21 族，21 族都过了 create→generate→build 编译矩阵，新增 8 族的逐族结果见 development-notes §87.5 | 双核 WB、MP1/MP2/N6、WB0/WL3 不在 HAL 建工程范围；内置资源里没有的族会明确拒绝（`stm32_assets verify` 定位缺件） |
+| 深层能力按族分级 | 族画像覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走；HAL 建工程 21 个单核族，寄存器版 21 族（21 族均过 create→build 编译矩阵；新增 8 族结果见 development-notes §87.5）；`.ioc` 外设预设全部查 db（`src/data/db-presets.ts`：串口 / TIM PWM / ADC，手写表只剩 db 表达不了的三类与离线兜底）；时钟规划从 db 派生（`src/data/clock-db.ts`）：pllmul 族 F1/F0/L0 与 pllmn 族 F4/F7/G4/L4 已做往返，PLL1 族 H5/U5/WBA/L4+ 已接入，共 18 族；仍只有 F1 的是 SVD 校验（内置资源只有 `device/f1/svd`） | 未覆盖的能力会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false，或逐条报「这一条为什么不行」），不会悄悄套 F1 表 |
 | 探针按 USB 实见自动选 | ST-Link → `interface/stlink-dap.cfg`（dapdirect）、DAPLink/CMSIS-DAP → `interface/cmsis-dap.cfg`、J-Link → `interface/jlink.cfg` + `transport select swd`；工程自带 `openocd.cfg` 时以它为准 | 插不同探针不用改配置；要固定就手写 `openocd.cfg` |
 | 新增外设要**手工补 HAL 源** | 插件只落位 CubeMX 的 `Src/` 与 `Inc/`（→ `Core/Src`、`Core/Inc`），CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 不搬；开了定时器/串口/ADC 之后要自己把 `stm32f1xx_hal_<外设>.c` 加进源清单 | 改工程里 `cmake/stm32cubemx/CMakeLists.txt` 的 `STM32_Drivers_Src`，或写进 `cmake/user/CMakeLists.txt` 的 `target_sources` |
 | 生成/建工程需要 **CubeMX + 该族固件包** | F1 默认 `STM32Cube_FW_F1_V1.8.7`；其它族取本机已装的最高版本（`STM32Cube_FW_<族>_V*`） | 换版本传 `firmwarePackage`；缺包装不上就先在 CubeMX 包管理器里装 |
 | 未在别人的机器上验证 | 本机：Windows 10 + MSYS2 UCRT64 + DAPLink + 蓝丸；其余组合靠反馈 | 遇到问题请附 `stm32_doctor` 的完整输出开 issue |
 | **RTT 只有通道 0**，帧是我们自己的约定 | `stm32_rtt` 只解析通道 0，头是 13 字节（4 B 长度 + 1 B 级别 + 8 B 时间戳 + UTF-8 正文）；既不是 defmt，也不是 SEGGER 原生裸字节——原生客户端（RTT Viewer / J-Link RTT Client）读通道 0 会把这 13 字节当正文。RTT 还依赖目标 RAM：不调 `rtt_init()` 就没有控制块，环满时整条丢 | 级别当过滤（`level: 3` 只看 info 以上），结构化内容塞进 `text` 里自己放 JSON；通道数与环大小改 `rtt.h` 的 `RTT_UP_CHANNELS` / `RTT_BUF_SIZE`（默认 3×1 KB = 3 KB `.bss`，C8T6 只有 20 KB）；要 defmt 解码或原生 RTT 输出是另一个功能 |
+| **串口 P1 只在 Windows** | `stm32_serial` 的桥是 PowerShell 5.1 + `System.IO.Ports`（插件零 npm 依赖）；Linux / macOS 直接报 `unsupported-platform`。P1 不含右侧串口面板、SSE 推流、自动重连，一次只开一个口 | 用系统串口工具，或等后续版本的 UI / 跨平台 |
+| **串口成功路径未上真机** | 真桥只验过失败路径（`COM99` → `port-not-found`）；`state=open`、真实收数、DTR/RTS 实际电平、桥 5 s 看门狗与 idle 自动放口都没有硬件证据（假桥按同一契约覆盖） | 插一块板子跑 `list` → `open` → `read` → `close`；细节见 development-notes §86 |
+| **寄存器新增 8 族已通过独立验收** | 0.1.5 把寄存器建工程从 13 族扩到 21 族（+ H5 / H7 / L4+ / L5 / U3 / U5 / WBA / WL）：8 族 `create→build` 矩阵全过（warning 0 / error 0，逐族 FLASH/RAM 见 development-notes §87.5）；H7 的 `-mcpu` 按族生成与 `cachel1_armv7.h` 已随模板修掉 | t8 独立复验已通过（21 族清单、GPIO 门、linkerRam、296 条事实断言、8 族重建全 exit 0，见 development-notes §87.6）；新增 8 族可按 §87.5 的型号试 |
 | **寄存器符号名与位域解释要靠内置 SVD（full 逻辑层）** | `GPIOC.ODR` / `GPIOC->ODR` 与外设 dump（只写 `GPIOC`）都从 `assets/device/f1/svd/<line>.json` 解析（ST SVD 派生，1.71 MiB），只覆盖 100/101/102/103/105/107。没有 SVD 时纯地址照读，只是没有名字和位域；符号名会报错并提示重装插件（full 也随包） | 写 `0x` 开头的地址；或 `stm32_assets verify` 确认安装完整性 |
 
 ## 排错
@@ -401,20 +438,20 @@ C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配�
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 43 个离线套件、736 个用例；不需要板子、CubeMX、工具链
+npm test                 # 59 个离线套件、932 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
 npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **736 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **932 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 
 | 放哪 | 内容 | 量级 |
 | --- | --- | --- |
-| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`assets/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 265 个文件 / 1750.3 KB，解包 14901.3 KB；`assets/**` 源文件 12.5 MB（headers 压缩率高） |
+| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`assets/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 269 个文件 / 1800.6 KB，解包 15094.8 KB；`assets/**` 源文件 12.5 MB（headers 压缩率高） |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
 | 内置（随包） | 设备事实层（21 个族的 `device/<族>/chips.json`）、`.ioc` 模板、`.ld`、SVD、startup、headers——core 75 个文件、full 105 个文件，随 npm 包分发，离线可用 | `stm32_assets list/verify` 查看与校验；`prune` 只清历史外部版本 |
 | 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包 | 缓存可用 `stm32_cache list/verify/purge` 管 |
@@ -436,13 +473,13 @@ node test\e2e-flash.mjs
 ```text
 src/
   index.ts                 插件入口（name / inject / apply）
-  tools/                   23 个工具的 L3 层（参数 schema + 输出契约 + 渲染）
+  tools/                   24 个注册工具的 L3 层（23 个文件：参数 schema + 输出契约 + 渲染）
   engine/                  纯逻辑与工作流（generate / build / flash / debug / ioc / scaffold …）
   commands/register.ts     7 条斜杠命令
   skill/stm32-workflow.ts  随插件下发的 SKILL
   data/                    路径与芯片数据（路径是数据不是逻辑）
 templates/scaffold/        建工程用的模板快照（CMake / .ld / .vscode / .ioc）
-test/                      离线套件（36 个，run-units 登记）+ fixtures + 真机 e2e
+test/                      离线套件（59 个，run-units 登记）+ fixtures + 真机 e2e
 scripts/                   护栏与生成脚本（pack-size / pack-smoke / gen-xcube-catalog / copy-client）
 docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/（不进 npm 包）
 ```
@@ -452,6 +489,7 @@ docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/�
 - [规格书](docs/dsh-stm32-plugin-规格.md)：工具契约、状态机、验收 A1–A13 的判定标准
 - [开发笔记](docs/development-notes.md)：里程碑、宿主契约踩坑、每个工具的实现细节与实测数据
 - [源码精读指南](docs/reading-guide.md)：分层阅读顺序、每个文件的职责与关键导出、14 张流程图、23 条不变量
+- [发布说明 0.1.5](docs/release-notes/v0.1.5.md)：串口 P1、寄存器 21 族与验收记录（0.1.4 及更早见 git 历史）
 - 可视化：[架构总览](docs/diagrams/dsh-stm32-architecture.html) / [主线旅程](docs/diagrams/dsh-stm32-journey.html)（单文件 HTML，离线可开，可导出 PNG/SVG）
 
 ## 许可证

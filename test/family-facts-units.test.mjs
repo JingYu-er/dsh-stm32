@@ -247,12 +247,13 @@ test("族画像的 HAL 能力：21 个单核族放行，双核/MPU/范围外的�
   for (const family of ["STM32WB", "STM32WB0", "STM32WL3", "STM32MP1", "STM32MP2", "STM32N6"]) {
     assert.equal(familyProfileOf(family).capabilities.halScaffold, false, family + " 不该宣称支持 HAL 建工程");
   }
-  // 寄存器版模板：资源包有 chips.json 的 13 族（C0/F0/F1/F2/F3/F4/F7/G0/G4/L0/L1/L4/U0）放行，
-  // 其余族即便 HAL 放行也不该宣称寄存器版（能力闸门别被 HAL 的放行带跑）。
-  for (const family of ["STM32C0", "STM32F0", "STM32F1", "STM32F2", "STM32F3", "STM32F4", "STM32F7", "STM32G0", "STM32G4", "STM32L0", "STM32L1", "STM32L4", "STM32U0"]) {
+  // 寄存器版模板：资源包有 chips.json 的 21 族（这一次把 H5/H7/L4+/L5/U3/U5/WBA/WL 八族补进了
+  // CMSIS 下载清单）放行；其余族即便 HAL 放行也不该宣称寄存器版（能力闸门别被 HAL 的放行带跑）。
+  for (const family of ["STM32C0", "STM32F0", "STM32F1", "STM32F2", "STM32F3", "STM32F4", "STM32F7", "STM32G0", "STM32G4", "STM32H5", "STM32H7", "STM32L0", "STM32L1", "STM32L4", "STM32L4+", "STM32L5", "STM32U0", "STM32U3", "STM32U5", "STM32WBA", "STM32WL"]) {
     assert.equal(familyProfileOf(family).capabilities.registerScaffold, true, family + " 应支持寄存器版建工程");
   }
-  for (const family of ["STM32H5", "STM32H7", "STM32L5", "STM32U5", "STM32WBA"]) {
+  // WB 是双核、WB0/WL3 内置资源还没有 chips.json，MP1/MP2/N6 不在建工程范围里。
+  for (const family of ["STM32WB", "STM32WB0", "STM32WL3", "STM32MP1", "STM32MP2", "STM32N6"]) {
     assert.equal(familyProfileOf(family).capabilities.registerScaffold, false, family + " 没有 CMSIS 下载清单，不该宣称寄存器版");
   }
 });

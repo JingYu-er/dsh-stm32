@@ -250,7 +250,7 @@ function envText(rows: readonly { capability: ToolchainCapability; gate: GateRes
   return { kind: "success", text: lines.join("\n") };
 }
 
-/** 注册六条斜杠命令；宿主没组合 commands 服务时直接返回（工具不受影响）。 */
+/** 注册七条斜杠命令；宿主没组合 commands 服务时直接返回（工具不受影响）。 */
 export function registerCommands(ctx: DshContext): void {
   const commands = ctx.commands;
   if (commands === undefined) return;

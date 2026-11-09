@@ -128,8 +128,8 @@ const HAL_CAPS: Stm32FamilyCapabilities = { ...NO_CAPS, halScaffold: true };
 const HAL_REG_CAPS: Stm32FamilyCapabilities = { ...HAL_CAPS, registerScaffold: true };
 
 /** 还没做 HAL 支持的族（双核 / MPU / 范围外）：说明为什么，别让工具悄悄退化。 */
-const PENDING_HAL = "HAL 建工程只支持 22 个单核族（C0/F0/F1/F2/F3/F4/F7/G0/G4/H5/H7/L0/L1/L4/L4+/L5/U0/U3/U5/WBA/WL，另加双核的 WB 只建 M4 核），本族不在其中";
-const PENDING_REG = "寄存器版模板（CMSIS 头 + 启动文件）目前只有 F1 与内置资源已有芯片表的 13 族（C0/F0/F1/F2/F3/F4/F7/G0/G4/L0/L1/L4/U0）";
+const PENDING_HAL = "HAL 建工程只支持 21 个单核族（C0/F0/F1/F2/F3/F4/F7/G0/G4/H5/H7/L0/L1/L4/L4+/L5/U0/U3/U5/WBA/WL，另加双核的 WB 只建 M4 核），本族不在其中";
+const PENDING_REG = "寄存器版模板（CMSIS 头 + 启动文件）目前覆盖内置资源已有芯片表的 21 族（C0/F0/F1/F2/F3/F4/F7/G0/G4/H5/H7/L0/L1/L4/L4+/L5/U0/U3/U5/WBA/WL），本族不在其中";
 const REG_OK = "寄存器版已按族打通（CMSIS 头 + 启动文件 + 按族 GPIO；时钟留复位默认）";
 const PENDING_PRESET = ".ioc 外设预设表目前只有 F1（下一步按族从 db 的 RefParameter 生成）";
 const PENDING_CLOCK = "时钟规划目前只按 F1 的 RCC/PLL 实现";
@@ -143,8 +143,8 @@ const NO_SVD = "内置资源只有 F1 的 SVD（中断名/寄存器名校验暂�
  * 用户看不出到底哪一项挡住了他。
  */
 export const CAPABILITY_GAPS: Readonly<Record<keyof Stm32FamilyCapabilities, string>> = {
-  halScaffold: "HAL 建工程（模板/启动文件/链接脚本/设备宏）按 22 个单核族的固件包实现",
-  registerScaffold: "寄存器版模板（CMSIS 头 + 启动文件）只有内置资源已有芯片表的 13 族：C0/F0/F1/F2/F3/F4/F7/G0/G4/L0/L1/L4/U0",
+  halScaffold: "HAL 建工程（模板/启动文件/链接脚本/设备宏）按 21 个单核族的固件包实现",
+  registerScaffold: "寄存器版模板（CMSIS 头 + 启动文件）覆盖内置资源已有芯片表的 21 族：C0/F0/F1/F2/F3/F4/F7/G0/G4/H5/H7/L0/L1/L4/L4+/L5/U0/U3/U5/WBA/WL",
   iocPresets: "手写 .ioc 预设表只有 F1（其它族靠 db 派生 USART/UART/LPUART，TIM/ADC/DMA 仍需手写键）",
   clockPlan: "时钟规划只按 F1 的 RCC/PLL 键实现",
   svdValidation: "中断名/寄存器名校验要该族的 SVD，内置资源目前只有 F1 的",
@@ -200,11 +200,11 @@ const PROFILES: readonly Stm32FamilyProfile[] = [
     note: REG_OK + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
   }),
   profile({
-    id: "STM32H5", line: "H5", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_H5", caps: HAL_CAPS,
+    id: "STM32H5", line: "H5", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_H5", caps: HAL_REG_CAPS,
     note: "openocd 0.12 只有 stm32x5x_common.cfg（公共片段），没有 h5x 目标脚本 —— 不能用 u5x 顶替",
   }),
   profile({
-    id: "STM32H7", line: "H7", core: "Cortex-M7", target: "stm32h7x", firmware: "STM32Cube_FW_H7", caps: HAL_CAPS,
+    id: "STM32H7", line: "H7", core: "Cortex-M7", target: "stm32h7x", firmware: "STM32Cube_FW_H7", caps: HAL_REG_CAPS,
     note: "双 bank 器件可用 openocd.cfg 里改 source target/stm32h7x_dual_bank.cfg" + "；" + PENDING_CLOCK,
   }),
   profile({
@@ -220,12 +220,12 @@ const PROFILES: readonly Stm32FamilyProfile[] = [
     note: REG_OK + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
   }),
   profile({
-    id: "STM32L4+", line: "L4+", core: "Cortex-M4", target: "stm32l4x", firmware: "STM32Cube_FW_L4", caps: HAL_CAPS,
+    id: "STM32L4+", line: "L4+", core: "Cortex-M4", target: "stm32l4x", firmware: "STM32Cube_FW_L4", caps: HAL_REG_CAPS,
     note: "L4+ 零件（L4P5/L4Q5/L4R5/L4S5…）共用 STM32Cube_FW_L4 固件包与 openocd 的 stm32l4x.cfg" + "；" + PENDING_CLOCK,
   }),
   profile({
-    id: "STM32L5", line: "L5", core: "Cortex-M33", target: "stm32l5x", firmware: "STM32Cube_FW_L5", caps: HAL_CAPS,
-    note: PENDING_REG + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
+    id: "STM32L5", line: "L5", core: "Cortex-M33", target: "stm32l5x", firmware: "STM32Cube_FW_L5", caps: HAL_REG_CAPS,
+    note: REG_OK + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
   }),
   profile({
     id: "STM32MP1", line: "MP1", core: "Cortex-A7", target: "stm32mp15x", firmware: "STM32Cube_FW_MP1",
@@ -244,12 +244,12 @@ const PROFILES: readonly Stm32FamilyProfile[] = [
     note: "openocd 0.12 没有 u0 目标脚本：插件内置一份适配 0.12 的脚本（templates/openocd/stm32u0x.cfg）",
   }),
   profile({
-    id: "STM32U3", line: "U3", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_U3", caps: HAL_CAPS,
+    id: "STM32U3", line: "U3", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_U3", caps: HAL_REG_CAPS,
     note: "openocd 0.12 没有 u3 目标脚本",
   }),
   profile({
-    id: "STM32U5", line: "U5", core: "Cortex-M33", target: "stm32u5x", firmware: "STM32Cube_FW_U5", caps: HAL_CAPS,
-    note: PENDING_REG + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
+    id: "STM32U5", line: "U5", core: "Cortex-M33", target: "stm32u5x", firmware: "STM32Cube_FW_U5", caps: HAL_REG_CAPS,
+    note: REG_OK + "；" + PENDING_PRESET + "；" + PENDING_CLOCK + "；" + NO_SVD,
   }),
   profile({
     id: "STM32WB", line: "WB", core: "Cortex-M4", target: "stm32wbx", firmware: "STM32Cube_FW_WB",
@@ -260,11 +260,11 @@ const PROFILES: readonly Stm32FamilyProfile[] = [
     note: "openocd 0.12 没有 wb0 目标脚本；固件包名未确认（STM32CubeWB0 还是并入 WB），运行时不去猜",
   }),
   profile({
-    id: "STM32WBA", line: "WBA", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_WBA", caps: HAL_CAPS,
+    id: "STM32WBA", line: "WBA", core: "Cortex-M33", target: null, firmware: "STM32Cube_FW_WBA", caps: HAL_REG_CAPS,
     note: "openocd 0.12 没有 wba 目标脚本",
   }),
   profile({
-    id: "STM32WL", line: "WL", core: "Cortex-M4", target: "stm32wlx", firmware: "STM32Cube_FW_WL", caps: HAL_CAPS,
+    id: "STM32WL", line: "WL", core: "Cortex-M4", target: "stm32wlx", firmware: "STM32Cube_FW_WL", caps: HAL_REG_CAPS,
     note: "Sub-GHz 无线：M4 应用核可建工程/调试，射频部分不碰" + "；" + PENDING_CLOCK,
   }),
   profile({

@@ -1,6 +1,6 @@
 # dsh-stm32
 
-> Hand the whole **STM32 family** (27 families: C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3) development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc (clocks included) → generate code → build → debug → flash. The family is read from the .ioc's `Mcu.Family`: pin names, SWD debug signal names, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint/watchpoint budget all follow the family and its core. **HAL scaffolding** (firmware package, startup file, device define, linker script, .ioc template, cmake and debug configuration) is implemented per family for the 21 single-core families (C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL); the register route covers 13 families; clock planning covers 18 families (PLL1 on H5 / U5 / WBA / L4+), .ioc peripheral presets are derived from the CubeMX db, and SVD validation is still F1-only — uncovered capabilities are refused with a reason instead of silently reusing F1 tables (see [Known limitations](#known-limitations)).
+> Hand the whole **STM32 family** (27 families: C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / MP1 / MP2 / N6 / U0 / U3 / U5 / WB / WB0 / WBA / WL / WL3) development chain to DSH: probe the toolchain → scaffold a project → edit the .ioc (clocks included) → generate code → build → debug → flash, plus serial interaction (`stm32_serial`, Windows P1). The family is read from the .ioc's `Mcu.Family`: pin names, SWD debug signal names, EXTI NVIC vector grouping, the openocd target and the hardware breakpoint/watchpoint budget all follow the family and its core. **HAL scaffolding** (firmware package, startup file, device define, linker script, .ioc template, cmake and debug configuration) is implemented per family for the 21 single-core families (C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL); the register route covers 21 families, all verified through create→build (the per-family results for the 8 new ones are in development-notes §87.5); clock planning covers 18 families (PLL1 on H5 / U5 / WBA / L4+), .ioc peripheral presets are derived from the CubeMX db, and SVD validation is still F1-only — uncovered capabilities are refused with a reason instead of silently reusing F1 tables (see [Known limitations](#known-limitations)).
 
 [中文](./README.md) · [Quick start](#quick-start-a-minimal-end-to-end-check-empty-directory-to-a-blinking-led) · [Features](#features) · [Tool reference](#tool-reference) · [Slash commands](#slash-commands) · [Design notes](#design-notes) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [Specification](docs/dsh-stm32-plugin-规格.md)
 
@@ -8,9 +8,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.4-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.5-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 23 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 24 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.4`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.5`); after a restart `/stm32-doctor` should respond.
 
 > **Chip facts ship with the plugin**: device facts (part → startup file / device define / Flash·RAM size) come from `assets/device/<family>/chips.json` inside the package (75 files for `core`, 105 for `full`: chip tables + memory layout + `.ioc` templates + linker scripts + SVD). Everything works offline once installed — no asset-pack download. Run `stm32_assets verify` to check integrity; missing files usually mean an incomplete install.
 
@@ -69,7 +69,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 736 offline cases in 43 suites, no board needed
+npm test                            # optional: 932 offline cases in 59 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
@@ -127,7 +127,7 @@ The blinking LED is the **smallest smoke test** for this chain: it walks create 
 | Confirm a peripheral is really running after flashing | `stm32_regs_read` reads any peripheral register — by name `TIM2.CNT` / `USART1.SR` / `ADC1.DR` … or by physical address `0x40000024`; naming just the peripheral (`GPIOC`) dumps all 7 of its registers. `stm32_debug_eval` reads variables too | Address form verified on hardware (`0x4001100C` / `0x40010004`); symbol names and bit-field decoding verified against the real bundled SVDs with a fake probe, **hardware re-test pending** (development notes §31.11) |
 | Something is wrong and you need the live state | `stm32_debug_run` halts at `main` for one snapshot; use `stm32_debug_session` + `stm32_debug_eval` for continuous debugging | Verified (halts at `main () at main.c:67`) |
 
-So the blinking LED is the acceptance sample, not the ceiling: **this covers the whole engineering chain, not one demo.** The real boundaries are the ones under [Known limitations](#known-limitations) — the STM32F1 family only (F100/101/102/103/105/107; the verified board is a C8T6), verified on Windows only, CMSIS-DAP by default, plus the manual HAL-source step above. Peripheral types themselves are not limited by the tools: whatever the `.ioc` can configure goes through the same generate → build → flash → read-back chain; it just has not been tested peripheral by peripheral yet, so run `stm32_doctor` before starting a real project.
+So the blinking LED is the acceptance sample, not the ceiling: **this covers the whole engineering chain, not one demo.** The real boundaries are the ones under [Known limitations](#known-limitations) — HAL scaffolding covers 21 single-core families and the register route covers 21 families (the verified board is a C8T6), verified on Windows only, CMSIS-DAP by default, plus the manual HAL-source step above. Peripheral types themselves are not limited by the tools: whatever the `.ioc` can configure goes through the same generate → build → flash → read-back chain; it just has not been tested peripheral by peripheral yet, so run `stm32_doctor` before starting a real project.
 
 ## Features
 
@@ -149,6 +149,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Prove it is running | `stm32_regs_read`: reads any peripheral register back by address or symbol name (`GPIOC.ODR`), decoding bit fields when SVD data is installed (`→ ODR5=1`); halts, reads, then `resume` — no chip reset |
 | Variable watch / watchpoints | `stm32_watch`: `action=add` registers expressions (`kind=value` is sampling only and needs no session); `action=sample` halts, evaluates each expression, computes the delta, and resumes if the target was running; `kind=write/read/access` installs hardware watchpoints (gdb `watch`/`rwatch`/`awatch`), bounded by the F1's 4 data comparators |
 | Firmware logs (RTT) | `stm32_rtt`: a SEGGER-shaped control block in RAM, openocd `rtt setup/start/server start` turns channel 0 into a TCP stream, and a 13-byte frame header carries level and timestamp — no UART, no rewiring |
+| Serial interaction (Windows P1) | `stm32_serial`: `list` / `open` / `read` / `send` / `transact` / `status` / `close`; zero npm dependencies (a PowerShell 5.1 + `System.IO.Ports` bridge holds the COM port), default 115200 8N1, DTR/RTS not asserted, `persist=false`, one session at a time; **no GUI panel, no SSE, no Linux/macOS, no auto-reconnect** (see [Serial](#serial-windows-p1)) |
 | Working discipline for the model | SKILL `stm32-workflow` shipped with the plugin (USER CODE only, never touch generated regions, flash and debug are separate, claims need register evidence) |
 
 ## Tool reference
@@ -224,6 +225,37 @@ stm32_rtt action=stop                      # releases the port; also runs at tur
 
 Enabling it moves RAM from 1576 B to 5232 B (three 1 KB rings plus the control block, about a quarter of the C8T6's 20 KB); FLASH grows with `rtt_printf` (mostly newlib's `vsnprintf` — use `rtt_write` for plain text to avoid it). HAL projects do not ship this source: follow `templates/scaffold/RTT.md`, copy `templates/register/Core/Src/rtt.c` to `App/rtt.c`, wire it into `cmake/user/CMakeLists.txt`, then add the same three lines to the USER CODE block. When a ring is full the **whole record is dropped** (never half of one) and `rtt_dropped_count()` reports the loss.
 
+## Serial (Windows P1)
+
+`stm32_serial` lets the model open a serial port, send, receive and wait for replies itself — no serial terminal on the side, no copy-paste. This is **P1**: the smallest end-to-end loop, Windows only, with the boundaries stated below.
+
+| Action | What it does |
+| --- | --- |
+| `list` | Every COM port with its PnP name, VID/PID, serial number and location, plus the settings remembered for that port (keyed by USB identity, so a different USB socket or COM number still finds the last baud rate) |
+| `open` | Starts the resident PowerShell bridge and waits for `state=open` (up to 5 s); omit `port` to reuse the last successful port from `serial.json` |
+| `read` | Reads received lines from the tail of `rx.ndjson`; pass the previous `nextCursor` as `cursor` to get only new lines, so the model never re-pastes history into context |
+| `send` | Sends one line and waits for the bridge's `done` ack (up to 2 s); CRLF is appended by default, `raw: true` sends verbatim |
+| `transact` | Sends a line and waits for an expected reply: `until` is a regex (e.g. `OK|ERROR`); on a hit it returns `matched` / `matchedLine`, on timeout it only reports `timedOut` — not a failure |
+| `status` | Read-only snapshot: session, bridge pid, `rx.ndjson` / `tx.ndjson` sizes, session directories that may have been left behind |
+| `close` | Graceful first: sends `close`, waits 3 s, then kills the pid |
+
+Defaults: **115200 8N1, no flow control, DTR and RTS both de-asserted (asserting them resets many boards), UTF-8, CRLF appended on send**; `persist=false` closes the port at turn end (`persist=true` keeps it across turns). **One session at a time**: a second `open` returns `already-open` and asks you to `close` first — the "two logical sessions fighting over one port" class of bug cannot happen.
+
+```text
+stm32_serial action=list
+stm32_serial action=open port=COM3 baudRate=115200
+stm32_serial action=send text="AT"
+stm32_serial action=transact text="AT" until="OK|ERROR" timeoutMs=1000
+stm32_serial action=read cursor=0
+stm32_serial action=close
+```
+
+**Why a PowerShell bridge**: the plugin has a hard zero-npm-dependency rule and Node ships no serial support; Windows ships PowerShell 5.1 and `System.IO.Ports.SerialPort`. The process that actually holds the COM port is therefore a bridge independent of the tool call (`templates/serial/bridge.ps1`, started with `spawn` + `unref` — not `detached`, which maps to `DETACHED_PROCESS` on Windows and makes PowerShell 5.1 exit immediately). The Node side only talks to it through files in one directory: `cmd/<id>.json` in, `done/<id>.json` back, `rx.ndjson` / `tx.ndjson` for the streams, `status.json` for state. The bridge checks its parent every 5 s: if DSH dies (window closed, host restarted) it releases the port and exits — otherwise that COM port would stay "in use" forever. Location: `%USERPROFILE%\.dsh-stm32\serial\<sessionId>\` (`DSH_STM32_SERIAL_HOME` moves the root).
+
+Port settings are remembered in `%USERPROFILE%\.dsh-stm32\serial.json` (`DSH_STM32_SERIAL_CONFIG` overrides it), keyed by `usb:VID:PID:serial` → `usb:VID:PID@location` → `com:COMx`, three levels of fallback; only a successful `open` writes them. Failures carry one of 11 structured kinds (`unsupported-platform` / `powershell-missing` / `port-not-found` / `port-busy` / `access-denied` / `settings-invalid` / `bridge-start-timeout` / `bridge-crashed` / `disconnected` / `already-open` / `no-session`) with a `cause` / `hint` / `evidence` / `retryable` payload.
+
+**P1 explicitly does not include**: a serial panel in the UI (the tool returns text only), SSE / WebSocket streaming (`read` is pull-based), Linux / macOS (the bridge is PowerShell; other hosts get `unsupported-platform`), or **auto-reconnect** (reopen after a disconnect). The real-hardware success path — `state=open`, actual received bytes, real DTR/RTS levels — has only fake-bridge and failure-path evidence in 0.1.5; see [Known limitations](#known-limitations) and development-notes §86.
+
 ## Slash commands
 
 Tools are for the model; when you want to act yourself, use a command — one command, one action, no model decision in between.
@@ -250,9 +282,10 @@ Tools are for the model; when you want to act yourself, use a command — one co
 
 ## Chips, linker scripts and clocks
 
-- **The part is a parameter, not a constant.** `stm32_project_create` / `stm32_generate` swap three things together from `mcu`: the startup file (`startup_stm32f103xe.s`), the device define (`STM32F103xE`) and the linker script (`STM32F103RCTx_FLASH.ld`). The HAL route goes through `src/engine/hal-chip.ts` (`resolveHalChip()` + `renderStartupAndDefine` / `renderLinkerScript` / `renderIoc`); the register route goes through `src/data/stm32f1.ts` (`resolveF1Chip()`, 14 density grades, every startup file pinned by upstream sha256). An unknown part returns a reason instead of inventing a startup file that does not exist upstream.
+- **The part is a parameter, not a constant.** `stm32_project_create` / `stm32_generate` swap three things together from `mcu`: the startup file (`startup_stm32f103xe.s`), the device define (`STM32F103xE`) and the linker script (`STM32F103RCTx_FLASH.ld`). The HAL route goes through `src/engine/hal-chip.ts` (`resolveHalChip()` + `renderStartupAndDefine` / `renderLinkerScript` / `renderIoc`); the register route resolves F1 through `src/data/stm32f1.ts` (`resolveF1Chip()`, 14 density grades, every startup file pinned by upstream sha256) and the other 20 families through `CMSIS_FAMILIES` in `src/data/cmsis-sources.ts` plus their bundled `assets/device/<family>/chips.json`. An unknown part returns a reason instead of inventing a startup file that does not exist upstream.
 - **Linker scripts are named after the `DeviceId`: `<DeviceId>_FLASH.ld`.** C8T6 → `STM32F103C8Tx_FLASH.ld` (64 KiB Flash / 20 KiB RAM), RCT6 → `STM32F103RCTx_FLASH.ld` (256 / 48), F107VCT6 → `STM32F107VCTx_FLASH.ld` (256 / 64). The old `STM32F103XX_FLASH.ld` in the template survives only as a C8T6 compatibility copy; CMake's `-T` always points at the rendered one (`pointLinkerFlagAt()` rewrites the old name inside the toolchain file so you never end up with two `-T` flags and the wrong script).
 - **Clocks: nearest, and say so when unreachable.** `stm32_ioc_plan`'s `clock: { targetHz }` (or `pllMul` to pin the multiplier, `pllSource` to pick HSE / HSI) enumerates every reachable PLL combination, takes the one with the smallest |SYSCLK − target| and states the gap: for 60 MHz the F1 PLL only multiplies integers and HSE 8 MHz cannot hit that step, so it picks 64 MHz and reports "unreachable, chose 64 MHz (+4 MHz)" (ties go to the higher step). The same plan **recomputes every derived key** (`SYSCLKFreq_VALUE`, `HCLKFre`, `PLLMUL`, APB1/APB2/ADC dividers) — changing only SYSCLK leaves CubeMX recomputing from stale values or ignoring them — and lists per-peripheral frequencies, UART baud error and a few alternatives. On an out-of-range request (SYSCLK > 72 MHz, APB1 > 36 MHz, ADC > 14 MHz, USB wanting 48 MHz outside PLLCLK/1.5) it **writes no key at all**.
+- **The register route maps memory per chip, not per family template.** Startup file, device define and Flash/RAM all come from `assets/device/<family>/chips.json` for the 21 families; H7 uses only the 128 KiB DTCM (`0x20000000`) by default — all 138 parts carry a `linkerRam` window — U5 follows the per-line SRAM window (256 / 768 / 2496 KiB), while L4+ and L5 are single contiguous blocks (L5's 192 + 64 KiB are adjacent and merge to 256 KiB). The rendered `MEMORY` ORIGIN/LENGTH and `_estack` follow that window, so "builds fine, HardFaults on boot" from silent RAM overflow does not happen (see development-notes §87).
 - **Five consistency checks before flashing.** `stm32_doctor` cross-checks `.ioc` part ↔ startup file name ↔ device define in cmake ↔ `.ld` MEMORY sizes ↔ `.elf` Flash usage, and reports a blocker on any mismatch. The `.elf` figure sums `p_filesz` from the ELF program headers rather than using the file size — with `-g3` a 20 KiB firmware produces a 600 KB `.elf`, which would false-alarm "over Flash".
 ## Configuration
 
@@ -365,12 +398,15 @@ C0 / U0 have no official script in openocd 0.12, so the plugin ships adapted cop
 | --- | --- | --- |
 | Only verified on **Windows** | `stm32_generate` depends on `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`; CubeMX on Linux/macOS is not shaped like that | None yet; flash/debug/register reads may work on Linux with openocd and gdb present, but are untested |
 | **C0 / U0 target scripts are bundled** | openocd 0.12 ships no `stm32c0x.cfg` / `stm32u0x.cfg`; the plugin bundles adapted copies (only `dap create … -tap` → `-chain-position`) and copies them into the project's `openocd/` when scaffolding | Verified that openocd 0.12 loads the script completely (only the probe is missing); **no real C0/U0 board has been flashed yet** |
-| Deeper capabilities are graded per family | The family profile covers 27 families (`src/data/family.ts`): pin names, SWD debug signals, EXTI vector grouping, openocd target and breakpoint budget all follow the family and its core; HAL scaffolding covers 21 single-core families and the register route 13 families. **.ioc peripheral presets** are derived from the CubeMX db (`src/data/db-presets.ts`: serial / TIM PWM / ADC; the hand-written table is down to what db cannot express, plus an offline fallback). **Clock planning** is db-derived too (`src/data/clock-db.ts`): pllmul families F1/F0/L0 and pllmn families F4/F7/G4/L4 round-trip, PLL1 families H5/U5/WBA/L4+ are wired in — 18 families in total. Still F1-only: **SVD validation** (the bundled resources only ship `device/f1/svd`) | Uncovered capabilities are refused with a reason (the profile's `capabilities` are false, or the exact blocker is reported) — nothing is silently done with F1 tables. Dual-core WB, MP1/MP2/N6 and WB0/WL3 are out of HAL scaffolding scope |
+| Deeper capabilities are graded per family | The family profile covers 27 families (`src/data/family.ts`): pin names, SWD debug signals, EXTI vector grouping, openocd target and breakpoint budget all follow the family and its core; HAL scaffolding covers 21 single-core families and the register route 21 families (all verified through create→build; per-family results for the 8 new ones are in development-notes §87.5). **.ioc peripheral presets** are derived from the CubeMX db (`src/data/db-presets.ts`: serial / TIM PWM / ADC; the hand-written table is down to what db cannot express, plus an offline fallback). **Clock planning** is db-derived too (`src/data/clock-db.ts`): pllmul families F1/F0/L0 and pllmn families F4/F7/G4/L4 round-trip, PLL1 families H5/U5/WBA/L4+ are wired in — 18 families in total. Still F1-only: **SVD validation** (the bundled resources only ship `device/f1/svd`) | Uncovered capabilities are refused with a reason (the profile's `capabilities` are false, or the exact blocker is reported) — nothing is silently done with F1 tables. Dual-core WB, MP1/MP2/N6 and WB0/WL3 are out of HAL scaffolding scope |
 | The probe is picked from what USB actually shows | ST-Link → `interface/stlink-dap.cfg` (dapdirect), DAPLink/CMSIS-DAP → `interface/cmsis-dap.cfg`, J-Link → `interface/jlink.cfg` + `transport select swd`; a project `openocd.cfg` overrides all of it | Swap probes without editing config; pin one by writing `openocd.cfg` |
 | Adding a peripheral needs a **manual HAL source entry** | The plugin only relocates CubeMX's `Src/` and `Inc/` (→ `Core/Src`, `Core/Inc`); the `cmake/stm32cubemx/CMakeLists.txt` CubeMX emits is not applied. Enable a timer/UART/ADC and you must add the matching `stm32f1xx_hal_<peripheral>.c` yourself | Edit `STM32_Drivers_Src` in the project's `cmake/stm32cubemx/CMakeLists.txt`, or add a `target_sources` line in `cmake/user/CMakeLists.txt` |
 | Generation/scaffolding needs **CubeMX + the F1 firmware package** | Package version defaults to `STM32Cube_FW_F1_V1.8.7` | Pass another version via `firmwarePackage` |
 | Not yet verified on other machines | This machine: Windows 10 + MSYS2 UCRT64 + DAPLink + a Blue Pill; other combinations rely on your feedback | Open an issue with the full `stm32_doctor` output |
 | **RTT channel 0 only**, and the frame format is ours | `stm32_rtt` parses channel 0 only, with a 13-byte header (4 B length + 1 B level + 8 B timestamp + UTF-8 text); it is neither defmt nor SEGGER raw bytes — a native client (RTT Viewer / J-Link RTT Client) reading channel 0 sees that header as payload. RTT also lives in target RAM: no `rtt_init()` means no control block, and a full ring drops records | Use `level` as a filter (`level: 3` keeps info and above), put JSON in `text` for structured output; change channel count and buffer size via `RTT_UP_CHANNELS` / `RTT_BUF_SIZE` in `rtt.h` (default 3 × 1 KB = 3 KB `.bss` on a 20 KB C8T6); defmt decoding or native RTT output would be a separate feature |
+| **Serial P1 is Windows-only** | `stm32_serial`'s bridge is PowerShell 5.1 + `System.IO.Ports` (the plugin has zero npm dependencies); Linux / macOS get `unsupported-platform`. P1 has no serial panel in the UI, no SSE streaming, no auto-reconnect, and one port at a time | use a system serial terminal, or wait for the UI / cross-platform work |
+| **Serial success path has no real-hardware evidence** | The real bridge was only exercised on the failure path (`COM99` → `port-not-found`); `state=open`, actual received bytes, real DTR/RTS levels, the 5 s parent watchdog and idle auto-release have no hardware runs (the fake bridge covers the same contract) | plug in a board and run `list` → `open` → `read` → `close`; see development-notes §86 |
+| **The 8 new register families passed independent acceptance** | 0.1.5 grows the register route from 13 to 21 families (+ H5 / H7 / L4+ / L5 / U3 / U5 / WBA / WL): all eight pass create→build with warning 0 / error 0 (per-family FLASH/RAM in development-notes §87.5); H7's per-family `-mcpu` and the missing `cachel1_armv7.h` were fixed in the template | independent acceptance (t8) passed: 21-family inventory, GPIO gates, linkerRam, 296 fact assertions, all eight rebuilt at exit 0 (development-notes §87.6); try the new eight with the parts listed in §87.5 |
 | Register **symbol names and bit-field decoding need the bundled SVD (`full` logical tier)** | `GPIOC.ODR` / `GPIOC->ODR` and peripheral dumps (a bare `GPIOC`) are resolved from `assets/device/f1/svd/<line>.json`, derived from ST's SVDs (ST EULA, 1.71 MiB); only lines 100/101/102/103/105/107 exist. Without SVD data plain addresses still read, just with no names or bit fields; a symbol name fails with a hint to reinstall the plugin (the `full` tier ships in the package) | use `0x…` addresses; or run `stm32_assets verify` to check the install |
 
 ## Troubleshooting
@@ -395,22 +431,22 @@ C0 / U0 have no official script in openocd 0.12, so the plugin ships adapted cop
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 43 offline suites, 736 cases; no board, CubeMX, or toolchain needed
+npm test                 # 59 offline suites, 932 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **736 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **932 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 
 | Where | What | Size |
 | --- | --- | --- |
-| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `assets/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 265 files / 1750.3 KB packed, 14901.3 KB unpacked; `assets/**` is 12.5 MB of source (headers compress well) |
+| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `assets/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 269 files / 1800.6 KB packed, 15094.8 KB unpacked; `assets/**` is 12.5 MB of source (headers compress well) |
 | Git only, not packed | `src/**`, `test/**`, `scripts/**`, `docs/diagrams/**` (two interactive HTML pages) | diagrams are 2 MB raw / 891 KB gz; `files` in `package.json` narrows `docs` to `docs/*.md` |
-| Bundled (npm package) | Device-facts layer (13 families of `device/<family>/chips.json`), `.ioc` templates, `.ld`, SVD, startup files and headers — 75 files for `core`, 105 for `full`, shipped offline | inspect and verify with `stm32_assets list/verify`; `prune` only removes historical external versions |
+| Bundled (npm package) | Device-facts layer (21 families of `device/<family>/chips.json`), `.ioc` templates, `.ld`, SVD, startup files and headers — 75 files for `core`, 105 for `full`, shipped offline | inspect and verify with `stm32_assets list/verify`; `prune` only removes historical external versions |
 | Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages | manage the cache with `stm32_cache list/verify/purge` |
 | Rendered on the spot | `.ioc` content (`renderIoc`), `.ld` MEMORY (`renderLinkerScript`), the cmake source list | rendered per part, never stored as a template |
 
@@ -430,7 +466,7 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 23 tools, L3 (parameter schema + output contract + rendering)
+  tools/                   the 24 registered tools, L3 (23 files: parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
   commands/register.ts     the 7 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
@@ -446,6 +482,7 @@ docs/                      specification + development notes + reading guide + d
 - [Specification](docs/dsh-stm32-plugin-规格.md): tool contracts, state machine, acceptance criteria A1–A13
 - [Development notes](docs/development-notes.md): milestones, host-contract pitfalls, implementation details and measured numbers
 - [Source reading guide](docs/reading-guide.md): layered reading order, per-file responsibilities and exports, 14 flow diagrams, 23 invariants
+- [Release notes 0.1.5](docs/release-notes/v0.1.5.md): serial P1, the 21-family register route and acceptance records (0.1.4 and earlier live in git history)
 - Visuals: [architecture](docs/diagrams/dsh-stm32-architecture.html) / [main journey](docs/diagrams/dsh-stm32-journey.html) — single-file HTML, opens offline, exports PNG/SVG
 
 ## License

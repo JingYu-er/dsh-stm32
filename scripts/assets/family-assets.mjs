@@ -10,6 +10,7 @@
  *   header     stm32<letter><line><group>.h
  *   define     STM32<LETTER><line>x<GROUP 大写>（group=xx 时保留小写 xx，与 CubeMX 的 CMakeLists 一致）
  *   ld         <deviceId>_FLASH.ld（插件建工程时按 Flash/RAM 现渲染）
+ *   linkerRam  H7/U5 专有：连续 RAM 窗口（ramBytes 含不连续区域，见 linkerRamFor）
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -156,6 +157,46 @@ export function namingOf(family, line, suffix, deviceId) {
 }
 
 /**
+ * RAM 分区的族 → 链接脚本可用的连续窗口（chips.json 的 linkerRam 字段）。
+ *
+ * db 的 <Ram> 是「芯片共有多少 RAM」，可能跨不连续区域：
+ *   H7   DTCM 128K@0x20000000 + AXI SRAM@0x24000000（其余 D2/D3 SRAM 又各自独立）
+ *   U5   主 SRAM + SRAM4 16K@0x28000000 + 2K backup
+ * 按 ramBytes 整块生成，_estack 会落在空洞里——链接能过、烧进去 HardFault。
+ * 窗口大小取自 ST 官方固件包的 gcc 链接脚本（H7：Projects/NUCLEO-H723ZG 与 NUCLEO-H743ZI 的
+ * DTCM 脚本都是 RAM 128K@0x20000000；U5：cmsis-device-u5 Source/Templates/gcc/linker/STM32U5xx_FLASH.ld
+ * 的 RAM 行）。L4+/L5 的 RAM 地址连续（L4+ 320K/640K 单块；L5 192K+64K 相邻），不需要覆盖。
+ *
+ * 返回 null = 该族没有分区、保持 ramBytes；返回 undefined = 族在此表但这条 line 没收录，
+ * 调用方必须跳过这颗芯片并报出来——宁可少一颗，也不猜一个尺寸。
+ */
+const H7_LINKER_RAM = { origin: 0x20000000, sizeBytes: 128 * 1024, region: "DTCM" };
+const U5_LINKER_RAM_KB = {
+    "535": 256,
+    "545": 256,
+    "575": 768,
+    "585": 768,
+    "595": 2496,
+    "599": 2496,
+    "5A5": 2496,
+    "5A9": 2496,
+    "5F7": 2496,
+    "5F9": 2496,
+    "5G7": 2496,
+    "5G9": 3008,
+};
+
+export function linkerRamFor(family, line) {
+    if (family === "H7") return { ...H7_LINKER_RAM };
+    if (family === "U5") {
+        const kb = U5_LINKER_RAM_KB[line.toUpperCase()];
+        if (kb === undefined) return undefined;
+        return { origin: 0x20000000, sizeBytes: kb * 1024, region: "SRAM" };
+    }
+    return null;
+}
+
+/**
  * 启动文件尾缀 → 设备宏的尾缀（大写的是「不是 x 的那个字符」，x 永远小写）：
  *   xb → xB（STM32F103xB）  xx → xx（STM32F407xx）  cx → Cx（STM32F410Cx，「按封装分档」那种）
  */
@@ -205,6 +246,12 @@ export function collectFamilyChips({ mcuDir, cmsisRoot, family }) {
                 skipped.push({ what: cpn, reason: "封装 " + group.packageName + " 里认不出引脚数" });
                 continue;
             }
+            // 分区族的链接脚本窗口：undefined 说明表里没这条 line，跳过并报出来（不猜）。
+            const linkerRam = linkerRamFor(family, group.line);
+            if (linkerRam === undefined) {
+                skipped.push({ what: cpn, reason: family + " 的 line " + group.line + " 没收录连续 RAM 窗口（family-assets.mjs 的 linkerRamFor）" });
+                continue;
+            }
             chips.push({
                 cpn,
                 line: group.line,
@@ -220,6 +267,8 @@ export function collectFamilyChips({ mcuDir, cmsisRoot, family }) {
                 startup: naming.startup,
                 deviceHeader: naming.deviceHeader,
                 deviceDefine: naming.deviceDefine,
+                // H7/U5 才有：链接脚本真正的连续 RAM 窗口（见 linkerRamFor）。
+                ...(linkerRam === null ? {} : { linkerRam }),
             });
         }
     }

@@ -5,15 +5,22 @@
  *   · F1：RCC->APB2ENR 的 IOPxEN + CRL/CRH（每引脚 4 位 MODE/CNF）
  *   · F2/F4/F7：RCC->AHB1ENR + MODER（每引脚 2 位）
  *   · F0/F3/L1：RCC->AHBENR + MODER
- *   · G4/L4：RCC->AHB2ENR + MODER
+ *   · G4/L4/H5/L4+/L5/WBA/WL：RCC->AHB2ENR + MODER
+ *   · H7：RCC->AHB4ENR + MODER（H7 把 GPIO 挂到 AHB4）
+ *   · U3/U5：RCC->AHB2ENR1 + MODER（U5 代把 AHB2 拆成 ENR1/ENR2）
  *   · C0/G0/L0/U0：RCC->IOPENR + MODER
  * 拿 F1 的写法去配 F4，编译就过（GPIOC->CRH 在 F4 头里不存在？实际是 GPIO_TypeDef 没有 CRH
  * 字段 → 编译期就报错），所以这张表不是"风格选择"，是能不能编过的问题。
  *
  * 这张表是按族实测编译过的（见 docs §82 的 build matrix）；新增族必须先真编一次再加进来。
+ * 2026-11-09 补的 8 族：时钟门寄存器名不是猜的——逐族从 cmsis-device-<族> 的型号头里查到
+ * #define RCC_<门>_GPIOCEN（H5/L4+/L5/WBA/WL → RCC_AHB2ENR_GPIOCEN；H7 → RCC_AHB4ENR_GPIOCEN；
+ * U3/U5 → RCC_AHB2ENR1_GPIOCEN），MODER 的位布局与 G4/L4 一致（2 位/引脚）。
+ * 编译证据：H5（STM32H503CBT6）已用 arm-none-eabi-gcc 13.3 真编过一次（含时钟门行）；
+ * 其余 7 族随交付的 8 族编译矩阵逐族验证。
  */
 
-export type LedStyle = "f1-legacy" | "moder-ahb1" | "moder-ahb" | "moder-ahb2" | "moder-iopenr" | "none";
+export type LedStyle = "f1-legacy" | "moder-ahb1" | "moder-ahb" | "moder-ahb2" | "moder-ahb4" | "moder-ahb2enr1" | "moder-iopenr" | "none";
 
 // 这张表是编译器逼出来的，不是抄手册的：F2 的 GPIO 已经是 MODER、时钟在 AHB1ENR（拿 F1 的 CRH
 // 直接报 "GPIO_TypeDef has no member named CRH"）；F3 有 MODER 但时钟门叫 AHBENR（不是 AHB1ENR）。
@@ -27,6 +34,14 @@ const STYLE_BY_FAMILY: Readonly<Record<string, LedStyle>> = {
   L1: "moder-ahb",
   G4: "moder-ahb2",
   L4: "moder-ahb2",
+  H5: "moder-ahb2",
+  "L4+": "moder-ahb2",
+  L5: "moder-ahb2",
+  WBA: "moder-ahb2",
+  WL: "moder-ahb2",
+  H7: "moder-ahb4",
+  U3: "moder-ahb2enr1",
+  U5: "moder-ahb2enr1",
   C0: "moder-iopenr",
   G0: "moder-iopenr",
   L0: "moder-iopenr",
@@ -68,6 +83,8 @@ export function renderLedFunctions(family: string): LedRender {
     "moder-ahb1": "    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;",
     "moder-ahb": "    RCC->AHBENR |= RCC_AHBENR_GPIOCEN;",
     "moder-ahb2": "    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;",
+    "moder-ahb4": "    RCC->AHB4ENR |= RCC_AHB4ENR_GPIOCEN;",
+    "moder-ahb2enr1": "    RCC->AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;",
     "moder-iopenr": "    RCC->IOPENR |= RCC_IOPENR_GPIOCEN;",
   };
 

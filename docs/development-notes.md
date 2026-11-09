@@ -5557,3 +5557,180 @@ f0 736 B / f1 1404 B / f2 932 B / f3 948 B / f4 960 B / f7、c0、g0、g4、l0�
 - **flat 与 versioned 必须并存**：外部 `DSH_STM32_ASSETS` 的历史版本还在用户机器上，直接只认 flat 会让老夹具与老缓存全失效；flat 优先、旧版兜底，两边都测。
 - **体积护栏要按产物量级设，不是按源文件量级**：12.5 MB 源文件打成 1.75 MB tarball；按源文件设上限会让护栏失去意义。
 - **文案断言是最容易漏的回归**：删下载器后 `refresh --profile full` 的提示全变了，`svd-units` / `stm32f1-units` 立刻红；工具文案是契约，改语义必须同步测试与 README。
+
+## 86. 串口 P1：Windows PowerShell 桥 + `stm32_serial` 七动作（2026-11-09）
+
+用户要的是一条**不需要 GUI** 的串口闭环：模型自己开串口、发一行、等回包、读收到的行，串口助手不再由人肉中转。硬约束有两条：插件**零 npm 依赖**（dependencies 为空），且 P1 只做 Windows、不做右侧面板/SSE。
+
+### 一、为什么是 PowerShell 桥
+
+- Node 没有内建串口；装 `serialport` 就破坏零依赖。Windows 自带 PowerShell 5.1 + `System.IO.Ports.SerialPort`，于是真正握着 COM 口的是 `templates/serial/bridge.ps1`（18472 B，纯 ASCII）。
+- Node 侧（`src/engine/serial.ts`，约 1999 行）只是**文件 IPC 客户端**：起桥用 `spawn(powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File bridge.ps1)` + `stdio: ignore` + `windowsHide` + `unref`。
+- **不能用 `detached`**：Windows 上它翻成 `DETACHED_PROCESS`，powershell.exe 5.1 直接 exit 0，什么都不跑（这是本轮最早踩的坑；改成 spawn + unref 后才有独立于工具调用的桥）。
+- 桥也必须是纯 ASCII：PS 5.1 对无 BOM 的 .ps1 按 ANSI 解码，中文 hint 全部放在 `src/tools/serial.ts`。
+
+### 二、文件契约（没有 RPC）
+
+目录 `%USERPROFILE%\.dsh-stm32\serial\<sessionId>\`（`DSH_STM32_SERIAL_HOME` 改根）：
+
+- `session.json`：会话参数（端口、波特率、8N1、dtr/rts、编码、换行、persist、超时、maxLines/maxBytes）。
+- `status.json`：`opening|open|closed|error`，桥每 1 s 心跳；`open` 等它到 `state=open`（上限 5 s）。
+- `cmd/<id>.json` → `done/<id>.json`：命令与回执；`cmd` 先写 `.tmp` 再 rename，避免半截 JSON。
+- `rx.ndjson` / `tx.ndjson`：收发行流水 `{t,d[,p]}`，`p=true` 是无换行残行。
+- `bridge.pid` / `bridge.log`：pid 与桥自己的日志。
+
+节拍：桥 20 ms 轮询串口、100 ms 扫 `cmd/`、1 s 写 `status.json`、5 s 查一次父进程 PID——DSH 被杀（关窗口/重启宿主）时桥自己放口退出，否则 COM 口会永远「被占用」。超时：`send` 等 `done` ≤2 s（`ACK_WAIT_MS`），`close` 等 3 s（`CLOSE_GRACE_MS`）后强杀，`idleTimeoutMs` 默认 600000（10 min）自动放口。
+
+### 三、单会话、参数与端口记忆
+
+- 模块级 `active` 只允许一个会话；重复 `open` 返回 `already-open` 并提示先 `close`。并发两次 `open` 由引擎的 `openChain` 串行化（t14 修）：一次成功、一次 `already-open`。
+- 默认（`src/data/serial-config.ts`）：115200 / 8 / 1 / none 校验 / 无流控 / **dtr=false、rts=false** / utf8 / CRLF；会话参数 `timeoutMs=1000`（上限 30000）、`maxLines=200`、`maxBytes=65536`、`idleTimeoutMs=600000`、`maxLogBytes=8 MB`、`persist=false`。波特率 50–4000000，数据位 5–8。
+- 端口记忆 `%USERPROFILE%\.dsh-stm32\serial.json`（`DSH_STM32_SERIAL_CONFIG` 覆盖；`DSH_STM32_NO_CONFIG=1` 关闭）：身份三档 `usb:VID:PID:序列号` → `usb:VID:PID@位置` → `com:COMx`，最多 32 个、按最后使用淘汰；**只有成功 open 才写**。
+
+### 四、工具层与错误
+
+- `src/tools/serial.ts`（829 行）：`SERIAL_TOOL="stm32_serial"`，七个动作 `list/open/read/send/transact/status/close`；输出 `{message, report}`，report 的 24 个必填字段恒定，失败时附 `serialError`。
+- 工具层补三件引擎不做的事：`cursor` 增量读（`nextCursor` 是 `rx.ndjson` 的字节偏移）、`hex`（`"48 65 6C"` 按会话编码反解）、`until` → `transact.match` 正则。
+- 11 类错误统一 `{kind,cause,hint,evidence,retryable}`：`unsupported-platform` / `powershell-missing` / `port-not-found` / `port-busy` / `access-denied` / `settings-invalid` / `bridge-start-timeout` / `bridge-crashed` / `disconnected` / `already-open` / `no-session`；中文 `cause`/`hint` 在工具层。
+- `persist=false` 时 turn 结束自动 `close`（`turn/end` 事件），`persist=true` 才跨 turn。
+
+### 五、t14 的六处收口
+
+1. `abandonBridge`：open 失败/超时先发 close 等 800 ms、再 kill 等 1.5 s，目录留 `abandoned.json`，`status` 报 `orphanDirs`——失败不再留下占着 COM 口的孤儿桥（代价是失败 open 多花约 2.3 s）。
+2. `openChain`：open/close 串行，消除并发 `open` 的双桥竞态。
+3. `SerialSessionView` 增 `timeoutMs/maxLines/maxBytes/idleTimeoutMs`，open 报告显示会话实际值而不是全局默认。
+4. `transact` 的 `truncated` 与 `timedOut` 解耦：读满上限不等于没等到回包。
+5. `bridge.ps1` 的 `rtscts` 改 `Handshake::RequestToSend`，流控参数真正生效。
+6. `readSerial` 缺省用会话打开时的 `maxLines/maxBytes`，工具层不再另给一套默认。
+
+### 六、验收
+
+- `npx tsc --noEmit` exit 0；`npm run build` exit 0。
+- `test/serial-units.test.mjs`：**23 pass / 0 fail**，全部走 `test/fixtures/serial-fake-bridge.mjs` 假桥（同一份文件契约；`DSH_STM32_SERIAL_FAKE_FAIL` / `DSH_STM32_SERIAL_FAKE_SLOW_OPEN_MS` 两个钩子造失败与慢 open）。
+- 全量 `node test/run-units.mjs`：**TOTAL pass=932 fail=0**（t15 时点）。
+- **真桥只验到失败路径**：用真 PowerShell + 真 `bridge.ps1`、`DSH_STM32_SERIAL_PORTS` 造一个不存在的 COM99 → `port-not-found`；`status.json`/`bridge.log` 落盘正确、无残留 pid、`orphanDirs=0`。成功路径（`state=open`、真实收数、DTR/RTS 实际电平、5 s 看门狗、idle 自动放口、`port-busy`/`access-denied` 真机样本）**没有硬件证据**：本机无板、也没有第二个 COM 口可占。
+- `turn/end` 的真实宿主事件只做了代码审读；`powershell-missing` 未实测（本机必装）。
+
+### 七、未做 / 已知风险
+
+- P1 不做右侧串口面板、不做 SSE/WebSocket 推流（`read` 是拉取式）、不支持 Linux/macOS（直接 `unsupported-platform`）、不自动重连。
+- `orphanDirs` 是「目录里还有 `bridge.pid` 且进程活着」，多开几个 DSH 进程时会把别人的活会话误列为孤儿（只是提示，不动别人的进程）。
+- kill 失败时没有更强的手段，只能提示人工关进程；`read` 的 `maxBytes` 有 256 的下界 clamp。
+- 恢复路径：`stm32_serial action=close` → 不行再按 `status` 报的 pid 手工结束；桥日志在会话目录 `bridge.log`。
+
+### 八、教训
+
+- **「独立进程」在 Windows 上不等于 `detached`**：Node 的 `detached` 会改进程创建标志，老 PowerShell 直接不执行脚本；spawn + unref 才是对的做法。
+- **文件 IPC 比 stdin/stdout 更好测**：假桥只要照同一份 `cmd/``done/``status.json` 契约写文件，23 条用例全离线；换成管道协议就得模拟进程生命周期。
+- **失败路径也要收口**：open 超时若只 kill 不管，桥可能已经握着口；先 close 再 kill、再留 `abandoned.json`，才能把「口被占」变成可诊断状态。
+- **零依赖是产品约束，不是洁癖**：它直接决定了「桥」这个形态；文档里必须写清 P1 的边界，否则用户会默认它跨平台、有 UI、会重连。
+
+## 87. 寄存器路线 13 → 21 族：数据层、GPIO 门与链接窗口（2026-11-09）
+
+0.1.5 把寄存器建工程从 13 族扩到 21 族：新增 **H5 / H7 / L4+ / L5 / U3 / U5 / WBA / WL**。这一节写已经落地并复核过的事实：数据层与链接层见一～三，8 族的逐族 `create→build` 矩阵见 §87.5（t6 已跑完，8/8 通过，合计 21/21）。
+
+### 一、21 族与代表型号
+
+`src/data/cmsis-sources.ts` 的 `CMSIS_FAMILIES` 现在 21 项（原 13 族 + 8 族）；内置 `assets/device/<族>/chips.json` 同步到 21 族。逐族抽一颗代表型号核对过（头文件 / 启动文件 / 设备宏 / Flash / RAM）：
+
+| 族 | 代表型号 | 设备头 | 启动文件 | 设备宏 | Flash / RAM |
+| --- | --- | --- | --- | --- | --- |
+| H5 | STM32H563ZIT6 | stm32h563xx.h | startup_stm32h563xx.s | STM32H563xx | 2 MB / 640 KB |
+| H7 | STM32H743ZIT6 | stm32h743xx.h | startup_stm32h743xx.s | STM32H743xx | 2 MB / 864 KB（跨域合计，不连续） |
+| L4+ | STM32L4R5ZIT6 / STM32L4P5ZGT6 | stm32l4r5xx.h / stm32l4p5xx.h | 同名 startup | STM32L4R5xx / STM32L4P5xx | 640 KB / 320 KB（连续） |
+| L5 | STM32L562ZET6 | stm32l562xx.h | startup_stm32l562xx.s | STM32L562xx | 512 KB / 256 KB |
+| U5 | STM32U575ZIT6 | stm32u575xx.h | startup_stm32u575xx.s | STM32U575xx | 2 MB / 786 KB |
+| WBA | STM32WBA55CGU6 | stm32wba55xx.h | startup_stm32wba55xx.s | STM32WBA55xx | 1 MB / 128 KB |
+| WL | STM32WLE5CCU6 | stm32wle5xx.h | startup_stm32wle5xx.s | STM32WLE5xx | 256 KB / 64 KB |
+
+- L4+ 必须走 `cmsis-device-l4` + `STM32CubeL4`、设备宏前缀 `STM32L4`（没有独立的 l4plus 仓库）。
+- WL 的 chips 只有 WLE4/WLE5，没有 WL55；WL55 双核的启动文件是 `startup_stm32wl55xx_cm4.s`，不在寄存器路线里。
+- 首次下载的 8 族 CMSIS 源（设备头 / system / startup / 内核头）在 2026-11-08/09 逐族实测 200；唯一例外是 STM32CubeU3 的 `cmsis_gcc.h` 在 jsDelivr 403（上游树缓存），raw.githubusercontent 与 ghproxy 两条兜底正常。
+
+### 二、GPIO 使能位：四种口径
+
+`src/data/register-gpio.ts` 按芯片记录选：
+
+- `moder`：原 F1 口径（GPIO 在 APB2）。
+- `moder-ahb4`：**H7**，GPIO 挂在 AHB4ENR，端口 A–K。
+- `moder-ahb2enr1`：**U3 / U5**，GPIO 在 AHB2ENR1；U3 只有 A,B,C,D,E,G,H（没有 F）。
+- `moder-ahb2`：其余族（H5 A–I、L4+ A–I、L5 A–H、WBA/WL A,B,C,H）。
+
+族 profile（`src/data/family.ts`）的 `HAL_REG_CAPS`/`PENDING_REG` 与 `CAPABILITY_GAPS` 文案同步改成 21 族口径；不支持列表固定为 WB / WB0 / WL3（双核或无线专用）/ MP1 / MP2 / N6（MPU/NPU 路线）。
+
+### 三、链接脚本：H7 的 DTCM 与 U5 的 per-line 窗口
+
+`DeviceFactsChip` 新增可选 `linkerRam { origin, sizeBytes, region }`；`planRegisterLinker` 优先用它并改写 `MEMORY` 的 ORIGIN/LENGTH（`family-assets.mjs` 负责落数据与 manifest）。
+
+- **H7**：138 颗全部带 `{0x20000000, 128 KiB, DTCM}`。生成的 .ld `RAM` 128 KB、`_estack=0x20020000`；实测 130 KB `.bss` 报 `RAM overflowed by 3592 bytes`，8 KB 通过（`g_data`/`g_bss` 落在 0x20000000/0x20000004）。
+- **U5**：62 颗按 line 给窗口——535/545 256 KiB，575/585 768 KiB，595/599/5A5/5F7/5G7 2496 KiB（region SRAM）；实测 260 KB 溢出 5640 B、8 KB 通过，`_estack=0x20040000`。
+- **L4+ / L5**：都是连续单块，不需要 `linkerRam`；L5 的 192 + 64 KiB 相邻，合并成 256 KiB。
+- h7/u5 的 `chips.json` 与 `assets/manifest.json`（bytes + sha256）已同步；`stm32_assets verify` 通过。
+
+### 四、已验收 / 未验收
+
+- 已过：`npm run build` exit 0；`node test/run-units.mjs` pass=932、0 fail（t6 时点；t4 时点 909）；H5 冒烟 `createRegisterProject(STM32H503CBT6)` 下载 10 个 CMSIS 文件并 `cmake --build`（Debug）exit 0；8 族矩阵 8/8 全过（§87.5）。
+- 两处模板阻塞已在 t6 修掉并被矩阵验证：①模板 cmake 的 `-mcpu=cortex-m3` 改为按族生成——`src/engine/register-template.ts` 新增 `coreFlagOf()`，复制 `cmake/gcc-arm-none-eabi.cmake` 时替换（H7=cortex-m7，H5/L5/U3/U5/WBA=cortex-m33，L4+/WL=cortex-m4）；②`core_cm7.h:2234` 条件 include `cachel1_armv7.h`——`src/data/cmsis-sources.ts` 增加 `extraCoreHeaders`，H7 的下载/校验清单补上（guard `ARM_CACHEL1_ARMV7_H`），H7 模板目标 10→11 个文件。
+- **独立验收（t8）已通过**：上面是实施侧矩阵；t8 由 impl 复验，结论一致，证据见 §87.6。
+
+### 五、8 族逐族矩阵（t6 实测，warning 0 / error 0）
+
+| 族 | 型号 | 结果 | FLASH used/total | RAM used/total | elf B |
+| --- | --- | --- | --- | --- | --- |
+| H5 | STM32H503CBT6 | ok | 1368 / 131072 | 1576 / 32768 | 610028 |
+| H7 | STM32H723VGT6 | ok | 1524 / 1048576 | 1576 / 131072 | 1039792 |
+| L4+ | STM32L4P5AGI6 | ok | 988 / 1048576 | 1576 / 327680 | 895372 |
+| L5 | STM32L552CET6 | ok | 1044 / 524288 | 1576 / 262144 | 842544 |
+| U3 | STM32U375CET6 | ok | 1124 / 524288 | 1576 / 262144 | 929460 |
+| U5 | STM32U535CBT6 | ok | 1196 / 131072 | 1576 / 262144 | 937248 |
+| WBA | STM32WBA50KGU6 | ok | 916 / 1048576 | 1576 / 65536 | 495364 |
+| WL | STM32WLE4CBU6 | ok | 856 / 131072 | 1576 / 49152 | 433488 |
+
+- 验证方式：8 个工程 `cmake configure + build` exit 0，`stm32_build` clean rebuild `ok:true` / `warningCount 0` / `errors []`；M33 族（H5 / L5 / U3 / U5 / WBA）用默认 startup + cortex-m33 编译链接全过，不需要额外 CMSE/TZ 选项。
+- H7 内存证据：`.ld` 的 `RAM ORIGIN=0x20000000 LENGTH=128K`，`nm _estack=0x20020000`，`.data` 0x20000000+4B、`.bss` 0x20000004+0x20B，都在 DTCM 窗口内；U5 用 256K 连续窗口（RAM 1576/262144）未越界。
+- 采集口径的坑：`stm32_build` 解析器把 1 MB 的 FLASH 行漏了，H7 / L4+ / WBA 三行是 t6 从原始 cmake 输出补记的（不是编译问题）。
+- t6 是在**新 Node 进程**里直接 import `lib/engine/register-template.js` 建工程的：长驻 dsh 进程会缓存旧插件模块，`tools.stm32_project_create` 建出的仍是旧模板（564K / m3 / 无 cachel1）；build 仍走 `stm32_build`。矩阵工程留在 `demo/.tmp-register-matrix/`，未提交。
+
+### 六、t8 独立验收（2026-11-09）
+
+t8 由 impl 执行（不是寄存器路线的实现者）：只做只读复验与新建工程编译，不改实现。以下是 0.1.5「21 族可用」的独立证据；它和 §87.4 / §87.5 的实施侧矩阵互相印证。
+
+- **数据层**：`CMSIS_FAMILIES` 恰 21 个键（`src/data/cmsis-sources.ts`）；`registerScaffold` 对 21 族逐一有 profile，没有缺项或多余键。
+- **8 族 GPIO 门**：H5 A–I@AHB2ENR、H7 A–K@AHB4ENR、L4+ A–I@AHB2ENR、L5 A–H@AHB2ENR、U3 A,B,C,D,E,G,H@AHB2ENR1（无 F）、U5 A–I@AHB2ENR1、WBA/WL A,B,C,H@AHB2ENR；`register-gpio.ts` 的 `moder-ahb4`（H7）与 `moder-ahb2enr1`（U3/U5）两条路径都命中。
+- **链接窗口**：H7 138/138 颗带 `linkerRam`（0x20000000 / 128 KiB / DTCM），U5 62/62 颗按 line 带窗口；H7 实测 `.ld` 的 `RAM LENGTH=128K`、`_estack=0x20020000`，链接后 RAM 末地址 0x20000628，未越过 DTCM 上界。
+- **事实校验**：外部 `verify-facts` 296 条断言 `failed=0`（逐颗启动文件 / 设备宏 / Flash·RAM 与 assets 一致）。
+- **编译**：H5 / H7 / L4+ 新工程 `create→build` exit 0；8 族 `cmake` 构建全部 exit 0（warning 0 / error 0，逐族 FLASH/RAM 见 §87.5）。
+- **回归**：`npm run build` exit 0；`node test/run-units.mjs` pass=932 / fail=0。
+- **未验**：真机烧录与运行（无硬件）；逐颗 `linkerRam` 只验了代表型号与窗口边界，没有对 138 + 62 颗全部做链接/上板验证。
+
+### 七、教训
+
+- **「族」不是「内核」**：H7 的 GPIO 在 AHB4ENR、U5 在 AHB2ENR1，按 F1 的 APB2 套就会静默不亮；使能位必须按族查数据，不能按内核猜。
+- **链接窗口是数据，不是常量**：H7 只给 DTCM、U5 按 line 分窗口，写死一张 RAM 表就必然有一颗芯片越界；`linkerRam` 放进 chips.json 后，溢出错误在链接期就暴露。
+- **下载成功 ≠ 可编译**：CMSIS 头/启动文件齐了只说明事实层对了；`-mcpu` 与内核附加头（`cachel1_armv7.h`）是模板层的事，验收矩阵必须真的 build。
+
+## 88. 0.1.5 旧文案清理（2026-11-09）
+
+跟 13 → 21 族与串口 P1 一起，把「只有 F1 / 13 族 / 22 个单核族 / HAL 14 族」这类旧口径从用户文档里清掉。原则：**用户文档写现在的行为；development-notes 的历史章节保留当时的数字**（它们是决策记录，不是现状）。
+
+### 一、改了什么
+
+- `README.md` / `README_EN.md`：首段链条补 `stm32_serial`；寄存器族数 13 → 21（初稿按当时口径写「13 族已过、8 族矩阵指 §87」；t6 补上矩阵后已统一成 21/21，见 §87.5）；「这只是最小验证」的边界句去掉「只到 F1」；功能表加串口行；新增「串口（Windows P1）」章节；芯片章节补寄存器内存映射 bullet；已知限制补串口两条与 8 族矩阵一条；文档节指向 `docs/release-notes/v0.1.5.md`。
+- `docs/reading-guide.md`：§4.2 工具表补 `stm32_serial` 行；新增「§12 0.1.5 增补」讲串口文件 IPC 与 21 族事实层；§11 的历史条目与数字不动。
+- `docs/development-notes.md`：新增 §86/§87/§88；§1–§85 不动。
+- 新增 `docs/release-notes/v0.1.5.md` 骨架；t17 已把测试与包体数字填成实测值；t22 按 `test:size` 最终实测回填为 932 pass / 59 套件、269 文件 / 1800.6 KB packed / 15094.8 KB unpacked。
+- t17 补清代码侧文案：`src/skill/stm32-workflow.ts:12,14`（HAL 22→21、寄存器 13→21，并写明其余族 WB/WB0/WL3/MP1/MP2/N6 只有 HAL 或明确拒绝）、`src/tools/project-create.ts:180`、`src/data/family.ts:131,146`、`test/assets-units.test.mjs:178` 标题、`package.json:4` description（version 未动）。
+
+### 二、收尾结果（t22）
+
+- 版本号已 bump 到 0.1.5：`package.json`、`package-lock.json`（根与 `packages[""]`）、`README.md` badge 与安装确认行、`README_EN.md` badge 与安装确认行；历史 release notes 里的 0.1.4 保留。
+- 代码侧旧族数已由 t17 改掉：`src/skill/stm32-workflow.ts:12,14`、`src/tools/project-create.ts:180`、`src/data/family.ts:131,146`、`test/assets-units.test.mjs:178`、`package.json:4` 的 description；剩下只有版本号与发版动作。
+- `README.md` / `README_EN.md` 的测试规模与包体数字已按最终实测刷新：932 用例 / 59 套件，269 文件 / 1800.6 KB packed / 15094.8 KB unpacked（`npm pack` 原始 size=1,843,826 B、unpackedSize≈15,457,070 B，与 `test:size` 的 KB 口径一致）。
+- 工具计数已改到 24 个注册工具（`src/tools/` 23 个文件 = 22 个工具文件 + `project-dir.ts`；`debug-session.ts` 一键三工具），两份 README 的「注册 23 个工具」都已改口。
+- `docs/development-notes.md` §5040/5049/5451/5453/5458/5475/5483/5488 附近的旧族数是历史记录，**不改**；`docs/reading-guide.md` §11 的早期条目里「只有 F1 在 FIRMWARE_FAMILIES」是现状描述，已改为「目前收 17 族」并列出族名。
+- t8 独立验收已通过，README / README_EN / release notes / §87.4 的「独立验收尚未收口」四处已改为通过并指向 §87.6；`src/commands/register.ts:253` 注释「六条斜杠命令」实测 7 条，已改。
+
+### 三、教训
+
+- **旧口径要按「文档类型」分流**：README/指南是现状，必须改；notes 是时间线，改了反而丢失「当时为什么这么写」。
+- **留清单比随手改安全**：版本号、skill 文案、工具 description 与测试断言要跟 package.json/代码一起动，文档预检阶段先列 `文件:行`，避免两边不同步。

@@ -505,8 +505,8 @@
     },
     {
       "path": "device/h7/chips.json",
-      "bytes": 53921,
-      "sha256": "ed1ddc949f091f5ead17ec277b948850d161d7ee972c7ecb4195d8eaccc1f0ce",
+      "bytes": 69868,
+      "sha256": "f56f90a2acf56232728dd09c25063926e09f2bc2e1bae0830cebb26ad9afade7",
       "source": "CubeMX db/mcu + STM32Cube_FW_H7_V1.11.0（H7 全部 CPN）",
       "profile": "core"
     },
@@ -561,8 +561,8 @@
     },
     {
       "path": "device/u5/chips.json",
-      "bytes": 24718,
-      "sha256": "e71b81d6ad86686686c9a19a46c6c5fbd4285740e8d35d01289b46797d751bf2",
+      "bytes": 32038,
+      "sha256": "5a47bb87e1d0ef8f2a51477ffe437dd01899c17f8220534448ed8a45615e3d4f",
       "source": "CubeMX db/mcu + STM32Cube_FW_U5_V1.8.0（U5 全部 CPN）",
       "profile": "core"
     },

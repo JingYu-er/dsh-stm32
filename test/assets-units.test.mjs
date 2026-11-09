@@ -175,7 +175,7 @@ test("assetsRootInfo：默认指向插件内置 assets/，DSH_STM32_ASSETS 仍�
   assert.match(override.root, /some-assets/u);
 });
 
-test("真实内置 manifest：v2、core 与 full 分层、13 族事实都在", () => {
+test("真实内置 manifest：v2、core 与 full 分层、21 族事实都在", () => {
   const root = bundledAssetsRoot();
   const parsed = parseManifest(readFileSync(join(root, "manifest.json"), "utf8"));
   assert.equal(parsed.error, "");

@@ -214,6 +214,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | `stm32_route_plan` | route-plan.ts（576） | engine/route-plan.assessRoute + toolchain-gate | register-ok → build；其余 → generate；unclear → 不查 |
 | `stm32_cache` | cache.ts（306） | engine/cache 全套 | 无 |
 | `stm32_doctor` | doctor.ts（202） | doctor.runDoctor + collectChipConsistency（型号/启动文件/设备宏/.ld/Flash 五项一致性） | 无（它自己就是体检） |
+| `stm32_serial` | serial.ts（829，0.1.5 新增） | 无独立 engine 入口：engine/serial.ts 直接管 PowerShell 桥（文件 IPC：cmd/ done/ rx.ndjson tx.ndjson status.json）与端口记忆（`~/.dsh-stm32/serial.json`） | 无（P1 仅 Windows；非 Windows / 缺 PowerShell 在工具层返回 `unsupported-platform`，不起桥） |
 | —（基础设施） | project-dir.ts（120） | resolveProjectDir / validateToolArgs | — |
 
 两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**regs.ts 735 行**现在是 tools 层最大的（D 阶段从 272 涨到 735，+463 行），**route-plan.ts 576 行**退居第二——后者的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
@@ -328,7 +329,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | cmsis-sources.ts | 416 | 寄存器路线的下载源与型号映射：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（委托 resolveF1Chip，兼容 `F1:B` / `F1:8` / `F103:xb` / `STM32F103C8T6` 四种写法；只给容量字母的老写法现在从设备事实里挑一颗同档芯片当代表，优先 F103——原来的「字母 → 档位」常量表已删，没缓存就返回 null 让上层提示 refresh）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / **STARTUP 14 条** / CORE_HEADER）、缓存条目 id 与解析（`chipOf`、`cmsisGroupKey`、`cmsisEntryId` → `cmsis:F1:103xb`、`chipEntryId`、`parseCmsisEntryRef`、`cmsisEntryAliases`）。**改这里等于改「离线可复现」的边界**：F1 的 14 个容量档 sha256 全部是 2026-10-30 真实下载实测的。 |
 | stm32f1.ts | 171 | 两条路线共用的**型号解析器**，本身不再存任何事实：`resolveF1Chip(input)` 先做格式/封装/温度档校验，再查 `device-facts.ts`（完整型号按 CPN 精确匹配、无温度后缀按前缀归一化、`F103:xb` 按 line+档取代表芯片），返回 `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`（签名与结构 0.2 不变）；`f1GroupsFor(code)` 从事实聚合该 line 的容量档。错误分四类且都带「先跑 `stm32_assets verify`」提示：内置资源缺失 / 型号不在内置资源 / line 不存在 / 该 line 没有这一容量档。 |
 | clock-f1.ts | 215 | F1 时钟树的事实表：PLL 源（HSE 8 MHz / HSI÷2 4 MHz / HSI 8 MHz，后者 `selectable=false`）、倍频 ×2..×16、上限（SYSCLK 72 / APB1 36 / APB2 72 / ADC 14 / USB 48 且必须 PLLCLK=72÷1.5）、APB1/APB2/ADC 分频表、14 条外设→总线、UART 波特率档、20 个 RCC IPParameters 名单。 |
-| firmware-packages.ts | 463 | 固件包事实表：`FIRMWARE_FAMILIES`（目前只有 F1）、`firmwareFamilyOf`、`firmwareVersionTags`、`packageXmlText`、`firmwarePlanFor`、`verifyFirmwarePackage`、`DSH_FIRMWARE_DIR_NAME = "dsh-firmware"`、`dshFirmwareDir`、`firmwareNeedFromIoc`（从 .ioc 的包名推族与版本）、`looksLikeFirmwarePackage`、`locateFirmwarePackage(root, packageName, extraDirs)` → `FirmwareLocation`（source：repository / dsh-firmware / cache / custom）、`firmwareSourceLabel`、`FirmwareExtraDir`。 |
+| firmware-packages.ts | 463 | 固件包事实表：`FIRMWARE_FAMILIES`（17 族：F1/F2/F3/F7/G0/L1/L4/U0/C0/H5/U5/WBA/L5/WB/WL/H7/U3）、`firmwareFamilyOf`、`firmwareVersionTags`、`packageXmlText`、`firmwarePlanFor`、`verifyFirmwarePackage`、`DSH_FIRMWARE_DIR_NAME = "dsh-firmware"`、`dshFirmwareDir`、`firmwareNeedFromIoc`（从 .ioc 的包名推族与版本）、`looksLikeFirmwarePackage`、`locateFirmwarePackage(root, packageName, extraDirs)` → `FirmwareLocation`（source：repository / dsh-firmware / cache / custom）、`firmwareSourceLabel`、`FirmwareExtraDir`。 |
 | install-guides.ts | 251 | 安装指引文本：`COMPONENT_INSTALLABILITY`（哪些 pacman 能代装、哪些必须人装）、`cubeMxGuide`、`firmwareGuide`、`guideFor`（用 Map 查而不是 in，避免原型链误判）、`guidesFor`、`guideLines`、`firmwareSizeHint`、`familyPrefix`。 |
 | search-roots.ts | 421 | 见 5.2。 |
 | toolchain-config.ts | 370 | 见 5.2。 |
@@ -740,7 +741,7 @@ const fake = {
 
 ## 11. 已知的坑与未做的事
 
-1. **只有 F1 在 FIRMWARE_FAMILIES**：其他族要接入必须先核实真实仓库名（stm32g4xx-hal-driver 之类），不能照 F1 改字母。
+1. **`FIRMWARE_FAMILIES` 目前收 17 族**（F1/F2/F3/F7/G0/L1/L4/U0/C0/H5/U5/WBA/L5/WB/WL/H7/U3）：新增族要接入必须先核实真实仓库名（stm32g4xx-hal-driver 之类），不能照 F1 改字母。
 2. **generate 是否补发 SetCopyLibrary "copy all"** 仍待定：只靠 .ioc 的 ProjectManager.LibraryCopy=1 不会让 CubeMX 从 setCustomFWPath 的包拷 HAL 源码。
 3. **firmware-install 的 existing 分支 nextStep 文案**偏旧（还停在「直接调 stm32_generate」的说法）。
 4. **四类探针故障只有单测没有真机**：swd-locked / flash-protected / no-power / target-mismatch 需要真故障才能验（`probeError` 的 kind 与专属 hint 已在 test/probe-error-units 覆盖）。
@@ -755,6 +756,25 @@ const fake = {
 13. **B3 的真机计时还欠着**：会话复用快路径只有假探针（假 subprocess + 本地假 Tcl 服务端）的数字，真机 10 连读没测成——当时插的是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；同一句在 B3 之前的旧版一次性路径上也复现，所以不是这次改动引入的。**复测方法**：换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
 14. **RTT 已真机验证（2026-11-01）**：`rtt-units` 33 例仍全离线（假 subprocess + 假端口），但真板上跑通了 start → dump（1 kHz 固件打印、`dma` 与 `t` 1:1）→ stop（openocd 一并退出、探针归还）→ flash 的完整链路，见 development-notes §10.2/§39/§40。剩下的设计取舍（只有通道 0 / 无 defmt 解码 / 默认占 3 KB RAM）见 development-notes §30.6。**复现命令**（`_rich_hal` 上验过）：`stm32_rtt action=start projectDir=<工程> addr=0x20000f88` → `action=dump seconds=3` → `action=stop`。
 15. **寄存器符号名与位域解释只有离线验证**：`svd-units` 39 例全离线（真实内置 SVD + 假 subprocess + 假 Tcl 服务端），**没有一次「真板子 + 真探针 + `GPIOC.ODR`」**（与坑 13 同一个 WCH-Link 问题）。**复测方法**：换回 CMSIS-DAP 探针后 `stm32_regs_read addresses=["GPIOC.ODR","0x4001100C"]`，看 `samples[0].name` / `fields` 与 notes 里的 SVD line。
+
+## 12. 0.1.5 增补：串口 P1 与寄存器 21 族
+
+> 接续第 11 章。上面 1–15 条是 0.1.4 及更早的记录，其中的数字不动；这里只补 0.1.5 新增的两条阅读线。
+
+### 12.1 串口（`stm32_serial`，Windows P1）
+
+- 新增文件：`src/engine/serial.ts`（文件 IPC 客户端 + 会话表 + 端口记忆）、`src/tools/serial.ts`（7 个动作的 schema / 渲染 / 错误 hint）、`src/data/serial-config.ts`（默认值与 `serial.json` 读写）、`templates/serial/bridge.ps1`（约 18 KB，纯 ASCII，真正持有 COM 口）、`test/serial-units.test.mjs` 与 `test/fixtures/serial-fake-bridge.mjs`。
+- 阅读顺序：`tools/serial.ts` 的参数 schema 与 `ACTIONS` → `engine/serial.ts` 的 `openSerial` / `sendSerial` / `readSerial` / `transactSerial` / `closeSerial` / `serialStatus` → `templates/serial/bridge.ps1` 的 `Main` 循环（20 ms 轮询串口 / 100 ms 扫 cmd / 1 s 心跳 / 5 s 查父进程）。**契约不是 RPC，而是目录里的文件**：`cmd/<id>.json` 进、`done/<id>.json` 回，流水在 `rx.ndjson` / `tx.ndjson`，状态在 `status.json`。
+- 不要踩的：`spawn` 不能用 `detached`（Windows 上会翻成 `DETACHED_PROCESS`，powershell.exe 5.1 直接 exit 0）；`bridge.ps1` 必须保持 ASCII（PS 5.1 按 ANSI 解码无 BOM 脚本）；重复 `open` 由引擎的 `openChain` 串行化并返回 `already-open`；`read` 的 `cursor` 是 `rx.ndjson` 的字节偏移（`nextCursor`），跨轮不重贴历史靠它。
+- 边界：P1 只做 Windows；不含 UI 面板 / SSE / 自动重连 / 多会话。真机缺口见 development-notes §86（真桥只验过失败路径）。
+- 计数口径（0.1.5 起）：`src/tools/` 共 23 个文件 = 22 个工具文件 + `project-dir.ts`；注册工具 **24 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章里的「22 个工具 / 23 个文件」沿用「工具文件」口径，不冲突。
+
+### 12.2 寄存器路线：13 → 21 族
+
+- 事实层：`assets/device/<族>/chips.json` 现在有 21 族；`src/data/cmsis-sources.ts` 的 `CMSIS_FAMILIES` 也是 21 项（新增 H5 / H7 / L4+ / L5 / U3 / U5 / WBA / WL）。F1 仍走 `src/data/stm32f1.ts` 的 `resolveF1Chip()`，其余族走 `CMSIS_FAMILIES` + `DeviceFactsChip`。
+- GPIO 使能位分四种：`moder`（原 F1 口径）、`moder-ahb4`（H7，GPIO 在 AHB4ENR）、`moder-ahb2enr1`（U3 / U5，GPIO 在 AHB2ENR1）、`moder-ahb2`（其余）。读 `src/data/register-gpio.ts` 时先看芯片记录选的是哪一种。
+- 链接脚本：`DeviceFactsChip` 新增可选 `linkerRam`（origin / sizeBytes / region），H7 的 138 颗都带 DTCM 128 KiB，U5 按 line 给 256 / 768 / 2496 KiB 窗口；`planRegisterLinker` 优先用它。L4+ 与 L5 是连续单块，不需要 `linkerRam`。
+- 8 族矩阵已跑完（t6）：`create→build` 8/8 通过、warning 0 / error 0，逐族 FLASH/RAM 与两处模板修复（按族 `-mcpu`、H7 的 `cachel1_armv7.h`）见 development-notes §87.5；别把「已下载 CMSIS + 生成 .ld」当成「已编译验收」。
 
 ---
 

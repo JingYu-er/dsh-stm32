@@ -14,6 +14,7 @@
 import { registerCommands } from "./commands/register.js";
 import { debugSessions } from "./engine/debug-session.js";
 import { stopRtt } from "./engine/rtt.js";
+import { cleanupSerialOnTurnEnd, closeSerial } from "./engine/serial.js";
 import { registerStm32Skill } from "./skill/stm32-workflow.js";
 import { registerAssets } from "./tools/assets.js";
 import { registerBuild } from "./tools/build.js";
@@ -35,6 +36,7 @@ import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerRtt } from "./tools/rtt.js";
+import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
 import type { DshContext } from "./types.js";
@@ -88,6 +90,7 @@ export function apply(ctx: DshContext): void {
   registerAssets(ctx);
   registerCache(ctx);
   registerDoctor(ctx);
+  registerSerial(ctx);
   // 设置面板的宿主 API（浏览器端 lib/client.js 用）。宿主没 webServer 服务时静默跳过。
   registerWebRoutes(ctx);
 
@@ -118,12 +121,19 @@ export function apply(ctx: DshContext): void {
         "turn/end：本轮输出结束，把探针还给你",
         owner === "" ? {} : { requireOwner: owner },
       );
+      // 串口默认不跨 turn：turn 结束就把口放掉，别让一个 COM 口被忘在后台。
+      // persist=true 的会话由 cleanupSerialOnTurnEnd 自己判断并保留（顺带扫死会话目录）。
+      // 这里 catch 掉异常：收尾失败不该让宿主事件处理器抛错。
+      void cleanupSerialOnTurnEnd({}).catch(() => undefined);
     });
     ctx.on("session/disposed", () => {
       void debugSessions.stop("session/disposed");
+      // 会话都没了，persist=true 的串口也不能留（它没有下一个 turn 可以复用）。
+      void closeSerial({}).catch(() => undefined);
     });
     ctx.on("dispose", () => {
       void debugSessions.stop("插件卸载");
+      void closeSerial({}).catch(() => undefined);
     });
   }
 }
