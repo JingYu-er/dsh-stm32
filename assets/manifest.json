@@ -1,0 +1,1130 @@
+{
+  "name": "dsh-stm32-assets",
+  "version": "2026.11.04-2",
+  "schema": 2,
+  "generatedBy": "scripts/assets/build-assets.mjs",
+  "profiles": {
+    "core": [
+      "device/**",
+      "ioc/**",
+      "ld/**"
+    ],
+    "full": [
+      "device/**",
+      "ioc/**",
+      "ld/**",
+      "startup/**",
+      "headers/**"
+    ]
+  },
+  "profileCounts": {
+    "core": 69,
+    "full": 105
+  },
+  "counts": {
+    "device": 27,
+    "ioc": 34,
+    "ld": 14,
+    "svd": 6,
+    "startup": 14,
+    "headers": 16
+  },
+  "device": {
+    "families": [
+      {
+        "family": "STM32C0",
+        "chips": "device/c0/chips.json",
+        "count": 78,
+        "ioc": "ioc/family/C0.ioc",
+        "package": "STM32Cube_FW_C0_V1.4.1"
+      },
+      {
+        "family": "STM32F0",
+        "chips": "device/f0/chips.json",
+        "count": 111,
+        "ioc": "ioc/family/F0.ioc",
+        "package": "STM32Cube_FW_F0_V1.11.6"
+      },
+      {
+        "family": "STM32F2",
+        "chips": "device/f2/chips.json",
+        "count": 47,
+        "ioc": "ioc/family/F2.ioc",
+        "package": "STM32Cube_FW_F2_V1.9.3"
+      },
+      {
+        "family": "STM32F3",
+        "chips": "device/f3/chips.json",
+        "count": 93,
+        "ioc": "ioc/family/F3.ioc",
+        "package": "STM32Cube_FW_F3_V1.11.5"
+      },
+      {
+        "family": "STM32F4",
+        "chips": "device/f4/chips.json",
+        "count": 209,
+        "ioc": "ioc/family/F4.ioc",
+        "package": "STM32Cube_FW_F4_V1.28.3"
+      },
+      {
+        "family": "STM32F7",
+        "chips": "device/f7/chips.json",
+        "count": 121,
+        "ioc": "ioc/family/F7.ioc",
+        "package": "STM32Cube_FW_F7_V1.17.4"
+      },
+      {
+        "family": "STM32G0",
+        "chips": "device/g0/chips.json",
+        "count": 149,
+        "ioc": "ioc/family/G0.ioc",
+        "package": "STM32Cube_FW_G0_V1.6.2"
+      },
+      {
+        "family": "STM32G4",
+        "chips": "device/g4/chips.json",
+        "count": 177,
+        "ioc": "ioc/family/G4.ioc",
+        "package": "STM32Cube_FW_G4_V1.6.2"
+      },
+      {
+        "family": "STM32H5",
+        "chips": "device/h5/chips.json",
+        "count": 63,
+        "ioc": "ioc/family/H5.ioc",
+        "package": "STM32Cube_FW_H5_V1.5.1"
+      },
+      {
+        "family": "STM32H7",
+        "chips": "device/h7/chips.json",
+        "count": 138,
+        "ioc": "ioc/family/H7.ioc",
+        "package": "STM32Cube_FW_H7_V1.11.0"
+      },
+      {
+        "family": "STM32L0",
+        "chips": "device/l0/chips.json",
+        "count": 177,
+        "ioc": "ioc/family/L0.ioc",
+        "package": "STM32Cube_FW_L0_V1.12.4"
+      },
+      {
+        "family": "STM32L1",
+        "chips": "device/l1/chips.json",
+        "count": 87,
+        "ioc": "ioc/family/L1.ioc",
+        "package": "STM32Cube_FW_L1_V1.10.6"
+      },
+      {
+        "family": "STM32L4",
+        "chips": "device/l4/chips.json",
+        "count": 151,
+        "ioc": "ioc/family/L4.ioc",
+        "package": "STM32Cube_FW_L4_V1.18.2"
+      },
+      {
+        "family": "STM32L4+",
+        "chips": "device/l4+/chips.json",
+        "count": 60,
+        "ioc": "ioc/family/L4+.ioc",
+        "package": "STM32Cube_FW_L4_V1.18.2"
+      },
+      {
+        "family": "STM32L5",
+        "chips": "device/l5/chips.json",
+        "count": 15,
+        "ioc": "ioc/family/L5.ioc",
+        "package": "STM32Cube_FW_L5_V1.5.0"
+      },
+      {
+        "family": "STM32U0",
+        "chips": "device/u0/chips.json",
+        "count": 48,
+        "ioc": "ioc/family/U0.ioc",
+        "package": "STM32Cube_FW_U0_V1.2.0"
+      },
+      {
+        "family": "STM32U3",
+        "chips": "device/u3/chips.json",
+        "count": 21,
+        "ioc": "ioc/family/U3.ioc",
+        "package": "STM32Cube_FW_U3_V1.2.0"
+      },
+      {
+        "family": "STM32U5",
+        "chips": "device/u5/chips.json",
+        "count": 62,
+        "ioc": "ioc/family/U5.ioc",
+        "package": "STM32Cube_FW_U5_V1.8.0"
+      },
+      {
+        "family": "STM32WBA",
+        "chips": "device/wba/chips.json",
+        "count": 35,
+        "ioc": "ioc/family/WBA.ioc",
+        "package": "STM32Cube_FW_WBA_V1.7.0"
+      },
+      {
+        "family": "STM32WL",
+        "chips": "device/wl/chips.json",
+        "count": 12,
+        "ioc": "ioc/family/WL.ioc",
+        "package": "STM32Cube_FW_WL_V1.3.0"
+      }
+    ],
+    "chips": {
+      "path": "device/f1/chips.json",
+      "count": 111,
+      "coverage": "F1 全部 CPN",
+      "source": "dsh-stm32 resolveF1Chip + resolveHalChip（CubeMX db/mcu 的 58 个分组按容量字母展开 + 14 个代表型号）"
+    },
+    "svd": {
+      "dir": "device/f1/svd/",
+      "count": 6,
+      "kind": "st-svd",
+      "counts": {
+        "peripherals": 266,
+        "registers": 3703,
+        "fields": 27881
+      },
+      "source": {
+        "repo": "cmsis-svd/cmsis-svd-data",
+        "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+        "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+        "path": "data/STMicro/STM32F1<line>xx.svd"
+      },
+      "lines": [
+        {
+          "line": "100",
+          "path": "device/f1/svd/100.json",
+          "counts": {
+            "peripherals": 48,
+            "registers": 566,
+            "fields": 3220
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F100xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F100xx.svd",
+            "file": "STM32F100xx.svd",
+            "line": "100",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F100xx",
+            "version": "1.1"
+          }
+        },
+        {
+          "line": "101",
+          "path": "device/f1/svd/101.json",
+          "counts": {
+            "peripherals": 46,
+            "registers": 545,
+            "fields": 3087
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F101xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F101xx.svd",
+            "file": "STM32F101xx.svd",
+            "line": "101",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F101xx",
+            "version": "1.1"
+          }
+        },
+        {
+          "line": "102",
+          "path": "device/f1/svd/102.json",
+          "counts": {
+            "peripherals": 25,
+            "registers": 307,
+            "fields": 1741
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F102xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F102xx.svd",
+            "file": "STM32F102xx.svd",
+            "line": "102",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F102xx",
+            "version": "1.1"
+          }
+        },
+        {
+          "line": "103",
+          "path": "device/f1/svd/103.json",
+          "counts": {
+            "peripherals": 53,
+            "registers": 722,
+            "fields": 4833
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F103xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F103xx.svd",
+            "file": "STM32F103xx.svd",
+            "line": "103",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F103xx",
+            "version": "1.3"
+          }
+        },
+        {
+          "line": "105",
+          "path": "device/f1/svd/105.json",
+          "counts": {
+            "peripherals": 45,
+            "registers": 755,
+            "fields": 7409
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F105xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F105xx.svd",
+            "file": "STM32F105xx.svd",
+            "line": "105",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F105xx",
+            "version": "1.2"
+          }
+        },
+        {
+          "line": "107",
+          "path": "device/f1/svd/107.json",
+          "counts": {
+            "peripherals": 49,
+            "registers": 808,
+            "fields": 7591
+          },
+          "source": {
+            "kind": "st-svd",
+            "repo": "cmsis-svd/cmsis-svd-data",
+            "commit": "c65f8551e57c770344d229dcaa0bf838fa29aff4",
+            "path": "data/STMicro/STM32F107xx.svd",
+            "url": "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/c65f8551e57c770344d229dcaa0bf838fa29aff4/data/STMicro/STM32F107xx.svd",
+            "file": "STM32F107xx.svd",
+            "line": "107",
+            "license": "STMicroelectronics End User License Agreement v1.0（cmsis-svd-data 的 data/STMicro/License.html）",
+            "device": "STM32F107xx",
+            "version": "1.2"
+          }
+        }
+      ]
+    }
+  },
+  "startup": {
+    "dir": "startup/f1/",
+    "count": 14,
+    "package": "STM32Cube_FW_F1_V1.8.7",
+    "license": "Apache License 2.0（CMSIS Device 部分，Copyright ARM Limited - STMicroelectronics）",
+    "source": "ST 官方固件包 Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_*.s"
+  },
+  "headers": {
+    "dir": "headers/f1/",
+    "count": 16,
+    "package": "STM32Cube_FW_F1_V1.8.7",
+    "license": "Apache License 2.0（CMSIS Device 部分，Copyright ARM Limited - STMicroelectronics）",
+    "source": "ST 官方固件包 Drivers/CMSIS/Device/ST/STM32F1xx/Include/*.h"
+  },
+  "skipped": [
+    "STM32F100C4T6：F100 没有 x4 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F100C6T6：F100 没有 x6 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F100R4H6：F100 没有 x4 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F100R4T6：F100 没有 x4 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F100R6H6：F100 没有 x6 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F100R6T6：F100 没有 x6 这一容量档（固件包里的档位：xb/xe）",
+    "STM32F105R8T6：F105 没有 x8 这一容量档（固件包里的档位：xc）",
+    "STM32F105RBT6：F105 没有 xb 这一容量档（固件包里的档位：xc）",
+    "STM32F105V8H6：F105 没有 x8 这一容量档（固件包里的档位：xc）",
+    "STM32F105V8T6：F105 没有 x8 这一容量档（固件包里的档位：xc）",
+    "STM32F105VBH6：F105 没有 xb 这一容量档（固件包里的档位：xc）",
+    "STM32F105VBT6：F105 没有 xb 这一容量档（固件包里的档位：xc）",
+    "STM32F107RBT6：F107 没有 xb 这一容量档（固件包里的档位：xc）",
+    "STM32F107VBT6：F107 没有 xb 这一容量档（固件包里的档位：xc）",
+    "STM32F768AIYx 的容量字母 I：F7 的 line 768 没有匹配的启动文件档位",
+    "STM32F778AIYx 的容量字母 I：F7 的 line 778 没有匹配的启动文件档位",
+    "STM32H7R3A8Ix 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3I8Kx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3I8Tx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3L8Hx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3R8Vx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3V8Hx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3V8Tx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3V8Yx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3Z8Jx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R3Z8Tx 的容量字母 8：H7 的 line 7R3 没有匹配的启动文件档位",
+    "STM32H7R7A8Ix 的容量字母 8：H7 的 line 7R7 没有匹配的启动文件档位",
+    "STM32H7R7I8Kx 的容量字母 8：H7 的 line 7R7 没有匹配的启动文件档位",
+    "STM32H7R7I8Tx 的容量字母 8：H7 的 line 7R7 没有匹配的启动文件档位",
+    "STM32H7R7L8Hx 的容量字母 8：H7 的 line 7R7 没有匹配的启动文件档位",
+    "STM32H7R7Z8Jx 的容量字母 8：H7 的 line 7R7 没有匹配的启动文件档位",
+    "STM32H7S3A8Ix 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3I8Kx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3I8Tx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3L8Hx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3R8Vx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3V8Hx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3V8Tx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3V8Yx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3Z8Jx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S3Z8Tx 的容量字母 8：H7 的 line 7S3 没有匹配的启动文件档位",
+    "STM32H7S7A8Ix 的容量字母 8：H7 的 line 7S7 没有匹配的启动文件档位",
+    "STM32H7S7I8Kx 的容量字母 8：H7 的 line 7S7 没有匹配的启动文件档位",
+    "STM32H7S7I8Tx 的容量字母 8：H7 的 line 7S7 没有匹配的启动文件档位",
+    "STM32H7S7L8Hx 的容量字母 8：H7 的 line 7S7 没有匹配的启动文件档位",
+    "STM32H7S7Z8Jx 的容量字母 8：H7 的 line 7S7 没有匹配的启动文件档位",
+    "STM32WL54CCU6：固件包里没有启动文件 startup_stm32wl54xx.s",
+    "STM32WL54JCI6：固件包里没有启动文件 startup_stm32wl54xx.s",
+    "STM32WL55CCU6：固件包里没有启动文件 startup_stm32wl55xx.s",
+    "STM32WL55JCI6：固件包里没有启动文件 startup_stm32wl55xx.s",
+    "STM32WL5MOCH6：固件包里没有启动文件 startup_stm32wl5mxx.s"
+  ],
+  "files": [
+    {
+      "path": "device/c0/chips.json",
+      "bytes": 30675,
+      "sha256": "25f02690b8be542e3b74f4960eb333afa945bbd5cf8f2297715954cadc27da8b",
+      "source": "CubeMX db/mcu + STM32Cube_FW_C0_V1.4.1（C0 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f0/chips.json",
+      "bytes": 43140,
+      "sha256": "9ee1eed4594a4b726f53b3c8bf5449dc17047832ced6915ccc0e7b993b6a129e",
+      "source": "CubeMX db/mcu + STM32Cube_FW_F0_V1.11.6（F0 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f1/chips.json",
+      "bytes": 30776,
+      "sha256": "e2177863796e468d29ced11a876c85d8c82f901811020d879ed5b693d0cc8985",
+      "source": "CubeMX db/mcu + ST 官方固件包（F1 全部 CPN：db 分组展开 + 14 个代表型号）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f1/svd/100.json",
+      "bytes": 225540,
+      "sha256": "269f35f419ac434693510a713ba57c465ddc5138ac49754c48cc5ca66c9c25f6",
+      "source": "ST SVD STM32F100xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f1/svd/101.json",
+      "bytes": 216244,
+      "sha256": "021c0534bd5a8f87c988e7aa3fa9171f1fdad7a59203416c4f8699902b58f13a",
+      "source": "ST SVD STM32F101xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f1/svd/102.json",
+      "bytes": 122946,
+      "sha256": "48e3826ce5a26cf1a601c17a35749e2fdbab9884ace73f905bdf0763bab5e4bf",
+      "source": "ST SVD STM32F102xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f1/svd/103.json",
+      "bytes": 322552,
+      "sha256": "4a5c27f84b355e163995f02bab53866e6616b537b6f2910e57e7bc29f6ae5833",
+      "source": "ST SVD STM32F103xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f1/svd/105.json",
+      "bytes": 453407,
+      "sha256": "81d1fd23ddd8afbd1db0db193f52f4f89759635b28c98c1f606399fae4f28782",
+      "source": "ST SVD STM32F105xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f1/svd/107.json",
+      "bytes": 468261,
+      "sha256": "d162dee521ec0cb644da5d749c157e62bebb4322fdf8bfa32bd62244f2c4611b",
+      "source": "ST SVD STM32F107xx.svd → 精简事实表（见文件内 source 字段）",
+      "profile": "full"
+    },
+    {
+      "path": "device/f2/chips.json",
+      "bytes": 19298,
+      "sha256": "c1073a4c7119c7e3d5fa603d837cde01ddc337e706cfe3ab0de7bce4d7aacc75",
+      "source": "CubeMX db/mcu + STM32Cube_FW_F2_V1.9.3（F2 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f3/chips.json",
+      "bytes": 36568,
+      "sha256": "7b432bd58b3b45152aa22dd148d51662f6d8bf84d4188821b4662bb1bea0b53e",
+      "source": "CubeMX db/mcu + STM32Cube_FW_F3_V1.11.5（F3 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f4/chips.json",
+      "bytes": 81407,
+      "sha256": "2a5fe7c7e4cd691486961e2ce3e784495c943e7b173bd1e11ec1271782b8779c",
+      "source": "CubeMX db/mcu + STM32Cube_FW_F4_V1.28.3（F4 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/f7/chips.json",
+      "bytes": 47472,
+      "sha256": "856f749e6e28eb5473dcd9f8be45c0fe9a7c03d342eef57696048279f9c91998",
+      "source": "CubeMX db/mcu + STM32Cube_FW_F7_V1.17.4（F7 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/g0/chips.json",
+      "bytes": 57943,
+      "sha256": "71fdff0aca49ec790dd6fcb171317d9960d523bc332e450134ceba0c9451267c",
+      "source": "CubeMX db/mcu + STM32Cube_FW_G0_V1.6.2（G0 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/g4/chips.json",
+      "bytes": 68709,
+      "sha256": "c86020042ad5317c72df8bd5323b9e466810b413444dc480c8b8d8bed396f0bf",
+      "source": "CubeMX db/mcu + STM32Cube_FW_G4_V1.6.2（G4 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/h5/chips.json",
+      "bytes": 25079,
+      "sha256": "24edc8df4963b048268ac0d1b35a8ae3226c0acde0efdb58b6798f7cb4eede39",
+      "source": "CubeMX db/mcu + STM32Cube_FW_H5_V1.5.1（H5 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/h7/chips.json",
+      "bytes": 53921,
+      "sha256": "ed1ddc949f091f5ead17ec277b948850d161d7ee972c7ecb4195d8eaccc1f0ce",
+      "source": "CubeMX db/mcu + STM32Cube_FW_H7_V1.11.0（H7 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/l0/chips.json",
+      "bytes": 68386,
+      "sha256": "2fb1701557ec81c66eadf9938c0fd6d499b5f948154e0f5651944bafa103ccec",
+      "source": "CubeMX db/mcu + STM32Cube_FW_L0_V1.12.4（L0 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/l1/chips.json",
+      "bytes": 34209,
+      "sha256": "eb3f57d09c268e92d824f5a5db67f23d44c37d1cde3a240885f315634dbbc06c",
+      "source": "CubeMX db/mcu + STM32Cube_FW_L1_V1.10.6（L1 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/l4+/chips.json",
+      "bytes": 24137,
+      "sha256": "739c72d9f3c88d4e0f73eb4a0ed0a2e503af53ce226bf9265520ac1aed3b47bb",
+      "source": "CubeMX db/mcu + STM32Cube_FW_L4_V1.18.2（L4+ 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/l4/chips.json",
+      "bytes": 58772,
+      "sha256": "eccf175f50e7cb400c9a0c8d2cc85c7cd33bdc89de049c619c2a94c6f39dd259",
+      "source": "CubeMX db/mcu + STM32Cube_FW_L4_V1.18.2（L4 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/l5/chips.json",
+      "bytes": 6836,
+      "sha256": "c7229f89c6112713963a7560757c72ffa3cf2d8ca6f16bd77b9616db555fb8f7",
+      "source": "CubeMX db/mcu + STM32Cube_FW_L5_V1.5.0（L5 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/u0/chips.json",
+      "bytes": 19239,
+      "sha256": "98f2bdffb289c8f5571a700260af27af93731ce381aa35640cda31c3dc131338",
+      "source": "CubeMX db/mcu + STM32Cube_FW_U0_V1.2.0（U0 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/u3/chips.json",
+      "bytes": 9092,
+      "sha256": "460cca22cd15c0fd56f47e0c26e7832b8eaadeb9cdf30b8157c73abd12e2b4c3",
+      "source": "CubeMX db/mcu + STM32Cube_FW_U3_V1.2.0（U3 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/u5/chips.json",
+      "bytes": 24718,
+      "sha256": "e71b81d6ad86686686c9a19a46c6c5fbd4285740e8d35d01289b46797d751bf2",
+      "source": "CubeMX db/mcu + STM32Cube_FW_U5_V1.8.0（U5 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/wba/chips.json",
+      "bytes": 14795,
+      "sha256": "61d4283589e48393d610fb93bd188b26642e7480dc8ab1da6f546b232cd18411",
+      "source": "CubeMX db/mcu + STM32Cube_FW_WBA_V1.7.0（WBA 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "device/wl/chips.json",
+      "bytes": 5660,
+      "sha256": "5320a7fc205ff6ed8e38cfc672ec85b2d50c65362a4fc3d0d58fe0324a0f8fce",
+      "source": "CubeMX db/mcu + STM32Cube_FW_WL_V1.3.0（WL 全部 CPN）",
+      "profile": "core"
+    },
+    {
+      "path": "headers/f1/stm32f100xb.h",
+      "bytes": 460501,
+      "sha256": "88ceaa84c70d6b72378846f46139b63b6c66863a97cf0502049ca692ee6ca656",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f100xb.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f100xe.h",
+      "bytes": 505268,
+      "sha256": "9fece142c6e63348b2e3623a05ab3b5ec5e41b8e4c31e572b79525fbef400e8b",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f100xe.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f101x6.h",
+      "bytes": 411593,
+      "sha256": "56a2e4f93f1febf7c716703c3cb0327982bcddf05ca598c26c618f53355af580",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f101x6.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f101xb.h",
+      "bytes": 421869,
+      "sha256": "c310cfc3d5afe70a9cc2fead7dd6a852d302ee2c85e096f1e473df7573e0d269",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f101xb.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f101xe.h",
+      "bytes": 503201,
+      "sha256": "9dafcb66917c270337675bf27d7607dff88e2dfe81ca036c4b4e048616e1388b",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f101xe.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f101xg.h",
+      "bytes": 518065,
+      "sha256": "1fdf19e22bbbc64c28eaaab51cc1ed97a47400d5ec720b05b1be7901e75ab6e1",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f101xg.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f102x6.h",
+      "bytes": 503458,
+      "sha256": "c0bf0a4447e14395e908b9545380c3c1929919f7d1e294377ed1b0ac3955bc9b",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f102x6.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f102xb.h",
+      "bytes": 512973,
+      "sha256": "fe0233569238071756f17c289c6daa132b9006664749b0968c988e5030b48a4b",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f102xb.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f103x6.h",
+      "bytes": 832603,
+      "sha256": "8e827edef0fbbc1f9fef6d1ec07fcf2c3789f18a906884cf88ac5fec893521be",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103x6.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f103xb.h",
+      "bytes": 842883,
+      "sha256": "d9c7c613d9fea74220892b4fbc3e80617493acad82a04bafadab2b4a7198399c",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f103xe.h",
+      "bytes": 962263,
+      "sha256": "2104082df11b7e172ecf85461a72689b849e05b222a573e3cae0b2ab279800c3",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xe.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f103xg.h",
+      "bytes": 976208,
+      "sha256": "7ca8ab045885a99481ffb141e01b0cc4f6df4d5e1914561fc0ee67b6f4a4e99a",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xg.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f105xc.h",
+      "bytes": 1217012,
+      "sha256": "ee0cff14b833552194d0d4062e93f479cb640b18b5a7a19c749e753bd305d0f1",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f105xc.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f107xc.h",
+      "bytes": 1297147,
+      "sha256": "ffb02a8480dd670d0436bedc48fca222085f343d3019088d83d9348fb4632b4d",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f107xc.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/stm32f1xx.h",
+      "bytes": 10110,
+      "sha256": "05e93fa3ddefb2e83d762b9ca4de36e3bba9cd8e9690400fe9f2c11fc0a3cef5",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "headers/f1/system_stm32f1xx.h",
+      "bytes": 1758,
+      "sha256": "a54dfbb3480c672f532d472a6e84bcf34df6551771d2e9966c5a3503c676b6ab",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h（CMSIS 设备头，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "ioc/family/C0.ioc",
+      "bytes": 2932,
+      "sha256": "dfe1e936b29837a046bf4998c05b8e4fed18e85edf748a7e4f5863e75efcc1b2",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 C0 最小工程模板（源：templates/family/C0.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/F0.ioc",
+      "bytes": 2304,
+      "sha256": "9066291924afee17e2db8dbcf93f32be2414fe3024b5ed768554ba2f20279e48",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 F0 最小工程模板（源：templates/family/F0.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/F2.ioc",
+      "bytes": 3325,
+      "sha256": "237abbd5000abbcb2a7583d4b1f0d569e4c4de2d6dec5ec62e67d77618b98265",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 F2 最小工程模板（源：templates/family/F2.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/F3.ioc",
+      "bytes": 3404,
+      "sha256": "7388b4130d0101f9939925d237c87b063fd90bd5935c64d8da2dffe8958cfe83",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 F3 最小工程模板（源：templates/family/F3.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/F4.ioc",
+      "bytes": 3314,
+      "sha256": "f8ebf8976f52cc1e86991b67c92d11d914f481eeaaf49facba0b55de359a8edb",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 F4 最小工程模板（源：templates/family/F4.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/F7.ioc",
+      "bytes": 3910,
+      "sha256": "365820ccaee79f87d5fa56161d0cebff1372703494b52228ca7e1ba8485a5d97",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 F7 最小工程模板（源：templates/family/F7.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/G0.ioc",
+      "bytes": 3166,
+      "sha256": "d0068ffec2c10b987ae2b5f03b6d62830f8edd5f4a7f422548122a089d9f9066",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 G0 最小工程模板（源：templates/family/G0.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/G4.ioc",
+      "bytes": 4176,
+      "sha256": "2754514db5411cb3ce91e7a8f6dc8353438f1de2b24c0bc9345ccd23bcfd253b",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 G4 最小工程模板（源：templates/family/G4.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/H5.ioc",
+      "bytes": 4643,
+      "sha256": "30a6c4c2589ef3717550bcadd05f9cc8ae334a92da26da0cf2d6e02003f869e1",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 H5 最小工程模板（源：templates/family/H5.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/H7.ioc",
+      "bytes": 5521,
+      "sha256": "b2dd3f9ea00fbbb296dd5a9f697370493ac54a93134db844e103c288e2d5c2b6",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 H7 最小工程模板（源：templates/family/H7.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/L0.ioc",
+      "bytes": 3174,
+      "sha256": "0804f1dc0bc33619e874e7f637d6c3debd534b9bc47c585cf004428e94f069c6",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 L0 最小工程模板（源：templates/family/L0.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/L1.ioc",
+      "bytes": 3078,
+      "sha256": "583a8e214a555207d1fdbe908b183b1b6c5ac6614c465966cbc473884d3f5f2c",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 L1 最小工程模板（源：templates/family/L1.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/L4+.ioc",
+      "bytes": 3639,
+      "sha256": "6affb6592657a74a654e3f9d12dde2889c98f8c3f4123b2d80a627139e01f3b0",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 L4+ 最小工程模板（源：templates/family/L4+.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/L4.ioc",
+      "bytes": 3640,
+      "sha256": "5047d19d390de95c0e12c90d1c3e8225c1d32c575753aace9ffa65b5a3a332c5",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 L4 最小工程模板（源：templates/family/L4.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/L5.ioc",
+      "bytes": 3593,
+      "sha256": "9f7c9c7e5d7b8487453c2257395c086e0024b41561abc169e39b997541f04f6d",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 L5 最小工程模板（源：templates/family/L5.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/U0.ioc",
+      "bytes": 3806,
+      "sha256": "6e9b56299c3d9b3c10bff356972285f2216cd501d557250166ad13fdb71e8d56",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 U0 最小工程模板（源：templates/family/U0.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/U3.ioc",
+      "bytes": 4403,
+      "sha256": "d6d92182c8b65c0a48fef2af1b18a0e65901ea8c0c78db073d93e4d21ac60350",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 U3 最小工程模板（源：templates/family/U3.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/U5.ioc",
+      "bytes": 4024,
+      "sha256": "21b684ae7a296c2dff439cbb981d5e97756c39b92eca97846c705e3a9cf7fcdc",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 U5 最小工程模板（源：templates/family/U5.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/WBA.ioc",
+      "bytes": 3920,
+      "sha256": "3b9594c0df476aa6a12f4f1458d23e87a8a019c5b79b6ac51e04d0a91d2d3034",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 WBA 最小工程模板（源：templates/family/WBA.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/family/WL.ioc",
+      "bytes": 4070,
+      "sha256": "097461f2bfb5721bbd93583150fa65575dfcb44a9edbdb8abcecc0207a5869d8",
+      "source": "CubeMX 6.15 无头 config load+save 认证过的 WL 最小工程模板（源：templates/family/WL.ioc）",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F100C8Tx.ioc",
+      "bytes": 4084,
+      "sha256": "6e320e1ae5e7b758b903adc4ca2c29ba4e74ff645eddfed7f152ca67580821dc",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F100C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F100RCTx.ioc",
+      "bytes": 4086,
+      "sha256": "9fde94d585fd3c291ae27f712508fe63135338fa5928f3c45b45f223808f242d",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F100RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F101C4Tx.ioc",
+      "bytes": 4084,
+      "sha256": "534eae584c1e0772d29b7ce2733a2596d1fae8f88214adbce01c215ed184a572",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F101C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F101C8Tx.ioc",
+      "bytes": 4084,
+      "sha256": "eae74d12186c1aa299dbba307d8e99828a14e6788d3a48de2a35322785bee057",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F101C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F101RCTx.ioc",
+      "bytes": 4086,
+      "sha256": "2e19136c9f66ee6ac4f6e06c2f4b0a591eaae20ba58e6560f5d9d4d27316f20e",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F101RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F101RFTx.ioc",
+      "bytes": 4084,
+      "sha256": "3d203de50e973ba802a9287b8056ebc71f770f4399def551023e5fb7feceaeda",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F101RFT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F102C4Tx.ioc",
+      "bytes": 4084,
+      "sha256": "9e6aa25066665938ca5208c85efe2dfc5f9615ba6bbae1d0489ecf75f9ead146",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F102C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F102C8Tx.ioc",
+      "bytes": 4084,
+      "sha256": "bfc6873a1c9878dc6e861268bc905dbfa8ff915e0ba2bf0f97891f835e6a5e0a",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F102C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F103C4Tx.ioc",
+      "bytes": 4084,
+      "sha256": "ca3e8cdae214861e5652598c7fddfd3496b7cc4ae1cd23dddc7468b250c2270d",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F103C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F103C8Tx.ioc",
+      "bytes": 4084,
+      "sha256": "a487d32b1d3b88187fc0d2927ca4cd98c1512ca58d8600407364ab6467ed03f8",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F103C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F103RCTx.ioc",
+      "bytes": 4086,
+      "sha256": "235d83d947e5fd2ad6183c43ffb778ef3d643e452ef568fbb0f32cff87b7e832",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F103RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F103RFTx.ioc",
+      "bytes": 4084,
+      "sha256": "89e677470be036bc4aa349d865bb12b40432c18ea6cfa66aba147c80a268ba36",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F103RFT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F105RCTx.ioc",
+      "bytes": 4086,
+      "sha256": "5473b0f38d2ba73260a8cc10c7131ca7e3b911aca17a75dfc48ba0a58059854a",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F105RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ioc/minimal/STM32F107RCTx.ioc",
+      "bytes": 4084,
+      "sha256": "3e6b4b858ebfd361cf8297a541b48f1e2afbafb19f69e400c5abcb0f36071db0",
+      "source": "renderIoc(dsh-stm32 templates/scaffold/demo.ioc, STM32F107RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F100C8Tx_FLASH.ld",
+      "bytes": 8123,
+      "sha256": "d52a2f9207d5877cd017826317cf547e7173dcdb1e2d681f07a66fce4e41c9c4",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F100C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F100RCTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "d56eea61d0a91e19e1cfe463cfdeb6f941cd919995ea76bfff942cf2ae56a95f",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F100RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F101C4Tx_FLASH.ld",
+      "bytes": 8123,
+      "sha256": "32fa1263de429636b58711d10b1ab429b96d5eb88c0614c20627460efe7fef5a",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F101C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F101C8Tx_FLASH.ld",
+      "bytes": 8125,
+      "sha256": "a4b620f5c7e8ea5a24353f5750fdffbe01b43c78f908a86e8c287d3438f6dfd5",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F101C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F101RCTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "4d2db0458014cec687f5623082920bc0d747f9b0dc83ec83ae9ec0c240c771fa",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F101RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F101RFTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "02ecfdbb6eae848ce331cb7dcd5eda0fc7251494abca86fc4310b332d2d6300d",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F101RFT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F102C4Tx_FLASH.ld",
+      "bytes": 8123,
+      "sha256": "9e02f5d55536801057e322f302b4a9cae28349e14c7d21f7ec2304540fb66091",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F102C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F102C8Tx_FLASH.ld",
+      "bytes": 8125,
+      "sha256": "4c779eb072b2ca7fd95e7f276706a6f0cbb9acd37912f3c0389ae7b923982c1e",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F102C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F103C4Tx_FLASH.ld",
+      "bytes": 8123,
+      "sha256": "7741521805d2cd7dd8d180b31f90fc459130f963e56c3be87da6573b55e9d096",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F103C4T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F103C8Tx_FLASH.ld",
+      "bytes": 8125,
+      "sha256": "15338b1acd70f5cf8816080e85a3c87fd55ed946dd55e22f4a34c07569586c6a",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F103C8T6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F103RCTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "0fa3173d87fd95bbb3ae1b058b53a46dc0ac778cb3a86cd2a4cc53d2b42a440c",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F103RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F103RFTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "f6a461748d7e04ae50efb984271f8f37217701250fa28becf4a27b2783521f3a",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F103RFT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F105RCTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "e252a66484dfe9157f8a7bd5f56e02bc6c85ea2b96a25a7e5229fcc3218fc99d",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F105RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "ld/f1/STM32F107RCTx_FLASH.ld",
+      "bytes": 8127,
+      "sha256": "4102aea3c131a340d03e5fc147a344f9acf8f844d6d5b98620c84223730cbd11",
+      "source": "renderLinkerScript(templates/scaffold/STM32F103XX_FLASH.ld, STM32F107RCT6)",
+      "profile": "core"
+    },
+    {
+      "path": "startup/f1/startup_stm32f100xb.s",
+      "bytes": 10073,
+      "sha256": "627ed97c93a33e4678262f9403469f509c050dabc7e8467998016362517597df",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f100xb.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f100xe.s",
+      "bytes": 11301,
+      "sha256": "7aba359302b27457575a63c87b4e1718902d555f621f29bc5f56bd7b982b4e52",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f100xe.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f101x6.s",
+      "bytes": 8393,
+      "sha256": "bbd6f1acf892c549594521534be9560477cf4c1f904c5ac3cd6f38e5f87a1ea7",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f101x6.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f101xb.s",
+      "bytes": 8809,
+      "sha256": "fd97158a935c10b1d6701721b78b57da6d472d2f8a8fe672f8fc0c29b5428ef8",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f101xb.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f101xe.s",
+      "bytes": 10401,
+      "sha256": "2cb8b1d4c77cf56e39256eafbc167f7a360be3bfd07f43a5afcc0bbd6c0d7097",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f101xe.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f101xg.s",
+      "bytes": 11095,
+      "sha256": "71c2341a2b56c99e0963dff275df48a70f4cd9b4217b71b0200543481ec49ea0",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f101xg.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f102x6.s",
+      "bytes": 8635,
+      "sha256": "de15b09885aa64a55c3be274046ca16003eccdd434b02176f0644d1d714f3ee3",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f102x6.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f102xb.s",
+      "bytes": 9099,
+      "sha256": "d6a7da9e8c76932edcad28a2e0ff5da429a5ffff193d9dda087bc73ee7de040e",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f102xb.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f103x6.s",
+      "bytes": 9272,
+      "sha256": "56254accb4a72fe36b48e518bc7ea28e577353938a9c429cd847da52f660ce9e",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103x6.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f103xb.s",
+      "bytes": 9725,
+      "sha256": "a9a5fc7ed5ff617527dd98b3092830f4d17ed4bf57c99eac2c53bdb514ce138c",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xb.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f103xe.s",
+      "bytes": 12022,
+      "sha256": "04d6550310b491d5d8ad4de87b9cecb631b5ba5a284340e31bc94e0d05e4230b",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xe.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f103xg.s",
+      "bytes": 12174,
+      "sha256": "413a437ab1246c1506e5ba421d38efc0fef277e6f851af6c09904a3bafee84f9",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xg.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f105xc.s",
+      "bytes": 11753,
+      "sha256": "d189def35e547ee70e70a82648b03621587ac4384bf0d78245aafcf0b6bf7d42",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f105xc.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    },
+    {
+      "path": "startup/f1/startup_stm32f107xc.s",
+      "bytes": 12008,
+      "sha256": "71db8ed11634c230e3c04381cd899d1622b2ba58e3ac03b1e6c202eceec6713a",
+      "source": "ST 官方固件包 STM32Cube_FW_F1_V1.8.7 / Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f107xc.s（gcc 启动文件，Apache License 2.0）",
+      "profile": "full"
+    }
+  ]
+}

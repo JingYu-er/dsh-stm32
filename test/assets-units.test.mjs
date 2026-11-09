@@ -1,38 +1,34 @@
-// stm32_assets（资源包下载器）单元测试：全部离线。
+// stm32_assets（插件内置资源）单元测试：全部离线，不碰真实 assets/ 之外的任何目录。
 //
-// 怎么做到"一次网络都不发"：registerAssets() 接受 options.fetchImpl（生产不传），
-// 测试注入一个假 fetch —— 它按 ASSETS_SOURCES 的真实 baseUrl 前缀切出相对路径，
-// 从内存里的 Map 取内容，也可以按 host 假装 404（模拟某条线路不通）。
-// 于是"多源回退""全源失败"这些分支都被真实走到，却不碰任何 socket。
-// 本地目录也用 DSH_STM32_ASSETS 指到 mkdtemp 出来的临时目录，不碰真实 home。
+// 2026-11 起资源随插件包发布（assets/ 是 flat 布局：manifest.json 与 device/、ioc/ 同层），
+// 下载器已经删除。这里覆盖四件事：flat/历史布局的发现、manifest 校验、逐文件完整性检查、
+// 以及"内置根绝不被 prune 删除"这条安全边界。
 //
 // 运行：node --test test/assets-units.test.mjs（需先 npm run build）
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import {
-  ASSETS_SOURCES,
   assetsRootInfo,
-  fetchManifest,
+  bundledAssetsRoot,
+  ensureAssets,
   listInstalledVersions,
-  localAssetsRoot,
   parseManifest,
+  profileFiles,
   pruneOldVersions,
   readLocalManifest,
   resolveAssetFile,
   sha256Hex,
-  verifyAndInstall,
   verifyInstalled,
 } from "../lib/engine/assets.js";
 import { ASSETS_TOOL, outputSchema, registerAssets } from "../lib/tools/assets.js";
 
 /* ------------------------------ 宿主契约守卫 ------------------------------ */
 
-/** 与 test/schema-guard.mjs 同语义的精简版：additionalProperties:false 严格、不许 null/undefined。 */
 function checkSchema(schema, value, path = "value", problems = []) {
   if (schema === undefined) return problems;
   if (value === undefined) {
@@ -81,59 +77,54 @@ function reportProblems(label, schema, value) {
   if (problems.length > 0) assert.fail(label + " 的输出不符合宿主契约：\n  - " + problems.join("\n  - "));
 }
 
-/* ------------------------------ 假仓库与假 fetch ------------------------------ */
+/* ------------------------------ 夹具 ------------------------------ */
 
 const CORE_GLOBS = ["device/**", "ioc/**", "ld/**"];
-const FULL_GLOBS = [...CORE_GLOBS, "chipdb/**", "diagrams/**"];
-
+const FULL_GLOBS = [...CORE_GLOBS, "startup/**", "headers/**"];
 const CORPUS = [
-  { path: "device/f1/chips.json", body: '{"chips":[{"cpn":"STM32F103C8T6"}]}\n' },
-  { path: "device/f1/memory.json", body: '{"devices":[]}\n' },
+  { path: "device/f1/chips.json", body: '{"chips":[{"cpn":"STM32F103C8T6","flashBytes":65536,"ramBytes":20480}]}\n' },
   { path: "device/f1/svd/103.json", body: '{"peripherals":[]}\n' },
-  { path: "ioc/minimal/STM32F103C8T6.ioc", body: "Mcu.CPN=STM32F103C8T6\n" },
-  { path: "ld/f1/STM32F103C8T6_FLASH.ld", body: "MEMORY { FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 64K }\n" },
-  { path: "chipdb/f1/TEST.xml", body: "<device/>\n" },
-  { path: "diagrams/f1/TEST.svg", body: "<svg/>\n" },
+  { path: "ioc/minimal/STM32F103C8Tx.ioc", body: "Mcu.CPN=STM32F103C8T6\n" },
+  { path: "ld/f1/STM32F103C8Tx_FLASH.ld", body: "MEMORY { FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 64K }\n" },
+  { path: "headers/f1/stm32f1xx.h", body: "#ifndef __STM32F1XX_H\n#endif\n" },
+  { path: "startup/f1/startup_stm32f103xb.s", body: ".syntax unified\n_estack: .word 0\n" },
 ];
-const CORE_COUNT = 5;
+const CORE_COUNT = CORPUS.filter((file) => !file.path.startsWith("headers/") && !file.path.startsWith("startup/")).length;
 
-function makeManifest({ version = "2026.10.30-1", files = CORPUS, profiles = { core: CORE_GLOBS, full: FULL_GLOBS } } = {}) {
+function makeManifest({ version = "2026.11.09-1", files = CORPUS } = {}) {
   const entries = files.map((file) => ({
     path: file.path,
     bytes: Buffer.byteLength(file.body),
     sha256: sha256Hex(Buffer.from(file.body)),
     source: "test",
-    profile: file.path.startsWith("chipdb/") || file.path.startsWith("diagrams/") ? "full" : "core",
+    profile: file.path.startsWith("headers/") || file.path.startsWith("startup/") ? "full" : "core",
   }));
-  return { name: "dsh-stm32-assets", version, schema: 2, profiles, files: entries, skipped: [] };
+  return { name: "dsh-stm32-assets", version, schema: 2, profiles: { core: CORE_GLOBS, full: FULL_GLOBS }, files: entries, skipped: [] };
 }
 
-/** 内存里的"源仓库"：相对路径 → 内容。 */
-function servedMap(files = CORPUS, manifest = makeManifest()) {
-  const served = new Map();
-  served.set("manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-  for (const file of files) served.set(file.path, file.body);
-  return served;
+/** 在 dir 里写一份 flat 资源（manifest.json 与 device/… 同层）。 */
+function writeFlat(dir, { version = "2026.11.09-1", files = CORPUS, skip = [] } = {}) {
+  const manifest = makeManifest({ version, files });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+  for (const file of files) {
+    if (skip.includes(file.path)) continue;
+    const target = join(dir, ...file.path.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.body);
+  }
+  return manifest;
 }
 
-/**
- * 假 fetch：不联网。按 ASSETS_SOURCES 的 baseUrl 前缀切出相对路径后从 served 取内容；
- * failHosts 里的 host 一律回 404（用来测换源）；corrupt 里的路径换成坏内容（用来测 sha256）。
- */
-function makeFakeFetch({ served = new Map(), failHosts = [], corrupt = new Map() } = {}) {
-  const calls = [];
-  const fetchImpl = async (url) => {
-    const urlText = String(url);
-    calls.push(urlText);
-    const source = ASSETS_SOURCES.find((item) => urlText.startsWith(item.baseUrl));
-    if (source === undefined) return new Response("unknown source", { status: 500 });
-    if (failHosts.includes(new URL(urlText).host)) return new Response("not found", { status: 404 });
-    const rel = decodeURIComponent(urlText.slice(source.baseUrl.length));
-    if (!served.has(rel)) return new Response("not found", { status: 404 });
-    const body = corrupt.has(rel) ? corrupt.get(rel) : served.get(rel);
-    return new Response(body, { status: 200 });
-  };
-  return { fetchImpl, calls };
+/** 老布局：<root>/<version>/manifest.json + install.json。 */
+function writeVersioned(root, version) {
+  const dir = join(root, version);
+  writeFlat(dir, { version });
+  writeFileSync(
+    join(dir, "install.json"),
+    JSON.stringify({ version, profiles: ["core", "full"], installedAt: "2026-11-01T00:00:00.000Z" }, null, 2) + "\n",
+  );
+  return dir;
 }
 
 function tempRoot() {
@@ -144,8 +135,9 @@ function envFor(root) {
   return { DSH_STM32_ASSETS: root };
 }
 
-/** 用假 ctx 收集工具定义（与宿主一致的注册方式），并注入假 fetch / 假环境。 */
-function toolFor({ env, fetchImpl }) {
+/* ------------------------------ 工具宿主 ------------------------------ */
+
+function toolFor(env) {
   const defs = new Map();
   const ctx = {
     tools: {
@@ -155,366 +147,257 @@ function toolFor({ env, fetchImpl }) {
       },
     },
   };
-  registerAssets(ctx, { env, ...(fetchImpl === undefined ? {} : { fetchImpl }) });
+  registerAssets(ctx, { env });
   const definition = defs.get(ASSETS_TOOL);
   assert.ok(definition, "stm32_assets 应已注册");
   return definition;
 }
 
-async function runTool(options, args) {
-  const definition = toolFor(options);
+async function runTool(env, args) {
+  const definition = toolFor(env);
   const value = await definition.execute(args, { signal: new AbortController().signal });
-  // 每次工具调用都按 output.schema 校验：形状不合规在这里就炸，不留给宿主。
   reportProblems("stm32_assets(" + String(args.action ?? "list") + ")", outputSchema, value);
   return value;
 }
 
-/** 直接走引擎装一版（不经过工具层）。 */
-async function installVersion(env, version, profile = "core") {
-  const manifest = makeManifest({ version });
-  const served = servedMap(CORPUS, manifest);
-  const fake = makeFakeFetch({ served });
-  const result = await verifyAndInstall({
-    manifest,
-    manifestText: served.get("manifest.json"),
-    profile,
-    env,
-    fetchImpl: fake.fetchImpl,
-  });
-  assert.equal(result.ok, true, "夹具安装应成功：" + result.message);
-  return { result, fake, manifest };
-}
+const BUNDLED_ENV = { DSH_STM32_ASSETS: "" };
 
 /* ------------------------------ 用例 ------------------------------ */
 
-test("fetchManifest：假 fetch 从主源拉到 manifest，不联网也不换源", async () => {
-  const manifest = makeManifest();
-  const fake = makeFakeFetch({ served: servedMap(CORPUS, manifest) });
-  const result = await fetchManifest({ sources: [ASSETS_SOURCES[0]], fetchImpl: fake.fetchImpl });
-  assert.equal(result.ok, true, result.error);
-  assert.equal(result.source.id, "github");
-  assert.equal(result.manifest.version, "2026.10.30-1");
-  assert.equal(result.manifest.files.length, CORPUS.length);
-  assert.deepEqual(result.attempts, [], "第一源就通，不应有失败记录");
-  assert.equal(fake.calls.length, 1);
-  assert.ok(fake.calls[0].startsWith(ASSETS_SOURCES[0].baseUrl), "请求应打在 github raw 上：" + fake.calls[0]);
+test("assetsRootInfo：默认指向插件内置 assets/，DSH_STM32_ASSETS 仍可覆盖", () => {
+  const bundled = assetsRootInfo(BUNDLED_ENV);
+  assert.equal(bundled.root, bundledAssetsRoot());
+  assert.match(bundled.origin, /插件内置/u);
+  assert.ok(existsSync(join(bundled.root, "manifest.json")), "内置 assets/ 必须有 manifest.json");
+
+  const override = assetsRootInfo({ DSH_STM32_ASSETS: "D:/tmp/some-assets" });
+  assert.match(override.origin, /DSH_STM32_ASSETS/u);
+  assert.match(override.root, /some-assets/u);
 });
 
-test("refresh（默认 profile=core）逐文件 sha256 校验后装好，不碰 chipdb/diagrams", async () => {
-  const root = tempRoot();
-  try {
-    const manifest = makeManifest();
-    const fake = makeFakeFetch({ served: servedMap(CORPUS, manifest) });
-    const value = await runTool({ env: envFor(root), fetchImpl: fake.fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, true, value.message);
-    assert.equal(value.profile, "core");
-    assert.equal(value.fileCount, CORE_COUNT);
-    assert.ok(value.files.every((file) => file.status === "ok"), "每个文件都应通过 sha256");
-    assert.match(value.message, /github/u, "报告里要写清走了哪个源");
-    const versionDir = join(root, manifest.version);
-    assert.ok(existsSync(join(versionDir, "device/f1/chips.json")), "core 文件应落盘");
-    assert.ok(existsSync(join(versionDir, "manifest.json")), "manifest 原文应随包保存");
-    assert.ok(existsSync(join(versionDir, "install.json")), "安装记录应写盘");
-    assert.equal(existsSync(join(versionDir, "chipdb/f1/TEST.xml")), false, "core 不该下 chipdb");
-    assert.equal(existsSync(join(versionDir, "diagrams/f1/TEST.svg")), false, "core 不该下 diagrams");
-    assert.ok(
-      fake.calls.every((url) => !url.includes("chipdb") && !url.includes("diagrams")),
-      "core 安装时连请求都不该发到 chipdb/diagrams：" + fake.calls.join(" | "),
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test("真实内置 manifest：v2、core 与 full 分层、13 族事实都在", () => {
+  const root = bundledAssetsRoot();
+  const parsed = parseManifest(readFileSync(join(root, "manifest.json"), "utf8"));
+  assert.equal(parsed.error, "");
+  const manifest = parsed.manifest;
+  assert.ok(manifest);
+  assert.equal(manifest.schema, 2);
+  assert.ok(manifest.files.length >= 100, "内置文件数应 >= 100，实际 " + String(manifest.files.length));
+  const core = profileFiles(manifest, "core");
+  const full = profileFiles(manifest, "full");
+  assert.equal(core.length, 75, "core 应含 75 个文件（device 27 + ioc 34 + ld 14）");
+  assert.equal(full.length, 105, "full 应含 105 个文件");
+  assert.ok(full.length > core.length);
+  assert.ok(core.some((file) => file.path === "device/f1/chips.json"));
+  assert.ok(full.some((file) => file.path === "headers/f1/stm32f1xx.h"));
+  assert.ok(!core.some((file) => file.path.startsWith("headers/")), "headers 只在 full");
+  assert.ok(!core.some((file) => file.path.startsWith("startup/")), "startup 只在 full");
+  const missing = manifest.files.filter((file) => !existsSync(join(root, ...file.path.split("/"))));
+  assert.deepEqual(missing.map((file) => file.path), [], "manifest 里每个文件都应真的在 assets/ 里");
 });
 
-test("sha256 不符：整次拒绝、删半成品，已装版本一个字节不动", async () => {
+test("flat 根：listInstalledVersions 认作 bundled 当前版本，versionDir 就是根", () => {
   const root = tempRoot();
   try {
-    const env = envFor(root);
-    const manifest = makeManifest();
-    const first = await runTool({ env, fetchImpl: makeFakeFetch({ served: servedMap(CORPUS, manifest) }).fetchImpl }, { action: "refresh" });
-    assert.equal(first.ok, true, first.message);
-    const versionDir = join(root, manifest.version);
-    const chipsPath = join(versionDir, "device/f1/chips.json");
-    const original = readFileSync(chipsPath, "utf8");
-
-    const corrupt = new Map([["device/f1/chips.json", '{"chips":["evil"]}\n']]);
-    const fake = makeFakeFetch({ served: servedMap(CORPUS, manifest), corrupt });
-    const value = await runTool({ env, fetchImpl: fake.fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, false, "哈希不符必须整次失败");
-    assert.match(value.message, /校验失败/u);
-    assert.match(value.message, /device\/f1\/chips\.json/u, "要点名是哪个文件");
-    assert.match(value.message, /sha256 对不上/u);
-    assert.match(value.offlineFallback, /不再内置芯片表/u, "失败时要说清没有内置表可退");
-    assert.match(value.offlineFallback, /stm32_assets refresh/u, "并给出 refresh 这条路");
-    assert.equal(readFileSync(chipsPath, "utf8"), original, "半成品不能覆盖已装好的文件");
-    assert.equal(listInstalledVersions(env).length, 1, "仍然只有一版可用的安装");
-    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "临时目录必须删干净");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("manifest 列了但源上没有：失败点名文件与 404，且不留下版本目录", async () => {
-  const root = tempRoot();
-  try {
-    const manifest = makeManifest();
-    const served = servedMap(CORPUS, manifest);
-    served.delete("ld/f1/STM32F103C8T6_FLASH.ld");
-    const value = await runTool({ env: envFor(root), fetchImpl: makeFakeFetch({ served }).fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, false);
-    assert.match(value.message, /ld\/f1\/STM32F103C8T6_FLASH\.ld/u);
-    assert.ok(value.attempts.some((line) => line.includes("404")), "尝试记录里要有 404：" + value.attempts.join(" | "));
-    assert.deepEqual(readdirSync(root), [], "失败不应留下任何东西");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("多源回退：GitHub 404 后自动换 jsDelivr，报告写明实际源", async () => {
-  const root = tempRoot();
-  try {
-    const manifest = makeManifest();
-    const fake = makeFakeFetch({ served: servedMap(CORPUS, manifest), failHosts: ["raw.githubusercontent.com"] });
-    const value = await runTool({ env: envFor(root), fetchImpl: fake.fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, true, value.message);
-    assert.ok(value.source.includes("jsdelivr"), "实际来源应是 jsdelivr：" + value.source);
-    assert.ok(
-      value.attempts.some((line) => line.includes("github") && line.includes("404")),
-      "要记录第一源为什么不行：" + value.attempts.join(" | "),
-    );
-    assert.ok(value.files.every((file) => file.detail.includes("jsdelivr")), "每个文件都要标出实际来源");
-    assert.ok(existsSync(join(root, manifest.version, "device/f1/chips.json")));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("全源失败：ok=false、三个源都记下来，并明确说没有内置表可退、要 refresh", async () => {
-  const root = tempRoot();
-  try {
-    const fake = makeFakeFetch({
-      served: servedMap(CORPUS),
-      failHosts: ["raw.githubusercontent.com", "cdn.jsdelivr.net", "raw.gitcode.com"],
-    });
-    const value = await runTool({ env: envFor(root), fetchImpl: fake.fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, false);
-    assert.equal(value.attempts.length, 3, "三个源都要有尝试记录：" + value.attempts.join(" | "));
-    assert.match(value.offlineFallback, /不再内置芯片表/u);
-    assert.match(value.offlineFallback, /action=refresh/u);
-    assert.match(value.offlineFallback, /stm32_assets refresh/u, "要给出具体该跑什么");
-    assert.match(value.message, /刷新失败/u);
-    assert.deepEqual(readdirSync(root), []);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("profile=full 才装 chipdb/diagrams；core 装过再 full 会合并 profiles", async () => {
-  const root = tempRoot();
-  try {
-    const env = envFor(root);
-    const manifest = makeManifest();
-    const coreFake = makeFakeFetch({ served: servedMap(CORPUS, manifest) });
-    const core = await runTool({ env, fetchImpl: coreFake.fetchImpl }, { action: "refresh" });
-    assert.equal(core.ok, true, core.message);
-    const fullFake = makeFakeFetch({ served: servedMap(CORPUS, manifest) });
-    const full = await runTool({ env, fetchImpl: fullFake.fetchImpl }, { action: "refresh", profile: "full" });
-    assert.equal(full.ok, true, full.message);
-    assert.equal(full.fileCount, CORPUS.length);
-    assert.ok(fullFake.calls.some((url) => url.includes("chipdb/")), "full 才请求 chipdb");
-    const versionDir = join(root, manifest.version);
-    assert.ok(existsSync(join(versionDir, "chipdb/f1/TEST.xml")));
-    assert.ok(existsSync(join(versionDir, "diagrams/f1/TEST.svg")));
-    const versions = listInstalledVersions(env);
+    const manifest = writeFlat(root);
+    const versions = listInstalledVersions(envFor(root));
     assert.equal(versions.length, 1);
-    assert.deepEqual(versions[0].profiles, ["core", "full"], "两次安装的 profile 应合并记录");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("prune：只留当前与上一版，旧版本与 .tmp- 残留一起清", async () => {
-  const root = tempRoot();
-  try {
-    const env = envFor(root);
-    await installVersion(env, "2026.9.1");
-    await installVersion(env, "2026.10.30-1");
-    await installVersion(env, "2026.11.2");
-    // 模拟下载中断留下的半成品目录
-    const stale = join(root, "2026.9.1.tmp-999-1");
-    mkdirSync(stale, { recursive: true });
-    writeFileSync(join(stale, "half.bin"), "half");
-
-    const pruned = pruneOldVersions(env, 2);
-    assert.deepEqual(pruned.removed, ["2026.9.1"]);
-    assert.deepEqual(pruned.kept, ["2026.11.2", "2026.10.30-1"]);
-    assert.equal(existsSync(join(root, "2026.9.1")), false);
-    assert.equal(existsSync(join(root, "2026.11.2")), true);
-    assert.equal(existsSync(join(root, "2026.10.30-1")), true);
-    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], ".tmp- 残留要清掉");
-    assert.ok(pruned.reclaimedBytes > 0, "要报告回收了多少字节");
-    const versions = listInstalledVersions(env);
-    assert.equal(versions.length, 2);
-    assert.equal(versions[0].version, "2026.11.2");
+    assert.equal(versions[0].version, manifest.version);
+    assert.equal(versions[0].bundled, true);
     assert.equal(versions[0].current, true);
+    assert.deepEqual(versions[0].profiles, ["core", "full"]);
+    const state = readLocalManifest(envFor(root));
+    assert.equal(state.bundled, true);
+    assert.equal(state.versionDir, root);
+    assert.equal(state.error, "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("DSH_STM32_ASSETS 覆盖安装根；不设时退回 USERPROFILE/.dsh-stm32/assets", async () => {
+test("老布局仍可读：只有 <version>/install.json 时也能发现与读取", () => {
   const root = tempRoot();
   try {
-    assert.equal(localAssetsRoot({ DSH_STM32_ASSETS: root }), root);
-    assert.equal(assetsRootInfo({ DSH_STM32_ASSETS: root }).origin, "DSH_STM32_ASSETS");
-    const fakeHome = join(tmpdir(), "fake-home-" + String(process.pid));
-    assert.equal(localAssetsRoot({ USERPROFILE: fakeHome }), join(fakeHome, ".dsh-stm32", "assets"));
-    assert.equal(assetsRootInfo({ USERPROFILE: fakeHome }).origin, "USERPROFILE");
-
-    // 覆盖不只是"算路径"：实际安装也必须落在覆盖目录里。
-    const manifest = makeManifest();
-    const value = await runTool({ env: envFor(root), fetchImpl: makeFakeFetch({ served: servedMap(CORPUS, manifest) }).fetchImpl }, { action: "refresh" });
-    assert.equal(value.ok, true, value.message);
-    assert.ok(existsSync(join(root, manifest.version, "device/f1/chips.json")));
+    const dir = writeVersioned(root, "2026.10.01-1");
+    const versions = listInstalledVersions(envFor(root));
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0].bundled, false);
+    assert.equal(versions[0].current, true);
+    const state = readLocalManifest(envFor(root), "2026.10.01-1");
+    assert.equal(state.versionDir, dir);
+    assert.equal(state.bundled, false);
+    assert.equal(state.error, "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("action=list 形状：没装时可用、装好后报版本/文件/占用", async () => {
+test("flat 与历史版本并存：flat 优先且只有它 current", () => {
   const root = tempRoot();
   try {
+    writeVersioned(root, "2026.10.01-1");
+    const flat = writeFlat(root, { version: "2026.11.09-1" });
+    const versions = listInstalledVersions(envFor(root));
+    assert.equal(versions.length, 2);
+    assert.equal(versions[0].version, flat.version);
+    assert.equal(versions[0].bundled, true);
+    assert.equal(versions[0].current, true);
+    assert.equal(versions[1].current, false);
+    assert.equal(readLocalManifest(envFor(root)).versionDir, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureAssets：内置真实资源 ok/cache/bundled；缺 chips.json 时 missing 并指向重装插件", async () => {
+  const bundled = await ensureAssets({ env: BUNDLED_ENV });
+  assert.equal(bundled.ok, true, bundled.message);
+  assert.equal(bundled.status, "cache");
+  assert.equal(bundled.source, "bundled");
+  assert.ok(bundled.filePath.endsWith(join("device", "f1", "chips.json")));
+  assert.match(bundled.message, /插件内置资源/u);
+
+  const root = tempRoot();
+  try {
+    writeFlat(root, { skip: ["device/f1/chips.json"] });
+    const missing = await ensureAssets({ env: envFor(root) });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, "missing");
+    assert.match(missing.message, /插件安装不完整/u);
+    assert.match(missing.message, /重装插件/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveAssetFile：core 能取 device/，full-only 文件在 core 里被拒，缺文件点名", () => {
+  const root = tempRoot();
+  try {
+    writeFlat(root);
     const env = envFor(root);
-    const empty = await runTool({ env }, {});
-    assert.equal(empty.action, "list");
-    assert.equal(empty.ok, true);
-    assert.deepEqual(empty.versions, []);
-    assert.match(empty.offlineFallback, /不再内置芯片表/u, "没装时要说清没有内置表可退");
+    const chips = resolveAssetFile("core", "device/f1/chips.json", env);
+    assert.equal(chips.ok, true, chips.error);
+    assert.ok(chips.path.endsWith(join("device", "f1", "chips.json")));
 
-    await installVersion(env, "2026.10.30-1");
-    const listed = await runTool({ env }, { action: "list" });
-    assert.equal(listed.ok, true);
-    assert.equal(listed.version, "2026.10.30-1");
-    assert.equal(listed.versions.length, 1);
-    assert.equal(listed.versions[0].current, true);
-    assert.equal(listed.fileCount, CORE_COUNT);
-    assert.ok(listed.files.every((file) => file.status === "present"));
-    assert.ok(listed.totalBytes > 0);
-    assert.match(listed.message, /2026\.10\.30-1/u);
+    const header = resolveAssetFile("core", "headers/f1/stm32f1xx.h", env);
+    assert.equal(header.ok, false);
+    assert.match(header.error, /profile=full/u);
+
+    const full = resolveAssetFile("full", "headers/f1/stm32f1xx.h", env);
+    assert.equal(full.ok, true, full.error);
+
+    rmSync(join(root, "headers/f1/stm32f1xx.h"), { force: true });
+    const gone = resolveAssetFile("full", "headers/f1/stm32f1xx.h", env);
+    assert.equal(gone.ok, false);
+    assert.match(gone.error, /本地缺这个文件/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("action=verify：装好后逐个 sha256 通过；篡改一个文件会报 changed 并给出修复动作", async () => {
+test("verifyInstalled：逐文件 sha256 对上才 ok；改一个字节变成 changed 并点名", () => {
   const root = tempRoot();
   try {
+    writeFlat(root);
     const env = envFor(root);
-    const installed = await installVersion(env, "2026.10.30-1");
-    const good = await runTool({ env }, { action: "verify" });
+    const good = verifyInstalled({ profile: "full", env });
     assert.equal(good.ok, true, good.message);
-    assert.equal(good.fileCount, CORE_COUNT);
+    assert.equal(good.fileCount, CORPUS.length);
     assert.ok(good.files.every((file) => file.status === "ok"));
 
-    writeFileSync(join(root, "2026.10.30-1/device/f1/chips.json"), '{"chips":[]}\n');
-    const bad = await runTool({ env }, { action: "verify" });
+    writeFileSync(join(root, "device/f1/chips.json"), '{"chips":["tampered"]}\n');
+    const bad = verifyInstalled({ profile: "core", env });
     assert.equal(bad.ok, false);
-    const changed = bad.files.find((file) => file.status === "changed");
-    assert.ok(changed, "要指出哪个文件变了：" + JSON.stringify(bad.files));
-    assert.equal(changed.path, "device/f1/chips.json");
-    assert.match(bad.message, /refresh/u, "要告诉用户怎么修");
-    assert.equal(installed.result.ok, true);
+    const hit = bad.files.find((file) => file.path === "device/f1/chips.json");
+    assert.equal(hit.status, "changed");
+    assert.match(bad.message, /重装插件/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("action=prune 的工具形状：三个版本清理后剩两个，schema 仍合规", async () => {
+test("prune：内置根绝不删除；历史版本按 keep 清理，.tmp- 残留一起清", () => {
+  const bundled = pruneOldVersions(BUNDLED_ENV, 2);
+  assert.deepEqual(bundled.removed, []);
+  assert.match(bundled.message, /不会被删除/u);
+  assert.ok(existsSync(join(bundledAssetsRoot(), "manifest.json")));
+
   const root = tempRoot();
   try {
-    const env = envFor(root);
-    await installVersion(env, "2026.9.1");
-    await installVersion(env, "2026.10.30-1");
-    await installVersion(env, "2026.11.2");
-    const value = await runTool({ env }, { action: "prune" });
-    assert.equal(value.action, "prune");
-    assert.equal(value.ok, true);
-    assert.equal(value.versions.length, 2);
-    assert.equal(value.version, "2026.11.2");
-    assert.match(value.message, /回收/u);
+    writeVersioned(root, "2026.09.01-1");
+    const second = writeVersioned(root, "2026.10.01-1");
+    const third = writeVersioned(root, "2026.11.09-1");
+    const tmp = join(root, "2026.11.09-1.tmp-abc");
+    mkdirSync(tmp, { recursive: true });
+    const result = pruneOldVersions(envFor(root), 2);
+    assert.deepEqual(result.removed, ["2026.09.01-1"]);
+    assert.ok(!existsSync(join(root, "2026.09.01-1")));
+    assert.ok(existsSync(second));
+    assert.ok(existsSync(third));
+    assert.ok(!existsSync(tmp), ".tmp- 残留应被清掉");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("resolveAssetFile：core 文件给本地路径，不属于该 profile 的文件被明确拒绝", async () => {
+test("parseManifest：重复 path 与绝对路径都拒绝", () => {
+  const manifest = makeManifest();
+  const duplicate = { ...manifest, files: [...manifest.files, manifest.files[0]] };
+  assert.match(parseManifest(JSON.stringify(duplicate)).error, /重复/u);
+  const absolute = {
+    ...manifest,
+    files: [{ path: "D:/evil.txt", bytes: 1, sha256: "0".repeat(64), source: "x", profile: "core" }],
+  };
+  assert.match(parseManifest(JSON.stringify(absolute)).error, /不合法/u);
+});
+
+test("工具 list：内置资源报版本/文件数/来源，输出形状符合宿主 schema", async () => {
+  const value = await runTool(BUNDLED_ENV, { action: "list" });
+  assert.equal(value.ok, true, value.message);
+  assert.equal(value.source, "bundled（插件内置）");
+  assert.match(value.origin, /插件内置/u);
+  assert.ok(value.fileCount >= 60, "core 文件数应 >= 60，实际 " + String(value.fileCount));
+  assert.ok(value.totalBytes > 0);
+  assert.equal(value.files.length, value.fileCount);
+  assert.ok(value.files.every((file) => file.status === "present"));
+  assert.ok(value.versions.some((item) => item.current));
+});
+
+test("工具 verify/refresh：flat 资源通过；改文件后 ok=false 并点名", async () => {
   const root = tempRoot();
   try {
+    writeFlat(root);
     const env = envFor(root);
-    await installVersion(env, "2026.10.30-1");
-    const okFile = resolveAssetFile("core", "device/f1/chips.json", env);
-    assert.equal(okFile.ok, true, okFile.error);
-    assert.ok(existsSync(okFile.path));
-    assert.equal(okFile.version, "2026.10.30-1");
+    const verified = await runTool(env, { action: "verify", profile: "full" });
+    assert.equal(verified.ok, true, verified.message);
+    assert.equal(verified.fileCount, CORPUS.length);
+    assert.ok(verified.files.every((file) => file.status === "ok"));
 
-    const notInCore = resolveAssetFile("core", "chipdb/f1/TEST.xml", env);
-    assert.equal(notInCore.ok, false);
-    assert.match(notInCore.error, /profile=full/u, "要说清它属于 full：" + notInCore.error);
+    const refreshed = await runTool(env, { action: "refresh" });
+    assert.equal(refreshed.ok, true, refreshed.message);
+    assert.match(refreshed.message, /不需要下载/u);
 
-    await installVersion(env, "2026.10.30-1", "full");
-    const fullFile = resolveAssetFile("full", "chipdb/f1/TEST.xml", env);
-    assert.equal(fullFile.ok, true, fullFile.error);
-    assert.ok(existsSync(fullFile.path));
-
-    // 没装任何东西的新环境：要提示 refresh，而不是抛异常。
-    const emptyRoot = tempRoot();
-    try {
-      const missing = resolveAssetFile("core", "device/f1/chips.json", envFor(emptyRoot));
-      assert.equal(missing.ok, false);
-      assert.match(missing.error, /refresh/u);
-    } finally {
-      rmSync(emptyRoot, { recursive: true, force: true });
-    }
+    writeFileSync(join(root, "device/f1/chips.json"), "tampered\n");
+    const bad = await runTool(env, { action: "verify", profile: "core" });
+    assert.equal(bad.ok, false);
+    assert.ok(bad.files.some((file) => file.path === "device/f1/chips.json" && file.status === "changed"));
+    assert.match(bad.offlineFallback, /重装插件/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("本地 manifest 坏了不抛：readLocalManifest / verify 都给出可修复的 error", async () => {
-  const root = tempRoot();
+test("工具 list：没有 manifest 时 ok=false 且建议重装；prune 内置根安全", async () => {
+  const empty = tempRoot();
   try {
-    const env = envFor(root);
-    await installVersion(env, "2026.10.30-1");
-    writeFileSync(join(root, "2026.10.30-1/manifest.json"), "{ not json");
-    const state = readLocalManifest(env);
-    assert.equal(state.manifest, null);
-    assert.match(state.error, /坏了/u);
-    assert.match(state.error, /refresh/u);
-    const verified = verifyInstalled({ profile: "core", env });
-    assert.equal(verified.ok, false);
-    assert.match(verified.message, /refresh/u);
+    const value = await runTool(envFor(empty), { action: "list" });
+    assert.equal(value.ok, false);
+    assert.match(value.message, /找不到内置资源/u);
+    assert.match(value.offlineFallback, /重装插件/u);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(empty, { recursive: true, force: true });
   }
-});
-
-test("parseManifest：缺 sha256 / 重复 path / 绝对路径都拒绝（不抛异常）", () => {
-  const sha = sha256Hex(Buffer.from("x"));
-  const good = parseManifest(JSON.stringify({ version: "1", files: [{ path: "a.json", bytes: 1, sha256: sha }] }));
-  assert.ok(good.manifest);
-  assert.equal(good.manifest.files[0].sha256, sha);
-
-  const noHash = parseManifest(JSON.stringify({ version: "1", files: [{ path: "a.json", bytes: 1 }] }));
-  assert.equal(noHash.manifest, null);
-  assert.match(noHash.error, /sha256/u);
-
-  const dup = parseManifest(
-    JSON.stringify({ version: "1", files: [{ path: "a.json", bytes: 1, sha256: sha }, { path: "a.json", bytes: 1, sha256: sha }] }),
-  );
-  assert.equal(dup.manifest, null);
-  assert.match(dup.error, /重复/u);
-
-  const absolute = parseManifest(JSON.stringify({ version: "1", files: [{ path: "C:/evil.json", bytes: 1, sha256: sha }] }));
-  assert.equal(absolute.manifest, null);
-  assert.match(absolute.error, /不合法/u);
+  const pruned = await runTool(BUNDLED_ENV, { action: "prune" });
+  assert.equal(pruned.ok, true);
+  assert.match(pruned.message, /不会被删除/u);
 });

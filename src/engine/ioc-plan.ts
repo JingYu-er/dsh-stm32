@@ -1460,7 +1460,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const familyProfile = family === "" ? null : familyProfileOf(family);
   const svdSupported = familyProfile === null || familyProfile.capabilities.svdValidation;
   // SVD 的中断表先准备好：interrupts 参数要拿它校验中断名，R20 也要用（同一个 set 复用，只读一次盘）。
-  // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有资源包时 device 为 null，校验跳过。
+  // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有内置资源时 device 为 null，校验跳过。
   let interrupts: ReadonlySet<string> | null = null;
   const cpn = (after.get(renderIocKey("mcu.cpn")) ?? "").trim();
   if (cpn !== "") {
@@ -1469,7 +1469,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
       const device = line === null ? null : loadSvdForLine(line);
       if (device !== null && device.interruptNames.size > 0) interrupts = device.interruptNames;
     } else {
-      // 资源包里只有 F1 的 SVD：别的族查不到中断名。跳过校验而不是拿 F1 的名字硬比（那样会把对的名字判成错）。
+      // 内置资源里只有 F1 的 SVD：别的族查不到中断名。跳过校验而不是拿 F1 的名字硬比（那样会把对的名字判成错）。
       notes.push("中断名/寄存器名校验跳过：" + (familyProfile === null ? family : capabilityGap(familyProfile, "svdValidation")));
     }
   }

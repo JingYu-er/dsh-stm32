@@ -8,7 +8,7 @@
  * 而且这一步发生在 spawn openocd 之前（探针不动、不占用）。
  *
  * 预算来源（优先级从高到低）：
- *   1. 资源包 chips.json 里给这颗芯片写的 breakpoints / watchpoints；
+ *   1. 内置资源 chips.json 里给这颗芯片写的 breakpoints / watchpoints；
  *   2. 按内核的硬件上限（data/family.ts 的 debugBudgetForCore）：M0/M0+ 4/2、M3/M4 6/4、M7/M33/M55 8/4；
  *   3. 都没有（没有 .ioc / 认不出族）→ F1 实测值 6 / 4，并在 note 里说清是兜底。
  *

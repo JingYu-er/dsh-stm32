@@ -5509,3 +5509,51 @@ f0 736 B / f1 1404 B / f2 932 B / f3 948 B / f4 960 B / f7、c0、g0、g4、l0�
 
 - tsc 0；新增 2 条回归用例：scaffold 失败文案必须含 CubeMX 链接与 route=register 说明；`backend=cubeprogrammer` 缺 CLI 时必须含 CubeProgrammer 链接且不调 CLI。
 - `flash-orchestrator-units` 14 条（含 2 条 J-Link：实见 1366 就选 `interface/jlink.cfg` 且参数顺序 interface → `-c transport select swd` → target；J-Link 失败不派 CubeProgrammer 并提示 transport）、`scaffold-patch-units` 26 条全绿；全量 TOTAL **pass=910 fail=0**；`pack-smoke` 全过；包体 678.8 KB / 上限 1171.9 KB（136 文件）。
+
+
+## 85. 资源仓并入插件：assets/ 随包分发，不再有第二个仓库（2026-11-09）
+
+用户要求（m04422）：`dsh-stm32-assets` 一共才十几兆，全部挪进插件仓库，少维护一个仓库，插件里对应的程序一起改。此前资源是独立仓 + manifest 下载器（三条源、逐文件 sha256、staging 回滚、`stm32_assets refresh`）；并入后**资源就是包的一部分**，装好插件即离线可用。
+
+### 一、搬运与清点
+
+- 资源仓 tracked 137 个文件。`.cache/`（16 文件 4.37 MB 的探针草稿）本就不入库，不搬。
+- `diagrams/` 4 个文件与插件 `docs/diagrams/` 同名文件 sha256 完全相同，不重复搬，也不进 manifest。
+- 搬进 `assets/`：device / headers / ioc / ld / startup / templates、`manifest.json`、`README.md`、`VERSION`，共 129 文件 12.48 MB；三个生成脚本进 `scripts/assets/`。
+- manifest 过滤掉 diagrams 后：schema 2、files 105（core 75 = device 27 + ioc 34 + ld 14；full 再加 startup 14 + headers 16）、合计 12,936,436 B。`templates/family/` 21 份是生成 `ioc/family/` 的源模板，保留但不进 manifest。
+- 口径修正：旧文档写 core 69，实际按 glob 展开是 **75**（27+34+14）；测试先按 69 写，被真实 manifest 打回。
+
+### 二、布局与解析
+
+- **flat 布局**：`assets/manifest.json` 与 `device/` 同层，不套 `<version>/`。`bundledAssetsRoot()` 用 `path.resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets")`，`lib/engine/assets.js` 正好解析到包根 `assets/`。
+- `assetsRootInfo(env)`：默认 `origin="插件内置（assets/）"`；`DSH_STM32_ASSETS` 非空仍覆盖（开发与单测），可指向 flat 或旧的 `<version>/install.json` 多版本布局。
+- `listInstalledVersions` 先认 flat 根（`bundled=true`、`current=true`、`installedAt="插件内置"`），再列外部历史版本；flat 存在时 current 只给 flat。`readLocalManifest` 同样先 flat，`versionDir` 就是根。
+- `ensureAssets` 退化成**纯本地完整性检查**：manifest + `device/f1/chips.json` 存在即 `ok/cache/bundled`，缺则 `missing` 并让人重装插件。为不打断调用方，旧参数 `source/fetchImpl/timeoutMs/signal` 保留但不使用，`EnsureAssetsStatus` 仍含 `refreshed`（永不产生）。
+
+### 三、删掉下载器
+
+- `src/engine/assets.ts` 整体重写（约 800 行）：删除 `ASSETS_SOURCES`、`resolveSources`、`fetchManifest`、`verifyAndInstall` 与全部下载/staging 代码；保留 `parseManifest`、glob/profile、逐文件 sha256 校验、`resolveAssetFile`、`verifyInstalled`、`pruneOldVersions`。
+- `pruneOldVersions` 在 `base === bundledAssetsRoot()` 时直接返回，**绝不删包内资源**；只有 `DSH_STM32_ASSETS` 下的历史版本与 `.tmp-*` 会被清。
+- `src/tools/assets.ts` 重写：`list/verify` 查内置资源并逐文件标 present/missing；`refresh` 保留为 `verify` 的别名（文案明说「资源随插件内置，不需要下载」）；`prune` 只清外部历史版本。输出 schema 14 个必填字段不变（`attempts` 恒空、`offlineFallback` 改为内置说明）。
+- 文案统一：`ASSETS_REFRESH_HINT` 改为「资源随插件内置（assets/）：缺文件说明安装不完整，重装插件后重试；stm32_assets verify 可定位缺了哪些」，`SVD_FULL_PROFILE_HINT` 改为「SVD 只在 profile=full 里：重装插件（或确认安装完整）」。涉及 `svd.ts`、`device-facts.ts`、`stm32f1.ts`、`scaffold.ts`、`hal-chip.ts`、`register-template.ts`、`regs.ts` 等 20 个文件。
+
+### 四、打包与护栏
+
+- `package.json` 的 `files` 加 `assets`；`scripts/pack-size.mjs` 的 `MAX_TARBALL` 从 1.2 MB 提到 **4 MB**（不是按源文件 12.5 MB 提，因为设备头是文本、压缩后很小：实测 1.75 MB），`REQUIRED` 增加 `assets/manifest.json` / `assets/device/f1/chips.json` / `assets/ioc/minimal/STM32F103C8Tx.ioc`。
+- `scripts/pack-smoke.mjs`：断言解包后有 assets 关键文件；建寄存器工程时清空 `DSH_STM32_ASSETS`，强制走解包后 `lib/engine/assets.js` 的 `../../assets` 解析——这一步才真正证明资源进了 tarball。
+- `test/assets-units.test.mjs` 整体重写：13 条全离线用例，覆盖 flat/旧版本发现、readLocalManifest、ensureAssets、resolveAssetFile、verifyInstalled、prune 安全、工具 list/verify/refresh/prune；`svd-units` 与 `stm32f1-units` 的旧 `refresh` 文案断言同步改为新提示。
+
+### 五、验收
+
+- `npm run build` exit 0（tsc + copy-client + copy-data）。
+- `node test/run-units.mjs`：**TOTAL pass=908 fail=0**（assets 套件 13 条全绿；svd-units 39、stm32f1 18）。
+- `npm run test:pack`：pack-smoke 全过（含「解包产物能建寄存器工程」与 assets 关键文件）。
+- `npm run test:size`：包体 **1750.3 KB / 上限 3906.3 KB**，解包 14901.3 KB，265 个文件；`templates/**` 运行时资产 22.0 KB / 9 个。
+- 未做：真机烧录验证（无探针）；dsh 需重启才加载新代码。
+
+### 六、教训
+
+- **别把「资源包」当成永久概念**：下载器、三源回退、staging 回滚、profile 安装开关，在资源随包后全是死代码；留着只会让「缺文件」被误诊成网络问题。删掉后 `ensureAssets` 的语义反而更清楚——它只是在检查安装完整性。
+- **flat 与 versioned 必须并存**：外部 `DSH_STM32_ASSETS` 的历史版本还在用户机器上，直接只认 flat 会让老夹具与老缓存全失效；flat 优先、旧版兜底，两边都测。
+- **体积护栏要按产物量级设，不是按源文件量级**：12.5 MB 源文件打成 1.75 MB tarball；按源文件设上限会让护栏失去意义。
+- **文案断言是最容易漏的回归**：删下载器后 `refresh --profile full` 的提示全变了，`svd-units` / `stm32f1-units` 立刻红；工具文案是契约，改语义必须同步测试与 README。

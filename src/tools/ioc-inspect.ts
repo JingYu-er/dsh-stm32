@@ -5,7 +5,7 @@
  * （没启用会生成 __HAL_AFIO_REMAP_SWJ_DISABLE()，烧录后 SWD 连不上）、
  * KeepUserCode 是否开启、目标工具链/落位目录是否与 CMake 工程一致。
  *
- * 不需要设备事实：只读 .ioc 文本，型号就是文件里的 Mcu.CPN，不查资源包，所以不 ensureAssets。
+ * 不需要设备事实：只读 .ioc 文本，型号就是文件里的 Mcu.CPN，不查内置资源，所以不 ensureAssets。
  */
 
 import { readFileSync } from "node:fs";

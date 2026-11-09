@@ -103,13 +103,13 @@ export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan
 
   const flashBytes = chip.flashBytes ?? 0;
   if (flashBytes <= 0) {
-    warnings.push("这颗芯片的 Flash 大小没收录（资源包 chips.json 里这一档没有 flashBytes），链接脚本按 64K 生成；确认后请更新资源包。");
+    warnings.push("这颗芯片的 Flash 大小没收录（内置资源 chips.json 里这一档没有 flashBytes），链接脚本按 64K 生成；确认后请更新内置资源。");
   }
   const exactRam = chip.ramBytes ?? null;
   const fallbackKb = RAM_FALLBACK_KB[key];
   const ramBytes = exactRam !== null ? exactRam : (fallbackKb ?? 20) * 1024;
   if (exactRam === null && fallbackKb === undefined) {
-    warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请更新资源包（chips.json 的 ramBytes）。");
+    warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请更新内置资源（chips.json 的 ramBytes）。");
   } else if (exactRam === null) {
     warnings.push("F" + line + " 的档位 " + chip.group + " 的 RAM 没收录，链接脚本按 CubeMX db 的最小值 " + kbOf(ramBytes) + "K 生成（宁可小，栈不会越界）；封装更大时可以把 LENGTH 改大。");
   }

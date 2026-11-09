@@ -1,15 +1,15 @@
 /**
- * L1：设备事实（device facts）——唯一来源是本地资源包缓存里的 device/f1/chips.json。
+ * L1：设备事实（device facts）——唯一来源是本地内置资源里的 device/f1/chips.json。
  *
- * 用户 2026-10-31 的决定（原话「内置表删了吧」）：插件不再自带任何芯片事实表。型号 → 容量档 /
- * 启动文件 / 设备宏 / 设备头 / Flash / RAM / 引脚数，全部取自资源仓库 dsh-stm32-assets 的
- * device/f1/chips.json，装到 <DSH_STM32_ASSETS 根或 ~/.dsh-stm32/assets>/<version>/device/f1/chips.json。
+ * 用户 2026-10-31 的决定（原话「内置表删了吧」）：插件不再自带任何手写芯片事实表。型号 → 容量档 /
+ * 启动文件 / 设备宏 / 设备头 / Flash / RAM / 引脚数，全部取自随插件包发布的 assets/device/<族>/chips.json
+ * （flat 布局，2026-11 起不再走独立资源仓与联网下载）。
  *
- * 第一次用没有缓存怎么办：工具层调 ensureAssets()（src/engine/assets.ts）自动 refresh 一次；
- * 没网、没装就只能明说「先跑 stm32_assets refresh，或检查网络」，绝不退回内置表（已经没有内置表了）。
+ * 读不到怎么办：工具层调 ensureAssets()（src/engine/assets.ts）做本地完整性检查；
+ * 缺文件只可能是插件安装不完整——明说「重装插件后重试（stm32_assets verify 可定位缺件）」，不猜也不内置第二份事实。
  *
  * 为什么要内存缓存：resolveF1Chip 在一个工程里会被调几十次（校验 .ioc、渲染启动文件名、选时钟），
- * 每次都读一遍 JSON 太浪费。缓存键带 path + size + mtimeMs：资源包升级/重装/手改后自动失效，
+ * 每次都读一遍 JSON 太浪费。缓存键带 path + size + mtimeMs：资源升级/重装/手改后自动失效，
  * 不需要任何 reset 钩子（也没有全局状态需要维护）。
  *
  * 只读：本文件不写盘、不联网、不起进程。
@@ -20,13 +20,13 @@ import path from "node:path";
 import { ASSETS_DEVICE_FACTS_FILE, ASSETS_REFRESH_HINT, errText, readLocalManifest } from "../engine/assets.js";
 import { familyIdOfPart, familyProfileOf } from "./family.js";
 
-/** chips.json 在资源包里的相对路径（manifest 的 profiles.core 也按 device/** 收录它）。 */
+/** chips.json 在内置资源里的相对路径（manifest 的 profiles.core 也按 device/** 收录它）。 */
 export const DEVICE_FACTS_REL = ASSETS_DEVICE_FACTS_FILE;
 
 /** 没缓存/没这颗芯片时，给用户的那句可执行提示（所有结构化错误都带上它）。 */
 export const DEVICE_FACTS_HINT = ASSETS_REFRESH_HINT;
 
-/** chips.json 里的一颗芯片（字段就是资源仓库 scripts/build-assets.mjs 写出来的那 13 个）。 */
+/** chips.json 里的一颗芯片（字段就是资源脚本 scripts/build-assets.mjs 写出来的那 13 个）。 */
 export interface DeviceFactsChip {
   /** 具体型号，例如 STM32F103C8T6。 */
   readonly cpn: string;
@@ -46,10 +46,10 @@ export interface DeviceFactsChip {
   readonly startup: string;
   readonly deviceDefine: string;
   readonly deviceHeader: string;
-  /** 资源包里随包发布的链接脚本名（没有则为空串）。 */
+  /** 内置资源里随包发布的链接脚本名（没有则为空串）。 */
   readonly linkerScript: string;
   /**
-   * 可选：硬件断点数量（FPB 代码比较器）。资源仓库以后按型号补值即可，插件不用改；
+   * 可选：硬件断点数量（FPB 代码比较器）。资源脚本 scripts/assets/以后按型号补值即可，插件不用改；
    * 没写就按 F1 默认 6 算（见 engine/breakpoints.ts）。
    */
   readonly breakpoints?: number;
@@ -63,7 +63,7 @@ export interface DeviceFacts {
   readonly ok: boolean;
   /** chips.json 的绝对路径；ok=false 时给的是「应该装在哪」。 */
   readonly path: string;
-  /** 资源包版本（缓存目录名），例如 2026.10.31-1。 */
+  /** 资源版本（缓存目录名），例如 2026.10.31-1。 */
   readonly version: string;
   readonly chips: readonly DeviceFactsChip[];
   /** cpn（大写）→ 事实。 */
@@ -107,9 +107,9 @@ function countOf(value: unknown): number | null {
  *   Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1<line><group>.h
  * 的文件名反推出来的，group 合法时名字唯一。
  *
- * 资源包 v2026.11.x 起 chips.json 只留 db/mcu 能算出来的 9 个字段
+ * 内置资源 v2026.11.x 起 chips.json 只留 db/mcu 能算出来的 9 个字段
  * （cpn/line/group/packageName/pinCount/flashBytes/ramBytes/deviceId/mcuName），这三样由这里现补；
- * 老版本资源包（v2026.10.31-1 及更早）自带显式字段，优先用包里的 —— 新插件读老缓存照样能用。
+ * 老版本资源（v2026.10.31-1 及更早）自带显式字段，优先用包里的 —— 新插件读老缓存照样能用。
  */
 export function namingFrom(line: string, group: string, deviceId: string): {
   readonly startup: string;
@@ -136,7 +136,7 @@ export function namingFrom(line: string, group: string, deviceId: string): {
 /**
  * 启动文件尾缀 → 设备宏尾缀（大写的是「不是 x 的那个字符」，x 永远小写）：
  *   xb → xB（STM32F103xB）、xx → xx（STM32F407xx）、cx → Cx（STM32F410Cx，按封装分档那种）。
- * 与资源仓库 scripts/family-assets.mjs 的 defineSuffix 必须逐字一致。
+ * 与资源脚本 scripts/family-assets.mjs 的 defineSuffix 必须逐字一致。
  */
 export function defineSuffix(group: string): string {
   if (group === "xx") return "xx";
@@ -246,7 +246,7 @@ export function parseDeviceFacts(text: string, filePath: string, version = ""): 
 /**
  * 读设备事实（内存缓存一次，按 path+size+mtimeMs 自动失效）。
  *
- * env 默认 process.env：DSH_STM32_ASSETS 可以覆盖资源包根目录（测试与自定义安装用）。
+ * env 默认 process.env：DSH_STM32_ASSETS 可以覆盖内置资源根目录（测试与自定义安装用）。
  * 读不到不抛——返回 ok:false + 人话，让调用方（工具卡片）照常渲染。
  */
 export function loadDeviceFacts(env: NodeJS.ProcessEnv = process.env): DeviceFacts {
@@ -254,10 +254,10 @@ export function loadDeviceFacts(env: NodeJS.ProcessEnv = process.env): DeviceFac
 }
 
 /**
- * 族 id → 资源包里的设备事实相对路径：STM32F1 → device/f1/chips.json；
+ * 族 id → 内置资源里的设备事实相对路径：STM32F1 → device/f1/chips.json；
  * STM32L4+ → device/l4+/chips.json；STM32WBA → device/wba/chips.json。
  *
- * 目录名取族画像的族段（小写、保留 +）—— 资源仓库就是这么建的目录。
+ * 目录名取族画像的族段（小写、保留 +）—— 资源脚本就是这么建的目录。
  * 不能按「前两个字符」推：WBA 会被推成 wb、L4+ 会被推成 l4（都是别的族，读到的芯片表是错的）。
  */
 export function familyFactsRelOf(familyId: string): string {
@@ -270,7 +270,7 @@ export function familyFactsRelOf(familyId: string): string {
 /**
  * 按族读设备事实（内存缓存一次，按 path+size+mtimeMs 自动失效）。
  *
- * 为什么要按族分文件：资源仓库按族生成 device/<族>/chips.json（F0/F4/G4/L0/C0…），
+ * 为什么要按族分文件：资源脚本按族生成 device/<族>/chips.json（F0/F4/G4/L0/C0…），
  * 合成一个大文件会让「装了这个族但没装那个族」这件事看不出来，也没法只更新一个族。
  */
 export function loadFamilyDeviceFacts(familyId: string, env: NodeJS.ProcessEnv = process.env): DeviceFacts {
@@ -278,7 +278,7 @@ export function loadFamilyDeviceFacts(familyId: string, env: NodeJS.ProcessEnv =
   const state = readLocalManifest(env);
   const filePath = state.versionDir === "" ? path.join(state.root, ...rel.split("/")) : path.join(state.versionDir, ...rel.split("/"));
   if (state.versionDir === "") {
-    return emptyFacts(filePath, "", (state.error === "" ? "本地还没装资源包" : state.error) + "；设备事实只从资源包缓存读，" + DEVICE_FACTS_HINT + "。");
+    return emptyFacts(filePath, "", (state.error === "" ? "找不到插件内置资源" : state.error) + "；设备事实只从内置资源读，" + DEVICE_FACTS_HINT + "。");
   }
   let stat: fs.Stats;
   try {
@@ -287,7 +287,7 @@ export function loadFamilyDeviceFacts(familyId: string, env: NodeJS.ProcessEnv =
     return emptyFacts(
       filePath,
       state.version,
-      "资源包 " + state.version + " 里没有 " + rel + "（" + filePath + "）：这一版资源包不含 " + familyId + " 的芯片表；" + DEVICE_FACTS_HINT + "。",
+      "内置资源 " + state.version + " 里没有 " + rel + "（" + filePath + "）：这一版内置资源不含 " + familyId + " 的芯片表；" + DEVICE_FACTS_HINT + "。",
     );
   }
   const key = filePath + ":" + String(stat.size) + ":" + String(stat.mtimeMs);
@@ -313,7 +313,7 @@ export function findChipFact(cpn: string, env: NodeJS.ProcessEnv = process.env):
   return facts.ok ? facts.byCpn.get(wanted) ?? null : null;
 }
 
-/** 结构化错误：code 区分「没装资源包」与「资源包里没这颗芯片」。 */
+/** 结构化错误：code 区分「缺内置资源」与「内置资源里没这颗芯片」。 */
 export type DeviceFactErrorCode = "facts-missing" | "chip-unknown";
 
 export class DeviceFactError extends Error {
@@ -339,7 +339,7 @@ export function requireChipFact(cpn: string, env: NodeJS.ProcessEnv = process.en
   if (found === undefined) {
     throw new DeviceFactError(
       "chip-unknown",
-      label + "资源包（" + facts.version + "）里没有 " + (wanted === "" ? "(空型号)" : wanted) + " 这颗芯片：" +
+      label + "内置资源（" + facts.version + "）里没有 " + (wanted === "" ? "(空型号)" : wanted) + " 这颗芯片：" +
         "已知 line " + (facts.lines.length === 0 ? "(无)" : facts.lines.join("/")) + "；" + DEVICE_FACTS_HINT + "。",
       wanted,
     );

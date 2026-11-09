@@ -5,22 +5,22 @@
  * "GPIOC_ODR" / "GPIOC.ODR"，读回来的 0x00000004 也没人告诉你那是 ODR2（PC2 输出高）。
  * SVD 里这些都有：外设 baseAddress + 寄存器 addressOffset + 字段 bitOffset/bitWidth。
  *
- * 数据来源只有一个：资源包 dsh-stm32-assets 的 device/f1/svd/<line>.json，装到
+ * 数据来源只有一个：内置资源 插件内置 assets/ 的 device/f1/svd/<line>.json，装到
  * <DSH_STM32_ASSETS 根或 ~/.dsh-stm32/assets>/<version>/device/f1/svd/ 之后复用。
  * 兼容两种布局：
  *   · 装好的缓存：<root>/<version>/device/f1/svd/103.json（install.json 里有 version）；
- *   · 直接检出/自定义布局：<root>/device/f1/svd/103.json（开发时把 DSH_STM32_ASSETS 指到资源仓库）。
+ *   · 直接检出/自定义布局：<root>/device/f1/svd/103.json（开发时把 DSH_STM32_ASSETS 指到资源脚本 scripts/assets/）。
  *
  * 关键约定：
  *   · SVD 只在 profile=full 里。缺了不是"静默降级"，而是结构化失败 + 一句能照着敲的
- *     "stm32_assets refresh --profile full"（见 SVD_FULL_PROFILE_HINT）；
+ *     "随插件内置（profile=full 也随包安装）"（见 SVD_FULL_PROFILE_HINT）；
  *   · 读不到不抛：loadSvd() 返回 { device, failure }，loadSvdForLine() 复用前者的便捷版（返回 null）；
  *     只有"明确要一个寄存器/一段地址"的 API（resolveRegisterRef / describeAddress）才抛 SvdError，
  *     因为那时候没有数据就已经是错误，而不是"可选增强"；
- *   · 缓存键是 path+size+mtimeMs：资源包升级/重装/手改后自动失效，不需要 reset 钩子。
+ *   · 缓存键是 path+size+mtimeMs：资源升级/重装/手改后自动失效，不需要 reset 钩子。
  *     单测靠 svdCacheStats() + resetSvdCache() 验证"命中不重复读盘"；
  *   · 严格解析：外设/寄存器/字段有任何一条不合法就整份拒绝（装错文件比没装更危险，
- *     半个位域表会解释出错误的位）。资源仓库的产物是脚本生成的，这份严格性目前一次都没误伤。
+ *     半个位域表会解释出错误的位）。资源脚本（scripts/assets/）的产物是脚本生成的，这份严格性目前一次都没误伤。
  *
  * 只读：本文件不写盘、不联网、不起进程，只读 fs + 内存缓存。
  */
@@ -31,21 +31,21 @@ import path from "node:path";
 import { assetsRootInfo, errText, listInstalledVersions } from "../engine/assets.js";
 import { findChipFact } from "./device-facts.js";
 
-/** SVD 在资源包里的目录（相对版本目录）。 */
+/** SVD 在内置资源里的目录（相对版本目录）。 */
 export const SVD_REL_DIR = "device/f1/svd";
 
 /**
  * 缺 SVD 时反复出现的那句提示。SVD 只在 profile=full 里，所以文案必须带
- * "stm32_assets refresh --profile full"——用户照着敲就能补齐，不用翻文档。
+ * "随插件内置（profile=full 也随包安装）"——用户照着敲就能补齐，不用翻文档。
  */
-export const SVD_FULL_PROFILE_HINT = "SVD 只在 profile=full 里：先跑 stm32_assets refresh --profile full";
+export const SVD_FULL_PROFILE_HINT = "SVD 只在 profile=full 里：重装插件（或确认安装完整）";
 
-/** 资源仓库当前发布的 F1 SVD（只用于报错文案，不做硬校验：上游加 line 不用改这里）。 */
+/** 资源脚本 scripts/assets/当前发布的 F1 SVD（只用于报错文案，不做硬校验：上游加 line 不用改这里）。 */
 export const SVD_KNOWN_LINES: readonly string[] = ["100", "101", "102", "103", "105", "107"];
 
 /* ------------------------------ 类型 ------------------------------ */
 
-/** SVD 的一个位域。description 在资源包的产物里没有，接口先留着。 */
+/** SVD 的一个位域。description 在内置资源的产物里没有，接口先留着。 */
 export interface SvdField {
   readonly name: string;
   readonly bitOffset: number;
@@ -53,7 +53,7 @@ export interface SvdField {
   readonly description: string;
 }
 
-/** SVD 的一个寄存器（offset/size 都按资源包约定：offset 是相对外设基址的字节偏移，size 是位）。 */
+/** SVD 的一个寄存器（offset/size 都按内置资源约定：offset 是相对外设基址的字节偏移，size 是位）。 */
 export interface SvdRegister {
   readonly name: string;
   readonly addressOffset: number;
@@ -90,11 +90,11 @@ export interface SvdDevice {
   readonly device: string;
   readonly family: string;
   readonly schema: number;
-  /** 资源包版本（未分版本的布局为空串）。 */
+  /** 资源版本（未分版本的布局为空串）。 */
   readonly version: string;
   /** 本地绝对路径。 */
   readonly path: string;
-  /** 上游 SVD 来源（资源包 source.url / source.file / source.repo）。 */
+  /** 上游 SVD 来源（内置资源 source.url / source.file / source.repo）。 */
   readonly source: string;
   /** 解析出来的真实计数（不信文件里写的 counts，自己数一遍）。 */
   readonly counts: { readonly peripherals: number; readonly registers: number; readonly fields: number };
@@ -103,7 +103,7 @@ export interface SvdDevice {
   readonly byName: ReadonlyMap<string, SvdPeripheral>;
   /** 外设名清单（报错文案用）。 */
   readonly peripheralNames: readonly string[];
-  /** SVD 里的中断表（R20 用）；资源包没带 interrupts 字段时是空数组。 */
+  /** SVD 里的中断表（R20 用）；内置资源没带 interrupts 字段时是空数组。 */
   readonly interrupts: readonly SvdInterrupt[];
   /** 中断名集合（NVIC 名校验用）。 */
   readonly interruptNames: ReadonlySet<string>;
@@ -142,7 +142,7 @@ export interface SvdLoad {
 
 export interface SvdParse {
   readonly device: SvdDevice | null;
-  /** device 为 null 时的原因（不含 refresh 提示，由调用方补）。 */
+  /** device 为 null 时的原因（是否含 profile 提示由调用方决定）。 */
   readonly error: string;
 }
 
@@ -251,7 +251,7 @@ function isDirectory(dir: string): boolean {
 }
 
 /**
- * SVD 里的数值：资源包写的是十六进制字符串（"0x40011000" / "0x0C"），
+ * SVD 里的数值：内置资源写的是十六进制字符串（"0x40011000" / "0x0C"），
  * 也接受数字与纯十进制字符串，别的都算坏数据。
  */
 export function parseSvdNumber(value: unknown): number | null {
@@ -345,7 +345,7 @@ export function resetSvdCache(): void {
 interface SvdLocation {
   /** 版本目录（或未分版本的资源根）。 */
   readonly dir: string;
-  /** 资源包版本；未分版本的布局是空串。 */
+  /** 资源版本；未分版本的布局是空串。 */
   readonly version: string;
   /** install.json 里记的 profile（未分版本布局为空）。 */
   readonly profiles: readonly string[];
@@ -354,8 +354,8 @@ interface SvdLocation {
 
 /**
  * 可能装着 SVD 的目录，按优先级：
- *   1. 已安装的资源包版本（新 → 旧，listInstalledVersions 已排好）；
- *   2. 未分版本的自定义布局（DSH_STM32_ASSETS 直接指到资源仓库/自建目录）。
+ *   1. 已安装的资源版本（新 → 旧，listInstalledVersions 已排好）；
+ *   2. 未分版本的自定义布局（DSH_STM32_ASSETS 直接指到资源脚本 scripts/assets//自建目录）。
  */
 function svdLocations(env: NodeJS.ProcessEnv): SvdLocation[] {
   const out: SvdLocation[] = [];
@@ -484,7 +484,7 @@ export function parseSvd(text: string, filePath = "", version = "", expectedLine
     return "";
   })();
 
-  // 中断表：资源包新版才带（2026-11-01 起）。老包没有这个字段 → 空表，R20 自动跳过。
+  // 中断表：内置资源新版才带（2026-11-01 起）。老包没有这个字段 → 空表，R20 自动跳过。
   const interrupts: SvdInterrupt[] = [];
   const rawInterrupts = parsed["interrupts"];
   if (Array.isArray(rawInterrupts)) {
@@ -549,7 +549,7 @@ export function loadSvd(line: string, env: NodeJS.ProcessEnv = process.env): Svd
         "assets-missing",
         wanted,
         path.join(root, SVD_REL_DIR, wanted + ".json"),
-        "本地还没装资源包（" + root + "），读不到 " + SVD_REL_DIR + "/" + wanted + ".json；" + SVD_FULL_PROFILE_HINT + "。",
+        "本地还缺内置资源（" + root + "），读不到 " + SVD_REL_DIR + "/" + wanted + ".json；" + SVD_FULL_PROFILE_HINT + "。",
       ),
     };
   }
@@ -598,7 +598,7 @@ export function loadSvd(line: string, env: NodeJS.ProcessEnv = process.env): Svd
   const onlyCore = versioned.length > 0 && versioned.every((location) => location.profiles.length > 0 && !location.profiles.includes("full"));
   const where = versioned.length === 0 ? "（" + assetsRootInfo(env).root + "）" : "（版本 " + versioned.map((location) => location.version).join("、") + "）";
   const message =
-    "本地资源包" + where + "里没有 " + SVD_REL_DIR + "/" + wanted + ".json" +
+    "本地资源" + where + "里没有 " + SVD_REL_DIR + "/" + wanted + ".json" +
     (onlyCore ? "：已装的版本只装了 profile=core" : "") +
     "；" + SVD_FULL_PROFILE_HINT + "。";
   return { device: null, failure: failureOf("svd-missing", wanted, tried[0] ?? "", message) };
@@ -621,7 +621,7 @@ export function requireSvd(line: string, env: NodeJS.ProcessEnv = process.env): 
   });
 }
 
-/** 型号 → SVD line（用资源包 device facts 的 line 字段）；没有这颗芯片/没有资源包返回 null。 */
+/** 型号 → SVD line（用内置资源 device facts 的 line 字段）；没有这颗芯片/没有内置资源返回 null。 */
 export function svdLineForChip(cpn: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const chip = findChipFact(cpn, env);
   return chip === null ? null : chip.line;
@@ -731,7 +731,7 @@ export function resolveRegisterRef(ref: string, line: string, env: NodeJS.Proces
   if (peripheral === null) {
     throw new SvdError(
       "peripheral-unknown",
-      "资源包（line=" + device.line + "）里没有外设 " + peripheralName.toUpperCase() + "；已知外设：" + listNames(device.peripheralNames) + "。",
+      "内置资源（line=" + device.line + "）里没有外设 " + peripheralName.toUpperCase() + "；已知外设：" + listNames(device.peripheralNames) + "。",
       { line: device.line, ref: text },
     );
   }

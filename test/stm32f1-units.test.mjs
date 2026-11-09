@@ -86,12 +86,12 @@ test("resolveF1Chip：F107 只有 xC 一档，互联型认得出", () => {
   assert.equal(chip.ramBytes, 64 * 1024);
 });
 
-test("resolveF1Chip：资源包里没收录的容量档要明确拒绝，并指向资源包/refresh", () => {
+test("resolveF1Chip：内置资源里没收录的容量档要明确拒绝，并指向重装插件/verify", () => {
   const f107xb = resolveF1Chip("STM32F107RBT6");
   assert.equal(f107xb.chip, null);
   assert.match(f107xb.reason, /这一档没有收录/u);
-  assert.match(f107xb.reason, /资源包/u);
-  assert.match(f107xb.reason, /stm32_assets refresh/u);
+  assert.match(f107xb.reason, /内置资源/u);
+  assert.match(f107xb.reason, /stm32_assets verify/u);
   const f102xe = resolveF1Chip("STM32F102CET6");
   assert.equal(f102xe.chip, null);
   assert.match(f102xe.reason, /这一档没有收录/u);
@@ -167,16 +167,16 @@ test("F100xE / F101xE：RAM 32K / 48K（同一容量档不同 line 的 RAM 仍�
   assert.notEqual(f100.chip.ramBytes, f101.chip.ramBytes);
 });
 
-test("资源包里没收录的型号：返回 chip=null + 人话（不再拿 ramBytes=null 硬凑一颗）", () => {
+test("内置资源里没收录的型号：返回 chip=null + 人话（不再拿 ramBytes=null 硬凑一颗）", () => {
   for (const mcu of ["STM32F100RCT6", "STM32F101RCT6"]) {
     const { chip, reason } = resolveF1Chip(mcu);
     assert.equal(chip, null, mcu + " 不该再解析出半条事实");
-    assert.match(reason, /资源包/u, mcu + " 要说清是资源包没收录");
-    assert.match(reason, /stm32_assets refresh/u, mcu + " 要给 refresh 提示");
+    assert.match(reason, /内置资源/u, mcu + " 要说清是内置资源没收录");
+    assert.match(reason, /stm32_assets verify/u, mcu + " 要指向 verify 定位缺件");
   }
 });
 
-test("没有资源包缓存时：findChipFact=null，requireChipFact 抛结构化错误并提示 refresh", () => {
+test("没有内置资源时：findChipFact=null，requireChipFact 抛结构化错误并提示重装插件", () => {
   const emptyRoot = mkdtempSync(join(tmpdir(), "dsh-stm32-noassets-"));
   const env = { ...process.env, DSH_STM32_ASSETS: emptyRoot };
 
@@ -184,7 +184,7 @@ test("没有资源包缓存时：findChipFact=null，requireChipFact 抛结构�
   const facts = loadDeviceFacts(env);
   assert.equal(facts.ok, false);
   assert.equal(facts.chips.length, 0);
-  assert.match(facts.error, /stm32_assets refresh/u);
+  assert.match(facts.error, /stm32_assets verify/u);
   assert.equal(findChipFact("STM32F103C8T6", env), null);
 
   assert.throws(
@@ -193,8 +193,8 @@ test("没有资源包缓存时：findChipFact=null，requireChipFact 抛结构�
       assert.ok(error instanceof DeviceFactError);
       assert.equal(error.code, "facts-missing");
       assert.equal(error.cpn, "STM32F103C8T6");
-      assert.match(error.message, /stm32_assets refresh/u);
-      assert.match(error.message, /检查网络/u);
+      assert.match(error.message, /stm32_assets verify/u);
+      assert.match(error.message, /重装插件/u);
       return true;
     },
   );
@@ -205,7 +205,7 @@ test("没有资源包缓存时：findChipFact=null，requireChipFact 抛结构�
   try {
     const { chip, reason } = resolveF1Chip("STM32F103C8T6");
     assert.equal(chip, null);
-    assert.match(reason, /stm32_assets refresh/u);
+    assert.match(reason, /stm32_assets verify/u);
   } finally {
     process.env.DSH_STM32_ASSETS = previous;
   }
@@ -218,7 +218,7 @@ test("requireChipFact：缓存里没有这颗时抛 chip-unknown（错误码可�
       assert.ok(error instanceof DeviceFactError);
       assert.equal(error.code, "chip-unknown");
       assert.match(error.message, /STM32F103ZET6/u);
-      assert.match(error.message, /stm32_assets refresh/u);
+      assert.match(error.message, /stm32_assets verify/u);
       return true;
     },
   );

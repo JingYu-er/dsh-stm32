@@ -57,6 +57,10 @@ try {
     "templates/scaffold/demo.ioc",
     "templates/scaffold/openocd.cfg",
     "cordis.patch.yml",
+    "assets/manifest.json",
+    "assets/device/f1/chips.json",
+    "assets/ioc/minimal/STM32F103C8Tx.ioc",
+    "assets/ld/f1/STM32F103C8Tx_FLASH.ld",
   ];
   for (const rel of mustHave) {
     say(existsSync(join(pkgRoot, rel)), "包内文件存在：" + rel);
@@ -111,12 +115,10 @@ try {
   };
   const projectDir = join(work, "proj");
   const cacheDir = join(work, "cache");
-  // 设备事实只从资源包缓存读（插件不再内置芯片表），所以这里把 DSH_STM32_ASSETS 指到仓库里的
-  // 测试夹具：烟测验的是「解包出来的 lib 能不能建工程」，不该依赖网络或本机缓存。
-  const assetsRoot = join(root, "test", "fixtures", "assets");
-  const previousAssets = process.env.DSH_STM32_ASSETS;
-  process.env.DSH_STM32_ASSETS = assetsRoot;
-  const env = { DSH_STM32_CACHE: cacheDir, DSH_STM32_ASSETS: assetsRoot };
+  // 设备事实必须来自**解包后的**内置 assets/：显式清掉 DSH_STM32_ASSETS，让 lib/engine/assets.js
+  // 的 ../../assets 解析到包根。这一步同时验证 assets/ 真的进了 tarball（而不是只在本机仓库里）。
+  delete process.env.DSH_STM32_ASSETS;
+  const env = { DSH_STM32_CACHE: cacheDir, DSH_STM32_ASSETS: "" };
   const report = await mod.createRegisterProject({
     targetDir: projectDir,
     projectName: "smoke",

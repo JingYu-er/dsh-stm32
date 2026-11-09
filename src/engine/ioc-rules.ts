@@ -29,7 +29,7 @@ export interface IocRuleIssue {
 export interface IocRuleContext {
   db?: CubemxDb | null;
   facts?: CubemxMcuFacts | null;
-  /** SVD 里的中断名集合（R20 用）；没有资源包/老包时不给，R20 自动跳过。 */
+  /** SVD 里的中断名集合（R20 用）；没有内置资源/老包时不给，R20 自动跳过。 */
   interrupts?: ReadonlySet<string> | null;
 }
 

@@ -58,7 +58,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.3`；重启后 `/stm32-doctor` 有输出。
 
-> **首次使用要联网拉一次资源包**：插件不内置任何芯片表，设备事实（型号 → 启动文件 / 设备宏 / Flash·RAM 容量）在第一次用到时由 `stm32_assets` 自动装一次（`profile: "core"`，30 个文件约 237 KiB：芯片表 + 内存布局 + `.ioc` 模板 + 链接脚本）。装好之后整条链离线可用，换版本才会再联网。
+> **芯片事实随插件内置**：设备事实（型号 → 启动文件 / 设备宏 / Flash·RAM 容量）来自包内的 `assets/device/<族>/chips.json`（core 75 个文件、full 105 个文件：芯片表 + 内存布局 + `.ioc` 模板 + 链接脚本 + SVD），装好即可离线使用，不需要联网拉资源包。`stm32_assets verify` 可校验完整性；缺文件通常意味着安装不完整。
 
 
 **卸载**：`dsh plugin --profile desktop remove dsh-stm32`，重启 dsh。
@@ -100,7 +100,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 5 | **只烧录**：program + verify + reset | `stm32_flash` | 2.1–2.6 s |
 | 6 | 读回 `GPIOC.ODR`（或地址 `0x4001100C`），确认状态确实在翻 | `stm32_regs_read` | 0.4–1.3 s |
 
-> 第 6 步用的是符号写法（`GPIOC.ODR`）。它靠资源包里的 SVD 表：`stm32_assets action="refresh" profile="full"`（128 个文件，其中 SVD 1.71 MiB）。只装了 `core` 也能读——但要写地址 `0x4001100C`，报告里没有寄存器名，也没有位域解释。
+> 第 6 步用的是符号写法（`GPIOC.ODR`），靠插件内置的 SVD 表（`assets/device/f1/svd/`，full 逻辑层）。只装 `core` 或安装不完整也能读——但要写地址 `0x4001100C`，报告里没有寄存器名，也没有位域解释。
 
 模型侧就是一句话：「在 `D:\work\blink` 建一个 STM32F103C8T6 的闪灯工程，编译并烧进去」。想自己敲就：
 
@@ -125,7 +125,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 多源文件、自己写的模块 | 写进 `cmake/user/CMakeLists.txt`，模板已留好位置 | 位置就位；未单独实测 |
 | 业务代码 | `stm32_code_patch` 按块写入，重新生成时按标签搬回 | 已实测（append / replace / 标签写错会列出全部可用标签） |
 | 调参数、改时钟 | `.ioc` 事务：先 diff → SHA 校验 → 备份 → 失败回滚 | 已实测 |
-| 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器——符号名 `TIM2.CNT` / `USART1.SR` / `ADC1.DR`…或物理地址 `0x40000024`；只写外设名 `GPIOC` 就把它的 7 个寄存器整体 dump。也可以 `stm32_debug_eval` 读变量 | 地址写法已上板实测（`0x4001100C` / `0x40010004`）；符号名与位域解释用真实资源包 + 假探针验证，**真机待复测**（开发笔记 §31.11） |
+| 烧完确认外设真的在动 | `stm32_regs_read` 读任意外设寄存器——符号名 `TIM2.CNT` / `USART1.SR` / `ADC1.DR`…或物理地址 `0x40000024`；只写外设名 `GPIOC` 就把它的 7 个寄存器整体 dump。也可以 `stm32_debug_eval` 读变量 | 地址写法已上板实测（`0x4001100C` / `0x40010004`）；符号名与位域解释用真实内置 SVD + 假探针验证，**真机待复测**（开发笔记 §31.11） |
 | 出问题要看现场 | `stm32_debug_run` 停在 `main` 抓一次；要连续调就开 `stm32_debug_session` + `stm32_debug_eval` | 已实测（停在 `main () at main.c:67`） |
 
 所以闪灯是验收用的最小样例，不是这套工具的能力上限：**它覆盖的是整条工程链，而不是一个 demo。** 真正的边界在[已知限制](#已知限制)里——芯片支持 F1 全系（F100/101/102/103/105/107，本机验证板是 C8T6）但只到 F1、宿主只在 Windows 上验证、探针默认 CMSIS-DAP，以及上面那条「新增外设要手工补 HAL 源」。外设种类本身不受工具限制：`.ioc` 里配得出来的，生成、编译、烧录、读回都走同一条链；只是除闪灯外还没有逐项上板实测，正式开项目前先跑一遍 `stm32_doctor`。
@@ -138,7 +138,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 开工前门禁 | 每个会动工具链的工具先过 `ensureToolchain`：缺件就拦住并写清装什么、缺了会怎样；`envCheck: "block"`（默认）/ `"warn"` / `"off"` 由调用方决定 |
 | 装工具链 | `stm32_env_install`：先只出计划（下载什么、多大、要改哪条 PATH），你点头才真装 MSYS2 + 5 个 pacman 包 + 用户级 PATH，装完自己写进配置文件 |
 | 选技术路线 | `stm32_route_plan`：先按**这个工程**的需求，把每个外设的 HAL 版与寄存器版代价摆出来（效率 / 可读性 / 排错），再告诉你缺的是「能代装的」还是「只能人装的」（CubeMX 是 GUI 向导 + 要 ST 账号、固件包只由 CubeMX 包管理器维护） |
-| 设备事实（型号 → 启动文件 / 设备宏 / 容量） | 插件**不内置芯片表**：型号、启动文件、设备宏、Flash/RAM 这些事实只从本地资源包缓存读（`~/.dsh-stm32/assets/<版本>/device/f1/chips.json`，`DSH_STM32_ASSETS` 可换根目录），第一次用到时自动装一次（`stm32_assets` 的 `refresh`），装好之后离线可用。没网又没缓存时 `stm32_project_create` / `stm32_doctor` 会明说「先跑 stm32_assets refresh，或检查网络」，不会拿内置表凑一个可能错的启动文件名 |
+| 设备事实（型号 → 启动文件 / 设备宏 / 容量） | 插件**内置芯片表**（随 npm 包分发）：型号、启动文件、设备宏、Flash/RAM 只从包内 `assets/device/f1/chips.json` 读（`lib/engine/assets.js` 从包根解析 `assets/`；`DSH_STM32_ASSETS` 仍可指向外部目录做开发覆盖）。文件缺失只说明安装不完整：`stm32_assets verify` 定位，重装插件即可，不需要联网 |
 | 从零建工程 | `stm32_project_create`：`route: "hal"` 用模板快照 + 固件包 Drivers（与 CubeMX GUI 新建的工程逐字节一致）；`route: "register"` 建不用 CubeMX 的寄存器版工程，CMSIS 模板首次从网上下到缓存、之后复用（每个文件都钉了上游 sha256，改过就拒绝落盘）；`mcu` 指定型号（两条路线都吃；HAL 路线按型号渲染启动文件 / 设备宏 / `<DeviceId>_FLASH.ld`）；两条路线都会带一份 `openocd.cfg`（CMSIS-DAP + `hla_swd` + 2 MHz） |
 | 导出工程 | `stm32_project_export`：源码打成一个 zip（默认不带 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`），可选把 `.elf` 一起带上，并写一份开箱 README |
 | `.ioc` 事务 | `stm32_ioc_inspect`（只读解析）→ `stm32_ioc_plan`（算 diff，不写盘）→ `stm32_ioc_apply`（SHA 校验 + 备份 + 回滚） |
@@ -163,7 +163,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
 | `stm32_project_create` | 空目录 → 完整 CMake 工程。`route: "hal"`（默认）走 CubeMX 那套（含 `.vscode` 里"① 只烧录 / ② 烧录并调试"两份配置）；`route: "register"` 建**不用 CubeMX、不用 HAL** 的寄存器版工程（`mcu` 指定型号——F1 全系都吃；寄存器版从缓存取 CMSIS 头与启动文件，HAL 版按型号渲染启动文件 / 设备宏 / `.ld`）。目标目录非空默认拒绝，`overwrite: true` 才覆盖 |
-| `stm32_assets` | 管**设备事实资源包**（芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "refresh"`（默认 `profile: "core"`，30 个文件约 237 KiB；已装同版本直接复用；`profile: "full"` 是 128 个文件，多加 SVD 等表）从 GitHub → jsDelivr → gitcode 多源拉 `manifest.json`，逐文件钉 sha256 装到 `~/.dsh-stm32/assets/<版本>/`；`list` / `verify` / `prune` 管各版本。**插件不再内置任何芯片表**，设备事实只从这里读，第一次用要联网装一次，装好后离线可用 |
+| `stm32_assets` | 管**插件内置资源**（21 个族的芯片表 / 内存布局 / .ioc 模板 / 链接脚本 / SVD，不是 CMSIS 下载缓存）：`action: "list"` / `"verify"` 查看与逐文件校验内置 `assets/`（core 75 个文件、full 105 个文件，随包分发，离线可用）；`"refresh"` 是 `verify` 的别名（不做下载）；`"prune"` 只清 `DSH_STM32_ASSETS` 下遗留的历史版本。缺文件说明安装不完整，重装插件即可 |
 | `stm32_cache` | 看 / 验 / 拉 / 清下载缓存：`action: "list"`（默认）列条目、`"verify"` 逐文件校验、`"fetch"` 按 `mcu` 拉一次模板（已缓存则直接复用，不联网）、`"purge"` 删条目（不给 `id` 就清空）。缓存里放的是"不属于插件、但建工程要用"的 CMSIS 设备头 + 启动文件 + 内核头，第一次用时才下载，之后一直复用 |
 | `stm32_project_export` | 把工程打成一个 zip 交给别人：默认收源码、CMake、`.vscode`、`.ioc`，跳过 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`；`includePrebuilt: true` 把 `.elf` 一起带上，`readme: false` 不写包内 README，`outDir` 指定落点（默认工程同级的 `<name>-export.zip`） |
 | `stm32_firmware_install` | 缺固件包时的一条龙，两条通道：`source: "auto"`（默认）先按 db 的 `FwLibrary` 拼官方 zip 的 URL 下载（验 `Content-Length` + 逐条 CRC32），再交给 CubeMX 自己的 `swmgr install` 装进 `Repository`——包被包管理器正经认下；装不成（没 CubeMX、跑着 GUI、首次装新族要弹许可协议窗）就把原因写进 `notes`，回退 GitHub 拼包（HAL 驱动 + CMSIS 设备支持 + 内核头约 2 MB，自写 `package.xml`，放进 `<CubeMX 根>/dsh-firmware`，生成时用 `setCustomFWPath` 指过去）。`source: "official"` 只走官网、失败直接报错。`dryRun`（默认）只出计划，`dryRun: false` + `confirm: true` 才真装；已有包时什么都不做 |
@@ -194,7 +194,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_debug_session` | 常驻 openocd 会话（`.elf` 自动解析），空闲 90 s 自动关、硬上限 10 min |
 | `stm32_debug_eval` | 在会话里执行 gdb 命令或读表达式（如 `g_led_blink_count`），读完立刻 `resume` + `detach` |
 | `stm32_debug_stop` | 立刻释放探针，幂等 |
-| `stm32_regs_read` | 读寄存器，`addresses` 五种写法：物理地址 `0x4001100C` / `4001100C`、符号名 `GPIOC.ODR` / `GPIOC->ODR`、只写外设名 `GPIOC`（按偏移升序把它的 7 个寄存器整体 dump，上限 64 条）。装了资源包的 `full` profile 时，每条样本带规范化名与**置位位域**（`GPIOC.ODR (0x4001100C) = 0x00000020  → ODR5=1`）；未知外设会列出可用的前 10 个（共 53 个），未知寄存器会列出该外设的已知寄存器；没有 SVD 时纯地址照读（只是没有名字与位域），符号名报错并提示 `stm32_assets refresh --profile full`。收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零；连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
+| `stm32_regs_read` | 读寄存器，`addresses` 五种写法：物理地址 `0x4001100C` / `4001100C`、符号名 `GPIOC.ODR` / `GPIOC->ODR`、只写外设名 `GPIOC`（按偏移升序把它的 7 个寄存器整体 dump，上限 64 条）。内置资源含 SVD（full 逻辑层）时，每条样本带规范化名与**置位位域**（`GPIOC.ODR (0x4001100C) = 0x00000020  → ODR5=1`）；未知外设会列出可用的前 10 个（共 53 个），未知寄存器会列出该外设的已知寄存器；没有 SVD 时纯地址照读（只是没有名字与位域），符号名报错并提示「SVD 只在 profile=full：重装插件」。收尾用 `resume` 而不是 `reset run`，避免读一眼就把固件状态清零；连读时复用常驻 openocd 会话（毫秒级，不另起进程），没有会话才起一次并保留 90 s |
 | `stm32_watch` | **变量监视与硬件观察点**：`action: "add"` 登记表达式（`expressions`，`kind` 默认 `value`＝每次 `sample` 求值；`write` / `read` / `access` 走 gdb `watch` / `rwatch` / `awatch`，是**数据**比较器，和代码断点不共用预算，F1 只有 4 个，超出在起进程之前就拒绝）。`kind=value` 只登记、不需要会话。`action: "sample"` 停下→逐项求值→和上次值算 `delta`→原本在跑就 `monitor resume` 放回去（`resume: false` 可留住）；出错时保留上一次的值并写 `lastError`。`action: "list"` / `"remove"`（`ids`）/ `"clear"` 管登记表。生命周期：会话 `stop` 时清表（观察点住在 gdb 进程里）；MI 重建会把观察点标成失效并提示重新 `add`。gdb 退回**软件观察点**时会在 `notes` 里警告（会拖慢目标） |
 | `stm32_rtt` | **RTT 日志**（不占串口）：`action: "start"` 先用 `mdw` 读三个字确认 RAM 里真有 `SEGGER RTT` 控制块（`addr` 填控制块起始地址，不是通道缓冲地址），再发 `rtt setup/start/server start`；没有活跃会话时自己起一个。`action: "dump"` 读 `seconds`（默认 3 s）或 `maxRecords`（默认 200 条），返回 `records[{ t, level, text }]`——`level` 是**保留到哪一级**（1 error / 2 warn / 3 info / 4 debug，默认 4 全要），`dropped` / `truncated` 如实报。`action: "stop"` 幂等（turn 结束也会自动停），`action: "status"` 看端口与已运行时长。目标必须**真在跑**（`rtt start` 读的是运行时 RAM）。失败带 `probeError`：控制块全 0 = 固件没调 `rtt_init()`、魔数不符 = `addr` 填错、连不上 = 会话掉了或 9090 端口被占 |
 
@@ -251,7 +251,7 @@ stm32_rtt action=stop                      # 释放端口；turn 结束也会自
 
 ## 芯片、链接脚本与时钟
 
-- **型号是参数，不是常量。** `stm32_project_create` / `stm32_generate` 按 `mcu` 一起换三样：启动文件（`startup_stm32f103xe.s`）、设备宏（`STM32F103xE`）、链接脚本（`STM32F103RCTx_FLASH.ld`）。HAL 路线走 `src/engine/hal-chip.ts`（`resolveHalChip()` 按族分发：F1 走手写 RAM 表，其它族走资源包的 `device/<族>/chips.json`；`renderStartupAndDefine` / `renderLinkerScript` / `renderIoc` / `renderCmakeLists` / `renderOpenocdTarget`），寄存器路线走 `src/data/stm32f1.ts`（`resolveF1Chip()`，14 个容量档，每个启动文件都钉了上游 sha256）。认不出的型号直接给原因，不猜一个上游不存在的启动文件名。
+- **型号是参数，不是常量。** `stm32_project_create` / `stm32_generate` 按 `mcu` 一起换三样：启动文件（`startup_stm32f103xe.s`）、设备宏（`STM32F103xE`）、链接脚本（`STM32F103RCTx_FLASH.ld`）。HAL 路线走 `src/engine/hal-chip.ts`（`resolveHalChip()` 按族分发：F1 走手写 RAM 表，其它族走内置资源的 `device/<族>/chips.json`；`renderStartupAndDefine` / `renderLinkerScript` / `renderIoc` / `renderCmakeLists` / `renderOpenocdTarget`），寄存器路线走 `src/data/stm32f1.ts`（`resolveF1Chip()`，14 个容量档，每个启动文件都钉了上游 sha256）。认不出的型号直接给原因，不猜一个上游不存在的启动文件名。
 - **链接脚本按 `DeviceId` 命名：`<DeviceId>_FLASH.ld`。** C8T6 → `STM32F103C8Tx_FLASH.ld`（64 KiB Flash / 20 KiB RAM），RCT6 → `STM32F103RCTx_FLASH.ld`（256 / 48），F107VCT6 → `STM32F107VCTx_FLASH.ld`（256 / 64）。模板里那份旧的 `STM32F103XX_FLASH.ld` 只作 C8T6 的兼容副本；CMake 的 `-T` 一律指向按型号渲染的那份（`pointLinkerFlagAt()` 把工具链文件里的旧名改指过去，避免两个 `-T` 让 ld 取错脚本）。
 - **时钟就近，不可达就明说。** `stm32_ioc_plan` 的 `clock: { targetHz }`（也可 `pllMul` 钉死倍频、`pllSource` 选 HSE / HSI）枚举全部可行的 PLL 组合，取 |SYSCLK − 目标| 最小的一档，并把差距写进结论：要 60 MHz 时 F1 的 PLL 只能整数倍频、HSE 8 MHz 拼不出这一档，于是选 64 MHz 并标注「不可达，已选 64 MHz（+4 MHz）」（同距取更高档）。同一次 plan 里把 `SYSCLKFreq_VALUE` / `HCLKFre` / `PLLMUL` / APB1·APB2·ADC 分频这些派生键**全量重算**——只改 SYSCLK 不动它们，CubeMX 会按旧值重算或干脆不认；同时列出逐外设频率、UART 波特率的整除误差与几个备选档。超限（SYSCLK > 72 MHz、APB1 > 36 MHz、ADC > 14 MHz、USB 要 48 MHz 却不在 PLLCLK/1.5 这条路上）时**一个键都不写**。
 - **烧前五项一致。** `stm32_doctor` 核对「`.ioc` 型号 ↔ 启动文件名 ↔ cmake 里的设备宏 ↔ `.ld` 的 MEMORY 容量 ↔ `.elf` 的 Flash 占用」，任一错配报 blocker。`.elf` 那份占用是读 ELF program header 的 `p_filesz` 累加，不是文件大小——带 `-g3` 时 20 KiB 固件的 `.elf` 能有 600 KB，按文件大小判会误报「超 Flash」。
@@ -370,14 +370,14 @@ C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配�
 | --- | --- | --- |
 | 只在 **Windows** 上验证 | `stm32_generate` 依赖 `<CubeMX>/STM32CubeMX.exe` + `jre/bin/java.exe`，Linux/macOS 上的 CubeMX 不是这个形态 | 暂无；烧录/调试/读寄存器在 Linux 上若 openocd 与 gdb 齐全可能可用，但未验证 |
 | **C0 / U0 的 target 脚本是插件自带的** | openocd 0.12 没有 `stm32c0x.cfg` / `stm32u0x.cfg`，插件内置适配版（只把 `dap create … -tap` 换成 `-chain-position`），建工程时复制进工程 `openocd/` | 已用 openocd 0.12 验证脚本能完整加载（只差探针）；**没有 C0/U0 真板烧写证据** |
-| **HAL 建工程覆盖 14 个单核族** | C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / L0 / L1 / L4 / L4+ / U0 已按族实现：固件包按族找（`resolveFamilyFirmwareRoot`）、启动文件/设备宏/链接脚本来自资源包的 `device/<族>/chips.json`、`.ioc` 用资源包的 `ioc/family/<族>.ioc` 模板（逐族时钟树）、cmake 与 openocd/launch.json 里的 `STM32F1xx`/`stm32f1x` 按族替换。已实测 F4（407VGT6）create→generate→build 出 elf | 双核（WB/WL）、M33/M55（H5/L5/U3/U5/N6/WBA）、MPU（MP1/MP2）、H7/WB0/WL3 仍明确拒绝；资源包里没有的族要先 `stm32_assets refresh` |
-| 深层能力还有几项只按 **F1** 实现 | 族画像覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走；HAL 建工程已扩到 14 个单核族；`.ioc` 外设预设**全部改成查 db**（`src/data/db-presets.ts`，F1 与 F4 都做过真机往返 `benign=true`）：串口（USART/UART/LPUART）、定时器 PWM（`TIMx` → CH1，自动写 `S_TIMx_CHy` + SH 块）、ADC 单通道（`ADCx_INn` + Rank/采样）；手写表只剩 db 表达不了的三类（`TIMx:timebase`、`DMA:<IP>`、多 Rank `ADC1:1,4,5`）与离线兜底。**时钟规划也从 db 派生**（`src/data/clock-db.ts` 读 RCC Modes 的 PLLMUL/PLLM/PLLN/PLLP（L4 是 PLLR）枚举与 `<Frequency>` 上限）：pllmul 族（F1/F0/L0）与 pllmn 的 F4/F7/G4/L4 已能规划并做过往返（F1 72 MHz、F0 48 MHz、F4 168 MHz、F7 216 MHz、G4 170 MHz、L4 80 MHz，全部 benign）；其余族缺「核过的总线上限 / VCO 区间」仍明确拒绝。仍只有 F1 的是：**SVD 校验**（资源包只有 `device/f1/svd`）与**寄存器版模板** | 这些会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false，或逐条报「这一条为什么不行」），不会悄悄套 F1 表 |
-| 默认探针是 **CMSIS-DAP** | 没有 `openocd.cfg` 时回退 cmsis-dap | 用 `openocd.cfg` 换 `interface/stlink.cfg`（见上） |
+| **HAL 建工程覆盖 14 个单核族** | C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / L0 / L1 / L4 / L4+ / U0 已按族实现：固件包按族找（`resolveFamilyFirmwareRoot`）、启动文件/设备宏/链接脚本来自内置资源 `assets/device/<族>/chips.json`、`.ioc` 用 `assets/ioc/family/<族>.ioc` 模板（逐族时钟树）、cmake 与 openocd/launch.json 里的 `STM32F1xx`/`stm32f1x` 按族替换。已实测 F4（407VGT6）create→generate→build 出 elf | 双核（WB/WL）、M33/M55（H5/L5/U3/U5/N6/WBA）、MPU（MP1/MP2）、H7/WB0/WL3 仍明确拒绝；内置资源里没有的族会明确拒绝（`stm32_assets verify` 定位缺件） |
+| 深层能力还有几项只按 **F1** 实现 | 族画像覆盖 27 个族（`src/data/family.ts`）：引脚名、SWD 调试信号、EXTI 向量分组、openocd target、断点预算都随族与内核走；HAL 建工程已扩到 14 个单核族；`.ioc` 外设预设**全部改成查 db**（`src/data/db-presets.ts`，F1 与 F4 都做过真机往返 `benign=true`）：串口（USART/UART/LPUART）、定时器 PWM（`TIMx` → CH1，自动写 `S_TIMx_CHy` + SH 块）、ADC 单通道（`ADCx_INn` + Rank/采样）；手写表只剩 db 表达不了的三类（`TIMx:timebase`、`DMA:<IP>`、多 Rank `ADC1:1,4,5`）与离线兜底。**时钟规划也从 db 派生**（`src/data/clock-db.ts` 读 RCC Modes 的 PLLMUL/PLLM/PLLN/PLLP（L4 是 PLLR）枚举与 `<Frequency>` 上限）：pllmul 族（F1/F0/L0）与 pllmn 的 F4/F7/G4/L4 已能规划并做过往返（F1 72 MHz、F0 48 MHz、F4 168 MHz、F7 216 MHz、G4 170 MHz、L4 80 MHz，全部 benign）；其余族缺「核过的总线上限 / VCO 区间」仍明确拒绝。仍只有 F1 的是：**SVD 校验**（内置资源只有 `device/f1/svd`）与**寄存器版模板** | 这些会**明确拒绝并说明原因**（族画像的 `capabilities` 为 false，或逐条报「这一条为什么不行」），不会悄悄套 F1 表 |
+| 探针按 USB 实见自动选 | ST-Link → `interface/stlink-dap.cfg`（dapdirect）、DAPLink/CMSIS-DAP → `interface/cmsis-dap.cfg`、J-Link → `interface/jlink.cfg` + `transport select swd`；工程自带 `openocd.cfg` 时以它为准 | 插不同探针不用改配置；要固定就手写 `openocd.cfg` |
 | 新增外设要**手工补 HAL 源** | 插件只落位 CubeMX 的 `Src/` 与 `Inc/`（→ `Core/Src`、`Core/Inc`），CubeMX 生成的 `cmake/stm32cubemx/CMakeLists.txt` 不搬；开了定时器/串口/ADC 之后要自己把 `stm32f1xx_hal_<外设>.c` 加进源清单 | 改工程里 `cmake/stm32cubemx/CMakeLists.txt` 的 `STM32_Drivers_Src`，或写进 `cmake/user/CMakeLists.txt` 的 `target_sources` |
 | 生成/建工程需要 **CubeMX + 该族固件包** | F1 默认 `STM32Cube_FW_F1_V1.8.7`；其它族取本机已装的最高版本（`STM32Cube_FW_<族>_V*`） | 换版本传 `firmwarePackage`；缺包装不上就先在 CubeMX 包管理器里装 |
 | 未在别人的机器上验证 | 本机：Windows 10 + MSYS2 UCRT64 + DAPLink + 蓝丸；其余组合靠反馈 | 遇到问题请附 `stm32_doctor` 的完整输出开 issue |
 | **RTT 只有通道 0**，帧是我们自己的约定 | `stm32_rtt` 只解析通道 0，头是 13 字节（4 B 长度 + 1 B 级别 + 8 B 时间戳 + UTF-8 正文）；既不是 defmt，也不是 SEGGER 原生裸字节——原生客户端（RTT Viewer / J-Link RTT Client）读通道 0 会把这 13 字节当正文。RTT 还依赖目标 RAM：不调 `rtt_init()` 就没有控制块，环满时整条丢 | 级别当过滤（`level: 3` 只看 info 以上），结构化内容塞进 `text` 里自己放 JSON；通道数与环大小改 `rtt.h` 的 `RTT_UP_CHANNELS` / `RTT_BUF_SIZE`（默认 3×1 KB = 3 KB `.bss`，C8T6 只有 20 KB）；要 defmt 解码或原生 RTT 输出是另一个功能 |
-| **寄存器符号名与位域解释要靠资源包的 `full` profile** | `GPIOC.ODR` / `GPIOC->ODR` 与外设 dump（只写 `GPIOC`）都从 `device/f1/svd/<line>.json` 解析，这份数据由 ST 的 SVD 派生（ST EULA，1.71 MiB），`core`（30 个文件约 237 KiB）里没有；覆盖线只有 100/101/102/103/105/107。没有 SVD 时纯地址照读，只是没有名字和位域；符号名会报错并提示怎么补 | `stm32_assets action="refresh" profile="full"`（128 个文件）；不想装就写 `0x` 开头的地址 |
+| **寄存器符号名与位域解释要靠内置 SVD（full 逻辑层）** | `GPIOC.ODR` / `GPIOC->ODR` 与外设 dump（只写 `GPIOC`）都从 `assets/device/f1/svd/<line>.json` 解析（ST SVD 派生，1.71 MiB），只覆盖 100/101/102/103/105/107。没有 SVD 时纯地址照读，只是没有名字和位域；符号名会报错并提示重装插件（full 也随包） | 写 `0x` 开头的地址；或 `stm32_assets verify` 确认安装完整性 |
 
 ## 排错
 
@@ -389,7 +389,7 @@ C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配�
 | 调试会话开着时读寄存器，`report.command` 是一条 `gdb-multiarch … target extended-remote 127.0.0.1:3333` | 这是「复用会话」的正常形态：`stm32_debug_session` 活着时，`stm32_regs_read` 借用会话里那个 openocd，notes 会写清「复用调试会话（gdb 端口 N，tcl 端口 M），没有另起 openocd」。B3 之后默认走 **Tcl RPC 直读**（一条 TCP 连接：halt → 读 pc → 连续 `mdw` → resume，毫秒级），所以 `report.command` 是 `gdb-multiarch …` 只说明 Tcl 快路径没成、回退到了会话里的 gdb，原因写在 notes 里；只有没有会话时才另起 openocd。旧版在这里会报 `CMSIS-DAP transfer count mismatch: expected N, got M` |
 | 编译"成功"但跑的是旧固件 | 复制或改名过带 `build/` 的工程：CMakeCache 里的目录对不上，ninja 仍退出 0。`stm32_build` 会判失败；按提示 clean 或删 `build/Debug` |
 | 工具直接回「缺 arm-none-eabi-gcc…，这次没有开始编译」 | 这是开工前门禁（`envCheck` 默认 `block`）拦下来的，不是 bug：它比跑到一半才发现省时间。回一句「装」，模型调 `stm32_env_install` 出计划；确认后装好并写配置文件，**下一条命令就能用，不必重启**。想先看全貌就 `/stm32-env`；只想先跑起来就传 `envCheck: "warn"`（照做但写警告）或 `"off"`（不查） |
-| 第一次建工程回「设备事实还没就绪……先跑 stm32_assets refresh，或检查网络」 | 插件不内置芯片表：型号 → 启动文件 / 设备宏 / Flash / RAM 的事实只从本地资源包缓存（`~/.dsh-stm32/assets/<版本>/`）读。联网跑一次 `stm32_assets`（`action: "refresh"`，默认 `profile: "core"`，30 个文件约 237 KiB），装好后离线可用；`DSH_STM32_ASSETS` 可换根目录 |
+| 第一次建工程回「设备事实还没就绪……」 | 插件随包内置芯片表（`assets/device/f1/chips.json`），正常安装不会出现；报这个说明插件安装不完整。跑 `stm32_assets verify` 看缺了哪些文件，重装插件即可（无需联网）；`DSH_STM32_ASSETS` 只用于开发时覆盖资源根 |
 | `stm32_doctor` 说找不到 gcc / openocd | 先看 doctor 的 notes / 报错里的「查过 …」列表与自动发现结果；装上后还找不到就设 `STM32_BIN_DIRS` 或给工具传 `binDirs`。**不知道装什么就先跑 `stm32_doctor`**：每条缺失项都带 `impact`（缺了影响哪些功能）、`install`（推荐装法，第一条最省事）、`verify`（装完自检），顶层 `recommendations` 给出安装顺序，还会问要不要帮你装 |
 | `stm32_generate` 很慢或像卡住 | 首次（冷启动、无缓存）3.5–4 分钟属正常，之后 .ioc 与产物没变会直接跳过（<1 s）。默认后台 job，用 `job_output` 看进度，或传 `foreground: true` 同步等。想确认是不是漏命中缓存，看返回里的 `skipped` 与 notes 给的 reason |
 | 生成没变化却每次都跑满 3 分钟 | 缓存键里含 CubeMX 的 size+mtime 与产物 hash：换过 CubeMX、改过生成区文件、或改过落位布局都会失效。看 notes 里的 reason，或删 `.dsh-stm32/generate-cache.json` 从干净状态重来 |
@@ -414,12 +414,13 @@ GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的�
 
 | 放哪 | 内容 | 量级 |
 | --- | --- | --- |
-| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 118 个文件 / 573.1 KB，解包 1816.6 KB；其中 `templates/**` 66.4 KB |
+| 随包（npm tarball） | `lib/**`（含 `lib/client.js`）、`client/client.js`、`templates/scaffold/**`、`assets/**`、`cordis.patch.yml`、两份 README、`LICENSE`、`docs/*.md` | 265 个文件 / 1750.3 KB，解包 14901.3 KB；`assets/**` 源文件 12.5 MB（headers 压缩率高） |
 | 进 git 不进包 | `src/**`、`test/**`、`scripts/**`、`docs/diagrams/**`（两张可交互 HTML） | diagrams 2 MB 原始 / 891 KB gz；`package.json` 的 `files` 把 `docs` 收窄成 `docs/*.md` |
-| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包；**设备事实资源包**（`device/f1/chips.json` 9 个字段 + .ioc 模板 + .ld + SVD，core 29 个文件约 197 KiB、full 69 个文件——SVD / startup / headers 都在 full 里；插件不再内置芯片表，首次使用要联网拉一次 `stm32_assets refresh`，之后离线可用） | 缓存可用 `stm32_cache list/verify/purge` 与 `stm32_assets list/verify/prune` 管 |
+| 内置（随包） | 设备事实层（21 个族的 `device/<族>/chips.json`）、`.ioc` 模板、`.ld`、SVD、startup、headers——core 75 个文件、full 105 个文件，随 npm 包分发，离线可用 | `stm32_assets list/verify` 查看与校验；`prune` 只清历史外部版本 |
+| 远端按需下载 | CMSIS 设备头 / 启动文件 / 内核头（寄存器版首次用时下到缓存，逐文件钉 sha256）；HAL 固件包 | 缓存可用 `stm32_cache list/verify/purge` 管 |
 | 现造 | `.ioc` 内容（`renderIoc`）、`.ld` 的 MEMORY（`renderLinkerScript`）、cmake 源清单 | 按型号渲染，模板里不落盘 |
 
-护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 1.2 MB（1 200 000 B）、`templates/**` 里的运行时资产（`.ioc/.xml/.ld/.json/.cfg/.svd/.csv`）≤ 40 KB 且单文件 ≤ 24 KB（`.md` 文档与 C/CMake 源码不算资产——文档是给人读的，源码是模板工程本身，二者由 tarball 上限兜住）、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md`。
+护栏是 `scripts/pack-size.mjs`（`npm run test:size`）：tarball ≤ 4 MB（4 000 000 B，`assets/**` 随包后实测 1.76 MB）、`templates/**` 里的运行时资产（`.ioc/.xml/.ld/.json/.cfg/.svd/.csv`）≤ 40 KB 且单文件 ≤ 24 KB（`.md` 文档与 C/CMake 源码不算资产）、包内禁止 `.png/.jpg/.gif/.webp/.bmp/.pdf/.html/.zip/.7z/.exe/.dll`，且必须含 `README.md` / `README_EN.md` / `LICENSE` / `cordis.patch.yml` / `docs/reading-guide.md` / `assets/manifest.json` / `assets/device/f1/chips.json`。
 
 真机 e2e 会写板子，需要你指一个能构建的工程：
 

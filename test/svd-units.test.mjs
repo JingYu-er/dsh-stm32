@@ -257,18 +257,18 @@ test("加载：已安装版本布局（install.json 里的版本号带出来）"
   assert.equal(device.path.includes(join("2026.10.31-1", "device", "f1", "svd")), true);
 });
 
-test("缺失：资源包没装 → assets-missing，文案含 stm32_assets refresh --profile full", () => {
+test("缺失：资源包没装 → assets-missing，文案含 SVD 只在 profile=full", () => {
   resetSvdCache();
   const loaded = loadSvd(LINE, nowhereEnv);
   assert.equal(loaded.device, null);
   assert.equal(loaded.failure.code, "assets-missing");
-  assert.match(loaded.failure.message, /stm32_assets refresh --profile full/u);
-  assert.match(loaded.failure.hint, /stm32_assets refresh --profile full/u);
+  assert.match(loaded.failure.message, /SVD 只在 profile=full/u);
+  assert.match(loaded.failure.hint, /SVD 只在 profile=full/u);
   assert.equal(loaded.failure.line, LINE);
   assert.equal(loadSvdForLine(LINE, nowhereEnv), null);
   const thrown = errorOf(() => requireSvd(LINE, nowhereEnv));
   assert.equal(thrown instanceof SvdError, true);
-  assert.match(thrown.message, /stm32_assets refresh --profile full/u);
+  assert.match(thrown.message, /SVD 只在 profile=full/u);
 });
 
 test("缺失：只装了 core profile 的资源包 → 明说「只装了 profile=core」并让人 refresh full", () => {
@@ -277,7 +277,7 @@ test("缺失：只装了 core profile 的资源包 → 明说「只装了 profil
   assert.equal(loaded.device, null);
   assert.equal(loaded.failure.code, "svd-missing");
   assert.match(loaded.failure.message, /profile=core/u);
-  assert.match(loaded.failure.message, /stm32_assets refresh --profile full/u);
+  assert.match(loaded.failure.message, /SVD 只在 profile=full/u);
   assert.match(loaded.failure.message, /device\/f1\/svd\/103\.json/u);
 });
 
@@ -287,7 +287,7 @@ test("缺失：这个 line 没有 SVD（资源包在，文件不在）", () => {
   assert.equal(loaded.device, null);
   assert.equal(loaded.failure.code, "svd-missing");
   assert.match(loaded.failure.message, /没有 device\/f1\/svd\/105\.json/u);
-  assert.match(loaded.failure.message, /stm32_assets refresh --profile full/u);
+  assert.match(loaded.failure.message, /SVD 只在 profile=full/u);
 });
 
 test("line 非法：不是三位数字 → line-invalid（不瞎猜成 103）", () => {
@@ -377,7 +377,7 @@ test("小工具：parseAddressText / formatAddress / formatOffset / 常量", () 
   assert.equal(parseAddressText("0xZZ"), null);
   assert.equal(formatAddress(0x4001100c), "0x4001100C");
   assert.equal(formatOffset(0x0c), "0xC");
-  assert.match(SVD_FULL_PROFILE_HINT, /stm32_assets refresh --profile full/u);
+  assert.match(SVD_FULL_PROFILE_HINT, /SVD 只在 profile=full/u);
 });
 
 /* ============================ D2：regs_read 的符号名与位域 ============================ */
@@ -616,12 +616,12 @@ test("planRegReads：未知寄存器 → 列出该外设已知寄存器；没有
   const noSvd = planWith(["GPIOC.ODR"], null);
   assert.equal(noSvd.targets.length, 0);
   assert.match(noSvd.errors[0], /不是物理地址/u);
-  assert.match(noSvd.errors[0], /stm32_assets refresh --profile full/u);
+  assert.match(noSvd.errors[0], /SVD 只在 profile=full/u);
 
   const addressOnly = planWith(["0x4001100C"], null);
   assert.deepEqual(addressOnly.errors, [], "没有 SVD 也要能按纯地址读");
   assert.equal(addressOnly.targets[0].name, "0x4001100C");
-  assert.match(addressOnly.notes.join("\n"), /refresh --profile full/u);
+  assert.match(addressOnly.notes.join("\n"), /SVD 只在 profile=full/u);
 });
 
 test("planRegReads：重复 ref 与同地址别名只读一次（并说明）", () => {
@@ -671,7 +671,7 @@ test("resolveProjectSvd：.ioc 型号 → line（SVD 在） / 没装 SVD → 提
   const withoutSvd = resolveProjectSvd(FIXTURE_PROJECT, { DSH_STM32_ASSETS: SVD_NOWHERE });
   assert.equal(withoutSvd.line, "103", "型号里能推断出 line，但文件读不到");
   assert.equal(withoutSvd.device, null);
-  assert.match(withoutSvd.note, /stm32_assets refresh --profile full/u);
+  assert.match(withoutSvd.note, /SVD 只在 profile=full/u);
 });
 
 test("execute：符号名 + 地址混着传 → 每条样本带 ref/name/fields，位域按 SVD 解释（假 subprocess）", async () => {
@@ -730,7 +730,7 @@ test("execute：没有 SVD 时回退纯地址模式（不报错，name=地址，
     assert.equal(value.report.samples[0].ref, "0x4001100C");
     assert.deepEqual(value.report.samples[0].fields, []);
     assert.equal(value.report.samples[0].value, "0x00000020");
-    assert.match(value.report.notes.join("\n"), /stm32_assets refresh --profile full/u);
+    assert.match(value.report.notes.join("\n"), /SVD 只在 profile=full/u);
     assert.match(value.message, /读到 1 个地址/u, "纯地址模式的文案还是「个地址」");
   } finally {
     await session.close();

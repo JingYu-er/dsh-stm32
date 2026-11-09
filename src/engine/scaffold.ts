@@ -278,7 +278,7 @@ export function resolveFamilyFirmwareRoot(
 }
 
 /**
- * 非 F1 族的 .ioc 模板：资源包里的 ioc/family/<族>.ioc（CubeMX 6.15 无头 config save 出来的认证配置）。
+ * 非 F1 族的 .ioc 模板：内置资源里的 ioc/family/<族>.ioc（CubeMX 6.15 无头 config save 出来的认证配置）。
  *
  * 为什么不能套 F1 的模板：.ioc 的时钟树/IP 列表是逐族的（RCC 键名、PLL 参数、Mcu.IP 清单全不同），
  * 拿 F1 的骨架改成 F4 的型号，CubeMX 打开就会报配置不一致。
@@ -497,15 +497,15 @@ export function createProjectScaffold(request: ScaffoldRequest): ScaffoldReport 
     );
   }
 
-  // 非 F1 族的 .ioc 模板来自资源包（逐族的时钟树 / Mcu.IP 清单 / RCC 键名）；没有就拒绝，
+  // 非 F1 族的 .ioc 模板来自内置资源（逐族的时钟树 / Mcu.IP 清单 / RCC 键名）；没有就拒绝，
   // 绝不拿 F1 的骨架改个型号名——CubeMX 打开会报配置不一致（那是"看起来建成了但打不开"的工程）。
   let familyIocText: string | null = null;
   if (facts.familyLine !== "F1") {
     familyIocText = assetsFamilyIocText(facts.familyLine);
     if (familyIocText === null) {
       return fail(
-        "资源包里没有 " + facts.familyLine + " 的 .ioc 模板（ioc/family/" + facts.familyLine.toUpperCase() + ".ioc）：" +
-          "先跑 stm32_assets refresh 更新资源包；F1 之外的族不能套 F1 的模板（时钟树与外设清单逐族不同）。",
+        "内置资源里没有 " + facts.familyLine + " 的 .ioc 模板（ioc/family/" + facts.familyLine.toUpperCase() + ".ioc）：" +
+          "先跑 stm32_assets verify 确认安装完整（缺文件就重装插件）；F1 之外的族不能套 F1 的模板（时钟树与外设清单逐族不同）。",
       );
     }
   }

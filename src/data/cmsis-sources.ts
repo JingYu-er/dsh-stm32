@@ -61,9 +61,9 @@ export interface CmsisFamilySpec {
 /**
  * 寄存器件模板支持的 13 个族。
  *
- * 为什么是这 13 个：资源包 device/<族>/chips.json 已经收了这 13 族的芯片事实
+ * 为什么是这 13 个：内置资源 device/<族>/chips.json 已经收了这 13 族的芯片事实
  * （启动文件名 / 设备宏 / 设备头 / Flash / RAM 都在里面），寄存器路线需要的事实刚好齐了。
- * 其它族（H5/U3/U5/L5/WB/WBA/WL/H7/L4+）等资源包补了 chips.json 再按同样字段加一条即可。
+ * 其它族（H5/U3/U5/L5/WB/WBA/WL/H7/L4+）等内置资源补了 chips.json 再按同样字段加一条即可。
  *
  * 内核头沿用 F1 的口径：从 ST 的 STM32Cube<族> 主仓库取（ST 在主仓里 vendor 了 CMSIS，
  * 不是子模块；2026-11-08 实测 F4/G0 的 Drivers/CMSIS/Include 都是 200）。
@@ -301,7 +301,7 @@ export interface StartupChoice {
   deviceHeader: string;
   /** 命中的 F1 芯片事实（缓存 id / 链接脚本 / 时钟都要用）。 */
   chip?: F1Chip;
-  /** 非 F1：资源包 chips.json 里的通用芯片事实（启动文件/宏/头/Flash/RAM 全在里面）。 */
+  /** 非 F1：内置资源 chips.json 里的通用芯片事实（启动文件/宏/头/Flash/RAM 全在里面）。 */
   facts?: DeviceFactsChip;
 }
 
@@ -320,7 +320,7 @@ function choiceFromChip(chip: F1Chip): StartupChoice {
  * 优先 F103（档位最全，0.1 的 "F1:B" 正是按 F103 解释的），再按 line / CPN 升序。
  *
  * 以前这里靠手写的「容量字母 → 档位」常量表（随 chip-table.json 2026-10-31 一起删了）。
- * 现在这条事实也只从资源包缓存读：没有缓存就返回 null，上层会明说先 refresh，
+ * 现在这条事实也只从内置资源读：缺文件就返回 null，上层会明说先确认安装完整（stm32_assets verify），
  * 不会编一个可能不存在的启动文件名。
  */
 function chipForDensityLetter(letter: string): F1Chip | null {
@@ -374,7 +374,7 @@ export function chipForInput(input: string): F1Chip | null {
 export function startupChoiceFor(mcu: string, env: NodeJS.ProcessEnv = process.env): StartupChoice | null {
   const chip = chipForInput(mcu);
   if (chip !== null) return choiceFromChip(chip);
-  // 非 F1：事实全部来自资源包 chips.json，插件不内置任何芯片表。
+  // 非 F1：事实全部来自插件内置资源 chips.json（按族分文件）。
   const facts = findChipFact(mcu, env);
   if (facts === null) return null;
   const familyId = familyIdOfPart(facts.cpn);

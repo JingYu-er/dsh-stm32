@@ -2,7 +2,7 @@
  * L1：引脚名合法性 + 由本机 CubeMX db 派生的引脚表。
  *
  * 用户 2026-10-31「内置表删了吧」之后，这里**不再有任何内置芯片/引脚表**（原来的 CHIPS / KNOWN_CHIPS /
- * findChip 已删）。原因：芯片事实的唯一来源是资源包缓存 device/f1/chips.json，而那份文件只有 pinCount
+ * findChip 已删）。原因：芯片事实的唯一来源是内置资源 device/f1/chips.json，而那份文件只有 pinCount
  * （封装上有多少根脚），没有「这个封装有哪几根 GPIO」的清单——拿 pinCount 去猜 PA0-PB15… 等于又造一张表。
  *
  * 于是分工变成：
@@ -27,7 +27,7 @@ const MAX_PIN_NUMBER = 15;
 /**
  * 引脚名是否合法（未知/虚拟引脚一律放行）。
  *
- * 为什么不再按型号判「有没有这根脚」：那需要「封装 → 引脚清单」的事实，而资源包只给了 pinCount。
+ * 为什么不再按型号判「有没有这根脚」：那需要「封装 → 引脚清单」的事实，而内置资源只给了 pinCount。
  * 真正的引脚存在性请用 deriveChipPinTable（本机 CubeMX db）——它给的是实测清单，不是符号表。
  */
 export function isKnownPin(pin: string): boolean {
@@ -171,7 +171,7 @@ export function deriveChipPinTable(input: {
     pins: [],
     notes: [
       "引脚表：没有本机 CubeMX db（" + why + "），引脚存在性不校验（isKnownPin 只查引脚名是否合法）；" +
-        "插件不内置引脚表（资源包里也不再有 db 副本），需要逐脚校验就装 CubeMX —— 插件直接读它的 db/mcu",
+        "插件不内置引脚表（内置资源里也不再有 db 副本），需要逐脚校验就装 CubeMX —— 插件直接读它的 db/mcu",
     ],
   };
 }

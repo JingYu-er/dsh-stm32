@@ -3,7 +3,9 @@
  * 包体护栏：npm 包必须保持轻量。
  *
  * 规则（docs/development-notes.md 的「随包 / 进仓库 / 现造」三分法）：
- *   - tarball ≤ 1.2 MB —— 超出就说明有大文件混进来了（图、固件包、板级 .ioc）。
+ *   - tarball ≤ 4 MB —— assets/ 源文件约 12.5 MB，但主要是文本（设备头压缩率高），实测 1.76 MB。
+     芯片事实、.ioc 模板、链接脚本、启动文件、CMSIS 设备头随包发布（2026-11 起不再拆独立资源仓，
+     也就没有联网下载失败这条路）。超出上限说明混进了固件包、架构图或 RM 这类不该随包的东西。
  *   - templates/** 里的**运行时资产** ≤ 40 KB —— 这里只算工具真的会读进内存用的文件
  *     （.ioc / .xml / .ld / .json / .cfg / .svd / .csv）。Markdown 文档和 C/CMake 源码不算资产：
  *     前者是给人读的，后者是模板工程的一部分，二者都靠 tarball 上限兜住。单文件再过一道 24 KB。
@@ -17,7 +19,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-const MAX_TARBALL = 1_200_000;
+const MAX_TARBALL = 4_000_000;
 /** 运行时资产：会被工具读进内存解析的文件类型（.md 文档、.c/.h/.cmake 源码都不算）。 */
 const ASSET_EXTS = [".ioc", ".xml", ".ld", ".json", ".cfg", ".svd", ".csv"];
 const MAX_TEMPLATE_ASSETS = 40 * 1024;
@@ -30,7 +32,10 @@ function isAsset(path) {
 }
 const FORBIDDEN = /\.(png|jpe?g|gif|webp|bmp|pdf|html?|zip|7z|exe|dll)$/i;
 /** 这些文档必须在包里（docs/*.md 是白名单，别把整个 docs 排除掉）。 */
-const REQUIRED = ["README.md", "README_EN.md", "LICENSE", "cordis.patch.yml", "docs/reading-guide.md"];
+const REQUIRED = [
+  "README.md", "README_EN.md", "LICENSE", "cordis.patch.yml", "docs/reading-guide.md",
+  "assets/manifest.json", "assets/device/f1/chips.json", "assets/ioc/minimal/STM32F103C8Tx.ioc",
+];
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -68,7 +73,7 @@ const templateBytes = templateFiles.reduce((sum, f) => sum + Number(f.size ?? 0)
 const assetFiles = templateFiles.filter((f) => isAsset(f.path));
 const assetBytes = assetFiles.reduce((sum, f) => sum + Number(f.size ?? 0), 0);
 if (assetBytes > MAX_TEMPLATE_ASSETS) {
-  problems.push("templates/ 运行时资产共 " + kb(assetBytes) + " 超过上限 " + kb(MAX_TEMPLATE_ASSETS) + "（大资产应走远端仓库按需下载）");
+  problems.push("templates/ 运行时资产共 " + kb(assetBytes) + " 超过上限 " + kb(MAX_TEMPLATE_ASSETS) + "（大资产放 assets/，不要塞进模板）");
 }
 for (const f of assetFiles) {
   const size = Number(f.size ?? 0);

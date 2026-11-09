@@ -7,7 +7,7 @@
  * （原来每次 spawn 一个 openocd 要 1493 ms）。Tcl 端口解析不到 / RPC 失败时回退到会话里的 gdb 读。
  * 端口被 VS Code 的调试会话占着时直接报 probe-busy，不抢探针。
  *
- * D2：接上资源包里的 SVD（profile=full 才装）。addresses 的每一项可以是
+ * D2：接上内置资源里的 SVD（profile=full 才装）。addresses 的每一项可以是
  *   物理地址（0x4001100C / 4001100C）、寄存器符号（GPIOC.ODR / GPIOC->ODR / RCC.CR），
  *   或者只写外设名（GPIOC）＝把该外设的寄存器整体 dump 一遍（最多 REG_DUMP_MAX 个）。
  * 每条样本都会带上 ref（用户写法）、name（规范化名）与 fields（置位位域），报告 schema 同步。
@@ -186,14 +186,14 @@ interface ToolValue {
 /* ------------------------------ SVD → line ------------------------------ */
 
 function svdFailureText(failure: SvdFailure): string {
-  const suffix = failure.message.includes("refresh --profile full") ? "" : "；" + SVD_FULL_PROFILE_HINT;
+  const suffix = failure.message.includes(SVD_FULL_PROFILE_HINT) ? "" : "；" + SVD_FULL_PROFILE_HINT;
   return failure.message + suffix;
 }
 
 /**
  * 工程 → SVD：先按型号查 device facts（chips.json 的 line），查不到再按型号里的三位数字兜底。
  *
- * 为什么要兜底：开发机上常把 DSH_STM32_ASSETS 直接指到资源仓库本体（未分版本、没有 install.json），
+ * 为什么要兜底：开发机上常把 DSH_STM32_ASSETS 直接指到资源脚本 scripts/assets/本体（未分版本、没有 install.json），
  * 这时 device-facts 读不到，但 SVD 文件其实就在 <root>/device/f1/svd/<line>.json —— 兜底让本地开发可用。
  */
 export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = process.env): SvdLineResolution {
@@ -226,7 +226,7 @@ export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = p
 
   if (line === "") {
     return degraded(
-      "型号 " + cpn + " 没能对上 SVD line（device facts 里没有它，或资源包没装）：这次只按物理地址读，符号名与位域解释不可用；" +
+      "型号 " + cpn + " 没能对上 SVD line（device facts 里没有它，或内置资源没装）：这次只按物理地址读，符号名与位域解释不可用；" +
         SVD_FULL_PROFILE_HINT + "。",
     );
   }
@@ -250,7 +250,7 @@ export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = p
   const pieces = [
     "位域解释来自 SVD line=" + device.line + "（" + device.device + "，" +
       String(device.counts.peripherals) + " 个外设 / " + String(device.counts.registers) + " 个寄存器 / " +
-      String(device.counts.fields) + " 个位域" + (device.version === "" ? "" : "，资源包 " + device.version) + "）",
+      String(device.counts.fields) + " 个位域" + (device.version === "" ? "" : "，内置资源 " + device.version) + "）",
     source === "cpn"
       ? "line 是按型号 " + cpn + " 的编号兜底推出来的（device facts 里没有这颗芯片）"
       : "型号 " + cpn + " 来自 device facts",
@@ -441,7 +441,7 @@ export function planRegReads(
           // 外设写错是最常见的笔误：这里统一列出该 line 的前 N 个外设（不把 SVD 的内部文案直接甩给用户）。
           errors.push(
             error.code === "peripheral-unknown"
-              ? "资源包（line=" + device.line + "）里没有外设 " + wanted.toUpperCase() +
+              ? "内置资源（line=" + device.line + "）里没有外设 " + wanted.toUpperCase() +
                   "；可用外设（前 " + String(REGS_SUGGEST_PERIPHERALS) + " 个）：" +
                   suggestPeripheralNames(device, wanted).join("、") + "（共 " +
                   String(device.counts.peripherals) + " 个）"
@@ -461,7 +461,7 @@ export function planRegReads(
     }
 
     errors.push(
-      "资源包（line=" + device.line + "）里没有外设 " + text.toUpperCase() +
+      "内置资源（line=" + device.line + "）里没有外设 " + text.toUpperCase() +
         "，也不像 GPIOC.ODR 这种寄存器写法；可用外设（前 " + String(REGS_SUGGEST_PERIPHERALS) + " 个）：" +
         suggestPeripheralNames(device, text).join("、") + "（共 " + String(device.counts.peripherals) + " 个）",
     );
@@ -554,7 +554,7 @@ export function registerRegsRead(ctx: DshContext): void {
     name: REGS_TOOL,
     description:
       "读 STM32 内存映射寄存器：addresses 每项可以是物理地址（0x4001100C / GPIOC_ODR=0x4001100C 这种）、符号名（GPIOC.ODR / GPIOC->ODR / RCC.CR），或只给外设名（GPIOC = 把该外设的寄存器整体 dump 一遍，最多 " +
-      String(REG_DUMP_MAX) + " 个）。有 SVD（stm32_assets refresh --profile full）时每条样本带规范化名 name 与置位位域 fields；没有 SVD 时自动退回纯地址读，只是没有名字/位域。复用常驻调试会话的 openocd（B3：Tcl RPC 直读，毫秒级；没有会话就先起一个并保留到租约到期），halt → mdw → resume 不复位芯片；Tcl 不可用时回退 gdb。用来自证固件在跑（例如看 ODR 位在翻转）。",
+      String(REG_DUMP_MAX) + " 个）。有 SVD（随插件内置，profile=full 也随包安装）时每条样本带规范化名 name 与置位位域 fields；没有 SVD 时自动退回纯地址读，只是没有名字/位域。复用常驻调试会话的 openocd（B3：Tcl RPC 直读，毫秒级；没有会话就先起一个并保留到租约到期），halt → mdw → resume 不复位芯片；Tcl 不可用时回退 gdb。用来自证固件在跑（例如看 ODR 位在翻转）。",
     parameters: {
       type: "object",
       additionalProperties: false,

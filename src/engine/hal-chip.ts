@@ -56,7 +56,7 @@ export interface HalChipFacts {
   readonly linkerScript: string;
   /** 族 id（STM32F4 / STM32L0 …）：模板目录、CMSIS 目录、系统文件、SVD 都按它取。 */
   readonly familyId: string;
-  /** 族段（F4 / L0 / L4+）：拼固件包名与资源包路径用。 */
+  /** 族段（F4 / L0 / L4+）：拼固件包名与内置资源路径用。 */
   readonly familyLine: string;
   /** 是否还要顺带写旧名 STM32F103XX_FLASH.ld（只有蓝丸 C8T6 需要）。 */
   readonly keepLegacyLinkerScript: boolean;
@@ -91,7 +91,7 @@ export function resolveHalChip(input?: string): HalChipResolution {
       reason: "认不出 " + mcu + " 属于哪个 STM32 族：型号要以 STM32 开头并带完整封装后缀，例如 STM32F103C8T6 / STM32G431CBT6 / STM32L071CBT6",
     };
   }
-  // F1 走原来那条实测过千万次的路径（手写 RAM 表 + db 分组名），其它族走资源包的芯片表。
+  // F1 走原来那条实测过千万次的路径（手写 RAM 表 + db 分组名），其它族走内置资源的芯片表。
   if (familyId !== "STM32F1") return resolveFamilyHalChip(mcu, familyId);
   const resolved = resolveF1Chip(mcu);
   if (resolved.chip === null) {
@@ -134,7 +134,7 @@ export function resolveHalChip(input?: string): HalChipResolution {
   }
 
   const notes: string[] = [];
-  // 封装脚数与 db 分组名都从资源包的 chips.json 来（DeviceFactsChip.pinCount / mcuName）：
+  // 封装脚数与 db 分组名都从内置资源的 chips.json 来（DeviceFactsChip.pinCount / mcuName）：
   // 插件不再自己维护「封装字母 → 脚数」「line → 分组名」两张表 —— 那只是 db 的 Package/RefName 的手抄快照，
   // 换族、换 db 版本就失真（§65 已经为预设表栽过一次）。
   const pinCount = chip.pinCount;
@@ -142,7 +142,7 @@ export function resolveHalChip(input?: string): HalChipResolution {
   const mcuName = chip.mcuName !== "" ? chip.mcuName : deviceId;
   if (chip.mcuName === "") {
     notes.push(
-      "资源包里没有 " + deviceId + " 的 db 分组名（Mcu.Name），按具体型号名写（CubeMX 打不开 .ioc 的话把型号换成同容量档的常见型号）",
+      "内置资源里没有 " + deviceId + " 的 db 分组名（Mcu.Name），按具体型号名写（CubeMX 打不开 .ioc 的话把型号换成同容量档的常见型号）",
     );
   }
   const packageKind = suffixLetter === "U" ? "VFQFPN" : suffixLetter === "Y" ? "WLCSP" : "LQFP";
@@ -172,7 +172,7 @@ export function resolveHalChip(input?: string): HalChipResolution {
 }
 
 /**
- * 非 F1 族：事实全部来自资源包的 device/<族>/chips.json（每个字段都是生成器在固件包里
+ * 非 F1 族：事实全部来自内置资源的 device/<族>/chips.json（每个字段都是生成器在固件包里
  * existsSync 验过的文件名），插件不再内置任何分组表。
  *
  * 为什么不在插件里推名字：F4 的 F410/F412 启动文件按**封装**分档（startup_stm32f410cx.s），
@@ -185,15 +185,15 @@ function resolveFamilyHalChip(mcu: string, familyId: string): HalChipResolution 
     return {
       facts: null,
       reason:
-        profile.id + " 的芯片表里没有 " + mcu + "：资源包要含 device/" + profile.line.toLowerCase() +
-        "/chips.json（先跑 stm32_assets refresh 更新资源包）。芯片表由资源仓库按族从 CubeMX db 与固件包生成，插件不内置",
+        profile.id + " 的芯片表里没有 " + mcu + "：内置资源要含 device/" + profile.line.toLowerCase() +
+        "/chips.json（先跑 stm32_assets verify 确认插件安装完整）。芯片表随插件内置，由 scripts/assets/ 的资源脚本按族从 CubeMX db 与固件包生成",
     };
   }
   const notes: string[] = [];
   if (fact.flashBytes <= 0 || fact.ramBytes <= 0) {
     return {
       facts: null,
-      reason: mcu + " 的 Flash/RAM 在芯片表里是 0（db 里缺 <Flash>/<Ram>）：链接脚本的内存长度不能猜，先在资源仓库补这一档",
+      reason: mcu + " 的 Flash/RAM 在芯片表里是 0（db 里缺 <Flash>/<Ram>）：链接脚本的内存长度不能猜，先在资源脚本 scripts/assets/补这一档",
     };
   }
   let mcuName = fact.mcuName;

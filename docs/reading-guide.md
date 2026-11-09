@@ -1,7 +1,7 @@
 # dsh-stm32 源码精读指南
 
 > 面向：第一次读这个仓库、并且要改它的人。
-> 规模：75 个 TypeScript 文件约 23.2k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。**芯片事实不在仓库里**：`src/data/device-facts.ts` 只读本地资源包缓存（`~/.dsh-stm32/assets/<版本>/device/f1/chips.json`），插件不内置任何芯片表（2026-10-31 删掉了 chip-table.json / f1-ram.generated.ts / 手写容量档表 / 内置引脚表）。
+> 规模：75 个 TypeScript 文件约 23.2k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。**芯片事实随包内置**：`src/data/device-facts.ts` 读插件包内 `assets/device/f1/chips.json`（`DSH_STM32_ASSETS` 可覆盖；2026-11 从独立资源仓并入插件），2026-10-31 已删掉手写 chip-table.json / f1-ram.generated.ts / 手写容量档表 / 内置引脚表。
 > 读完这份指南你应该能回答：一次工具调用从宿主进来到 openocd 退出中间经过了谁；哪几条不变量破了一定出事；要改某个功能得动哪几个文件；哪些行为有测试兜着、哪些只能上板子验。
 >
 > 配套文档：docs/development-notes.md（按时间记的决策与被坑记录）、docs/logic-audit.md（历史审计条目）、README.md（用户视角）。
@@ -28,7 +28,7 @@
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
 | L3 契约层 | src/tools（23 个文件：22 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
 | L2 逻辑层 | src/engine（46 个 .ts，其中 45 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
-| L1 事实表 | src/data（10 个数据模块） | 设备事实（`device-facts.ts` 从资源包缓存读 chips.json；插件不内置芯片表）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写、SVD 寄存器表（`svd.ts`，来自资源包 `full` 档） | 起进程、写工程文件 |
+| L1 事实表 | src/data（10 个数据模块） | 设备事实（`device-facts.ts` 读包内 `assets/device/f1/chips.json`）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写、SVD 寄存器表（`svd.ts`，来自内置 `assets/device/f1/svd/`，full 逻辑层） | 起进程、写工程文件 |
 
 跨层的只有两样东西：**SubprocessService**（进程能力，从 ctx 一路当参数传到 engine）和 **DshContext**（宿主服务袋）。
 
@@ -53,7 +53,7 @@ flowchart TD
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
-  ENGINE --> DATA["src/data/*<br/>10 个数据模块（芯片事实读资源包缓存；SVD 在 full 档）"]
+  ENGINE --> DATA["src/data/*<br/>10 个数据模块（芯片事实读包内 assets/；SVD 在 full 层）"]
   ENGINE --> RUN["src/engine/subprocess-runner.ts"]
   RUN --> OS["宿主 subprocess 服务"]
   OS --> BIN["gcc / cmake / ninja / openocd / gdb<br/>java(CubeMX) / reg.exe / pacman / objcopy"]
@@ -69,11 +69,11 @@ flowchart TD
 | src/ | 4 | 803 | index.ts 127、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
 | src/tools/ | 23 | 7158 | 22 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 regs.ts 735 行（D 阶段从 272 涨到 735），其次是 route-plan.ts 576 行、rtt.ts 408 行、watch.ts 305 行 |
 | src/engine/ | 51 | 21712 | 见第 5 章（第 5 章表格化了 45 个模块，另有 assets.ts 1162 行没单列）；最大的是 msys2-install.ts 2313 行，其次是 assets.ts 1162 行、clock-plan.ts 801 行 |
-| src/data/ | 10 | 3599 | 10 个 .ts 数据模块（device-facts.ts 从资源包缓存读设备事实、svd.ts 读 `full` 档的寄存器表；仓库里没有任何芯片表），见第 6 章 |
+| src/data/ | 10 | 3599 | 10 个 .ts 数据模块（device-facts.ts 读包内 assets/、svd.ts 读 full 层的寄存器表），见第 6 章 |
 | templates/ | 20 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc；C 阶段加了寄存器版的 `Core/Src/rtt.c` + `Core/Inc/rtt.h` 与 HAL 脚手架 `scaffold/RTT.md`） |
 | client/ | 1 | 682 | 设置面板的前端 bundle（手写 JS，不经打包器） |
 | test/ | 41 套件（run-units 登记）+ 15 个 e2e 脚本 + 4 个辅助脚本 | — | 见第 9 章 |
-| scripts/ | 4 | 405 | copy-client.mjs(24)、gen-xcube-catalog.mjs(151)、pack-size.mjs(80)、pack-smoke.mjs(150)。芯片表的生成脚本 2026-10-31 已挪到资源仓库（`scripts/build-assets.mjs`） |
+| scripts/ | 8 | 2115 | copy-client.mjs(24)、copy-data.mjs(20)、gen-xcube-catalog.mjs(151)、pack-size.mjs(105)、pack-smoke.mjs(157)、assets/build-assets.mjs(1042)、assets/family-assets.mjs(238)、assets/svd-f1.mjs(378)。芯片表与 SVD 的生成脚本 2026-11 起随插件放在 `scripts/assets/` |
 
 > 全书行数统一口径：按文件里的换行符数（`content.split("\n").length`，等价于编辑器的「块末行号」），2026-10-31（D 阶段末）重数过一遍——第 1、4.1、4.2、5、6 章都按这个口径，和本指南更早版本的数字会有几行到几十行的差异。
 
@@ -220,7 +220,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 ## 5. engine 层：45 个模块，十个域
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 45 个；`src/engine/` 目录里实际有 46 个 `.ts`——`assets.ts`（资源包装配的小件）还没单独成行，读资源包那条链路时直接从 §5.7 与 `src/data/assets` 一起看。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 45 个；`src/engine/` 目录里实际有 46 个 `.ts`——`assets.ts`（内置资源装配与完整性校验，flat 布局）还没单独成行，读内置资源那条链路时直接从 §5.7 与 `src/data/device-facts.ts` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -320,20 +320,20 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | --- | --- |
 | route-plan.ts（645） | 「这笔功能该走 HAL 还是寄存器」。`PERIPHERAL_RULES`（外设规则表：关键词 → HAL/寄存器各自的代价与风险）、`assessRoute(input)` → `RouteAssessment`（verdict：hal-only / both-viable / register-ok / unclear）、`familyOf`、`findFirmwarePackage`、`VERDICT_LABEL`。工具层再把它和门禁、安装指引拼成一份输出。 |
 
-## 6. data 层：10 个数据模块（3599 行；芯片事实来自资源包缓存，仓库里没有芯片表）
+## 6. data 层：10 个数据模块（3599 行；芯片事实来自包内 assets/）
 
 | 模块 | 行数 | 内容 |
 | --- | --- | --- |
 | chips.ts | 177 | **不再有内置引脚表**（`CHIPS` / `KNOWN_CHIPS` / `findChip` 2026-10-31 删除）。`isKnownPin(pin)` 只查**引脚名是否合法**（`PA0..PG15`、`VP_*` 虚拟脚放行；顺序不影响——`PA0-WKUP` / `PC13-TAMPER-RTC` 先归一化）；这不是「这个封装有没有这根脚」，那条事实只能来自本机 CubeMX db：`parseMcuDbXmlPins`（`<Pin Name= Position=>`，`Position<=0` 的虚拟脚丢弃，电源脚不算）、`findMcuDbDir`（`<CubeMX>/db/mcu`）、`readMcuDbPins`、`deriveChipPinTable({cpn, mcuName, dbMcuDir})` → `kind: db / unknown`（db 命中注明来源 XML 与引脚数；没有 db 就明说「引脚存在性不校验」，绝不拿内置表冒充）。 |
 | cmsis-sources.ts | 416 | 寄存器路线的下载源与型号映射：四个镜像（jsdelivr fastly/cdn、raw.githubusercontent、ghproxy）、`CMSIS_FAMILIES`、`startupChoiceFor(mcu)`（委托 resolveF1Chip，兼容 `F1:B` / `F1:8` / `F103:xb` / `STM32F103C8T6` 四种写法；只给容量字母的老写法现在从设备事实里挑一颗同档芯片当代表，优先 F103——原来的「字母 → 档位」常量表已删，没缓存就返回 null 让上层提示 refresh）、`cmsisTemplatePlan(choice)`（10 个文件的目标路径）、四个 sha256 表（DEVICE_HEADER / SYSTEM_C / **STARTUP 14 条** / CORE_HEADER）、缓存条目 id 与解析（`chipOf`、`cmsisGroupKey`、`cmsisEntryId` → `cmsis:F1:103xb`、`chipEntryId`、`parseCmsisEntryRef`、`cmsisEntryAliases`）。**改这里等于改「离线可复现」的边界**：F1 的 14 个容量档 sha256 全部是 2026-10-30 真实下载实测的。 |
-| stm32f1.ts | 171 | 两条路线共用的**型号解析器**，本身不再存任何事实：`resolveF1Chip(input)` 先做格式/封装/温度档校验，再查 `device-facts.ts`（完整型号按 CPN 精确匹配、无温度后缀按前缀归一化、`F103:xb` 按 line+档取代表芯片），返回 `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`（签名与结构 0.2 不变）；`f1GroupsFor(code)` 从事实聚合该 line 的容量档。错误分四类且都带「先跑 `stm32_assets refresh`」提示：没缓存 / 型号不在资源包 / line 不存在 / 该 line 没有这一容量档。 |
+| stm32f1.ts | 171 | 两条路线共用的**型号解析器**，本身不再存任何事实：`resolveF1Chip(input)` 先做格式/封装/温度档校验，再查 `device-facts.ts`（完整型号按 CPN 精确匹配、无温度后缀按前缀归一化、`F103:xb` 按 line+档取代表芯片），返回 `F1Chip{cpn,prefix,densityLetter,group,startup,deviceDefine,deviceHeader,pinCount,flashBytes,ramBytes,notes}`（签名与结构 0.2 不变）；`f1GroupsFor(code)` 从事实聚合该 line 的容量档。错误分四类且都带「先跑 `stm32_assets verify`」提示：内置资源缺失 / 型号不在内置资源 / line 不存在 / 该 line 没有这一容量档。 |
 | clock-f1.ts | 215 | F1 时钟树的事实表：PLL 源（HSE 8 MHz / HSI÷2 4 MHz / HSI 8 MHz，后者 `selectable=false`）、倍频 ×2..×16、上限（SYSCLK 72 / APB1 36 / APB2 72 / ADC 14 / USB 48 且必须 PLLCLK=72÷1.5）、APB1/APB2/ADC 分频表、14 条外设→总线、UART 波特率档、20 个 RCC IPParameters 名单。 |
 | firmware-packages.ts | 463 | 固件包事实表：`FIRMWARE_FAMILIES`（目前只有 F1）、`firmwareFamilyOf`、`firmwareVersionTags`、`packageXmlText`、`firmwarePlanFor`、`verifyFirmwarePackage`、`DSH_FIRMWARE_DIR_NAME = "dsh-firmware"`、`dshFirmwareDir`、`firmwareNeedFromIoc`（从 .ioc 的包名推族与版本）、`looksLikeFirmwarePackage`、`locateFirmwarePackage(root, packageName, extraDirs)` → `FirmwareLocation`（source：repository / dsh-firmware / cache / custom）、`firmwareSourceLabel`、`FirmwareExtraDir`。 |
 | install-guides.ts | 251 | 安装指引文本：`COMPONENT_INSTALLABILITY`（哪些 pacman 能代装、哪些必须人装）、`cubeMxGuide`、`firmwareGuide`、`guideFor`（用 Map 查而不是 in，避免原型链误判）、`guidesFor`、`guideLines`、`firmwareSizeHint`、`familyPrefix`。 |
 | search-roots.ts | 421 | 见 5.2。 |
 | toolchain-config.ts | 370 | 见 5.2。 |
-| device-facts.ts | 278 | 设备事实读取层（新增）：从 `~/.dsh-stm32/assets/<版本>/device/f1/chips.json` 读（`DSH_STM32_ASSETS` 可换根目录，版本取本地已装的最新一版），按 path+size+mtime 缓存一次。`loadDeviceFacts(env?)` → `{ok,path,version,chips,byCpn,byLineGroup,lines,groupsByLine,error}`、`findChipFact(cpn,env?)`（缺失返回 null）、`requireChipFact(cpn,env?)`（抛 `DeviceFactError`，`code: facts-missing / chip-unknown`）、`deviceFactsSource(env?)`（缓存路径或 `"none"`）。**不抛异常、不退回内置表**：没有缓存就把「先跑 stm32_assets refresh，或检查网络」原样交给上层。 |
-| svd.ts | 837 | SVD 寄存器表（新增，D 阶段）：读 `device/f1/svd/<line>.json`（`profile=full`）。常量 `SVD_REL_DIR`、`SVD_KNOWN_LINES`（100/101/102/103/105/107）、`SVD_FULL_PROFILE_HINT`（一句能照敲的 `stm32_assets refresh --profile full`）。`loadSvd`（返回 `{device,failure}`，不抛）/ `loadSvdForLine` / `requireSvd` / `svdLineForChip(cpn, env)`（走 device-facts 的 line）、`resolveRegisterRef(ref, line, env)`（`GPIOC.ODR` / `GPIOC->ODR` / `0x4001100C` 三种写法等价，返回 base+offset 之后的地址、size、fields）、`describeAddress`（地址 → 寄存器 + 寄存器内偏移，`exact:false` 表示落在寄存器中间）、`decodeRegisterValue`（置位字段 / 清位 / 未覆盖位）、`formatDecodedFields` / `formatAddress` / `formatOffset`；出错抛 `SvdError`（9 类 code）。兼容「装好的 `<root>/<version>/`」与「直接指向资源仓库本体的 flat」两种布局，缓存键 path+size+mtimeMs，`svdCacheStats` / `resetSvdCache` 给单测证明命中不重复读盘。只读：不写盘、不联网、不起进程。 |
+| device-facts.ts | 278 | 设备事实读取层（新增）：从插件包内 `assets/device/f1/chips.json` 读（`lib/engine/assets.js` 从包根解析；`DSH_STM32_ASSETS` 可换根目录，外部旧版本仍兼容），按 path+size+mtime 缓存一次。`loadDeviceFacts(env?)` → `{ok,path,version,chips,byCpn,byLineGroup,lines,groupsByLine,error}`、`findChipFact(cpn,env?)`（缺失返回 null）、`requireChipFact(cpn,env?)`（抛 `DeviceFactError`，`code: facts-missing / chip-unknown`）、`deviceFactsSource(env?)`（缓存路径或 `"none"`）。**不抛异常、不退回内置表**：找不到内置文件就把「安装不完整：stm32_assets verify 定位，重装插件」原样交给上层。 |
+| svd.ts | 837 | SVD 寄存器表（新增，D 阶段）：读插件包内 `assets/device/f1/svd/<line>.json`（`profile=full`）。常量 `SVD_REL_DIR`、`SVD_KNOWN_LINES`（100/101/102/103/105/107）、`SVD_FULL_PROFILE_HINT`（一句能照做的「SVD 只在 profile=full：重装插件」提示）。`loadSvd`（返回 `{device,failure}`，不抛）/ `loadSvdForLine` / `requireSvd` / `svdLineForChip(cpn, env)`（走 device-facts 的 line）、`resolveRegisterRef(ref, line, env)`（`GPIOC.ODR` / `GPIOC->ODR` / `0x4001100C` 三种写法等价，返回 base+offset 之后的地址、size、fields）、`describeAddress`（地址 → 寄存器 + 寄存器内偏移，`exact:false` 表示落在寄存器中间）、`decodeRegisterValue`（置位字段 / 清位 / 未覆盖位）、`formatDecodedFields` / `formatAddress` / `formatOffset`；出错抛 `SvdError`（9 类 code）。兼容「包内 flat `assets/`」与旧的外部 `<root>/<version>/` 两种布局，缓存键 path+size+mtimeMs，`svdCacheStats` / `resetSvdCache` 给单测证明命中不重复读盘。只读：不写盘、不联网、不起进程。 |
 
 ## 7. 关键流程
 
@@ -723,10 +723,10 @@ const fake = {
 | --- | --- | --- |
 | 加一个工具 | src/engine/<域>.ts（逻辑）→ src/tools/<x>.ts（schema + 渲染）→ src/index.ts 注册 | output schema、formatXReport、test/tool-contract-units、schema-guard |
 | 改报告字段 | src/tools/<x>.ts 的 reportSchema + 渲染 | schema-guard 必须有对应断言 |
-| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts（引脚存在性交给 deriveChipPinTable 从本机 db 派生）、设备事实（资源仓库的 device/<族>/chips.json，由它的 scripts/build-assets.mjs 生成）、再补一份 clock-f1 那样的时钟上限表（否则寄存器版只能不出 clock_init） | 仓库名不能猜；sha256 逐文件实测并把来源 URL 记进表里（F1 的 14 条就是这么来的） |
-| 加芯片型号（同族容量档） | **资源仓库的 device/f1/chips.json**（`node scripts/build-assets.mjs` 从本机 CubeMX `db/mcu` 展开 CPN 并逐字段对账，manifest 里会列 skipped）→ 插件的 src/data/device-facts.ts 自动读到；再对照 src/engine/hal-chip.ts（渲染启动文件/宏/.ld/.ioc）→ register-template.ts / register-linker.ts / register-clock.ts | 资源仓库改完要升 manifest 版本（插件按最新已装版本读）；本地 `~/.dsh-stm32/assets/` 是旧版就先 `stm32_assets refresh`。三条路都要试：HAL 建工程、寄存器建工程、doctor 一致性 |
+| 加芯片族（F4/G0…） | src/data/cmsis-sources.ts（启动文件与宏）、firmware-packages.ts（FIRMWARE_FAMILIES 的仓库名要 curl 核实）、data/chips.ts（引脚存在性交给 deriveChipPinTable 从本机 db 派生）、设备事实（包内 assets/device/<族>/chips.json，由 scripts/assets/build-assets.mjs 生成）、再补一份 clock-f1 那样的时钟上限表（否则寄存器版只能不出 clock_init） | 仓库名不能猜；sha256 逐文件实测并把来源 URL 记进表里（F1 的 14 条就是这么来的） |
+| 加芯片型号（同族容量档） | **插件内置 `assets/device/f1/chips.json`**（`node scripts/assets/build-assets.mjs` 从本机 CubeMX `db/mcu` 展开 CPN 并逐字段对账，manifest 里会列 skipped）→ 插件的 src/data/device-facts.ts 自动读到；再对照 src/engine/hal-chip.ts（渲染启动文件/宏/.ld/.ioc）→ register-template.ts / register-linker.ts / register-clock.ts | 改完随插件发版；若用 `DSH_STM32_ASSETS` 指到外部旧版，以外部为准。三条路都要试：HAL 建工程、寄存器建工程、doctor 一致性 |
 | 改时钟树 | src/data/clock-f1.ts（PLL 源/分频/外设→总线）→ src/engine/clock-plan.ts（枚举/就近/diff）→ src/tools/ioc-plan.ts（参数与渲染）→ src/engine/register-clock.ts（寄存器版） | clock-units 14 例兜「60→64」「超限一个键都不写」；派生键必须全量重算 |
-| 更新设备事实（芯片表） | **资源仓库** `node scripts/build-assets.mjs` 重跑 → device/f1/chips.json + manifest.json 一起更新（chipdb 与 memory.json 2026-10-31 已删：前者与 CubeMX 的 db/mcu 重复，后者字段全由 chips.json 派生）；插件侧 `stm32_assets refresh` 拉新版本 | 生成物不要手改；插件已经不再内置芯片表（`scripts/gen-chip-table.mjs` 与 chip-table.json 2026-10-31 删除），没缓存时工具会明说先 refresh。测试夹具在 `test/fixtures/assets/`，与真实资源包同构 |
+| 更新设备事实（芯片表） | **插件内置资源** `node scripts/assets/build-assets.mjs` 重跑 → device/f1/chips.json + manifest.json 一起更新（chipdb 与 memory.json 2026-10-31 已删：前者与 CubeMX 的 db/mcu 重复，后者字段全由 chips.json 派生）；随插件发版一起分发 | 生成物不要手改；插件已经不再内置芯片表（`scripts/gen-chip-table.mjs` 与 chip-table.json 2026-10-31 删除），缺文件时工具会明说重装插件。测试夹具在 `test/fixtures/assets/`，与内置资源同构 |
 | 改工程模板 | templates/scaffold/*，若新增文件同步 scaffold.ts 的 SHARED_TEMPLATE_FILES | scaffold-patch-units 的文件数断言会红 |
 | 改设置面板 | client/client.js（前端）+ engine/web-api.ts（逻辑）+ web-api-units | 前端不经打包器，语法要保守 |
 | 改编码行为 | engine/text-file.ts 一处改，code-patch / generate 自动跟随 | text-encoding-units 9 例兜底 |
@@ -735,7 +735,7 @@ const fake = {
 | 改 cmake 源清单的认法（设备宏、startup、HAL 模块） | engine/cmake-sources.ts 的 `collectCmakeSources` / `halModulesInUse` | 注释掉的 `#define` 与 `#include` 不能算启用；内容没变必须零写入（cmake-sources-units 15 例兜这两条） |
 | 改 RTT 帧格式（头长、级别含义、长度字段） | engine/rtt.ts 的 `RTT_FRAME_HEADER_BYTES` / `RTT_MIN_FRAME_BYTES` / `parseRttFrames` + templates/register/Core/Src/rtt.c 的 `RTT_FRAME_OVERHEAD` / `RTT_FRAME_MIN_BYTES` / `rtt_ring_write` | 两侧常量必须一致（rtt-units 有一条反算断言），还要同步 templates/scaffold/RTT.md 与两份 README 的三行示例；改帧头等于改 ABI，老固件会被判成帧失步；dump 侧另有 `resyncRttFrames` 负责把环缓冲首字节/中段对齐到帧边界，并按「时间戳+级别+文本」去重（严格解析器不动，见 development-notes §39、§40） |
 | 改寄存器写法的解析或位域解释 | `src/data/svd.ts`（符号解析 / 反向查 / 解码）+ `src/tools/regs.ts`（五种写法、去重、dump、渲染、建议文案） | `svd-units` 39 例兜着；夹具在 `test/fixtures/svd/`（flat / versioned / badline 三种布局）；改渲染要同步两份 README 与 development-notes §31 |
-| 更新 SVD 事实表（新 line / 新资源版本） | **资源仓库** `node scripts/build-assets.mjs` 重新从 cmsis-svd-data 生成 `device/f1/svd/<line>.json`（`files[].profile` 标 full，并带 ST EULA 来源）→ 插件侧 `stm32_assets action=refresh profile="full"` | SVD 严格解析：外设/寄存器/字段有一条不合法就整份拒绝；缓存键是 path+size+mtimeMs，升级后自动失效 |
+| 更新 SVD 事实表（新 line / 新资源版本） | 插件仓内 `node scripts/assets/build-assets.mjs --svd` 重新从 cmsis-svd-data 生成 `assets/device/f1/svd/<line>.json`（`files[].profile` 标 full，并带 ST EULA 来源）→ 再跑 `node scripts/assets/build-assets.mjs` 重写 manifest → `stm32_assets verify` 校验完整性 | SVD 严格解析：外设/寄存器/字段有一条不合法就整份拒绝；缓存键是 path+size+mtimeMs，升级后自动失效 |
 | 加一条不变量 | 先写测试，再改代码 | 本文件第 8 章同步补一行 |
 
 ## 11. 已知的坑与未做的事
@@ -754,7 +754,7 @@ const fake = {
 12. **换芯片后别留旧链接脚本名**：`-T` 出现两个 .ld 时链哪个取决于顺序，症状是「编译过、上板跑飞」。hal-chip.pointLinkerFlagAt 会把工具链里的旧名改指新名，doctor 的 ①③ 两项检查也会先报 blocker。
 13. **B3 的真机计时还欠着**：会话复用快路径只有假探针（假 subprocess + 本地假 Tcl 服务端）的数字，真机 10 连读没测成——当时插的是 WCH-Link（`USB\VID_C251&PID_F001`），openocd 0.12 init 直接报 `Error: CMSIS-DAP command CMD_INFO failed.`，hid / bulk 后端与 `adapter speed 1000` 都试过；同一句在 B3 之前的旧版一次性路径上也复现，所以不是这次改动引入的。**复测方法**：换回 CMSIS-DAP 探针后跑 `stm32_regs_read` 连读 10 次 `0x4001100C`，看报告里的 `durationMs` 与 `reusedSession`。
 14. **RTT 已真机验证（2026-11-01）**：`rtt-units` 33 例仍全离线（假 subprocess + 假端口），但真板上跑通了 start → dump（1 kHz 固件打印、`dma` 与 `t` 1:1）→ stop（openocd 一并退出、探针归还）→ flash 的完整链路，见 development-notes §10.2/§39/§40。剩下的设计取舍（只有通道 0 / 无 defmt 解码 / 默认占 3 KB RAM）见 development-notes §30.6。**复现命令**（`_rich_hal` 上验过）：`stm32_rtt action=start projectDir=<工程> addr=0x20000f88` → `action=dump seconds=3` → `action=stop`。
-15. **寄存器符号名与位域解释只有离线验证**：`svd-units` 39 例全离线（真实资源包 + 假 subprocess + 假 Tcl 服务端），**没有一次「真板子 + 真探针 + `GPIOC.ODR`」**（与坑 13 同一个 WCH-Link 问题）。**复测方法**：换回 CMSIS-DAP 探针后 `stm32_regs_read addresses=["GPIOC.ODR","0x4001100C"]`，看 `samples[0].name` / `fields` 与 notes 里的 SVD line。
+15. **寄存器符号名与位域解释只有离线验证**：`svd-units` 39 例全离线（真实内置 SVD + 假 subprocess + 假 Tcl 服务端），**没有一次「真板子 + 真探针 + `GPIOC.ODR`」**（与坑 13 同一个 WCH-Link 问题）。**复测方法**：换回 CMSIS-DAP 探针后 `stm32_regs_read addresses=["GPIOC.ODR","0x4001100C"]`，看 `samples[0].name` / `fields` 与 notes 里的 SVD line。
 
 ---
 
