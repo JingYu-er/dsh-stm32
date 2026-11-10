@@ -5734,3 +5734,30 @@ t8 由 impl 执行（不是寄存器路线的实现者）：只做只读复验�
 
 - **旧口径要按「文档类型」分流**：README/指南是现状，必须改；notes 是时间线，改了反而丢失「当时为什么这么写」。
 - **留清单比随手改安全**：版本号、skill 文案、工具 description 与测试断言要跟 package.json/代码一起动，文档预检阶段先列 `文件:行`，避免两边不同步。
+
+## 89. 安装包只下载、不安装：`stm32_download`（2026-11-10）
+
+### 一、问题与边界
+
+用户问「实见 J-Link 但缺驱动，能不能自动装」。核验后结论是：**软件包可以自动下，驱动不能无感装**。J-Link 安装器从 6.49a 起支持 `-InstAllUsers=0` 按用户安装，但 `-InstUSBDriver=1` 只在 `-InstAllUsers=1` 时生效，必须过 UAC；而现代 J-Link 探针默认 WinUSB，只有停产老探针才需要 legacy 驱动，Problem Code 28/52 也未必靠重装软件修复。STM32CubeMX / CubeProgrammer 更没有稳定直链：ST 官网要 myST 登录、接受许可，直链会过期，本机 `winget search STM32` 也没有对应包。
+
+因此定边界：**插件只负责下载与校验，不执行安装器、不写注册表、不改 PATH、不请求管理员**。J-Link 用官方直链 + 固定 SHA256；ST 两个组件默认只打开官方页；用户自己下载好的安装包可以交给工具做哈希校验。
+
+### 二、实现
+
+- `src/engine/download.ts`（247 行）：`DownloadComponent`、`JLINK_DOWNLOAD`（8.18.0，URL `https://files.nordicsemi.com/artifactory/swtools/external/jlink/JLink_Windows_V818_x86_64.exe`，SHA256 `63110b6fc55e494d197d6efa156d7f61c0dd0c1f776424995a05407e2d7f566f`）、`ST_PAGES`、`planDownload`、`downloadRootInfo`、`downloadUrlToFile`、`sha256File`、`inspectInstallerFile`。
+- 下载实现：`fetch` + `response.body.getReader()` 逐块写 `targetPath + ".part-<pid>-<ts>"`，边写边更新 SHA256；校验通过后先删旧目标再 `rename`；网络失败、超时、超过 `maxBytes`（默认 300 MB）或哈希不符都删除临时文件。已有目标且哈希正确时 `cached: true`，不重复下载。
+- `src/tools/download.ts`（300 行）：`stm32_download`，四种模式 `plan` / `direct` / `manual` / `file`；`dryRun` 默认 `true`，`confirm` 只对 `direct` / `manual` 生效；`file` 模式只校验本地安装包，不需要 `confirm`。report 有 21 个必填字段，`expectedSha256` 与实测 `sha256` 分开，不把计算值伪装成官方值。
+- `src/index.ts:26` 引入、`:74` 注册；`test/download-units.test.mjs` 5 条离线用例；`test/run-units.mjs:89` 登记。
+
+### 三、验证
+
+- `npm run build` exit 0；`node test/download-units.test.mjs` 5 pass / 0 fail；全量 `node test/run-units.mjs` **pass=937 fail=0**。
+- J-Link 直链只做 `HEAD`：HTTP 200、`content-length: 59,012,800`；没有真的下载 59 MB，也没有运行安装器（按设计永远不运行）。
+- 下载/缓存/哈希不符清理用本机 HTTP 服务覆盖；ST 页面只验证 URL 与计划输出，没有打开浏览器。
+
+### 四、教训
+
+- **「自动安装」和「自动下载」要分开承诺**：下载可以校验、可以重试、可以缓存；安装要 UAC、许可与驱动绑定，插件不该替用户点。
+- **哈希要在写盘过程中算**：下完再读一遍 59 MB 会多一次全文件 IO；边写边算还能在中途失败时立刻停。
+- **临时文件必须带 pid + 时间戳**：并发或上次崩溃留下的 `.part` 不能互相覆盖，失败清理也不该误删别人的。

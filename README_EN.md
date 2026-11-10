@@ -8,9 +8,9 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.5-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.6-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 24 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 25 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
 ## Why you need it
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.5`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.6`); after a restart `/stm32-doctor` should respond.
 
 > **Chip facts ship with the plugin**: device facts (part → startup file / device define / Flash·RAM size) come from `assets/device/<family>/chips.json` inside the package (75 files for `core`, 105 for `full`: chip tables + memory layout + `.ioc` templates + linker scripts + SVD). Everything works offline once installed — no asset-pack download. Run `stm32_assets verify` to check integrity; missing files usually mean an incomplete install.
 
@@ -69,7 +69,7 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 932 offline cases in 59 suites, no board needed
+npm test                            # optional: 937 offline cases in 59 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
 npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
@@ -136,6 +136,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Environment health check | `stm32_doctor` (read-only), `stm32_doctor` (toolchain + busy probes + ports + project warnings) |
 | Pre-flight gate | Every tool that needs the toolchain runs `ensureToolchain` first: missing pieces are refused up front with what to install and what stops working; `envCheck: "block"` (default) / `"warn"` / `"off"` |
 | Install the toolchain | `stm32_env_install`: plan first (what is downloaded, how large, which PATH entry changes), install only after you confirm — MSYS2 + 5 pacman packages + a **user-level** PATH entry, then it writes the config file itself |
+| Installer downloads (download only) | `stm32_download`: J-Link direct link + SHA256; CubeMX / CubeProgrammer return the official page or verify a local file; it downloads/verifies but never runs an installer or asks for admin |
 | Choose the technical route | `stm32_route_plan`: for **this project's** requirements, lays out the HAL and register cost per peripheral (effort / readability / debugging), then says whether what is missing is installable-by-the-plugin or human-only (CubeMX is a GUI wizard needing an ST account; firmware packages are only maintained by the CubeMX package manager) |
 | Chip facts (part → startup file / device define / sizes) | The plugin **ships the chip table inside the npm package**: part, startup file, device define and Flash/RAM come from `assets/device/f1/chips.json` (`lib/engine/assets.js` resolves `assets/` from the package root; `DSH_STM32_ASSETS` can still point elsewhere for development). A missing file only means an incomplete install: locate it with `stm32_assets verify`, then reinstall the plugin — no network needed |
 | Project from scratch | `stm32_project_create`: `route: "hal"` uses the template snapshot + firmware Drivers (byte-identical to a CubeMX GUI project); `route: "register"` builds a register-level project with no CubeMX at all, pulling the CMSIS template into the cache on first use (every file is pinned by upstream sha256 and refused if it changed); `mcu` names the part (both routes accept it; the HAL route renders its startup file / device define / `<DeviceId>_FLASH.ld` from it); both routes also ship an `openocd.cfg` (CMSIS-DAP + `hla_swd` + 2 MHz) |
@@ -160,6 +161,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | --- | --- |
 | `stm32_doctor` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions; for anything missing it states the impact (cannot build / flash / debug / generate), the recommended install command (pacman / winget, paste-ready), a self-check command, plus `capabilities` (which of the four jobs work) and `recommendations` (install order and an offer to install for you). Read-only, repeatable |
 | `stm32_env_install` | One-stop install when the toolchain is missing: `dryRun` (default) only returns a plan — size of the official MSYS2 installer, the five packages, the PATH entry it would add; only `dryRun: false` + `confirm: true` actually work (download → install MSYS2 → `pacman -S` → user-level PATH → self-check → write `~/.dsh-stm32/config.json`). With an existing msys64 it only adds the packages. No uninstall |
+| `stm32_download` | Downloads installers but never runs them: `component: "jlink"` fetches SEGGER's official 8.18.0 installer and verifies its SHA256; `"cubemx"` / `"cubeprogrammer"` return the ST download page (myST login + licence), and a local `file` can be hashed for your own comparison. `dryRun: true` (default) returns a plan; `dryRun: false` + `confirm: true` actually downloads or opens the page. No registry writes, no PATH edits, no admin request |
 | `stm32_route_plan` | Settle the route before writing code: `requirement` is required (e.g. "a button drives the LED, UART prints its state once a second"), and it returns `verdict` (`register-ok` / `both-viable` / `hal-only` / `unclear`), per-peripheral `halEffort`/`regEffort` with `advice`, how the two routes differ, the next concrete step, and toolchain gaps tagged `installability` (`auto` = the plugin can install it / `manual` = human only) plus the full manual install guide. No generic comparison table — the verdict only holds for the requirement you gave |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
 | `stm32_project_create` | Empty directory → full CMake project. `route: "hal"` (default) is the CubeMX route (including both "flash only" and "flash and debug" launch configs in `.vscode`); `route: "register"` builds a **no-CubeMX, no-HAL** register-level project (`mcu` picks the part, CMSIS headers and startup file come from the cache). Refuses a non-empty target unless `overwrite: true` |
@@ -344,6 +346,17 @@ Fallback channel (GitHub assembly):
 - The assembled package matches the official layout: a six-line `package.xml` (version tags `FW.<family>.<x.y.z>`) and `THIRD_PARTY_NOTICES.md`, with **no manifest or hashes** — CubeMX does not verify provenance either (measured: generating with `setCustomFWPath` copies HAL sources byte-for-byte out of our directory);
 - But "generation succeeded" proves nothing: with a non-existent package name in the `.ioc`, CubeMX prints no error, exits 0 and simply skips copying HAL. So five checks are mandatory (core headers / HAL Inc / HAL Src / device headers / `startup_*.s`), and the installer runs them right after assembling.
 
+### Installer downloads (download only)
+
+`stm32_download` separates getting an installer from installing it: the plugin downloads and verifies, you double-click when ready.
+
+| Component | Behaviour |
+| --- | --- |
+| `jlink` | Downloads SEGGER 8.18.0 from the official direct link (~59 MB), hashing while it writes and comparing against `63110b6fc55e494d197d6efa156d7f61c0dd0c1f776424995a05407e2d7f566f`; an existing file with the right hash is reused; a failed or mismatched download deletes its temp file |
+| `cubemx` / `cubeprogrammer` | ST requires a myST login and licence acceptance and direct links expire: the default is the official page; `dryRun:false + confirm:true` opens it in the browser. A downloaded `file: "D:/.../installer.exe"` is hashed so you can compare it yourself |
+
+`dryRun:true` is the default: plan only, no network. The download root is `%LOCALAPPDATA%\dsh-stm32\downloads`, overridable with `DSH_STM32_DOWNLOADS` or `outDir`. The tool never executes an installer, writes the registry or edits PATH; J-Link's USB driver is installed by choosing all users and allowing UAC in its installer (modern probes use WinUSB; only legacy probes need the old driver).
+
 ### Environment variables (optional)
 
 | Variable | Purpose | Default |
@@ -354,6 +367,7 @@ Fallback channel (GitHub assembly):
 | `DSH_STM32_CONFIG` | Point the config file elsewhere (several toolchains / project isolation) | `%USERPROFILE%\.dsh-stm32\config.json` |
 | `DSH_STM32_NO_CONFIG` | Set to `1` / `true` to ignore the config file entirely (environment variables only) | unset = read |
 | `DSH_STM32_CACHE` | Download cache root (register-route template etc.), supports `~` | `%LOCALAPPDATA%\dsh-stm32\cache` |
+| `DSH_STM32_DOWNLOADS` | Installer download root for `stm32_download`, supports `~` | `%LOCALAPPDATA%\dsh-stm32\downloads` |
 | `DSH_STM32_E2E_PROJECT` | Project used by hardware e2e runs (with `openocd.cfg` and `build/Debug/*.elf`) | none |
 | `DSH_STM32_E2E_ROOT` | Scratch directory for e2e copies | system temp |
 
@@ -431,20 +445,20 @@ C0 / U0 have no official script in openocd 0.12, so the plugin ships adapted cop
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 59 offline suites, 932 cases; no board, CubeMX, or toolchain needed
+npm test                 # 59 offline suites, 937 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
 npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **932 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **937 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 
 | Where | What | Size |
 | --- | --- | --- |
-| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `assets/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 269 files / 1800.6 KB packed, 15094.8 KB unpacked; `assets/**` is 12.5 MB of source (headers compress well) |
+| npm tarball | `lib/**` (including `lib/client.js`), `client/client.js`, `templates/scaffold/**`, `assets/**`, `cordis.patch.yml`, both READMEs, `LICENSE`, `docs/*.md` | 271 files / 1809.8 KB packed, 15125.8 KB unpacked; `assets/**` is 12.5 MB of source (headers compress well) |
 | Git only, not packed | `src/**`, `test/**`, `scripts/**`, `docs/diagrams/**` (two interactive HTML pages) | diagrams are 2 MB raw / 891 KB gz; `files` in `package.json` narrows `docs` to `docs/*.md` |
 | Bundled (npm package) | Device-facts layer (21 families of `device/<family>/chips.json`), `.ioc` templates, `.ld`, SVD, startup files and headers — 75 files for `core`, 105 for `full`, shipped offline | inspect and verify with `stm32_assets list/verify`; `prune` only removes historical external versions |
 | Downloaded on demand | CMSIS device headers / startup files / core headers (fetched into the cache on first use, pinned per file by sha256); HAL firmware packages | manage the cache with `stm32_cache list/verify/purge` |
@@ -466,7 +480,7 @@ See the [development notes](docs/development-notes.md) for the suite breakdown a
 ```text
 src/
   index.ts                 plugin entry (name / inject / apply)
-  tools/                   the 24 registered tools, L3 (23 files: parameter schema + output contract + rendering)
+  tools/                   the 25 registered tools, L3 (24 files: parameter schema + output contract + rendering)
   engine/                  pure logic and workflows (generate / build / flash / debug / ioc / scaffold …)
   commands/register.ts     the 7 slash commands
   skill/stm32-workflow.ts  the SKILL shipped with the plugin
@@ -482,6 +496,7 @@ docs/                      specification + development notes + reading guide + d
 - [Specification](docs/dsh-stm32-plugin-规格.md): tool contracts, state machine, acceptance criteria A1–A13
 - [Development notes](docs/development-notes.md): milestones, host-contract pitfalls, implementation details and measured numbers
 - [Source reading guide](docs/reading-guide.md): layered reading order, per-file responsibilities and exports, 14 flow diagrams, 23 invariants
+- [Release notes 0.1.6](docs/release-notes/v0.1.6.md): installer downloads without installation (`stm32_download`)
 - [Release notes 0.1.5](docs/release-notes/v0.1.5.md): serial P1, the 21-family register route and acceptance records (0.1.4 and earlier live in git history)
 - Visuals: [architecture](docs/diagrams/dsh-stm32-architecture.html) / [main journey](docs/diagrams/dsh-stm32-journey.html) — single-file HTML, opens offline, exports PNG/SVG
 

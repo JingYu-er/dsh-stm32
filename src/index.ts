@@ -23,6 +23,7 @@ import { registerCodePatch } from "./tools/code-patch.js";
 import { registerDebugRun } from "./tools/debug.js";
 import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
+import { registerDownload } from "./tools/download.js";
 import { registerEnvInstall } from "./tools/env-install.js";
 import { registerFirmwareInstall } from "./tools/firmware-install.js";
 import { registerFlash } from "./tools/flash.js";
@@ -70,6 +71,7 @@ export function callerIdOf(event: unknown, session: unknown): string {
 
 export function apply(ctx: DshContext): void {
   registerEnvInstall(ctx);
+  registerDownload(ctx);
   registerFirmwareInstall(ctx);
   registerProjectCreate(ctx);
   registerProjectExport(ctx);

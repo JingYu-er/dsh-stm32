@@ -86,6 +86,7 @@ const suites = [
   "scaffold-patch-units.test.mjs",
   "search-roots-units.test.mjs",
   "serial-units.test.mjs",
+  "download-units.test.mjs",
   "session-units.test.mjs",
   "text-encoding-units.test.mjs",
   "thirdparty-units.test.mjs",
@@ -149,6 +150,8 @@ for (const name of suites) {
   if (code !== 0 && counts.fail === 0) crashed += 1;
   const bad = counts.fail > 0 || code !== 0;
   console.log(name + " exit=" + code + " (" + counts.fmt + ") pass=" + counts.pass + " fail=" + counts.fail + (bad ? "  <<< 需检查" : ""));
+  // 失败时把结尾贴出来：串口/桥这类时序用例偶发失败时，没有用例名就只能靠重跑猜。
+  if (bad) console.log("    " + tail(out, 30));
 }
 console.log("TOTAL pass=" + totalPass + " fail=" + totalFail + (unparsed > 0 ? "（" + String(unparsed) + " 个套件未统计）" : "") + (crashed > 0 ? "（" + String(crashed) + " 个套件退出码非 0 但自报 0 失败）" : ""));
 if (totalFail > 0 || unparsed > 0 || crashed > 0) process.exitCode = 1;

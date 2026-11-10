@@ -1,7 +1,7 @@
 # dsh-stm32 源码精读指南
 
 > 面向：第一次读这个仓库、并且要改它的人。
-> 规模：75 个 TypeScript 文件约 23.2k 行，外加一个手写的浏览器 bundle（client/client.js，682 行）。**芯片事实随包内置**：`src/data/device-facts.ts` 读插件包内 `assets/device/f1/chips.json`（`DSH_STM32_ASSETS` 可覆盖；2026-11 从独立资源仓并入插件），2026-10-31 已删掉手写 chip-table.json / f1-ram.generated.ts / 手写容量档表 / 内置引脚表。
+> 规模：110 个 TypeScript 文件约 42.3k 行，外加一个手写的浏览器 bundle（client/client.js，618 行）；第 1–11 章的表与行数保留 D 阶段口径，当前计数见 §13.5。**芯片事实随包内置**：`src/data/device-facts.ts` 读插件包内 `assets/device/f1/chips.json`（`DSH_STM32_ASSETS` 可覆盖；2026-11 从独立资源仓并入插件），2026-10-31 已删掉手写 chip-table.json / f1-ram.generated.ts / 手写容量档表 / 内置引脚表。
 > 读完这份指南你应该能回答：一次工具调用从宿主进来到 openocd 退出中间经过了谁；哪几条不变量破了一定出事；要改某个功能得动哪几个文件；哪些行为有测试兜着、哪些只能上板子验。
 >
 > 配套文档：docs/development-notes.md（按时间记的决策与被坑记录）、docs/logic-audit.md（历史审计条目）、README.md（用户视角）。
@@ -26,7 +26,7 @@
 | 层 | 目录 | 干什么 | 绝对不能干的事 |
 | --- | --- | --- | --- |
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
-| L3 契约层 | src/tools（23 个文件：22 个工具 + 1 个基础设施） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
+| L3 契约层 | src/tools（24 个文件：25 个工具 + 1 个基础设施；一个文件可注册多个工具） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
 | L2 逻辑层 | src/engine（46 个 .ts，其中 45 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
 | L1 事实表 | src/data（10 个数据模块） | 设备事实（`device-facts.ts` 读包内 `assets/device/f1/chips.json`）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写、SVD 寄存器表（`svd.ts`，来自内置 `assets/device/f1/svd/`，full 逻辑层） | 起进程、写工程文件 |
 
@@ -44,12 +44,12 @@
 ```mermaid
 flowchart TD
   HOST["DSH 宿主 ctx<br/>tools / subprocess / jobs / webServer / commands / skills"] --> IDX["src/index.ts<br/>apply(ctx) 装配"]
-  IDX --> TOOLS["src/tools/*<br/>22 个工具"]
+  IDX --> TOOLS["src/tools/*<br/>25 个工具"]
   IDX --> CMDS["src/commands/register.ts<br/>7 条斜杠命令"]
   IDX --> SKILL["src/skill/stm32-workflow.ts<br/>红线 skill"]
   IDX --> WEB["src/engine/web-routes.ts<br/>6 条 HTTP 路由"]
   IDX --> EVT["turn/end、session/disposed、dispose<br/>把探针还回去"]
-  TOOLS --> ENGINE["src/engine/*<br/>45 个纯逻辑模块"]
+  TOOLS --> ENGINE["src/engine/*<br/>65 个纯逻辑模块"]
   CMDS --> ENGINE
   WEB --> API["src/engine/web-api.ts<br/>面板 API 纯逻辑"]
   API --> ENGINE
@@ -67,7 +67,7 @@ flowchart TD
 | 目录 | 文件数 | 行数 | 说明 |
 | --- | --- | --- | --- |
 | src/ | 4 | 803 | index.ts 127、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
-| src/tools/ | 23 | 7158 | 22 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 regs.ts 735 行（D 阶段从 272 涨到 735），其次是 route-plan.ts 576 行、rtt.ts 408 行、watch.ts 305 行 |
+| src/tools/ | 24 | 7583 | 25 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 serial.ts 829 行，其次是 regs.ts 735 行、route-plan.ts 576 行、rtt.ts 408 行 |
 | src/engine/ | 51 | 21712 | 见第 5 章（第 5 章表格化了 45 个模块，另有 assets.ts 1162 行没单列）；最大的是 msys2-install.ts 2313 行，其次是 assets.ts 1162 行、clock-plan.ts 801 行 |
 | src/data/ | 10 | 3599 | 10 个 .ts 数据模块（device-facts.ts 读包内 assets/、svd.ts 读 full 层的寄存器表），见第 6 章 |
 | templates/ | 20 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc；C 阶段加了寄存器版的 `Core/Src/rtt.c` + `Core/Inc/rtt.h` 与 HAL 脚手架 `scaffold/RTT.md`） |
@@ -100,7 +100,7 @@ flowchart TD
 三件事，只有三件：
 
 1. **声明身份与依赖**：`export const name = "dsh-stm32"`、`export const inject = ["tools", "subprocess", "jobs"]`。这三个是硬依赖，缺了插件不加载。
-2. **apply(ctx) 里按「先探测、再操作」的顺序注册 22 个工具**：env_probe → env_install → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → build → flash → debug_run → debug_session → watch → regs_read → route_plan → rtt → assets → cache → doctor → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
+2. **apply(ctx) 里按「先探测、再操作」的顺序注册 25 个工具**：env_install → download → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → ioc_verify → build → flash → debug_run → debug_session → regs_read → route_plan → rtt → watch → assets → cache → doctor → serial → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
 3. **注册可选层并挂三个事件**：commands / skills 走 `ctx.inject([...], scope => ...)`，宿主没组合这些服务时静默跳过，工具照常工作；webServer 路由在`registerWebRoutes` 里自己判断。
 
 三个事件是本插件唯一的「状态清理入口」，也是很容易读漏的地方：
@@ -154,7 +154,7 @@ ctx.on("dispose", () => { void debugSessions.stop("插件卸载"); });
 
 7 条命令里有 6 条最终调用 engine 的同一个函数（build → runBuild，flash → runFlash …），所以它们和工具的唯一差别是：输入来自文本而不是 JSON、输出是一段中文。
 
-## 4. tools 层：22 个工具 + 1 个基础设施
+## 4. tools 层：25 个工具 + 1 个基础设施
 
 ### 4.1 一个工具文件的固定骨架
 
@@ -190,12 +190,12 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 2. **门禁在工具层，不在 engine。** engine 假设工具链就位；`blockedReport` / `emptyReport` 是门禁拦截与早退时造「同形报告」的工厂，保证失败也是合法输出。
 3. **`resolveProjectDir` + `validateToolArgs`（tools/project-dir.ts，120 行）是所有工具的共同入口**：前者把 `projectDir` 参数 / 会话工作目录落成绝对路径，后者按 `RequiredArgSpec` 校验必填参数类型，报错文案统一。
 
-### 4.2 22 个工具一览
+### 4.2 25 个工具一览
 
 | 工具 | 文件（行） | engine 入口 | 门禁能力 |
 | --- | --- | --- | --- |
-| `stm32_doctor` | env-probe.ts（284） | probe.buildTargets / probeAll + search-roots.resolveSearchConfig | 无 |
 | `stm32_env_install` | env-install.ts（550） | msys2-install.planOrInstallMsys2 | 无 |
+| `stm32_download` | download.ts（300） | download.planDownload / downloadUrlToFile / sha256File / inspectInstallerFile | 无（只下载与校验，绝不执行安装器） |
 | `stm32_firmware_install` | firmware-install.ts（288） | firmware-install.planOrInstallFirmware | 无 |
 | `stm32_project_create` | project-create.ts（387） | scaffold.createProjectScaffold（型号 → hal-chip 渲染启动文件/设备宏/.ld/.ioc）/ register-template.createRegisterProject | build（仅 register 路线；hal 路线降级成 warnings） |
 | `stm32_project_export` | project-export.ts（122） | project-export.runExport | 无 |
@@ -204,6 +204,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | `stm32_ioc_inspect` | ioc-inspect.ts（243） | ioc.summarizeIoc | 无 |
 | `stm32_ioc_plan` | ioc-plan.ts（398） | ioc-plan.planIocChanges + clock-plan.planClockChanges（引脚 / 键 / 时钟进同一个 candidate） | 无 |
 | `stm32_ioc_apply` | ioc-apply.ts（137） | ioc-plan.applyIocPlan / rollbackIoc | 无 |
+| `stm32_ioc_verify` | ioc-verify.ts（246） | ioc-verify.runIocVerify（CubeMX 无头 load→save 回读对比） | generate（CubeMX + JRE） |
 | `stm32_build` | build.ts（243） | build.runBuild | build（gcc + cmake + ninja） |
 | `stm32_flash` | flash.ts（203） | flash.runFlash | flash（openocd） |
 | `stm32_debug_run` | debug.ts（252） | debug.runDebugRun | debug（openocd + gdb） |
@@ -212,16 +213,17 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 | `stm32_regs_read` | regs.ts（735） | regs.runRegsRead + data/svd 的 `resolveRegisterRef` / `decodeRegisterValue`（工具层先把符号名解析成地址，再进 engine） | debug（解析失败在门禁之前就返回，不 spawn 进程） |
 | `stm32_rtt` | rtt.ts（408） | rtt.startRtt / dumpRtt / stopRtt / rttStatus + probe-session.ensureSession（parseRttFrames / encodeRttFrame 是纯函数） | debug（仅 start） |
 | `stm32_route_plan` | route-plan.ts（576） | engine/route-plan.assessRoute + toolchain-gate | register-ok → build；其余 → generate；unclear → 不查 |
+| `stm32_assets` | assets.ts（314） | engine/assets 全套（内置资源定位、manifest 校验、ensureAssets） | 无 |
 | `stm32_cache` | cache.ts（306） | engine/cache 全套 | 无 |
 | `stm32_doctor` | doctor.ts（202） | doctor.runDoctor + collectChipConsistency（型号/启动文件/设备宏/.ld/Flash 五项一致性） | 无（它自己就是体检） |
 | `stm32_serial` | serial.ts（829，0.1.5 新增） | 无独立 engine 入口：engine/serial.ts 直接管 PowerShell 桥（文件 IPC：cmd/ done/ rx.ndjson tx.ndjson status.json）与端口记忆（`~/.dsh-stm32/serial.json`） | 无（P1 仅 Windows；非 Windows / 缺 PowerShell 在工具层返回 `unsupported-platform`，不起桥） |
 | —（基础设施） | project-dir.ts（120） | resolveProjectDir / validateToolArgs | — |
 
-两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**regs.ts 735 行**现在是 tools 层最大的（D 阶段从 272 涨到 735，+463 行），**route-plan.ts 576 行**退居第二——后者的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
+两个「不像工具」的文件：**debug-session.ts 一个文件注册三个工具**（会话开 / eval / stop 共享同一份会话表，所以必须同文件）；**serial.ts 829 行**现在是 tools 层最大的，**regs.ts 735 行**次之（D 阶段从 272 涨到 735，+463 行），**route-plan.ts 576 行**第三——后者的输出 schema 要装下「逐外设代价矩阵 + 安装指引 + 缺件清单」三大块。
 
-## 5. engine 层：45 个模块，十个域
+## 5. engine 层：D 阶段的 45 个模块，十个域（现 65 个 .ts）
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。表里列 45 个；`src/engine/` 目录里实际有 46 个 `.ts`——`assets.ts`（内置资源装配与完整性校验，flat 布局）还没单独成行，读内置资源那条链路时直接从 §5.7 与 `src/data/device-facts.ts` 一起看。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。这里保留 D 阶段的 45 个模块表；`src/engine/` 现在有 65 个 `.ts`，0.1.5 的 `serial.ts`、0.1.6 的 `download.ts` 与 `assets.ts`（内置资源装配与完整性校验，flat 布局）等后续模块见 §12、§13 与目录本身；读内置资源链路时从 §5.7 与 `src/data/device-facts.ts` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -767,7 +769,7 @@ const fake = {
 - 阅读顺序：`tools/serial.ts` 的参数 schema 与 `ACTIONS` → `engine/serial.ts` 的 `openSerial` / `sendSerial` / `readSerial` / `transactSerial` / `closeSerial` / `serialStatus` → `templates/serial/bridge.ps1` 的 `Main` 循环（20 ms 轮询串口 / 100 ms 扫 cmd / 1 s 心跳 / 5 s 查父进程）。**契约不是 RPC，而是目录里的文件**：`cmd/<id>.json` 进、`done/<id>.json` 回，流水在 `rx.ndjson` / `tx.ndjson`，状态在 `status.json`。
 - 不要踩的：`spawn` 不能用 `detached`（Windows 上会翻成 `DETACHED_PROCESS`，powershell.exe 5.1 直接 exit 0）；`bridge.ps1` 必须保持 ASCII（PS 5.1 按 ANSI 解码无 BOM 脚本）；重复 `open` 由引擎的 `openChain` 串行化并返回 `already-open`；`read` 的 `cursor` 是 `rx.ndjson` 的字节偏移（`nextCursor`），跨轮不重贴历史靠它。
 - 边界：P1 只做 Windows；不含 UI 面板 / SSE / 自动重连 / 多会话。真机缺口见 development-notes §86（真桥只验过失败路径）。
-- 计数口径（0.1.5 起）：`src/tools/` 共 23 个文件 = 22 个工具文件 + `project-dir.ts`；注册工具 **24 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章里的「22 个工具 / 23 个文件」沿用「工具文件」口径，不冲突。
+- 计数口径（0.1.6 起）：`src/tools/` 共 24 个文件（23 个工具文件 + `project-dir.ts`），注册工具 **25 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章已按这个口径更新。
 
 ### 12.2 寄存器路线：13 → 21 族
 
@@ -775,6 +777,50 @@ const fake = {
 - GPIO 使能位分四种：`moder`（原 F1 口径）、`moder-ahb4`（H7，GPIO 在 AHB4ENR）、`moder-ahb2enr1`（U3 / U5，GPIO 在 AHB2ENR1）、`moder-ahb2`（其余）。读 `src/data/register-gpio.ts` 时先看芯片记录选的是哪一种。
 - 链接脚本：`DeviceFactsChip` 新增可选 `linkerRam`（origin / sizeBytes / region），H7 的 138 颗都带 DTCM 128 KiB，U5 按 line 给 256 / 768 / 2496 KiB 窗口；`planRegisterLinker` 优先用它。L4+ 与 L5 是连续单块，不需要 `linkerRam`。
 - 8 族矩阵已跑完（t6）：`create→build` 8/8 通过、warning 0 / error 0，逐族 FLASH/RAM 与两处模板修复（按族 `-mcpu`、H7 的 `cachel1_armv7.h`）见 development-notes §87.5；别把「已下载 CMSIS + 生成 .ld」当成「已编译验收」。
+
+## 13. 0.1.6 增补：安装包下载（`stm32_download`）
+
+> 接续 §12。只做「拿到安装包」，不做「安装」：插件负责下载与 SHA256 校验，双击安装器、接受许可、过 UAC 都由用户完成。
+
+### 13.1 四种模式
+
+| 模式 | 触发 | 行为 |
+| --- | --- | --- |
+| `plan` | `dryRun: true`（默认） | 只返回 URL、文件名、版本、SHA256、下载目录与安装提示，不联网 |
+| `direct` | `dryRun: false` + `confirm: true`，组件是 J-Link | 下载到下载根目录；边写边算哈希，校验通过才原子改名；已有同哈希文件直接复用（`cached: true`） |
+| `manual` | `dryRun: false` + `confirm: true`，组件是 CubeMX / CubeProgrammer | 打开 ST 官方下载页（需要 myST 登录与许可），不猜直链 |
+| `file` | 传了 `file` | 只校验本地安装包的 SHA256（有官方哈希就对比），不执行、不复制 |
+
+### 13.2 阅读顺序
+
+- `src/tools/download.ts`：`stm32_download` 的参数 schema（`component` / `dryRun` / `confirm` / `file` / `outDir` / `openPage` / `timeoutMs`）→ `execute` 的模式判定 → 21 个必填字段的 report → `render` 的中文行。`confirm` 只对 `direct` / `manual` 生效；`file` 只读。
+- `src/engine/download.ts`：`planDownload`（URL 与目标路径）→ `downloadUrlToFile`（fetch + `getReader` + `.part-<pid>-<ts>` + 边写边算哈希 + 校验后 rename）→ `sha256File` → `inspectInstallerFile`。下载根目录的优先级是 `DSH_STM32_DOWNLOADS` > `%LOCALAPPDATA%\dsh-stm32\downloads` > `%USERPROFILE%\AppData\Local\...` > 临时目录。
+- `test/download-units.test.mjs`：5 条离线用例——两种计划、下载目录覆盖、本地文件校验、本地 HTTP 直链的下载/缓存/哈希不符清理、工具层三种模式。
+
+### 13.3 安全边界
+
+- **不执行安装器**：不 spawn 安装包、不传 `/S` 之类的静默参数；`manual` 只 spawn `cmd /c start` 打开官方页面。
+- **不写注册表、不改 PATH、不请求管理员**。J-Link 的 USB 驱动由安装器自己处理：`-InstAllUsers=1` + UAC；现代探针默认 WinUSB，只有停产老探针才需要 legacy 驱动。
+- **URL 白名单**：只有 SEGGER 官方直链与 ST 的两个官方页面；J-Link 版本与 SHA256 写死在 `JLINK_DOWNLOAD`，升级要同时改 URL 与哈希。
+- **失败清理**：网络中断、超时（默认 10 分钟，下限 5 秒）、超过 `maxBytes`（默认 300 MB）或哈希不符时删除临时文件；目标文件只在哈希通过后出现。
+
+### 13.4 验证边界
+
+- J-Link 直链只做了 `HEAD`：HTTP 200、`content-length: 59,012,800`；**没有真的下载 59 MB**，也没有运行安装器（按设计永远不运行）。
+- 下载/校验/缓存/失败清理由本地 HTTP 服务覆盖；ST 的两个页面只验证了 URL 与计划输出，没有打开浏览器。
+- 真机安装、驱动加载、CubeMX/CubeProgrammer 的 myST 下载仍未验。
+
+### 13.5 计数口径（0.1.6 起）
+
+| 项 | 当前值 |
+| --- | --- |
+| TypeScript | 110 个文件、42,261 行（`src/`，不含 client） |
+| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
+| `src/engine/` | 65 个 `.ts` / 26,358 行 |
+| `src/data/` | 17 个 `.ts` / 7,625 行 |
+| 单测 | 59 个套件 / 937 pass / 0 fail（`node test/run-units.mjs`） |
+
+第 1–11 章的目录表与模块计数保留 D 阶段原样（45 个 engine 模块、23 个 tools 文件），读旧章节时以本节为准。
 
 ---
 
