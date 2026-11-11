@@ -69,9 +69,9 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # typescript only
 npm run build                       # tsc -> lib/ (required before committing)
-npm test                            # optional: 937 offline cases in 59 suites, no board needed
+npm test                            # optional: 939 offline cases in 59 suites, no board needed
 npm run test:pack                   # pack a tarball, unpack it, scaffold a real register project from it
-npm run test:size                   # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
+npm run test:size                   # package guard: tarball <=3.9 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 Link it into your dsh profile — **while editing code use `link:`, never `file:`**:
@@ -160,7 +160,7 @@ So the blinking LED is the acceptance sample, not the ceiling: **this covers the
 | Tool | What it does |
 | --- | --- |
 | `stm32_doctor` | Detects gcc / gdb / openocd / cmake / ninja / CubeMX / JRE paths and versions; for anything missing it states the impact (cannot build / flash / debug / generate), the recommended install command (pacman / winget, paste-ready), a self-check command, plus `capabilities` (which of the four jobs work) and `recommendations` (install order and an offer to install for you). Read-only, repeatable |
-| `stm32_env_install` | One-stop install when the toolchain is missing: `dryRun` (default) only returns a plan — size of the official MSYS2 installer, the five packages, the PATH entry it would add; only `dryRun: false` + `confirm: true` actually work (download → install MSYS2 → `pacman -S` → user-level PATH → self-check → write `~/.dsh-stm32/config.json`). With an existing msys64 it only adds the packages. No uninstall |
+| `stm32_env_install` | One-stop install when the toolchain is missing: `dryRun` (default) only returns a plan — size of the official MSYS2 installer, the five packages, the PATH entry it would add; only `dryRun: false` + `confirm: true` actually work (download → verify size/MZ/sha256 → install MSYS2 → `pacman -S` → user-level PATH → self-check → write `~/.dsh-stm32/config.json`). The installer is pinned to stable release `2026-09-27` with a sha256; a custom source must supply its own hash, and a mismatch is never executed. With an existing msys64 it only adds the packages. No uninstall |
 | `stm32_download` | Downloads installers but never runs them: `component: "jlink"` fetches SEGGER's official 8.18.0 installer and verifies its SHA256; `"cubemx"` / `"cubeprogrammer"` return the ST download page (myST login + licence), and a local `file` can be hashed for your own comparison. `dryRun: true` (default) returns a plan; `dryRun: false` + `confirm: true` actually downloads or opens the page. No registry writes, no PATH edits, no admin request |
 | `stm32_route_plan` | Settle the route before writing code: `requirement` is required (e.g. "a button drives the LED, UART prints its state once a second"), and it returns `verdict` (`register-ok` / `both-viable` / `hal-only` / `unclear`), per-peripheral `halEffort`/`regEffort` with `advice`, how the two routes differ, the next concrete step, and toolchain gaps tagged `installability` (`auto` = the plugin can install it / `manual` = human only) plus the full manual install guide. No generic comparison table — the verdict only holds for the requirement you gave |
 | `stm32_doctor` | Answers three questions at once: is the toolchain complete, who holds the probe (`openocd.exe` / gdb processes / port 3333), can this project be flashed |
@@ -340,10 +340,11 @@ Having CubeMX installed does not mean the package for **this particular part** i
 Fallback channel (GitHub assembly):
 
 - What it downloads: `stm32f1xx-hal-driver` (HAL driver, BSD-3-Clause) + `cmsis-device-f1` (device headers and startup file, Apache-2.0) + five CMSIS core headers — about 2 MB, a few seconds;
+- Integrity: every archive comes from exactly one source, `codeload.github.com/<repo>/tar.gz/refs/heads/<ref>`, and every archive plus every core header is pinned by sha256 in `src/data/firmware-pins.ts` (regenerate with `scripts/firmware/pin-firmware.mjs`). A hash mismatch rejects the whole package before anything is unpacked; the error reports the expected and actual hashes when upstream master moves.
 - Why the `STM32CubeF1` source archive is not enough: its HAL and CMSIS device directories are **git submodules**, so the tarball ships them empty — unpacking it yields a package that cannot compile (no startup file, no HAL sources);
 - Where it lands: `<CubeMX root>/dsh-firmware/<package>` by default (a plugin-owned folder next to `Repository`, official packages untouched); only if that root is not writable does it fall back to the user cache. **Do not drop self-made version names into `Repository`** — measured: CubeMX does not recognise that version, silently falls back to the package it knows, and reports a successful generation with stale HAL files;
 - How generation picks it up: `stm32_generate` resolves the package named in the `.ioc` (`ProjectManager.FirmwarePackage`), looking in both `Repository` and `<CubeMX root>/dsh-firmware`, and passes `project setCustomFWPath <package dir>` to the CubeMX script — the only mechanism proven to work, and it leaves no absolute path in the `.ioc`;
-- The assembled package matches the official layout: a six-line `package.xml` (version tags `FW.<family>.<x.y.z>`) and `THIRD_PARTY_NOTICES.md`, with **no manifest or hashes** — CubeMX does not verify provenance either (measured: generating with `setCustomFWPath` copies HAL sources byte-for-byte out of our directory);
+- The assembled package matches the official layout: a six-line `package.xml` (version tags `FW.<family>.<x.y.z>`) and `THIRD_PARTY_NOTICES.md`; `package.xml` carries no hash manifest (CubeMX does not verify provenance), because integrity is enforced per file by sha256 at download time — measured: generating with `setCustomFWPath` copies HAL sources byte-for-byte out of our directory;
 - But "generation succeeded" proves nothing: with a non-existent package name in the `.ioc`, CubeMX prints no error, exits 0 and simply skips copying HAL. So five checks are mandatory (core headers / HAL Inc / HAL Src / device headers / `startup_*.s`), and the installer runs them right after assembling.
 
 ### Installer downloads (download only)
@@ -368,6 +369,9 @@ Fallback channel (GitHub assembly):
 | `DSH_STM32_NO_CONFIG` | Set to `1` / `true` to ignore the config file entirely (environment variables only) | unset = read |
 | `DSH_STM32_CACHE` | Download cache root (register-route template etc.), supports `~` | `%LOCALAPPDATA%\dsh-stm32\cache` |
 | `DSH_STM32_DOWNLOADS` | Installer download root for `stm32_download`, supports `~` | `%LOCALAPPDATA%\dsh-stm32\downloads` |
+| `MSYS2_INSTALLER_URL` | Override the `stm32_env_install` installer URL (full exe URL); **`MSYS2_INSTALLER_SHA256` is required with it**, or the install is refused | official pinned release `2026-09-27` |
+| `MSYS2_MIRROR` | Override the installer directory (appends `msys2-base-x86_64-20260927.sfx.exe`); a hash is still required | none |
+| `MSYS2_INSTALLER_SHA256` | sha256 for the override source (64 hex chars, optional `sha256:` prefix) | official package hash |
 | `DSH_STM32_E2E_PROJECT` | Project used by hardware e2e runs (with `openocd.cfg` and `build/Debug/*.elf`) | none |
 | `DSH_STM32_E2E_ROOT` | Scratch directory for e2e copies | system temp |
 
@@ -445,14 +449,14 @@ C0 / U0 have no official script in openocd 0.12, so the plugin ships adapted cop
 
 ```powershell
 npm run build            # tsc -> lib/ (lib/ is committed: rebuild before you commit)
-npm test                 # 59 offline suites, 937 cases; no board, CubeMX, or toolchain needed
+npm test                 # 59 offline suites, 939 cases; no board, CubeMX, or toolchain needed
 npm run test:pack        # pack a tarball, unpack it, scaffold a real register project from the unpacked lib
-npm run test:size        # package guard: tarball <=1.2 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
+npm run test:size        # package guard: tarball <=3.9 MB, runtime assets under templates/ (.ioc/.xml/.ld/.json/.cfg) <=40 KB, no binaries/diagrams inside
 ```
 
 CI (`.github/workflows/ci.yml`) runs `npm ci → build → check that the committed lib/ matches src/ → npm test → test:pack → test:size` on every push and PR (windows-latest).
 
-A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **937 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
+A GitHub runner has neither msys64 nor CubeMX, so two scaffolding cases that need the real firmware package are skipped: CI skips those two; a developer machine runs all **939 pass / 0 fail**. The offline suites only read the bundled [`test/fixtures/`](test/fixtures/README.md); the session cases build a fake toolchain directory with `fakeBinDirs()` (empty placeholder files for openocd / gdb), so nothing depends on what is installed locally.
 
 ### What ships where (decide before you add a file)
 

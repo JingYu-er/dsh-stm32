@@ -870,6 +870,7 @@ export async function installFirmware(request: FirmwareInstallRequest): Promise<
       path: archive.id + ".tgz",
       urls: archive.urls,
       minBytes: 100_000,
+      sha256: archive.sha256,
     }));
     const options: FetchOptions = {
       ...(request.signal === undefined ? {} : { signal: request.signal }),

@@ -308,7 +308,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| msys2-install.ts（2313） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrls(env)`（**F3a 候选链**：`MSYS2_INSTALLER_URL` 单源 > `MSYS2_MIRROR` > 清华 TUNA / 中科大 USTC / 南大 NJU / 阿里云 × 两个文件名 > GitHub，共 10 个候选；`installerSourceLabel` 把 URL 变成「清华 TUNA」这样的人话）、`installerSourceLabel`、`preferMirrorServers(text, servers)` / `preferChinaMirrors(msys64)`（**F3b**：只把国内镜像插到 `etc/pacman.d/mirrorlist.msys` 与 `mirrorlist.mingw` 最前，官方条目不删，幂等，已有 MSYS2 一个字都不改）、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。**F3d 三道粗检**：缓存要 MZ 头 + ≥ `MIN_INSTALLER_BYTES`（40 MB）才算数（`cachedInstallerBytes`）；下载后查退出码/体量/MZ；解压后再查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删）。**F3c**：`curl -C -` 同源续传、`--speed-limit 1024 --speed-time 10` 低速自退（退出码 28 单独说明），退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次，换源前删 `.part`。 |
+| msys2-install.ts（2313） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrls(env)`（**P0-1 固定版本**：稳定 release `2026-09-27` 的官方 exe 单源；`MSYS2_INSTALLER_URL` 或 `MSYS2_MIRROR` 可覆盖，但必须同时给 `MSYS2_INSTALLER_SHA256`，否则直接拒绝、不退回官方源；`installerSourceLabel` 只认官方 release 与自定义源）、`installerSourceLabel`、`preferMirrorServers(text, servers)` / `preferChinaMirrors(msys64)`（**F3b**：只把国内镜像插到 `etc/pacman.d/mirrorlist.msys` 与 `mirrorlist.mingw` 最前，官方条目不删，幂等，已有 MSYS2 一个字都不改）、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。**P0-1 四道闸**：`checkInstallerFile` 统一查体量 ≥40 MB、MZ 头、sha256（错误带期望/实际值）；缓存复用、下载完成、**解压执行前**各校验一次，哈希不符的下载删 `.part`、哈希不符的缓存保留原文件但重下；缓存名带版本 `msys2-2026-09-27.sfx.exe`。解压后再查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删）。**F3c**：`curl -C -` 同源续传、`--speed-limit 1024 --speed-time 10` 低速自退（退出码 28 单独说明），退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次，换源前删 `.part`。 |
 
 ### 5.9 设置面板的宿主侧（2 个，577 行）
 
@@ -818,7 +818,7 @@ const fake = {
 | `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
 | `src/engine/` | 65 个 `.ts` / 26,358 行 |
 | `src/data/` | 17 个 `.ts` / 7,625 行 |
-| 单测 | 59 个套件 / 937 pass / 0 fail（`node test/run-units.mjs`） |
+| 单测 | 59 个套件 / 939 pass / 0 fail（`node test/run-units.mjs`） |
 
 第 1–11 章的目录表与模块计数保留 D 阶段原样（45 个 engine 模块、23 个 tools 文件），读旧章节时以本节为准。
 

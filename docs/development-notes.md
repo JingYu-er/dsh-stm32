@@ -5761,3 +5761,43 @@ t8 由 impl 执行（不是寄存器路线的实现者）：只做只读复验�
 - **「自动安装」和「自动下载」要分开承诺**：下载可以校验、可以重试、可以缓存；安装要 UAC、许可与驱动绑定，插件不该替用户点。
 - **哈希要在写盘过程中算**：下完再读一遍 59 MB 会多一次全文件 IO；边写边算还能在中途失败时立刻停。
 - **临时文件必须带 pid + 时间戳**：并发或上次崩溃留下的 `.part` 不能互相覆盖，失败清理也不该误删别人的。
+
+## §90 供应链完整性：MSYS2 固定版本与固件拼包哈希（2026-11）
+
+用户要求（m06051）从 P0 开始修审计漏洞。两条都是「下载的东西没有可信哈希」：MSYS2 安装包下完直接 `-y` 执行，GitHub 固件归档只查 ≥500 B。修法是**把版本钉死、把哈希钉死，校验失败就不解压/不执行**；不是再加一层「看起来像校验」的体量检查。
+
+### 一、MSYS2：固定 release + sha256，覆盖源必须自带哈希
+
+- 原来 `INSTALLER_FILE = msys2-base-x86_64-latest.sfx.exe`，跟着 GitHub `releases/latest/download` 走——那是 **nightly**，每天变；四个国内镜像也不保留版本化文件（实测 TUNA/NJU/阿里云 404、USTC 403）。等于每次安装都在执行一个当天从网上拿的、无法复核的 exe。
+- 改为固定稳定 release `2026-09-27`：`MSYS2_INSTALLER_VERSION = "2026-09-27"`，资产 `msys2-base-x86_64-20260927.sfx.exe`，43,117,824 B，`MSYS2_INSTALLER_SHA256 = ad336cccfda47758b5e15cda993fbba421115cb0b126697daef1ee4dfe37209f`（GitHub release API 的 digest，release 同时提供 `.sha256` 与 `.sig`）。`src/engine/msys2-install.ts:85-96`
+- 默认只有一条源：官方 release 固定 URL。`resolveInstallerUrls(env)` 支持 `MSYS2_INSTALLER_URL`（完整 exe 地址）或 `MSYS2_MIRROR`（目录，自动拼固定文件名），但**必须同时给 `MSYS2_INSTALLER_SHA256`**；只给地址不给哈希直接 `ok:false`，不会悄悄退回官方源（避免「以为在用内网镜像，实际换成了公网未知文件」）。`src/engine/msys2-install.ts:466-520`
+- 三道闸都用同一个 `checkInstallerFile(path, expectedSha256)`：体量 ≥40 MB、MZ 头、sha256 一致；错误里同时给期望值与实际值。下载后校验（不符删 `.part` 并换源）、缓存复用时校验（不符不删原文件、标 warning 后重下）、**解压执行前再校验一次**（防止缓存目录在两次之间被替换）。缓存文件名带版本：`msys2-2026-09-27.sfx.exe`。
+- 失败文案不再写「10 个候选源、国内镜像优先」，改成固定版本/固定哈希口径，并直接告诉用户怎么补 `MSYS2_INSTALLER_SHA256`。
+
+### 二、固件拼包：34 个归档 + 86 个内核头逐个钉 sha256
+
+- 原来的 GitHub 回退通道有 3 条 URL（codeload、ghproxy、api tarball），`FetchTarget` 只带 URL、不带哈希，`minBytes: 500` 就是全部完整性检查；ghproxy 还是第三方代理。
+- 实测同一 commit 的 codeload 与 api legacy tarball **字节不同**（F1 HAL：817,831 B / `EA95…` vs 818,351 B / `5B1D…`），所以一个 sha256 不能同时校验多条归档链路。改为**每个归档只保留 codeload 一条源**：`https://codeload.github.com/STMicroelectronics/<repo>/tar.gz/refs/heads/<ref>`；ghproxy 与 api 两条删除。
+- `scripts/firmware/pin-firmware.mjs` 从 `lib/data/firmware-packages.js` 收集去重后的 **34 个归档**（21 族共用 repo，不是 42）与 **86 个内核头**（不是 105），流式下载算 sha256，生成 `src/data/firmware-pins.ts`。归档 key `<repo>@<ref>`，头 key `<repo>@<ref>/<包内路径>`，值 `{sha256, bytes}`。
+- `firmwarePlanFor` 为每个归档与内核头查 pin；缺任何一条就 `ok:false`（提示先跑 pin 脚本并提交生成文件），不再返回「没有哈希的计划」。`FirmwareArchivePlan` 带 `sha256`/`bytes`，`src/engine/firmware-install.ts` 把它塞进 `FetchTarget.sha256`；`fetch.ts` 已有的校验逻辑保持不变，只把报错文案改成「更新 cmsis-sources（CMSIS 头）或 firmware-pins（固件归档/内核头）」。
+- 没有钉 commit：GitHub API 未认证额度只有 60/h，63 个 repo 一次跑不完；哈希本身已经满足「内容不变」的要求——上游 master 挪动文件时，安装会在下载阶段明确拒收并给期望/实际哈希，而不是静默装进一个不同的包。需要完全可复现时，改 ref 为 commit 再重跑 pin 脚本即可。
+- **F7 的 cachel1 是照 H7 抄错的**：`STM32CubeF7@master/Drivers/CMSIS/Include/cachel1_armv7.h` 在 raw 与 jsDelivr 都是 404，F7 的 `core_cm7.h` 也不 include 它。原清单让 F7 的 GitHub 拼包必然 404；已改成五个头（无 cachel1），并加测试锁住「H7 有、F7 没有」。
+
+### 三、pin 脚本的可靠性
+
+- 首次跑：34 个归档（含 H7 5.5 MB，codeload 约 420 s）完成后，`raw.githubusercontent` 批量 87 个头里 72 个 `ECONNRESET`，整批 reject、不写文件。
+- 增加 `MAX_ATTEMPTS=4`、每条 URL 退避 1/2/3 s、`AbortSignal.timeout(180_000)`、`CONCURRENCY=6`；内核头按 fastly.jsDelivr → cdn.jsDelivr → raw → ghproxy 多镜像回退（`hashAny`）。raw 批量不可用、jsDelivr 个别 403，回退后 86 个全部成功。
+- `--cache` 读 `../.dsh-stm32/firmware-pins-cache.json`，每成功一项立即原子写（`.tmp` + rename）；任一项失败就不写 `src/data/firmware-pins.ts`、退出码 1，并提示「修好网络后加 --cache 重跑，已完成项会复用」。缓存是本机维护产物，不提交。
+
+### 四、验证
+
+- `npm run build` exit 0；`node test/install-units.test.mjs` 29 pass；`node test/firmware-units.test.mjs` **47 pass / 0 fail**；全量 `node test/run-units.mjs` **pass=939 fail=0**（59 套件）；`npm run test:pack` 全部通过；`npm run test:size` **1817.6 KB / 272 文件 / 解包 15152.1 KB**（上限 3906.3 KB）。
+- pin 产物：34 归档 + 86 头，17 个 GitHub 拼包族 `firmwarePlanFor` 全 `ok`。
+- 新增用例覆盖：缺哈希拒绝、非法哈希、direct/mirror 覆盖、下载内容哈希不符删 `.part` 不解压、缓存体量够但哈希不符保留原文件并重下；固件侧覆盖归档单源、每族 archive/core pin 非空、假 fetch 通过哈希闸。
+
+### 五、教训
+
+- **`latest` 不是版本**：MSYS2 的 `releases/latest/download` 指向 nightly，文件名里写着 latest 的东西不能进「可复核安装」链路。
+- **哈希要绑到具体 URL 形态**：同一 commit 的 codeload 与 api tarball 字节不同；先砍掉多余链路，再谈一个哈希。
+- **族间清单不能照抄**：F7 没有 cachel1_armv7.h，照 H7 抄会让整个拼包 404；这类差异要靠实测 URL/文件，不靠「都是 CM7」推断。
+- **校验点要贴着执行点**：下载后校验只证明「下载那一刻是对的」；解压/执行前再算一次，才覆盖缓存被替换的窗口。

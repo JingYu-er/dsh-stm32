@@ -15,6 +15,7 @@
  * 下载只用系统 curl、解压只用官方 sfx，不引第三方包（插件保持零运行时依赖）。
  */
 
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -67,38 +68,36 @@ const PACMAN_QUERY_TIMEOUT_MS = 60_000;
 const WINDOWS = process.platform === "win32";
 
 /**
- * 官方自解压包。名字里必须带 base：GitHub releases 上**没有** msys2-x86_64-latest.sfx.exe
- * 这个资产（msys2-x86_64-latest.exe 是图形安装器），sfx 只有 msys2-base-x86_64-latest.sfx.exe。
- * 它解压出一个顶层 msys64 目录，所以官方文档写 -y -oC:\ 就会得到 C:\msys64。
+ * 固定的 MSYS2 安装包版本（P0-1）。
+ *
+ * 以前用 releases/latest 的滚动资产，再靠「MZ 头 + ≥40 MB」判断真伪：镜像和 GitHub 的
+ * 字节数每天可能都不一样，钉 sha256 必然误杀，所以只能粗检。代价是下载通道可以被换源、
+ * 被中间人塞进任意 40 MB 的 exe，插件随后还会用 `-y` 静默执行它。
+ *
+ * 现在钉死一个有版本号的 release（2026-09-27）：文件名、字节数、sha256 全部来自该 release
+ * 的 GitHub API 资产元数据，且与 release 自带的 .sha256 文件一致。镜像站只同步 latest、
+ * 不保留历史版本（实测 2026-11-11：TUNA/NJU/阿里云对版本化文件名均 404，USTC 403），
+ * 所以默认只走这个不可变的官方 release 地址。
+ *
+ * 要换版本：同时改 VERSION / FILE / SHA256 / BYTES 四个常量，并重跑
+ * test/install-units.test.mjs 的哈希测试；只改其中一个是错误配置。
  */
-const INSTALLER_FILE = "msys2-base-x86_64-latest.sfx.exe";
+export const MSYS2_INSTALLER_VERSION = "2026-09-27";
+const INSTALLER_FILE = "msys2-base-x86_64-" + MSYS2_INSTALLER_VERSION.replace(/-/gu, "") + ".sfx.exe";
 
-/**
- * 同一个安装包在不同地方有两个文件名：镜像用 msys2-x86_64-latest.sfx.exe，
- * GitHub releases 用 msys2-base-x86_64-latest.sfx.exe。两个都试——一个名字 404
- * 不代表这个源没有包（实测 TUNA 只有 msys2-x86_64- 那个）。
- */
-const INSTALLER_NAMES: readonly string[] = ["msys2-x86_64-latest.sfx.exe", INSTALLER_FILE];
+/** GitHub release 的不可变下载前缀（tag 固定，不用 releases/latest）。 */
+const INSTALLER_GITHUB =
+  "https://github.com/msys2/msys2-installer/releases/download/" + MSYS2_INSTALLER_VERSION;
 
-/**
- * 安装包候选源（实测 2026-10，HEAD）：TUNA / NJU / 阿里云 均 200 且 43,117,824 B；
- * USTC 的 distrib 目录回 403（仍留作候选：它可能只挡 HEAD，真下能成）。
- * 镜像同步时点不同 → 字节数不同 → 不能跨源钉同一个 sha256，只能做 F3d 的三道粗检。
- */
-const INSTALLER_MIRRORS: ReadonlyArray<{ label: string; base: string }> = [
-  { label: "清华 TUNA", base: "https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib" },
-  { label: "中科大 USTC", base: "https://mirrors.ustc.edu.cn/msys2/distrib" },
-  { label: "南大 NJU", base: "https://mirror.nju.edu.cn/msys2/distrib" },
-  { label: "阿里云", base: "https://mirrors.aliyun.com/msys2/distrib" },
-];
-
-/** 官方兜底：GitHub releases/latest。F3e 要求「GitHub 类下载不改顺序」，它在候选链的最后。 */
-const INSTALLER_GITHUB = "https://github.com/msys2/msys2-installer/releases/latest/download";
-
+/** 唯一的默认安装包地址：固定版本，内容由下面的 sha256 钉死。 */
 export const MSYS2_INSTALLER_URL = INSTALLER_GITHUB + "/" + INSTALLER_FILE;
 
-/** 该资产的字节数（实测 43,060,392）；只用于计划里的用量估算，不参与校验。 */
-export const MSYS2_INSTALLER_BYTES = 43_060_392;
+/** 官方 release 资产元数据里的 sha256（小写十六进制；同 release 的 .sha256 文件可交叉核对）。 */
+export const MSYS2_INSTALLER_SHA256 =
+  "ad336cccfda47758b5e15cda993fbba421115cb0b126697daef1ee4dfe37209f";
+
+/** 该资产的字节数（GitHub API 实测 43,117,824）；只用于计划里的用量估算，不参与校验。 */
+export const MSYS2_INSTALLER_BYTES = 43_117_824;
 
 /**
  * 真包的体量下限（实测 42.9–43.1 MB）。小于它就是半截文件或错误页：
@@ -296,15 +295,71 @@ function looksLikeExecutable(path: string): boolean {
   }
 }
 
-/**
- * 缓存能不能当"已经下好的安装包"用（F3d）：MZ 头 + 体量下限。
- * 只查 size>0 时，一次超时留下的 12 MB 半截文件会被下一次当成有效缓存，解压永远失败。
- * 返回可用字节数，0 表示不可用。
- */
-function cachedInstallerBytes(path: string): number {
+/** 把用户/元数据里的哈希写成统一的 64 位小写十六进制；不合法返回空串。 */
+export function normalizeSha256(value: string | undefined): string {
+  const text = (value ?? "").trim().toLowerCase().replace(/^sha256:/u, "");
+  return /^[0-9a-f]{64}$/u.test(text) ? text : "";
+}
+
+/** 流式计算文件的 sha256；调用方负责捕获 IO 错误。 */
+export function sha256File(path: string): string {
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read <= 0) break;
+      hash.update(buffer.subarray(0, read));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+export interface InstallerFileCheck {
+  ok: boolean;
+  bytes: number;
+  actualSha256: string;
+  /** 不可用的人话原因；ok 时为空串。 */
+  reason: string;
+}
+
+/** 安装包能不能用：体量下限 + MZ 头 + 与钉死的 sha256 完全一致。 */
+export function checkInstallerFile(path: string, expectedSha256: string): InstallerFileCheck {
   const bytes = fileSize(path);
-  if (bytes < MIN_INSTALLER_BYTES) return 0;
-  return looksLikeExecutable(path) ? bytes : 0;
+  if (bytes < MIN_INSTALLER_BYTES) {
+    return { ok: false, bytes, actualSha256: "", reason: "只有 " + formatBytes(bytes) + "（小于 " + formatBytes(MIN_INSTALLER_BYTES) + "）" };
+  }
+  if (!looksLikeExecutable(path)) {
+    return { ok: false, bytes, actualSha256: "", reason: "开头不是 MZ（不是 exe）" };
+  }
+  let actual = "";
+  try {
+    actual = sha256File(path);
+  } catch (error) {
+    return { ok: false, bytes, actualSha256: "", reason: "读不了文件：" + describeError(error) };
+  }
+  if (actual !== expectedSha256) {
+    return {
+      ok: false,
+      bytes,
+      actualSha256: actual,
+      reason: "sha256 不符（期望 " + expectedSha256 + "，实际 " + actual + "）",
+    };
+  }
+  return { ok: true, bytes, actualSha256: actual, reason: "" };
+}
+
+/**
+ * 缓存能不能当"已经下好的安装包"用（P0-1）：体量下限 + MZ 头 + sha256。
+ * 只查体量时，一次超时留下的半截文件、或被换掉的镜像包会被下一次当成有效缓存；
+ * 哈希不符时保留原文件（不删用户的东西），只是不认它。
+ */
+function cachedInstallerCheck(path: string, expectedSha256: string): InstallerFileCheck {
+  if (!existsSync(path)) return { ok: false, bytes: 0, actualSha256: "", reason: "没有缓存" };
+  return checkInstallerFile(path, expectedSha256);
 }
 
 function safeList(dir: string): string[] {
@@ -381,52 +436,95 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 export interface UrlResolution {
   /** 候选地址，按尝试顺序排列；第一个是"计划里报给你看"的那个。 */
   urls: string[];
+  /** 这份安装包必须匹配的 sha256（64 位小写十六进制）；配置错误时为空串。 */
+  sha256: string;
   /** 这个地址是怎么来的：写进 notes，用户才知道自己设的变量生效没有。 */
   note: string;
+  /** 非空 = 环境变量配置不完整/不安全，调用方必须停下来报错，不能退回默认源。 */
+  error: string;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 /** 候选链的人话标签，报错时能说清"试过哪些源、各是怎么失败的"。 */
 export function installerSourceLabel(url: string): string {
-  for (const mirror of INSTALLER_MIRRORS) {
-    if (url.startsWith(mirror.base)) return mirror.label;
-  }
-  return url.startsWith(INSTALLER_GITHUB) ? "GitHub" : "自定义地址";
+  return url.startsWith(INSTALLER_GITHUB) ? "GitHub 官方 release" : "自定义地址";
 }
 
 /**
- * 安装包候选地址（F3a）：环境变量整体替换 > MSYS2_MIRROR 前缀 > 国内镜像链 → GitHub。
+ * 安装包地址（P0-1）：默认只有一个固定版本的官方 release 地址，内容由 sha256 钉死。
  *
- * 为什么不再只写死 GitHub：releases/latest 在部分网络里连不上（与 CMSIS 头同一个墙），
- * 一次 43 MB 的下载失败就等于这次安装整个作废，而国内镜像本来就有同名包。
- * 每个源都试两个文件名（镜像用 msys2-x86_64-，GitHub 用 msys2-base-）。
- * MSYS2_MIRROR 给全（以 .exe/.7z/.zip 结尾）就直接当完整地址，否则当前缀拼两个文件名。
+ * 为什么不再维护镜像候选链：镜像只同步 latest、不保留历史版本，而 latest 每天都在变，
+ * 无法跨源钉同一个哈希。允许用户用 MSYS2_INSTALLER_URL / MSYS2_MIRROR 指向内网镜像或
+ * 本地副本，但必须同时给 MSYS2_INSTALLER_SHA256——没有哈希的覆盖一律拒绝，否则「能用
+ * 镜像」就等于「能换掉要静默执行的 exe」。
  */
 export function resolveInstallerUrls(env: Record<string, string | undefined>): UrlResolution {
   const direct = (env["MSYS2_INSTALLER_URL"] ?? "").trim();
-  if (direct !== "") {
-    return { urls: [direct], note: "安装包地址来自环境变量 MSYS2_INSTALLER_URL（只用这一个源）" };
-  }
   const mirror = (env["MSYS2_MIRROR"] ?? "").trim().replace(/\/+$/u, "");
-  if (mirror !== "") {
-    const urls = /\.(exe|7z|zip)$/iu.test(mirror)
-      ? [mirror]
-      : INSTALLER_NAMES.map((name) => mirror + "/" + name);
+  const expected = normalizeSha256(env["MSYS2_INSTALLER_SHA256"]);
+  if (direct !== "" || mirror !== "") {
+    if (expected === "") {
+      return {
+        urls: [],
+        sha256: "",
+        note: "安装包地址来自环境变量覆盖，但缺少有效哈希",
+        error:
+          "环境变量覆盖了安装包地址，但没有同时给 MSYS2_INSTALLER_SHA256。" +
+          "请把官方包（或你镜像里那份）的 64 位 sha256 一起写上；" +
+          "插件不会执行一个无法校验来源的安装包。官方包哈希见 MSYS2_INSTALLER_SHA256 的默认值说明。",
+      };
+    }
+    if (direct !== "" && !isHttpUrl(direct)) {
+      return {
+        urls: [],
+        sha256: expected,
+        note: "安装包地址来自环境变量 MSYS2_INSTALLER_URL",
+        error: "MSYS2_INSTALLER_URL 必须是 http(s) 地址：" + direct,
+      };
+    }
+    if (direct === "" && !isHttpUrl(mirror)) {
+      return {
+        urls: [],
+        sha256: expected,
+        note: "安装包目录来自环境变量 MSYS2_MIRROR",
+        error: "MSYS2_MIRROR 必须是 http(s) 地址：" + mirror,
+      };
+    }
+    const urls = direct !== ""
+      ? [direct]
+      : /\.(exe|7z|zip)$/iu.test(mirror)
+        ? [mirror]
+        : [mirror + "/" + INSTALLER_FILE];
     return {
       urls,
-      note: "安装包地址来自环境变量 MSYS2_MIRROR（镜像）；官方源是 " + MSYS2_INSTALLER_URL,
+      sha256: expected,
+      note:
+        "安装包地址来自环境变量" +
+        (direct !== "" ? " MSYS2_INSTALLER_URL" : " MSYS2_MIRROR") +
+        "（sha256 " +
+        expected.slice(0, 12) +
+        "…，内容必须与官方固定版本一致）",
+      error: "",
     };
   }
-  const urls: string[] = [];
-  for (const source of INSTALLER_MIRRORS) {
-    for (const name of INSTALLER_NAMES) urls.push(source.base + "/" + name);
-  }
-  for (const name of INSTALLER_NAMES) urls.push(INSTALLER_GITHUB + "/" + name);
   return {
-    urls,
+    urls: [MSYS2_INSTALLER_URL],
+    sha256: MSYS2_INSTALLER_SHA256,
     note:
-      "安装包按 " +
-      INSTALLER_MIRRORS.map((source) => source.label).join(" → ") +
-      " → GitHub 依次尝试，前一个源不通就换下一个（每个源两个文件名）",
+      "安装包固定为官方 release " +
+      MSYS2_INSTALLER_VERSION +
+      "（sha256 " +
+      MSYS2_INSTALLER_SHA256.slice(0, 12) +
+      "…，下载后逐字节校验；要换版本必须同时改代码里的版本/哈希常量）",
+    error: "",
   };
 }
 
@@ -438,8 +536,8 @@ function stateDir(env: Record<string, string | undefined>): string {
 }
 
 function cacheFilePath(env: Record<string, string | undefined>): string {
-  // 固定文件名：换镜像/换版本不会堆一堆包体；要换版本就自己删这个文件。
-  return stateDir(env) + "/msys2-latest.sfx.exe";
+  // 版本进文件名：换版本不会把旧包当新包；同一版本的缓存只有一份。
+  return stateDir(env) + "/msys2-" + MSYS2_INSTALLER_VERSION + ".sfx.exe";
 }
 
 /* --------------------------- pacman 镜像（F3b） --------------------------- */
@@ -1495,15 +1593,16 @@ async function curlOnce(
 }
 
 /**
- * 按候选链下载安装包（F3a）：一个源不通就换下一个，全都不通才报错。
+ * 下载安装包并校验（P0-1）：一个源不通就换下一个，下载成功还要 sha256 完全一致才算数。
  *
- * 换源时**一定从零开始**（先删 .part）：镜像与 GitHub 的包体字节数不同（同步时点不同），
+ * 换源时**一定从零开始**（先删 .part）：不同源的包体字节数可能不同，
  * 把 A 源的前半段接在 B 源的后半段上，拼出来的 exe 一定解不开。
  * 同一个源内部的续传是安全的：curl -C - 续的是同一条线路上的同一个文件。
  */
 async function downloadInstaller(
   subprocess: SubprocessService,
   urls: readonly string[],
+  expectedSha256: string,
   partPath: string,
   cacheDir: string,
   request: Msys2InstallRequest,
@@ -1542,13 +1641,10 @@ async function downloadInstaller(
       removeFileQuietly(partPath);
       continue;
     }
-    if (bytes < MIN_INSTALLER_BYTES) {
-      attempts.push(installerSourceLabel(url) + " → 只下到 " + formatBytes(bytes) + "（小于 " + formatBytes(MIN_INSTALLER_BYTES) + "，像半截文件或错误页）");
-      removeFileQuietly(partPath);
-      continue;
-    }
-    if (!looksLikeExecutable(partPath)) {
-      attempts.push(installerSourceLabel(url) + " → 下回来的开头不是 MZ（不是 exe）");
+    // 下载完成还不够：体量/MZ 只挡半截文件与错误页，真正的内容完整性靠 sha256。
+    const check = checkInstallerFile(partPath, expectedSha256);
+    if (!check.ok) {
+      attempts.push(installerSourceLabel(url) + " → " + check.reason);
       removeFileQuietly(partPath);
       continue;
     }
@@ -1573,26 +1669,61 @@ export async function planOrInstallMsys2(
       : [...DEFAULT_MSYS2_PACKAGES],
   );
   const installer = resolveInstallerUrls(env);
-  // 计划卡片上只能写一个地址：写候选链的第一个（真装时按链逐个试）。
-  const primaryUrl = installer.urls[0] ?? MSYS2_INSTALLER_URL;
-  const cachePath = cacheFilePath(env);
-  // F3d：缓存只认「MZ 头 + ≥40 MB」。半截文件被当成已下好，解压就会永远失败。
-  const cachedBytes = cachedInstallerBytes(cachePath);
-  const cachedOk = cachedBytes > 0;
   const msys64 = target.msys64;
   const binDir = msys64 === "" ? "" : msys64 + "/ucrt64/bin";
   const parent = msys64 === "" ? "" : toPosix(dirname(msys64));
+  const steps = makeSteps();
+
+  // 环境变量覆盖缺哈希时，一秒钟都不往下走：否则会退回默认源，让用户以为自己设的镜像生效了。
+  if (installer.error !== "") {
+    const downloadStep = stepOf(steps, "download");
+    setStep(downloadStep, "failed", installer.error);
+    skipAfter(steps, "download", "安装包配置有误，未执行");
+    return {
+      ok: false,
+      mode: request.mode,
+      needsDecision: "",
+      msys64,
+      resolvedVia: target.via,
+      binDirs: binDir === "" ? [] : [binDir],
+      packages,
+      steps,
+      download: { url: "", bytes: 0, cached: false },
+      path: { done: false, changed: false, before: "", after: "", backup: "", error: "" },
+      config: { path: configRead.path, written: false, error: "" },
+      verify: { ok: false, tools: [] },
+      message: "安装包配置有误：" + installer.error,
+      nextStep: "设置 MSYS2_INSTALLER_SHA256（或去掉 MSYS2_INSTALLER_URL / MSYS2_MIRROR，使用官方固定版本）后重试。",
+      notes: [installer.note],
+      durationMs: Date.now() - started,
+    };
+  }
+
+  // 计划卡片上只能写一个地址：默认只有一个固定版本的官方 release。
+  const primaryUrl = installer.urls[0] ?? MSYS2_INSTALLER_URL;
+  const cachePath = cacheFilePath(env);
+  const cached = cachedInstallerCheck(cachePath, installer.sha256);
+  const cachedBytes = cached.ok ? cached.bytes : 0;
+  const cachedOk = cached.ok;
   let download: Msys2InstallDownload = {
     url: primaryUrl,
     bytes: cachedOk ? cachedBytes : MSYS2_INSTALLER_BYTES,
     cached: cachedOk,
   };
 
-  const steps = makeSteps();
   const userPath = await readUserPath(subprocess, request.signal);
   let pathState = planPathState(userPath, binDir, request.writePath);
 
   const notes: string[] = [];
+  if (!cachedOk && cached.reason !== "没有缓存") {
+    notes.push(
+      "⚠ 已有缓存 " +
+        cachePath +
+        " 不可用：" +
+        cached.reason +
+        "。会重新下载；原文件不删，留给你自己判断。",
+    );
+  }
   if (target.warning !== "") notes.push("⚠ " + target.warning);
   const warningPrefix = target.warning === "" ? "" : "⚠ " + target.warning + "；";
   notes.push(
@@ -1938,7 +2069,7 @@ export async function planOrInstallMsys2(
       skipAfter(steps, "download", "缓存目录不可用，未执行");
       return finish(false, "没能下载安装包：" + reason, "换一个可写目录后重试。");
     }
-    const fetched = await downloadInstaller(subprocess, installer.urls, partPath, cacheDir, request, timeoutMs);
+    const fetched = await downloadInstaller(subprocess, installer.urls, installer.sha256, partPath, cacheDir, request, timeoutMs);
     if (isAborted(request.signal)) return abortRest(downloadStep);
     if (!fetched.ok) {
       const reason =
@@ -1949,14 +2080,16 @@ export async function planOrInstallMsys2(
       skipAfter(steps, "download", "安装包没下来，未执行");
       return finish(
         false,
-        "下载安装包失败：试过 " +
+        "下载安装包失败：固定版本 " +
+          MSYS2_INSTALLER_VERSION +
+          " 的官方安装包没下来（试过 " +
           String(installer.urls.length) +
-          " 个候选源（国内镜像优先，GitHub 兜底）都不通。",
+          " 个候选）。",
         "逐源原因：\n  " +
           fetched.attempts.join("\n  ") +
           "\n可以自己下到 " +
           cachePath +
-          " 再重试（有效缓存会直接复用，不重新下载）；内网/代理可在 MSYS2_MIRROR 或 MSYS2_INSTALLER_URL 里指定一个能用的源。",
+          " 再重试（哈希校验通过才会复用，不重新下载）；内网/代理可用 MSYS2_INSTALLER_URL 指向镜像，但必须同时设置 MSYS2_INSTALLER_SHA256。",
       );
     }
     try {
@@ -1982,6 +2115,17 @@ export async function planOrInstallMsys2(
   if (alreadyInstalled) {
     setStep(extractStep, "skipped", "目标里已有 MSYS2，跳过解压");
   } else {
+    // 执行前最后一道闸：缓存可能是上次留下的半截文件，也可能是别人塞进来的 exe。
+    const verified = checkInstallerFile(cachePath, installer.sha256);
+    if (!verified.ok) {
+      setStep(extractStep, "failed", "安装包校验未通过，未执行");
+      skipAfter(steps, "extract", "安装包校验未通过，未执行");
+      return finish(
+        false,
+        "安装包校验未通过：" + verified.reason,
+        "删掉 " + cachePath + " 后重试（或手动放一份哈希匹配的安装包到这个路径）。",
+      );
+    }
     const extracted = await extractInstaller(subprocess, cachePath, msys64, request, timeoutMs);
     if (extracted.cancelled) {
       // 取消 ≠ 失败：什么都没坏，安装包还在缓存里，暂存目录也留着（下次进来先清掉重来）。

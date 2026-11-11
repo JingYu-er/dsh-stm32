@@ -70,9 +70,9 @@ git clone https://github.com/JingYu-er/dsh-stm32.git
 cd dsh-stm32
 npm install --no-audit --no-fund   # 只装 typescript
 npm run build                       # tsc -> lib/（提交前必须跑）
-npm test                            # 可选：937 个离线用例、59 个套件，不需要板子
+npm test                            # 可选：939 个离线用例、59 个套件，不需要板子
 npm run test:pack                   # 打包 tarball → 解包 → 用解包出来的 lib 真建一次寄存器工程
-npm run test:size                   # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
+npm run test:size                   # 包体护栏：tarball ≤3.9 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 挂进 dsh 的 profile——**改代码时必须用 `link:`，不要用 `file:`**：
@@ -161,7 +161,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 作用 |
 | --- | --- |
 | `stm32_doctor` | 探测 gcc / gdb / openocd / cmake / ninja / CubeMX / JRE 的路径与版本；缺什么会写清影响（编译不了 / 烧不了 / 调不了 / 建不了工程）、推荐装法（含可粘贴的 pacman / winget 命令）、装完自检命令，并给 `capabilities`（四项能力是否可用）与 `recommendations`（安装顺序 + 要不要我帮你装）。只读、可重复调 |
-| `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。已装 msys64 时只补包。不做卸载 |
+| `stm32_env_install` | 缺工具链时的一条龙：`dryRun`（默认）只给计划——官方 MSYS2 安装包多大、要装哪 5 个包、PATH 会加哪一条；`dryRun: false` + `confirm: true` 才真干活（下载 → 校验体量/MZ/sha256 → 装 MSYS2 → `pacman -S` → 写 **用户级** PATH → 自检 → 写 `~/.dsh-stm32/config.json`）。安装包固定在稳定 release `2026-09-27` 并钉 sha256；自定义源必须自带哈希，校验不过不会执行。已装 msys64 时只补包。不做卸载 |
 | `stm32_download` | 只下载安装包，不执行安装器：`component: "jlink"` 从 SEGGER 官方直链下载并校验 SHA256（8.18.0）；`"cubemx"` / `"cubeprogrammer"` 返回 ST 官方下载页（要 myST 登录/许可），也可把已下载的 `file` 传进来计算 SHA256（没有官方值时自己核对）。默认 `dryRun: true` 只出计划；真正下载/打开页面要 `dryRun: false` + `confirm: true`。不写注册表、不改 PATH、不请求管理员 |
 | `stm32_route_plan` | 动手前先把路线问清楚：`requirement` 必填（如「按键控制 LED，串口每秒打印一次状态」），返回 `verdict`（`register-ok` / `both-viable` / `hal-only` / `unclear`）、逐外设的 `halEffort`/`regEffort` 与 `advice`、两种写法的差别、落地的下一步、工具链缺件（每条标 `installability`：`auto` 可代装 / `manual` 只能人装）与手动安装指引全文。不做通用对照表——结论只对当前需求成立 |
 | `stm32_doctor` | 一次回答三件事：工具链齐不齐、探针被谁占（`openocd.exe` / gdb 进程 / 3333 端口）、这个工程能不能烧 |
@@ -344,10 +344,11 @@ CubeMX 装好也不一定有**这一颗芯片**的固件包（安装包里不带
 回退通道（GitHub 拼包）：
 
 - 下什么：`stm32f1xx-hal-driver`（HAL 驱动，BSD-3-Clause）+ `cmsis-device-f1`（设备头与启动文件，Apache-2.0）+ 5 个 CMSIS 内核头，合计约 2 MB、几秒钟；
+- 完整性：每个归档只走 `codeload.github.com/<repo>/tar.gz/refs/heads/<ref>` 一条源，归档与每个内核头都在 `src/data/firmware-pins.ts` 钉了 sha256（维护脚本 `scripts/firmware/pin-firmware.mjs` 重算）；下载内容对不上哈希就整包拒收，不会解压落盘。上游 master 挪动文件时，报错会给出期望/实际哈希；
 - 为什么不能直接解压 `STM32CubeF1` 的源码包：它的 HAL 与 CMSIS 设备目录是 **git 子模块**，tarball 里是空目录——解压出来编译必挂（缺 startup、缺 HAL 源文件）；
 - 装到哪：默认 `<CubeMX 根>/dsh-firmware/<包名>`（与 `Repository` 并列、插件自建，不动官方包）；这个根写不进去才退回用户缓存目录。**别往 `Repository` 里塞自造版本号**——实测 CubeMX 认不出那个版本名，不报错地退回它自己认识的包（生成「成功」，HAL 却是旧版）；
 - 生成时怎么用上它：`stm32_generate` 按 `.ioc` 的 `ProjectManager.FirmwarePackage` 找包（`Repository` 与 `<CubeMX 根>/dsh-firmware` 都找），并在 CubeMX 脚本里发 `project setCustomFWPath <包目录>`——这是唯一被实测有效的机制，不往 `.ioc` 里写绝对路径；
-- 组装包与官方包同构：自写 6 行 `package.xml`（版本串 `FW.<族>.<x.y.z>`）与 `THIRD_PARTY_NOTICES.md`，**不含任何哈希/清单**——CubeMX 也不校验来源（已实测：用 `setCustomFWPath` 指过去生成，拷出的 HAL 源文件逐字节来自我们目录）；
+- 组装包与官方包同构：自写 6 行 `package.xml`（版本串 `FW.<族>.<x.y.z>`）与 `THIRD_PARTY_NOTICES.md`；`package.xml` 里不写哈希清单（CubeMX 不校验来源），完整性由下载阶段逐文件 sha256 保证——已实测：用 `setCustomFWPath` 指过去生成，拷出的 HAL 源文件逐字节来自我们目录；
 - 但「生成成功」不能当验收：`.ioc` 点名了不存在的包时 CubeMX 不报错、退出码 0、只是不拷 HAL。所以装完必须过五条判据（内核头 / HAL Inc / HAL Src / 设备头 / `startup_*.s`），插件装完自己就验一遍。
 
 ### 安装包下载（只下载，不安装）
@@ -372,6 +373,9 @@ CubeMX 装好也不一定有**这一颗芯片**的固件包（安装包里不带
 | `DSH_STM32_NO_CONFIG` | 设为 `1` / `true` 完全不读配置文件（只想走环境变量时） | 不设 = 读 |
 | `DSH_STM32_CACHE` | 下载缓存根目录（寄存器版模板等），支持 `~` | `%LOCALAPPDATA%\dsh-stm32\cache` |
 | `DSH_STM32_DOWNLOADS` | `stm32_download` 的安装包下载目录，支持 `~` | `%LOCALAPPDATA%\dsh-stm32\downloads` |
+| `MSYS2_INSTALLER_URL` | 覆盖 `stm32_env_install` 的安装包地址（完整 exe URL）；**必须同时设 `MSYS2_INSTALLER_SHA256`**，否则拒绝安装 | 官方固定 release `2026-09-27` |
+| `MSYS2_MIRROR` | 覆盖安装包目录（自动拼 `msys2-base-x86_64-20260927.sfx.exe`）；同样必须带哈希 | 无 |
+| `MSYS2_INSTALLER_SHA256` | 覆盖源的 sha256（64 位十六进制，可带 `sha256:` 前缀） | 官方包哈希 |
 | `DSH_STM32_E2E_PROJECT` | 真机 e2e 用的工程（含 `openocd.cfg` 与 `build/Debug/*.elf`） | 无 |
 | `DSH_STM32_E2E_ROOT` | e2e 临时副本目录 | 系统临时目录 |
 
@@ -452,14 +456,14 @@ C0 / U0 这两族 openocd 0.12 里没有官方脚本，插件自带一份适配�
 
 ```powershell
 npm run build            # tsc -> lib/（lib/ 入库，改完 src 必须重建后一起提交）
-npm test                 # 59 个离线套件、937 个用例；不需要板子、CubeMX、工具链
+npm test                 # 59 个离线套件、939 个用例；不需要板子、CubeMX、工具链
 npm run test:pack        # 把包打成 tarball、解开、用解包出来的 lib 真建一次寄存器工程
-npm run test:size        # 包体护栏：tarball ≤1.2 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
+npm run test:size        # 包体护栏：tarball ≤3.9 MB、templates 里的运行时资产(.ioc/.xml/.ld/.json/.cfg)≤40 KB、包内不许二进制/图表
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑 `npm ci → build → 检查提交的 lib/ 是否与 src/ 同步 → npm test → test:pack → test:size`（windows-latest）。
 
-GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **937 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
+GitHub runner 上没有 msys64 / CubeMX，所以有两条依赖真固件包的脚手架用例会 skip：CI 上会 skip 那 2 条，开发机上是 **939 pass / 0 fail** 全跑。离线套件只读仓库自带的 [`test/fixtures/`](test/fixtures/README.md)；会话类用例用 `fakeBinDirs()` 在临时目录造空文件占位的 openocd / gdb，不依赖本机装了什么。
 
 ### 发布形态三分法（先把东西放哪想清楚，再写包）
 
