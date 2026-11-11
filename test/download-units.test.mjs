@@ -48,6 +48,30 @@ test("J-Link 计划是直链 + 官方 SHA256；ST 两件是 manual", () => {
   assert.match(prg.page, /stm32cubeprog/u);
 });
 
+test("J-Link 镜像覆盖必须同时给 URL 和 SHA256，否则回默认官方源", () => {
+  const fallback = planDownload("jlink", {
+    env: { DSH_STM32_JLINK_URL: "https://mirror.example/JLink.exe" },
+  });
+  assert.match(fallback.url, /files\.nordicsemi\.com/u, "只给 URL 不收：没有哈希的 exe 不能下");
+  assert.equal(fallback.expectedSha256.length, 64);
+
+  const hash = sha("mirror-installer");
+  const pinned = planDownload("jlink", {
+    env: {
+      DSH_STM32_JLINK_URL: "https://mirror.example/tools/JLink_Windows_V818.exe",
+      DSH_STM32_JLINK_SHA256: hash,
+    },
+  });
+  assert.equal(pinned.url, "https://mirror.example/tools/JLink_Windows_V818.exe");
+  assert.equal(pinned.expectedSha256, hash);
+  assert.match(pinned.targetPath, /JLink_Windows_V818\.exe$/u);
+
+  const badHash = planDownload("jlink", {
+    env: { DSH_STM32_JLINK_URL: "https://mirror.example/JLink.exe", DSH_STM32_JLINK_SHA256: "not-a-hash" },
+  });
+  assert.match(badHash.url, /files\.nordicsemi\.com/u, "哈希格式不对也回默认源");
+});
+
 test("下载目录：DSH_STM32_DOWNLOADS 覆盖", () => {
   const info = downloadRootInfo({ DSH_STM32_DOWNLOADS: "D:/tmp/x" });
   assert.equal(info.origin, "DSH_STM32_DOWNLOADS");

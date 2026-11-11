@@ -68,6 +68,17 @@ const PACMAN_QUERY_TIMEOUT_MS = 60_000;
 const WINDOWS = process.platform === "win32";
 
 /**
+ * 系统程序一律按绝对路径调（P1-6）：Windows 的 CreateProcess 会先找当前目录、
+ * 再按 PATH 找，裸 reg.exe / curl.exe 等于让"当前目录里恰好有个同名文件"劫持安装流程。
+ * 找不到就返回 System32 下的绝对路径让调用直接失败，绝不退回裸名字。
+ */
+function systemExe(name: string): string {
+  if (!WINDOWS) return name;
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+  return join(root, "System32", name);
+}
+
+/**
  * 固定的 MSYS2 安装包版本（P0-1）。
  *
  * 以前用 releases/latest 的滚动资产，再靠「MZ 头 + ≥40 MB」判断真伪：镜像和 GitHub 的
@@ -817,10 +828,12 @@ async function queryUserPathBytes(
   }
   const dump = join(dir, "dump.txt");
   try {
-    // 这一行故意不带任何引号、也不用绝对路径（cwd 就是临时目录）：cmd /c 对 \" 的转义规则
-    // 很容易踩坑，而 HKCU\Environment 与 dump.txt 都不含空格，省事且最不容易出错。
+    // reg.exe 用绝对路径（P1-6），外层再加一对引号防止 SystemRoot 含空格；
+    // HKCU\Environment 与 dump.txt 不含空格，重定向部分保持裸写。
+    const cmdExe = systemExe("cmd.exe");
+    const regExe = systemExe("reg.exe");
     const outcome = await runCapture(subprocess, {
-      argv: ["cmd.exe", "/d", "/s", "/c", "reg.exe query " + PATH_KEY + " /v Path > dump.txt 2>&1"],
+      argv: [cmdExe, "/d", "/s", "/c", '"' + regExe + '" query ' + PATH_KEY + " /v Path > dump.txt 2>&1"],
       cwd: dir,
       timeoutMs: 10_000,
       ...(signal === undefined ? {} : { signal }),
@@ -886,6 +899,23 @@ function pathContains(current: UserPathRead, entry: string): boolean {
   const key = toPosix(entry).toLowerCase();
   if (key === "") return false;
   return current.entries.some((item) => item.toLowerCase() === key);
+}
+
+/**
+ * 写注册表之后把这一条也补进当前进程的 PATH。
+ *
+ * HKCU\Environment 只影响"以后新开的进程"，DSH 自己已经启动，spawn 子进程时仍拿旧 PATH；
+ * 插件自己按绝对路径找工具所以不受影响，但用户在同一会话里跑的命令、以及需要裸命令名的
+ * 子进程会看不到刚装的 bin。只补当前进程，不广播到系统其他进程。
+ */
+function broadcastPathEntry(entry: string): void {
+  const key = process.platform === "win32" ? "Path" : "PATH";
+  const raw = process.env[key] ?? process.env.PATH ?? "";
+  const current: UserPathRead = { raw, entries: splitList(raw), found: raw !== "", readable: true, error: "" };
+  if (pathContains(current, entry)) return;
+  const next = composeUserPath(raw, entry);
+  process.env.PATH = next;
+  if (process.platform === "win32") process.env.Path = next;
 }
 
 /** 读不到时的兜底说明：给可手动执行的写法，但要求用户自己先确认旧值（我们读不到就无法替他拼）。 */
@@ -984,7 +1014,7 @@ async function applyUserPath(
   }
   state.backup = backup.path;
   const outcome = await runCapture(subprocess, {
-    argv: ["reg.exe", "add", PATH_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", state.after, "/f"],
+    argv: [systemExe("reg.exe"), "add", PATH_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", state.after, "/f"],
     timeoutMs: 15_000,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   });
@@ -1002,6 +1032,7 @@ async function applyUserPath(
   }
   state.done = true;
   state.changed = true;
+  broadcastPathEntry(entry);
   return state;
 }
 
@@ -1567,7 +1598,7 @@ async function curlOnce(
   signal: AbortSignal | undefined,
 ): Promise<RunOutcome> {
   const argv = [
-    WINDOWS ? "curl.exe" : "curl",
+    WINDOWS ? systemExe("curl.exe") : "curl",
     "-L",
     "--fail",
     "--retry",

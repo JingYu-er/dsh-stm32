@@ -5801,3 +5801,65 @@ t8 由 impl 执行（不是寄存器路线的实现者）：只做只读复验�
 - **哈希要绑到具体 URL 形态**：同一 commit 的 codeload 与 api tarball 字节不同；先砍掉多余链路，再谈一个哈希。
 - **族间清单不能照抄**：F7 没有 cachel1_armv7.h，照 H7 抄会让整个拼包 404；这类差异要靠实测 URL/文件，不靠「都是 CM7」推断。
 - **校验点要贴着执行点**：下载后校验只证明「下载那一刻是对的」；解压/执行前再算一次，才覆盖缓存被替换的窗口。
+
+## §91 P1/P2 加固：流式校验、原子固件安装、doctor 能力诚实化（2026-11）
+
+用户 m06797 要求把供应链审计剩下的 P1/P2 一次做完。P0（MSYS2 固定版本 + 固件归档哈希）已在 §90 收口；这一节处理的是「哈希对了之后，内存、落盘、并发和诊断仍然会说假话」的部分。
+
+### 一、官方 zip：不再把 388 MB 整包读进内存
+
+- 原实现 `verifyZipCrc(file)` 用 `readFileSync(file)` 读整个 WBA 官方包（388,603,994 B），再在 Buffer 里找 EOCD、解析中央目录、逐条 inflate。峰值内存 = 压缩包 + 单条解压，CI 和低内存机器都容易被打爆。
+- 改为 `openSync` + 定位读：只读尾部最多 65,558 B 找 EOCD，按 EOCD 的 `cdSize` 读中央目录，再按每条本地头 + `compressedSize` 读该条压缩数据；`inflateRawSync(raw, { maxOutputLength: ZIP_MAX_ENTRY_BYTES })`（256 MB）限制单条炸弹。校验 `cdOffset + cdSize <= size`、本地头/数据不越界，`finally` 关闭 fd。
+- 内存峰值从「整包大小」降到「最大单条」，API 仍是同步函数，调用点与测试不用改。
+- 教训：**流式不等于异步**。只要按偏移读，同步 API 也能把峰值压到单条；先改 IO 形态，再谈要不要改调用约定。
+
+### 二、tar：先限流再解压，并补流式解包
+
+- 同步 `extractTarGz` 原来先 `gunzipSync(archive)` 全量解压，再在 planned 累加时检查 `maxBytes`——压缩炸弹在检查之前就已经把内存吃掉了。现在 `gunzipSync(archive, { maxOutputLength: maxBytes + TAR_OVERHEAD_ALLOWANCE })`，超限返回「解包后超过 N MiB，已中止（防止压缩炸弹）」。64 MiB 的 allowance 只给 tar 头/对齐，不给文件内容。
+- 固件安装改走新的 `extractTarGzFile(archivePath, destRoot, options)`：`createReadStream → createGunzip → Transform` 计数，超过 `maxBytes` 立刻 `callback(Error("TAR_TOO_LARGE"))`；解出的 tar 落到 `mkdtemp(tmpdir()/dsh-tar-)` 临时文件，第一遍只读头/扩展头记录 `{ mapped, offset, bytes }`，第二遍按 1 MiB 分块 `readSync/writeSync` 落盘。路径安全、pax x/g、GNU L/K、`stripComponents`、`mapPath`、`maxBytes` 语义与同步版一致，`finally` 删临时目录。
+- 为什么还要临时 tar：tar 的扩展头可能出现在文件数据之前，必须先完整走一遍头才能知道每个文件从哪开始；把解压流先落成临时 tar，第二遍就能随机读写，不必把全部文件内容留在内存里。
+- 新增 `test/tar-units.test.mjs` 4 条：正常解包 + map、可疑路径整次失败且目标目录不存在、解压阶段就卡上限、截断失败。已登记进 `test/run-units.mjs`。
+
+### 三、固件安装：锁 + 暂存 + 原子换入
+
+- 原来 `installFirmware` 先 `mkdirSync(decision.dir)`，再直接 `extractTarGz(buffer, decision.dir)`，最后 `verifyFirmwarePackage(decision.dir)`。中途失败会留下半截包；两个进程同时装会互相覆盖；旧包也会在验证前就被新文件污染。
+- 现在：
+  1. `acquireInstallLock(dir)` 在 `<dir>.dsh-install.lock` 上用 `openSync(..., "wx")` 写 `{ pid, startedAt }`；`EEXIST` 时读 pid，`process.kill(pid, 0)` 判活，`ESRCH` 或超过 6 小时按陈旧锁删除重试；活锁直接返回「另一个进程正在装同一个固件包（pid N）」。
+  2. 下载归档到 `parent/.dsh-download-<pid>-<ts>`，内核头与解包内容进 `tempDir/package`（staging）；`package.xml` / `NOTICES` 也写在 staging。
+  3. staging 通过 `verifyFirmwarePackage` 后，旧目录 rename 成 `.dsh-replaced-<pid>-<ts>`，staging rename 成正式目录；换入后再验一次，失败删新目录并还原旧目录；成功后删备份。`finally` 删临时目录并释放锁。
+- 结果：失败不动旧包、不留半截包；成功是整目录替换，旧 `stale.txt` 不会残留。`test/firmware-units.test.mjs` 新增 3 条（失败保留旧目录、成功整目录替换、活锁不联网直接拒绝），套件 50 pass。
+- 教训：**「先写目标目录再校验」无法靠 finally 补救**。回滚能力来自「旧目录还在 + 新目录可丢弃」，所以必须先 staging 再 rename。
+
+### 四、下载文案与系统程序路径
+
+- `stm32_download` 在 `expectedSha256 === ""` 时 `verified` 本来就是 `false`，文案却写「安装包校验完成」。改为：有哈希时「安装包校验完成（SHA256 与官方值一致）」；没有官方哈希时「安装包已检查（无官方哈希可对比，verified=false）」。**字段和文案必须说同一件事**。
+- `systemExe(name)` 在 Windows 上固定解析 `%SystemRoot%/System32/<name>`（找不到也返回绝对路径，不退回裸名字），`cmd.exe` / `reg.exe` / `curl.exe` 三处调用改用它。原先裸命令会先命中当前目录或用户 PATH 上的同名 exe，属于典型的二进制劫持面。
+- `openOfficialPage` 原来 `spawn` 完立即 `return true`；改为 `Promise<boolean>`，绝对 `System32/cmd.exe`，等 `exit code === 0`，`error` / 3 秒超时都返回 false。虽然 `cmd /c start` 退出 0 仍不能 100% 证明浏览器真的打开了页面，但至少不再把「进程都没起来」报成「已打开」。
+- MSYS2 写用户 PATH 成功后，`broadcastPathEntry(entry)` 把新条目补进当前进程的 `process.env.PATH/Path`（去重）。此前只写注册表，当前 dsh 进程仍看不到新工具，用户必须重启。
+
+### 五、doctor：四项能力拆开，按实见探针说真话
+
+- `Capabilities` 仍是 build / flash / debug / generate，但新增 `flashOpenocd` / `flashCubeProgrammer` / `debugOpenocd`：
+  - `flash = openocd || cubeprogrammer`
+  - `debug = openocd && gdb`
+- `probe.ts` 里 gdb / openocd 不再 `required: true`：只编译、只烧录的用户不该被「缺 gdb」拦下；缺失由 `recommendationsOf` 按能力说明影响。
+- 只有 CubeProgrammer 时，推荐语明确写「只能走 CubeProgrammer（仅 ST-LINK，不能调试）」，不再笼统说「烧录还缺 openocd」。
+- 新增 `openocdTargetProblem(openocdPath, chooseOpenocdTarget(familyProfileOf(cpn)))`：优先看绝对 target 是否存在；相对 target 从 openocd 可执行文件的 `../share/openocd/scripts`、`../../share/openocd/scripts`、`./scripts` 找 scripts 根，再查 `target/<cfg>`。找不到 scripts 根时返回空（未知，不误报）；确实缺 target 时，有 CubeProgrammer 记 note，否则 blocker。
+- USB 正常时列出实见探针类型；J-Link 驱动错误时明确写「必须装 SEGGER USB 驱动，只装 OpenOCD 不够」。
+- 自动发现 `looksLikeBinDir` 从 gcc/openocd/cmake 扩到 `arm-none-eabi-gcc` / `arm-none-eabi-gdb` / `gdb-multiarch` / `openocd` / `cmake` / `ninja`，只补了 gdb 或 ninja 的 MSYS2 目录不再漏掉。
+- J-Link 仍只有一条官方 8.18.0 直链；新增 `DSH_STM32_JLINK_URL` + `DSH_STM32_JLINK_SHA256` 成对覆盖，缺哈希或非法哈希直接回官方源，不引入不可校验镜像。
+
+### 六、验证
+
+- `npm run build` exit 0。
+- 全量 `node test/run-units.mjs`：**947 pass / 0 fail**（60 个套件；新增 tar 套件）。
+- `npm run test:pack` 全部通过；`npm run test:size` 包体 1825.2 KB / 272 文件 / 解包 15181.3 KB（上限 3906.3 KB）。
+- 新增/更新用例：tar 4 条、固件原子安装与锁 3 条、J-Link 镜像成对覆盖 1 条、gdb/ninja 自动发现断言、schema-guard 的 CubeProgrammer-only 能力矩阵。`install-units` 29 pass（reg.exe 改为绝对路径后，测试匹配器同步改成「reg.exe + 动作」）。
+- 真机 C031F6P6 与真串口仍未验（没有探针/串口设备）；J-Link 驱动、CubeProgrammer 烧录、ST 官网下载均未在真机复核。
+
+### 七、教训
+
+- **内存峰值要按「最大单条」设计，不是「平均文件」**：388 MB 的包能过测试，不代表 1 GB 的包能过；先改 IO 形态最省事。
+- **原子性靠 staging + rename，不靠 finally**：finally 只能清理，不能把已经写坏的旧包变回来。
+- **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
+- **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。

@@ -32,6 +32,9 @@ process.env.STM32_NO_DISCOVER = "1";
 delete process.env.STM32_BIN_DIRS;
 delete process.env.STM32_CUBEMX_ROOT;
 
+/** 引擎现在用 System32 绝对路径调 reg.exe（可能带引号），测试只认「reg.exe + 动作」。 */
+const isRegCall = (line, action) => new RegExp("reg\\.exe\"?\\s+" + action, "u").test(line);
+
 const PACKAGES = [
   "mingw-w64-ucrt-x86_64-arm-none-eabi-gcc",
   "mingw-w64-ucrt-x86_64-gdb-multiarch",
@@ -412,7 +415,7 @@ test("reg query 读不到（起不来/被拦）：不写 PATH、不拿空串备�
   const root = makeMsys64(join(dir, "msys64"));
   const subprocess = scriptedSubprocess((line) => {
     // 只让"读 PATH"失败。真实世界里这是被组策略 / EDR 拦住，或 reg.exe 根本起不来。
-    if (line.includes("reg.exe query")) throw new Error("reg.exe 被安全软件拦住");
+    if (isRegCall(line, "query")) throw new Error("reg.exe 被安全软件拦住");
     if (isPacmanQuery(line)) {
       return { exitCode: 0, stdout: PACKAGES.map((name) => name + " 1.0.0-1").join("\n") + "\n" };
     }
@@ -429,7 +432,7 @@ test("reg query 读不到（起不来/被拦）：不写 PATH、不拿空串备�
   assert.match(pathStep.detail, /不会写注册表/u);
   assert.match(report.message, /不会写注册表/u, "message 也要说清是「为安全起见没动」，不是「写坏了」");
   // 红线：一条 reg add 都不能有——读不到旧值时写进去就是把用户整条用户级 PATH 换掉。
-  assert.deepEqual(subprocess.calls.filter((line) => line.includes("reg.exe add")), []);
+  assert.deepEqual(subprocess.calls.filter((line) => isRegCall(line, "add")), []);
   assert.equal(report.path.changed, false);
   assert.equal(report.path.done, false);
   assert.equal(report.path.after, "", "读失败时不该编出一个 after 值");
@@ -456,7 +459,7 @@ test("用户变量里确实没有 Path：照常新建一条（危险的是「读
   const dir = tempDir("path-missing");
   const root = makeMsys64(join(dir, "msys64"));
   const subprocess = scriptedSubprocess((line) => {
-    if (line.includes("reg.exe query")) {
+    if (isRegCall(line, "query")) {
       // 中文 Windows 上 reg.exe 的原话；英文系统是 "The system was unable to find ..."。
       return { exitCode: 1, stdout: "", stderr: "错误: 系统找不到指定的注册表项或值。\r\n" };
     }
@@ -472,7 +475,7 @@ test("用户变量里确实没有 Path：照常新建一条（危险的是「读
   );
   const pathStep = stepOf(report, "path");
   assert.equal(pathStep.status, "done", pathStep.detail);
-  const adds = subprocess.calls.filter((line) => line.includes("reg.exe add"));
+  const adds = subprocess.calls.filter((line) => isRegCall(line, "add"));
   assert.equal(adds.length, 1, "只该写一次：计划阶段与真装各读一次，但只有真装那一次能写");
   const entry = root.replaceAll("/", "\\") + "\\ucrt64\\bin";
   assert.ok(
@@ -550,8 +553,8 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   // 一个最小的注册表模拟：query 照当前值吐 GBK 字节，add 改当前值。
   let currentPath = "C:/Users/张三/tools";
   const subprocess = scriptedSubprocess((line) => {
-    if (line.includes("reg.exe query")) return { exitCode: 0, stdout: "", stderr: "" };
-    if (line.includes("reg.exe add")) {
+    if (isRegCall(line, "query")) return { exitCode: 0, stdout: "", stderr: "" };
+    if (isRegCall(line, "add")) {
       const matched = / \/d ([\s\S]*) \/f$/u.exec(line);
       if (matched !== null) currentPath = matched[1];
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -564,7 +567,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   // 引擎用 cmd.exe 把 reg 输出重定向到临时目录里的 dump.txt；这里替它写 GBK 字节。
   const spawn = subprocess.spawn;
   subprocess.spawn = (spec) => {
-    if (spec.argv.join(" ").includes("reg.exe query")) {
+    if (isRegCall(spec.argv.join(" "), "query")) {
       writeFileSync(join(spec.cwd, "dump.txt"), gbkDump(currentPath));
     }
     return spawn(spec);
@@ -577,7 +580,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   const pathStep = stepOf(report, "path");
   assert.equal(pathStep.status, "done", pathStep.detail);
   assert.equal(report.path.changed, true);
-  const adds = subprocess.calls.filter((line) => line.includes("reg.exe add"));
+  const adds = subprocess.calls.filter((line) => isRegCall(line, "add"));
   assert.equal(adds.length, 1, "只有真装那一次能写注册表");
   assert.ok((adds[0] ?? "").includes("C:/Users/张三/tools"), "旧值里的中文必须原样带过去：" + (adds[0] ?? ""));
   assert.ok(!(adds[0] ?? "").includes("\u{FFFD}"), "乱码绝不能写回注册表");
@@ -594,7 +597,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   assert.equal(stepOf(again, "path").status, "done", stepOf(again, "path").detail);
   assert.equal(again.path.changed, false);
   assert.equal(
-    subprocess.calls.filter((line) => line.includes("reg.exe add")).length,
+    subprocess.calls.filter((line) => isRegCall(line, "add")).length,
     1,
     "第二次不该重复写 PATH",
   );

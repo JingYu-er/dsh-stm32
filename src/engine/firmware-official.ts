@@ -18,7 +18,7 @@
  *   例：STM32Cube_FW_F1 + 1.8.7 → stm32cube_fw_f1_v187.zip（56,220,914 B）
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -160,12 +160,34 @@ function hex32(value: number): string {
   return "0x" + (value >>> 0).toString(16).padStart(8, "0");
 }
 
+/** zip 结构签名与单条解压上限。 */
+const ZIP_EOCD_SIG = 0x06054b50;
+const ZIP_CENTRAL_SIG = 0x02014b50;
+const ZIP_LOCAL_SIG = 0x04034b50;
+/** 单条目解压上限：官方包里最大的 C 源远小于此，超过只可能是坏 zip / 压缩炸弹。 */
+const ZIP_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
+
+/** 从 fd 的指定位置读满 len 字节；短读返回实际读到的（调用方判错）。 */
+function readAt(fd: number, position: number, len: number): Buffer {
+  const out = Buffer.allocUnsafe(len);
+  let done = 0;
+  while (done < len) {
+    const n = readSync(fd, out, done, len - done, position + done);
+    if (n <= 0) break;
+    done += n;
+  }
+  return done === len ? out : out.subarray(0, done);
+}
+
 /**
  * 校验 zip：读中央目录 → 逐条解压 → 比 CRC-32。
  *
  * 为什么要全量比一遍而不是"能解开就行"：ST 的 zip 有 300+ MB（WBA 388,603,994 B），
  * 代理/断流/磁盘满都能留一个"结构完好但内容缺一块"的文件，swmgr 解包时才炸，
  * 而那时用户已经等了几分钟、包目录还是半截。这里先自证一遍，坏在哪一条也说得清。
+ *
+ * 内存边界：只把中央目录（通常几百 KB）读进内存，压缩数据按条目一条条 readSync +
+ * inflate；峰值≈最大单条，不再整包 388 MB 进 Buffer。
  */
 export function verifyZipCrc(file: string, onProgress?: (checked: number, total: number) => void): ZipCrcReport {
   const base: ZipCrcReport = { ok: false, entries: 0, checked: 0, mismatches: [], error: "" };
@@ -176,77 +198,102 @@ export function verifyZipCrc(file: string, onProgress?: (checked: number, total:
     return { ...base, error: "读不了 zip：" + (error instanceof Error ? error.message : String(error)) };
   }
   if (size < 22) return { ...base, error: "不是 zip：文件只有 " + String(size) + " B" };
-  const buffer = readFileSync(file);
 
-  // EOCD 在文件尾部，后面最多跟 65535 字节注释。
-  const tailStart = Math.max(0, size - 65558);
-  let eocd = -1;
-  for (let i = size - 22; i >= tailStart; i -= 1) {
-    if (buffer.readUInt32LE(i) === 0x06054b50) {
-      const commentLen = buffer.readUInt16LE(i + 20);
-      if (i + 22 + commentLen === size) {
-        eocd = i;
-        break;
+  let fd: number;
+  try {
+    fd = openSync(file, "r");
+  } catch (error) {
+    return { ...base, error: "打不开 zip：" + (error instanceof Error ? error.message : String(error)) };
+  }
+  try {
+    // EOCD 在文件尾部，后面最多跟 65535 字节注释。
+    const tailStart = Math.max(0, size - 65558);
+    const tail = readAt(fd, tailStart, size - tailStart);
+    let eocd = -1;
+    for (let i = tail.length - 22; i >= 0; i -= 1) {
+      if (tail.readUInt32LE(i) === ZIP_EOCD_SIG) {
+        const commentLen = tail.readUInt16LE(i + 20);
+        if (tailStart + i + 22 + commentLen === size) {
+          eocd = i;
+          break;
+        }
       }
     }
-  }
-  if (eocd === -1) return { ...base, error: "不是 zip：找不到中央目录结尾（EOCD）" };
+    if (eocd === -1) return { ...base, error: "不是 zip：找不到中央目录结尾（EOCD）" };
 
-  const total = buffer.readUInt16LE(eocd + 10);
-  const cdOffset = buffer.readUInt32LE(eocd + 16);
-  const mismatches: { name: string; expected: string; actual: string }[] = [];
-  let offset = cdOffset;
-  let checked = 0;
+    const total = tail.readUInt16LE(eocd + 10);
+    const cdSize = tail.readUInt32LE(eocd + 12);
+    const cdOffset = tail.readUInt32LE(eocd + 16);
+    if (cdOffset + cdSize > size) return { ...base, entries: total, error: "中央目录越界：offset " + String(cdOffset) + " + " + String(cdSize) + " > " + String(size) };
+    const cd = readAt(fd, cdOffset, cdSize);
+    if (cd.length !== cdSize) return { ...base, entries: total, error: "中央目录读不全：" + String(cd.length) + "/" + String(cdSize) + " B" };
 
-  for (let index = 0; index < total; index += 1) {
-    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
-      return { ...base, entries: total, checked, mismatches, error: "中央目录第 " + String(index + 1) + " 条签名不对" };
-    }
-    const method = buffer.readUInt16LE(offset + 10);
-    const expectedCrc = buffer.readUInt32LE(offset + 16);
-    const compressedSize = buffer.readUInt32LE(offset + 20);
-    const nameLen = buffer.readUInt16LE(offset + 28);
-    const extraLen = buffer.readUInt16LE(offset + 30);
-    const commentLen = buffer.readUInt16LE(offset + 32);
-    const localOffset = buffer.readUInt32LE(offset + 42);
-    const name = buffer.subarray(offset + 46, offset + 46 + nameLen).toString("utf8");
-    offset += 46 + nameLen + extraLen + commentLen;
+    const mismatches: { name: string; expected: string; actual: string }[] = [];
+    let offset = 0;
+    let checked = 0;
 
-    if (buffer.readUInt32LE(localOffset) !== 0x04034b50) {
-      return { ...base, entries: total, checked, mismatches, error: "条目 " + name + " 的本地头签名不对" };
-    }
-    const localNameLen = buffer.readUInt16LE(localOffset + 26);
-    const localExtraLen = buffer.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
-    const raw = buffer.subarray(dataStart, dataStart + compressedSize);
+    for (let index = 0; index < total; index += 1) {
+      if (offset + 46 > cd.length) return { ...base, entries: total, checked, mismatches, error: "中央目录第 " + String(index + 1) + " 条越界" };
+      if (cd.readUInt32LE(offset) !== ZIP_CENTRAL_SIG) {
+        return { ...base, entries: total, checked, mismatches, error: "中央目录第 " + String(index + 1) + " 条签名不对" };
+      }
+      const method = cd.readUInt16LE(offset + 10);
+      const expectedCrc = cd.readUInt32LE(offset + 16);
+      const compressedSize = cd.readUInt32LE(offset + 20);
+      const nameLen = cd.readUInt16LE(offset + 28);
+      const extraLen = cd.readUInt16LE(offset + 30);
+      const commentLen = cd.readUInt16LE(offset + 32);
+      const localOffset = cd.readUInt32LE(offset + 42);
+      const name = cd.subarray(offset + 46, offset + 46 + nameLen).toString("utf8");
+      offset += 46 + nameLen + extraLen + commentLen;
 
-    let data: Buffer;
-    try {
-      if (method === 0) data = raw;
-      else if (method === 8) data = inflateRawSync(raw);
-      else {
+      if (method !== 0 && method !== 8) {
         // 其它算法（bzip2/lzma）官方包不用；不认识的条目跳过而不是判坏。
         continue;
       }
-    } catch (error) {
-      return {
-        ...base,
-        entries: total,
-        checked,
-        mismatches,
-        error: "条目 " + name + " 解压失败：" + (error instanceof Error ? error.message : String(error)),
-      };
-    }
-    const actual = crc32Of(data);
-    checked += 1;
-    if (actual !== (expectedCrc >>> 0)) {
-      mismatches.push({ name, expected: hex32(expectedCrc), actual: hex32(actual) });
-      if (mismatches.length > 5) mismatches.pop();
-    }
-    if (onProgress !== undefined && checked % 200 === 0) onProgress(checked, total);
-  }
+      if (localOffset + 30 > size) return { ...base, entries: total, checked, mismatches, error: "条目 " + name + " 的本地头越界" };
+      const localHeader = readAt(fd, localOffset, 30);
+      if (localHeader.length !== 30 || localHeader.readUInt32LE(0) !== ZIP_LOCAL_SIG) {
+        return { ...base, entries: total, checked, mismatches, error: "条目 " + name + " 的本地头签名不对" };
+      }
+      const localNameLen = localHeader.readUInt16LE(26);
+      const localExtraLen = localHeader.readUInt16LE(28);
+      const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+      if (dataStart + compressedSize > size) {
+        return { ...base, entries: total, checked, mismatches, error: "条目 " + name + " 的数据越界：" + String(dataStart) + " + " + String(compressedSize) + " > " + String(size) };
+      }
 
-  return { ok: mismatches.length === 0, entries: total, checked, mismatches, error: "" };
+      // 先按 central 里的压缩长度读；解压上限再兜一层压缩炸弹。
+      const raw = readAt(fd, dataStart, compressedSize);
+      if (raw.length !== compressedSize) {
+        return { ...base, entries: total, checked, mismatches, error: "条目 " + name + " 的数据读不全：" + String(raw.length) + "/" + String(compressedSize) + " B" };
+      }
+
+      let data: Buffer;
+      try {
+        data = method === 0 ? raw : inflateRawSync(raw, { maxOutputLength: ZIP_MAX_ENTRY_BYTES });
+      } catch (error) {
+        return {
+          ...base,
+          entries: total,
+          checked,
+          mismatches,
+          error: "条目 " + name + " 解压失败：" + (error instanceof Error ? error.message : String(error)),
+        };
+      }
+      const actual = crc32Of(data);
+      checked += 1;
+      if (actual !== (expectedCrc >>> 0)) {
+        mismatches.push({ name, expected: hex32(expectedCrc), actual: hex32(actual) });
+        if (mismatches.length > 5) mismatches.pop();
+      }
+      if (onProgress !== undefined && checked % 200 === 0) onProgress(checked, total);
+    }
+
+    return { ok: mismatches.length === 0, entries: total, checked, mismatches, error: "" };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /* ------------------------------ 下载 ------------------------------ */

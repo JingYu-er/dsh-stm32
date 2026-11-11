@@ -160,20 +160,45 @@ function reportForPlan(plan: DownloadPlan, env: NodeJS.ProcessEnv): DownloadRepo
   };
 }
 
-/** 打开官方页；只在 Windows 上尝试，失败就返回 false，让用户手动点 URL。 */
-function openOfficialPage(url: string): boolean {
-  if (process.platform !== "win32") return false;
-  try {
-    const child = spawn("cmd.exe", ["/c", "start", "", url], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * 打开官方页；只在 Windows 上尝试。
+ *
+ * 不能 spawn 完就报成功：cmd 起得来但 start 失败（没有默认浏览器、URL handler 坏了）时
+ * 也要返回 false。这里等 exit code，最多等 3 秒；超时按失败算，让用户手动复制 URL。
+ */
+function openOfficialPage(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32") {
+      resolve(false);
+      return;
+    }
+    const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(ok);
+    };
+    let child;
+    try {
+      child = spawn(root + "\\System32\\cmd.exe", ["/c", "start", "", url], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch {
+      finish(false);
+      return;
+    }
+    timer = setTimeout(() => {
+      try { child.kill(); } catch { /* 已退出 */ }
+      finish(false);
+    }, 3000);
+    child.once("error", () => finish(false));
+    child.once("exit", (code) => finish(code === 0));
+  });
 }
 
 function formatReport(report: DownloadReport, message: string): string[] {
@@ -255,7 +280,13 @@ export function registerDownload(ctx: DshContext): void {
             ? "已计算 SHA256；这个组件没有官方哈希可对比。"
             : "SHA256 与官方值一致。");
           report.notes.push("没有复制、没有执行安装器；确认来源可信后自己双击安装。");
-          return { message: "安装包校验完成：" + info.path, report };
+          // 没有官方哈希时 verified 一定是 false：不能把"算了一遍 SHA256"说成"校验完成"。
+          return {
+            message: info.verified
+              ? "安装包校验完成（SHA256 与官方值一致）：" + info.path
+              : "安装包已检查（无官方哈希可对比，verified=false）：" + info.path,
+            report,
+          };
         } catch (error) {
           const err = error instanceof DownloadError ? error : new DownloadError("file-invalid", error instanceof Error ? error.message : String(error));
           report.ok = false;
@@ -283,7 +314,7 @@ export function registerDownload(ctx: DshContext): void {
 
       if (plan.mode === "manual") {
         const shouldOpen = args.openPage !== false;
-        report.opened = shouldOpen ? openOfficialPage(plan.page) : false;
+        report.opened = shouldOpen ? await openOfficialPage(plan.page) : false;
         report.notes.push(shouldOpen && report.opened
           ? "已打开官方下载页；登录 myST、接受许可后下载。"
           : "没有自动下载；请在浏览器打开官方页，或把已下载文件传给 file。");

@@ -470,7 +470,10 @@ test("stm32_doctor 的能力矩阵与安装建议（原 stm32_env_probe 的纯�
     probeItem("cubemx-java", false, false),
   ];
   const caps = capabilitiesOf(full);
-  assert.deepEqual(caps, { build: true, flash: true, debug: true, generate: false }, "CubeMX 不在就没法建工程");
+  assert.deepEqual(caps, {
+    build: true, flash: true, debug: true, generate: false,
+    flashOpenocd: true, flashCubeProgrammer: false, debugOpenocd: true,
+  }, "CubeMX 不在就没法建工程");
   const ready = recommendationsOf(full, [], caps);
   assert.ok(ready.length > 0, "要给出下一步建议");
   assert.ok(ready.some((line) => line.includes("CubeMX 是可选的")), "缺 CubeMX 时必须说明它是可选的：" + JSON.stringify(ready));
@@ -480,10 +483,30 @@ test("stm32_doctor 的能力矩阵与安装建议（原 stm32_env_probe 的纯�
     probeItem("cubemx", false, false),
   ];
   const missingCaps = capabilitiesOf(missing);
-  assert.deepEqual(missingCaps, { build: false, flash: false, debug: false, generate: false });
+  assert.deepEqual(missingCaps, {
+    build: false, flash: false, debug: false, generate: false,
+    flashOpenocd: false, flashCubeProgrammer: false, debugOpenocd: false,
+  });
   const advice = recommendationsOf(missing, missing.map((item) => item.label), missingCaps);
   assert.ok(advice.some((line) => line.includes("pacman.exe -S")), "建议里要带可粘贴的安装命令：" + JSON.stringify(advice));
   assert.ok(advice.some((line) => line.includes("需要我帮你装吗")), "必须主动问要不要代装");
+
+  // 只有 CubeProgrammer、没有 openocd/gdb：能烧 ST-LINK，但不能调试；不能把两台都判成"缺 openocd"。
+  const cpOnly = [
+    ...["gcc", "cmake", "ninja"].map((id) => probeItem(id, true)),
+    probeItem("cubeprogrammer", true, false),
+    probeItem("openocd", false, false),
+    probeItem("gdb", false, false),
+    probeItem("cubemx", false, false),
+  ];
+  const cpCaps = capabilitiesOf(cpOnly);
+  assert.equal(cpCaps.flash, true);
+  assert.equal(cpCaps.flashOpenocd, false);
+  assert.equal(cpCaps.flashCubeProgrammer, true);
+  assert.equal(cpCaps.debug, false);
+  const cpAdvice = recommendationsOf(cpOnly, [], cpCaps).join("\n");
+  assert.match(cpAdvice, /只能走 CubeProgrammer/u);
+  assert.match(cpAdvice, /调试用不了/u);
 });
 
 test("stm32_ioc_inspect 找不到 .ioc 与解析成功都符合 output schema", async () => {

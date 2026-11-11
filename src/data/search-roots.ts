@@ -15,6 +15,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { binDirsFromConfig, configReadingDisabled, cubeMxRootsFromConfig, readToolchainConfig } from "./toolchain-config.js";
 
@@ -95,9 +96,15 @@ export function looksLikeCubeMxRoot(dir: string, exists: (path: string) => boole
   return exists(dir + "/jre/bin/java.exe") && exists(dir + "/STM32CubeMX.exe");
 }
 
-/** 一个目录是不是能用的工具链 bin（至少有一个我们要的 exe）。 */
+/**
+ * 一个目录是不是能用的工具链 bin（至少有一个我们要的 exe）。
+ *
+ * 不能只认 gcc/openocd/cmake：只补了 ninja 或 gdb 的 MSYS2（典型：先装 gcc，再单独补 gdb）
+ * 会被整目录漏掉，doctor 于是说「工具链没找到」。这里把 probe 的五项都算上。
+ */
 export function looksLikeBinDir(dir: string, exists: (path: string) => boolean = existsSync): boolean {
-  return ["arm-none-eabi-gcc.exe", "openocd.exe", "cmake.exe"].some((name) => exists(dir + "/" + name));
+  return ["arm-none-eabi-gcc.exe", "arm-none-eabi-gdb.exe", "gdb-multiarch.exe", "openocd.exe", "cmake.exe", "ninja.exe"]
+    .some((name) => exists(dir + "/" + name));
 }
 
 /** 发现过程需要的系统能力；抽出来是为了单测能注入假文件系统。 */
@@ -263,6 +270,13 @@ export function decodeRegistryText(
   };
 }
 
+/** 系统程序一律用绝对路径，避免当前目录里的同名 reg.exe 劫持查询（P1-6）。 */
+function regExe(): string {
+  if (process.platform !== "win32") return "reg.exe";
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+  return join(root, "System32", "reg.exe");
+}
+
 /** 读注册表里 ST 记下的安装位置；没有这些键是最常见的情况，不算错误。 */
 function readRegistryInstallDirs(): string[] {
   if (process.platform !== "win32") return [];
@@ -277,7 +291,7 @@ function readRegistryInstallDirs(): string[] {
     try {
       // 按 buffer 收：reg.exe 写的是系统代码页的字节（中文系统是 GBK），交给宿主按 UTF-8
       // 解会把中文安装路径变成乱码，existsSync 随后必然失败。
-      const raw = execFileSync("reg.exe", ["query", entry.key, "/v", entry.value], {
+      const raw = execFileSync(regExe(), ["query", entry.key, "/v", entry.value], {
         encoding: "buffer",
         timeout: 4000,
         windowsHide: true,

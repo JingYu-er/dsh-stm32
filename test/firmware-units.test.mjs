@@ -446,6 +446,76 @@ test("installFirmware：假 fetch 装出一个自检全过的包（只留要的�
   }
 });
 
+test("installFirmware：失败不动旧目录，暂存/备份/锁都不留", async () => {
+  const root = tempDir("atomic-fail");
+  const target = join(root, "pkg");
+  try {
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "old-marker.txt"), "keep me", "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: firmwareFetch({ fail: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(readFileSync(join(target, "old-marker.txt"), "utf8"), "keep me", "失败不能碰旧目录");
+    const names = readdirSync(root);
+    assert.equal(names.some((name) => name.startsWith(".dsh-download")), false, "暂存目录要清掉");
+    assert.equal(names.some((name) => name.startsWith(".dsh-replaced")), false, "备份目录要清掉");
+    assert.equal(existsSync(target + ".dsh-install.lock"), false, "安装锁要释放");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：成功时整目录原子替换，旧文件不会残留", async () => {
+  const root = tempDir("atomic-ok");
+  const target = join(root, "pkg");
+  try {
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "stale.txt"), "old", "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: firmwareFetch(),
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(existsSync(join(target, "stale.txt")), false, "旧目录内容不该混进新包");
+    assert.match(readFileSync(join(target, "package.xml"), "utf8"), /FW\.F1\.1\.8\.7/u);
+    assert.equal(existsSync(target + ".dsh-install.lock"), false);
+    assert.equal(readdirSync(root).some((name) => name.startsWith(".dsh-replaced")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：同一落点已有活进程持锁时直接拒绝，不联网", async () => {
+  const root = tempDir("install-lock");
+  const target = join(root, "pkg");
+  const lockFile = target + ".dsh-install.lock";
+  try {
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: neverFetch,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /另一个进程正在装/u);
+    assert.match(result.nextStep, /dsh-install\.lock/u);
+    assert.equal(existsSync(target), false);
+  } finally {
+    rmSync(lockFile, { force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("installFirmware：下不下来就失败、不许假装装好", async () => {
   const root = tempDir("fail");
   const target = join(root, "pkg");

@@ -810,15 +810,15 @@ const fake = {
 - 下载/校验/缓存/失败清理由本地 HTTP 服务覆盖；ST 的两个页面只验证了 URL 与计划输出，没有打开浏览器。
 - 真机安装、驱动加载、CubeMX/CubeProgrammer 的 myST 下载仍未验。
 
-### 13.5 计数口径（0.1.6 起）
+### 13.5 计数口径（0.1.7 起）
 
 | 项 | 当前值 |
 | --- | --- |
-| TypeScript | 110 个文件、42,261 行（`src/`，不含 client） |
-| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
-| `src/engine/` | 65 个 `.ts` / 26,358 行 |
-| `src/data/` | 17 个 `.ts` / 7,625 行 |
-| 单测 | 59 个套件 / 939 pass / 0 fail（`node test/run-units.mjs`） |
+| TypeScript | 111 个文件、43,057 行（`src/`，不含 client） |
+| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,616 行 |
+| `src/engine/` | 65 个 `.ts` / 26,961 行 |
+| `src/data/` | 18 个 `.ts` / 7,785 行 |
+| 单测 | 60 个套件 / 947 pass / 0 fail（`node test/run-units.mjs`） |
 
 第 1–11 章的目录表与模块计数保留 D 阶段原样（45 个 engine 模块、23 个 tools 文件），读旧章节时以本节为准。
 
