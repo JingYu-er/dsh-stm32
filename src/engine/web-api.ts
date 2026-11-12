@@ -36,6 +36,7 @@ import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
+import { readArtifacts } from "./artifacts.js";
 import { decodeFault } from "./fault-hints.js";
 import { readPinout } from "./pinout.js";
 import type { SubprocessService } from "../types.js";
@@ -412,6 +413,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/pinout",
   WEB_API_PREFIX + "/clocks",
   WEB_API_PREFIX + "/faults",
+  WEB_API_PREFIX + "/artifacts",
   WEB_API_PREFIX + "/abort",
   WEB_API_PREFIX + "/channels",
   WEB_API_PREFIX + "/channels/start",
@@ -461,7 +463,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/channels" &&
     path !== WEB_API_PREFIX + "/pinout" &&
     path !== WEB_API_PREFIX + "/clocks" &&
-    path !== WEB_API_PREFIX + "/faults";
+    path !== WEB_API_PREFIX + "/faults" &&
+    path !== WEB_API_PREFIX + "/artifacts";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -557,6 +560,14 @@ export async function handleWebApi(input: {
       };
     });
     return ok({ faults, total: failures.length });
+  }
+  if (path === WEB_API_PREFIX + "/artifacts") {
+    // 产物页：elf / hex / bin 的文件信息与芯片容量。只读文件属性，不起子进程。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = requested !== "" ? requested : process.cwd();
+    const read = readArtifacts(projectDir, env);
+    if (!read.ok) return fail(409, read.error);
+    return ok({ artifacts: read.report });
   }
   if (path === WEB_API_PREFIX + "/debug/breakpoints") {
     // 断点面板：只放行三种动作，位置与编号在这里先校验，避免把任意 gdb 命令搬上 HTTP。

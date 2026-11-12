@@ -45,6 +45,7 @@ const suites = [
     "pinout-units.test.mjs",
     "clocks-units.test.mjs",
     "fault-hints-units.test.mjs",
+    "artifacts-units.test.mjs",
   "client-debug-units.test.mjs",
   "cache-gc-units.test.mjs",
   "assets-units.test.mjs",

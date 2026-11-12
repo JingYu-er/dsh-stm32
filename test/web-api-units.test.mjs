@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十七条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 17);
-  assert.equal(new Set(WEB_API_PATHS).size, 17);
+test("WEB_API_PATHS：十八条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 18);
+  assert.equal(new Set(WEB_API_PATHS).size, 18);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -253,6 +253,35 @@ test("WEB_API_PATHS：十七条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/pinout"), true, "引脚面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/clocks"), true, "时钟面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/faults"), true, "故障面板必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/artifacts"), true, "产物面板必须有独立路由");
+});
+
+test("GET /artifacts：返回 elf 与芯片容量；没有构建目录时 elf 为 null", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-artifacts-"));
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  const buildDir = path.join(dir, "build", "Debug");
+  fs.mkdirSync(buildDir, { recursive: true });
+  fs.writeFileSync(path.join(buildDir, "CMakeCache.txt"), "CMAKE_PROJECT_NAME:STATIC=demo\n", "utf8");
+  fs.writeFileSync(path.join(buildDir, "demo.elf"), Buffer.alloc(1024));
+  const good = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/artifacts",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(good.status, 200);
+  assert.equal(good.body.artifacts.elf.name, "demo.elf");
+  assert.equal(good.body.artifacts.chip.flashBytes, 65536);
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-artifacts-empty-"));
+  const bare = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/artifacts",
+    query: { projectDir: empty },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(bare.status, 200);
+  assert.equal(bare.body.artifacts.elf, null);
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {

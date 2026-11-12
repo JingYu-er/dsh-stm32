@@ -27,7 +27,7 @@ function resultDigest(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   const digest: Record<string, unknown> = {};
-  for (const key of ["ok", "summary", "error", "message", "elfPath", "hexPath", "binPath", "port", "taskId"]) {
+  for (const key of ["ok", "summary", "error", "message", "elfPath", "hexPath", "binPath", "port", "taskId", "memoryUsage", "warningCount"]) {
     if (record[key] !== undefined) digest[key] = record[key];
   }
   return Object.keys(digest).length === 0 ? undefined : digest;

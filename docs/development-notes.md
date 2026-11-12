@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S10）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S11）
 
 ### 一、目标与约束
 
@@ -6028,7 +6028,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 为什么解码放在服务端：同一套规则要给命令行、验收脚本与面板共用；放在客户端会导致 curl 验收看不到提示。
 - 计数：69 套件 / **985 pass / 0 fail**；`client/client.js` 2033 行；包体 1880.7 KB / 281 文件 / 解包 15360.2 KB。
 
-### 十三、教训
+### 十三、产物与内存（S11）
+
+- 问题：烧完最常问的是「现在 Flash / RAM 还剩多少、刚才烧的是哪个文件」，这两件事原本分散在一次构建输出与文件管理器里。
+- 做法：只读文件属性与芯片容量，不额外起 `size` / `objdump` 进程。
+  - `src/engine/artifacts.ts`：`readArtifacts(projectDir)` 用 `detectBuildDir` → `findElf` 取 elf，同名兄弟文件取 `.hex` / `.bin`，`readIocCpn` + `findChipFact` 取 `flashBytes` / `ramBytes`；`notes` 覆盖「没有构建目录 / 多个 elf / 资源包没有该芯片 / 没有 .ioc 型号」。
+  - 内存占用来历：`stm32_build` 已带 `--print-memory-usage`，`tool-events` 的 `resultDigest` 白名单加上 `memoryUsage` / `warningCount`，面板直接从 `stm32_build` 的 ok 事件里取。同一份数字只有一个来源，不会出现「面板算的和构建打印的不一致」。
+  - 接口：`GET /dsh-stm32/api/artifacts?projectDir=…`，返回 `{ artifacts: { buildDir, elf, hex, bin, otherElves, chip, notes } }`，10 秒轮询。
+  - 面板：产物标签显示构建目录、ELF/HEX/BIN（文件名、大小、修改时间）、芯片容量一行、最近一次构建的 Flash/RAM 比例条；没有构建记录时提示先跑 `stm32_build`。
+- 边界：多 elf 时只展示一个，并在 notes 里说明挑法，避免把旧固件当成刚烧进去的那份。
+- 计数：70 套件 / **991 pass / 0 fail**；`client/client.js` 2181 行；包体 1884.2 KB / 282 文件 / 解包 15377.2 KB。
+
+### 十四、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

@@ -823,7 +823,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", channels: "实时通道", pinout: "引脚", clocks: "时钟", faults: "故障" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", channels: "实时通道", pinout: "引脚", clocks: "时钟", faults: "故障", artifacts: "产物" };
 
     /** 事件流地址：带上会话键，多标签页同时开着时只收本会话的事件。 */
     function debugEventsPath(lastSeq, sessionId) {
@@ -1526,6 +1526,151 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 产物页：构建目录里的 elf/hex/bin 与芯片容量；10 秒刷新。 */
+    function useArtifacts(projectDir, intervalMs) {
+      const [artifacts, setArtifacts] = useState(null);
+      const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let closed = false;
+        if (typeof projectDir !== "string" || projectDir === "") {
+          setArtifacts(null);
+          setError("");
+          return () => {
+            closed = true;
+          };
+        }
+        const load = async () => {
+          const result = await callApi("GET", "artifacts?projectDir=" + encodeURIComponent(projectDir));
+          if (closed) return;
+          if (result.ok) {
+            setArtifacts(result.value.artifacts);
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [projectDir, tick]);
+      return { artifacts, error, reload: () => setTick((value) => value + 1) };
+    }
+
+    /** 字节数 → 人类可读；产物大小与容量上限共用。 */
+    function bytesText(bytes) {
+      if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "—";
+      if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+      if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return String(bytes) + " B";
+    }
+
+    /**
+     * 最近一次构建的内存占用。
+     * 数据来自 stm32_build 的 ok 事件（payload.result.memoryUsage），不另跑 size：
+     * 构建时链接器已经打印过一次，复用同一份数字才不会出现两个口径。
+     */
+    function collectMemoryUsage(events) {
+      let latest = null;
+      for (const event of events) {
+        if (event.kind !== "stm32_build" || event.status !== "ok") continue;
+        const usage = event.payload?.result?.memoryUsage;
+        if (Array.isArray(usage) && usage.length > 0) latest = { seq: event.seq, time: event.time, usage };
+      }
+      return latest;
+    }
+
+    function MemoryBar(props) {
+      const region = props.region;
+      const percent = typeof region.percent === "number" ? Math.max(0, Math.min(100, region.percent)) : 0;
+      return e(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: "8px", padding: "2px 0", fontSize: "12px" } },
+        e("span", { style: { flex: "0 0 26%" } }, region.region),
+        e(
+          "span",
+          { style: { flex: "1 1 auto", height: "8px", background: "color-mix(in srgb, currentColor 8%, transparent)", borderRadius: "2px" } },
+          e("span", {
+            style: {
+              display: "block",
+              height: "100%",
+              width: percent + "%",
+              background: "color-mix(in srgb, currentColor 45%, transparent)",
+              borderRadius: "2px",
+            },
+          }),
+        ),
+        e("span", { style: { flex: "0 0 150px", textAlign: "right", fontVariantNumeric: "tabular-nums" } },
+          bytesText(region.usedBytes) + " / " + bytesText(region.totalBytes) + "（" + percent.toFixed(1) + "%）"),
+      );
+    }
+
+    /** 产物页：文件清单 + 最近一次构建的 Flash/RAM 占用。 */
+    function ArtifactPanel(props) {
+      const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
+      const state = useArtifacts(projectDir, 10000);
+      if (projectDir === "") {
+        return e("div", { style: { padding: "12px", opacity: 0.6, fontSize: "12px" } }, "当前没有可用的工程目录；先打开调试会话或建工程。");
+      }
+      if (state.error !== "") {
+        return e("div", { style: { padding: "12px", opacity: 0.75, fontSize: "12px" } }, state.error);
+      }
+      const artifacts = state.artifacts;
+      if (artifacts === null) {
+        return e("div", { style: { padding: "12px", opacity: 0.6, fontSize: "12px" } }, "读取产物…");
+      }
+      const memory = collectMemoryUsage(props.events ?? []);
+      const fileRow = (label, file) =>
+        e(
+          "div",
+          { key: label, style: { display: "flex", gap: "8px", fontSize: "12px", padding: "1px 0" } },
+          e("span", { style: { flex: "0 0 52px", opacity: 0.7 } }, label),
+          file === null
+            ? e("span", { style: { opacity: 0.5 } }, "—")
+            : e(
+                "span",
+                { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: file.path },
+                file.name + "  " + bytesText(file.size) + "  " + new Date(file.mtimeMs).toLocaleString(),
+              ),
+        );
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", padding: "6px 10px 10px" } },
+        e(
+          "div",
+          { style: { fontSize: "12px", opacity: 0.8, paddingBottom: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: artifacts.buildDir },
+          "构建目录：" + (artifacts.buildDir === "" ? "（未识别）" : artifacts.buildDir),
+        ),
+        fileRow("ELF", artifacts.elf),
+        fileRow("HEX", artifacts.hex),
+        fileRow("BIN", artifacts.bin),
+        e(
+          "div",
+          { style: { paddingTop: "6px", fontSize: "12px", opacity: 0.8 } },
+          "芯片：" + (artifacts.chip === null
+            ? "容量未知"
+            : artifacts.chip.cpn + "（Flash " + bytesText(artifacts.chip.flashBytes) + " / RAM " + bytesText(artifacts.chip.ramBytes) + "）"),
+        ),
+        memory === null
+          ? e("div", { key: "no-memory", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.6 } }, "还没有构建记录：跑一次 stm32_build 后这里显示 Flash / RAM 占用。")
+          : e(
+              "div",
+              { key: "memory", style: { paddingTop: "4px" } },
+              memory.usage.map((region) => e(MemoryBar, { key: String(region.region), region: region })),
+            ),
+        (artifacts.notes ?? []).length === 0
+          ? null
+          : e(
+              "div",
+              { key: "notes", style: { paddingTop: "6px", fontSize: "11px", opacity: 0.6 } },
+              artifacts.notes.map((note, index) => e("div", { key: "n" + String(index) }, note)),
+            ),
+      );
+    }
+
     const CHANNEL_DEFS = [
       { key: "serial", label: "串口" },
       { key: "rtt", label: "RTT" },
@@ -1754,6 +1899,7 @@ window.__ModuleLoader__.load({
         tabButton("pinout", DEBUG_LABELS.pinout),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("faults", DEBUG_LABELS.faults),
+        tabButton("artifacts", DEBUG_LABELS.artifacts),
       );
       const body =
         tab === "pinout"
@@ -1762,6 +1908,8 @@ window.__ModuleLoader__.load({
             ? [e(ClockPanel, { key: "clocks", projectDir: projectDir })]
             : tab === "faults"
             ? [e(FaultPanel, { key: "faults", sessionId: props.sessionId })]
+            : tab === "artifacts"
+            ? [e(ArtifactPanel, { key: "artifacts", projectDir: projectDir, events: props.events })]
             : [
               e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error }),
               e(RunningTools, { key: "running", events: props.events }),
