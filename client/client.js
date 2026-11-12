@@ -2167,6 +2167,20 @@ window.__ModuleLoader__.load({
       return { replay: replay, error: error, busy: busy, load: load, clear: clear };
     }
 
+    /** 把当前视图导出成证据格式的 JSONL，便于随对话一起交付。 */
+    function exportEvents(events) {
+      const text = events.map((event) => JSON.stringify(event)).join("\n") + (events.length === 0 ? "" : "\n");
+      const blob = new Blob([text], { type: "application/x-ndjson" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "stm32-debug-" + new Date().toISOString().replace(/[:.]/gu, "-") + ".jsonl";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     /** 回放选择器：列出证据目录里的 jsonl，点一个即载入。 */
     function ReplayPicker(props) {
       const evidence = useEvidence(true);
@@ -2213,15 +2227,17 @@ window.__ModuleLoader__.load({
       }, [sessionId]);
       const [selectedSeq, setSelectedSeq] = useState(null);
       const [pickerOpen, setPickerOpen] = useState(false);
+      const [onlyFail, setOnlyFail] = useState(false);
       const replayState = useReplay();
       const [filter, setFilter] = useState("");
       const [layout, setLayout] = useState(readDebugLayout);
       const dragRef = React.useRef(null);
       const selected = (replayState.replay === null ? events : replayState.replay.events).find((event) => event.seq === selectedSeq) ?? null;
 
+      const matchedBase = onlyFail === true ? events.filter((event) => event.status === "fail") : events;
       const matched = filter.trim() === ""
-        ? events
-        : events.filter((event) => (String(event.kind) + " " + String(event.summary)).toLowerCase().includes(filter.trim().toLowerCase()));
+        ? matchedBase
+        : matchedBase.filter((event) => (String(event.kind) + " " + String(event.summary)).toLowerCase().includes(filter.trim().toLowerCase()));
       const visible = replayState.replay === null ? matched : replayState.replay.events;
 
       const updateLayout = (patch) => {
@@ -2318,9 +2334,18 @@ window.__ModuleLoader__.load({
             value: filter,
             onChange: (event) => setFilter(event.target.value),
           }),
+          e(
+            "button",
+            {
+              style: Object.assign({}, debugStyles.button, onlyFail === true ? { borderColor: "color-mix(in srgb, currentColor 45%, transparent)" } : {}),
+              onClick: () => setOnlyFail((value) => !value),
+            },
+            onlyFail === true ? "只看失败" : "全部事件",
+          ),
           e("span", { style: { opacity: 0.6 } }, "显示 " + String(visible.length) + " / " + String(events.length)),
           e("span", { style: debugStyles.spacer }),
           e("button", { style: debugStyles.button, onClick: () => setSelectedSeq(null) }, "清除选择"),
+          e("button", { style: debugStyles.button, onClick: () => exportEvents(visible) }, "导出 JSONL"),
           e(
             "button",
             {
