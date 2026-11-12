@@ -1743,6 +1743,74 @@ window.__ModuleLoader__.load({
       );
     }
 
+    const PIN_PORT_PATTERN = /^P([A-Z])(\d+)$/u;
+
+    /** 按端口把引脚排成小格：一行一个端口，格子里是脚名与信号；用于快速看哪一路占了哪些脚。 */
+    function pinMapRows(pins) {
+      const ports = new Map();
+      for (const pin of pins) {
+        const matched = PIN_PORT_PATTERN.exec(pin.pin);
+        const port = matched === null ? "其它" : "P" + matched[1];
+        const order = matched === null ? 999 : Number(matched[2]);
+        if (!ports.has(port)) ports.set(port, []);
+        ports.get(port).push({ pin: pin, order: order });
+      }
+      return Array.from(ports.keys())
+        .sort((a, b) => (a === "其它" ? 1 : b === "其它" ? -1 : a.localeCompare(b)))
+        .map((port) => ({ port: port, cells: ports.get(port).sort((a, b) => a.order - b.order) }));
+    }
+
+    function PinMap(props) {
+      const rows = pinMapRows(props.pins);
+      if (rows.length === 0) {
+        return e("div", { style: { padding: "6px 0", opacity: 0.6, fontSize: "12px" } }, "还没有可显示的引脚。");
+      }
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "2px 0 6px" } },
+        rows.map((row) =>
+          e(
+            "div",
+            { key: row.port, style: { display: "flex", alignItems: "center", gap: "6px" } },
+            e("span", { style: { flex: "0 0 34px", fontSize: "11px", opacity: 0.6, fontVariantNumeric: "tabular-nums" } }, row.port),
+            e(
+              "div",
+              { style: { display: "flex", flexWrap: "wrap", gap: "4px" } },
+              row.cells.map((cell) => {
+                const pin = cell.pin;
+                const text = pin.signal !== "" ? pin.signal : pin.label !== "" ? pin.label : pin.mode !== "" ? pin.mode : "";
+                const tone = pin.kind === "debug" ? 0.95 : pin.kind === "gpio" ? 0.7 : 0.5;
+                return e(
+                  "button",
+                  {
+                    key: pin.pin + ":" + pin.signal,
+                    type: "button",
+                    title: pin.pin + (text === "" ? "" : " " + text) + "（点击复制引用）",
+                    onClick: () => props.onCopy(pin),
+                    style: {
+                      width: "76px",
+                      padding: "2px 4px",
+                      textAlign: "left",
+                      fontSize: "10px",
+                      lineHeight: "1.25",
+                      borderRadius: "4px",
+                      border: "1px solid color-mix(in srgb, currentColor " + String(Math.round(tone * 30)) + "%, transparent)",
+                      background: pin.signal === "" ? "transparent" : "color-mix(in srgb, currentColor 6%, transparent)",
+                      color: "inherit",
+                      cursor: "pointer",
+                      overflow: "hidden",
+                    },
+                  },
+                  e("div", { style: { fontWeight: 600, opacity: 0.9 } }, pin.pin),
+                  e("div", { style: { opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, text === "" ? "未配置" : text),
+                );
+              }),
+            ),
+          ),
+        ),
+      );
+    }
+
     /** 引脚面板：芯片、时钟与按外设分组的引脚表。只读 .ioc，不触发 CubeMX。 */
     function PinoutPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
@@ -1750,6 +1818,7 @@ window.__ModuleLoader__.load({
       const sync = useIocSync(projectDir, 10000);
       const pinout = state.pinout;
       const [copiedPin, setCopiedPin] = useState("");
+      const [mode, setMode] = useState("table");
       const copyPin = async (pin) => {
         const text = pin.signal === "" ? pin.pin : pin.pin + " " + pin.signal;
         try {
@@ -1785,6 +1854,13 @@ window.__ModuleLoader__.load({
                   sync.stale === true ? "待重新生成" : "已同步"),
           ),
         );
+        head.push(
+          e("div", { key: "mode", style: { display: "flex", gap: "6px", padding: "0 0 4px" } },
+            e("button", { type: "button", onClick: () => setMode("table"), style: Object.assign({}, debugStyles.button, mode === "table" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "表"),
+            e("button", { type: "button", onClick: () => setMode("map"), style: Object.assign({}, debugStyles.button, mode === "map" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "图"),
+            e("span", { style: { fontSize: "11px", opacity: 0.5, alignSelf: "center" } }, mode === "map" ? "按端口排布；点格子复制引用" : "按外设分组"),
+          ),
+        );
         const warnings = pinout.warnings ?? [];
         if (warnings.length > 0) {
           head.push(
@@ -1799,7 +1875,10 @@ window.__ModuleLoader__.load({
         "div",
         { style: { display: "flex", flexDirection: "column", padding: "0 10px 8px" } },
         head,
-        groups.map((group) =>
+        mode === "map"
+          ? e(PinMap, { key: "map", pins: pinout === null ? [] : (pinout.pins ?? []), onCopy: copyPin })
+          : null,
+        mode === "map" ? null : groups.map((group) =>
           e(
             "div",
             { key: group.name, style: { padding: "4px 0", borderTop: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },

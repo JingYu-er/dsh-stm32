@@ -129,6 +129,10 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("SerialCard") && source.includes("刷新端口"), "串口卡片要能开会话、列端口");
     assert.ok(source.includes("onShowFailures") && source.includes("只看失败"), "概览的失败数要能跳到失败视图");
     assert.ok(source.includes("清理旧证据") && source.includes("evidence/prune"), "证据目录要能显示占用并清理旧证据");
+    assert.ok(source.includes("useIocSync"), "引脚页要显示 .ioc 与生成代码是否同步");
+    assert.ok(source.includes("WatchAdmin") && source.includes("监视登记表"), "实时通道要能编辑监视登记表");
+    assert.ok(source.includes("BuildCard") && source.includes("构建与烧录"), "面板要能直接构建与烧录");
+    assert.ok(source.includes("pinMapRows") && source.includes("PinMap"), "引脚页要有按端口排布的图");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
