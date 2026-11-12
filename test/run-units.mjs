@@ -41,6 +41,7 @@ const suites = [
   "cache-units.test.mjs",
   "event-bus-units.test.mjs",
   "progress-units.test.mjs",
+  "channel-tap-units.test.mjs",
   "client-debug-units.test.mjs",
   "cache-gc-units.test.mjs",
   "assets-units.test.mjs",

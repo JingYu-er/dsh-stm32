@@ -43,6 +43,7 @@ import { registerWebRoutes } from "./engine/web-routes.js";
 import { emitEvent } from "./engine/event-bus.js";
 import { startEventLog } from "./engine/event-log.js";
 import { instrumentContext } from "./engine/tool-events.js";
+import { stopChannelTaps } from "./engine/channel-tap.js";
 import type { DshContext } from "./types.js";
 
 export const name = "dsh-stm32";
@@ -146,11 +147,13 @@ export function apply(ctx: DshContext): void {
       void cleanupSerialOnTurnEnd({}).catch(() => undefined);
     });
     ctx.on("session/disposed", () => {
+      stopChannelTaps();
       void debugSessions.stop("session/disposed");
       // 会话已不存在，persist=true 的串口同样不保留（该串口没有下一个 turn 可复用）。
       void closeSerial({}).catch(() => undefined);
     });
     ctx.on("dispose", () => {
+      stopChannelTaps();
       stopLog();
       void debugSessions.stop("插件卸载");
       void closeSerial({}).catch(() => undefined);

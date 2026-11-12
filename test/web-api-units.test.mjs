@@ -24,6 +24,7 @@ import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
 import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
 import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 import { beginToolCall, resetRunning } from "../lib/engine/progress.js";
+import { resetChannelTaps } from "../lib/engine/channel-tap.js";
 
 /** 假的宿主 subprocess：本套件里没有任何路径会真的起进程。 */
 const fakeSubprocess = {
@@ -233,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十一条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 11);
-  assert.equal(new Set(WEB_API_PATHS).size, 11);
+test("WEB_API_PATHS：十四条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 14);
+  assert.equal(new Set(WEB_API_PATHS).size, 14);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -246,6 +247,9 @@ test("WEB_API_PATHS：十一条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug"), true, "调试会话摘要必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/breakpoints"), true, "断点面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/abort"), true, "在途调用中止必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels"), true, "常驻通道状态必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -329,6 +333,50 @@ test("POST /abort：参数与在途调用校验，只中止登记过的调用", 
   assert.equal(handle.signal.aborted, true, "接口必须真的触发派生信号");
   handle.end();
   resetRunning();
+});
+
+test("常驻通道接口：默认关、开关改状态、非法值 400", async () => {
+  resetChannelTaps();
+  const idle = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/channels",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(idle.status, 200);
+  assert.deepEqual(
+    idle.body.channels.map((item) => item.name),
+    ["serial", "rtt"],
+  );
+  assert.equal(idle.body.channels.every((item) => item.active === false), true);
+
+  const started = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/channels/start",
+    body: JSON.stringify({ rtt: true }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.channels.find((item) => item.name === "rtt")?.active, true);
+  assert.equal(started.body.channels.find((item) => item.name === "serial")?.active, false);
+
+  const bad = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/channels/start",
+    body: JSON.stringify({ serial: 1 }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(bad.status, 400);
+  assert.ok(String(bad.body.error).includes("serial"));
+
+  const stopped = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/channels/stop",
+    body: JSON.stringify({ rtt: true }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(stopped.status, 200);
+  assert.equal(stopped.body.channels.every((item) => item.active === false), true);
+  resetChannelTaps();
 });
 
 test("GET /status：running 列出在途调用，按会话过滤", async () => {

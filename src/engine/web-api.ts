@@ -33,6 +33,7 @@ import {
 } from "./event-bus.js";
 import { evidenceRoot } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
+import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { debugSessions } from "./debug-session.js";
 import type { SubprocessService } from "../types.js";
 
@@ -406,6 +407,9 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug",
   WEB_API_PREFIX + "/debug/breakpoints",
   WEB_API_PREFIX + "/abort",
+  WEB_API_PREFIX + "/channels",
+  WEB_API_PREFIX + "/channels/start",
+  WEB_API_PREFIX + "/channels/stop",
 ];
 
 function ok(body: Record<string, unknown>): WebJson {
@@ -447,7 +451,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/config" &&
     path !== WEB_API_PREFIX + "/install/state" &&
     path !== WEB_API_PREFIX + "/status" &&
-    path !== WEB_API_PREFIX + "/debug";
+    path !== WEB_API_PREFIX + "/debug" &&
+    path !== WEB_API_PREFIX + "/channels";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -553,6 +558,25 @@ export async function handleWebApi(input: {
         running: listRunning(wanted),
       },
     });
+  }
+  if (path === WEB_API_PREFIX + "/channels") {
+    return ok({ channels: channelTapStatus() });
+  }
+  if (path === WEB_API_PREFIX + "/channels/start" || path === WEB_API_PREFIX + "/channels/stop") {
+    // 只认 serial / rtt 两个开关；不传就是两个都动，免得面板为「全开」多发一次请求。
+    const wantOn = path.endsWith("/start");
+    const picked: { serial?: boolean; rtt?: boolean } = {};
+    for (const name of ["serial", "rtt"] as const) {
+      const raw = parsed.value[name];
+      if (raw === undefined) continue;
+      if (typeof raw !== "boolean") return fail(400, name + " 必须是布尔值");
+      picked[name] = wantOn ? raw : !raw;
+    }
+    if (Object.keys(picked).length === 0) {
+      picked.serial = wantOn;
+      picked.rtt = wantOn;
+    }
+    return ok({ channels: setChannelTaps(picked) });
   }
   if (path === WEB_API_PREFIX + "/abort") {
     // 面板「中止」：只中止登记过的在途调用，不碰调试会话与后台 job。
