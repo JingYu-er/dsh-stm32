@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S26）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S27）
 
 ### 一、目标与约束
 
@@ -6197,7 +6197,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 边界：只读源码，不读二进制、不跟随 `#include`；工程外的 SDK 头（`Drivers/` 之外）与本工程内的文件同样受限，越界即 400。
 - 计数：73 套件 / **1018 pass / 0 fail**；`client/client.js` 2907 行；包体 1909.4 KB / 288 文件 / 解包 15478.6 KB。
 
-### 二十九、教训
+### 二十九、编译错误跳源码（S27）
+
+- 问题：`stm32_build` 的失败事件只带 `summary`，编译错误在 `errors` 里，面板看不到；S26 做了 `/source` 却只有断点能用上。
+- 做法：把错误本身也进事件摘要，面板复用同一套源码片段。
+  - `resultDigest` 白名单加 `projectDir`（跳源码要读哪个工程）与 `errors`；错误截到 20 条——再多是刷屏，完整列表仍在工具回包里。
+  - `parseCompileError("Core/Src/main.c:67:5: error: …")` 拆出 `file/line/column/message`；只有「文件:行:列」这种才有位置，`In function 'main':` 这类返回 null，按纯文本列出。
+  - `CompileErrors` 独立成组件：它有 `useState`，不能塞进 `Detail` 的早退分支里（`Detail` 在无事件时直接 return，钩子顺序会变）。
+  - 抽 `SourceBlock` 出来给断点与编译错误共用，`fetchSource(projectDir, file, line, context)` 只有一处拼参数。
+- 踩坑：用 python 字符串替换插函数时把 `function Detail(props) {` 写成了 `add + anchor`，`add` 结尾又带了一遍该行，产出 `function Detail(props) {    function Detail(props) {`，`node --check` 报 `Unexpected token ','` 在文件尾——报错行不在出错处，先看 `git diff` 的 `+` 行更快。
+- 计数：73 套件 / **1018 pass / 0 fail**；`client/client.js` 2986 行；包体 1911.0 KB / 288 文件 / 解包 15485.6 KB。
+
+### 三十、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

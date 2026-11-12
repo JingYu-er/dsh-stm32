@@ -994,6 +994,53 @@ window.__ModuleLoader__.load({
       return e(DebugPanel, { title: DEBUG_LABELS.timeline, flex: "1 1 0", onCollapse: props.onCollapse }, body);
     }
 
+    /** 编译错误列表：每条可点开源码上下文；解析不出「文件:行:列」的按纯文本列出。 */
+    function CompileErrors(props) {
+      const errors = Array.isArray(props.errors) ? props.errors : [];
+      const [picked, setPicked] = useState(null);
+      const [slice, setSlice] = useState(null);
+      const [error, setError] = useState("");
+      if (errors.length === 0) return null;
+      const open = async (index, parsed) => {
+        if (parsed === null) return;
+        setPicked(index);
+        setError("");
+        const result = await fetchSource(props.projectDir, parsed.file, parsed.line, 2);
+        if (result.ok) setSlice(result.value.source);
+        else {
+          setSlice(null);
+          setError(String(result.error ?? "读取源码失败"));
+        }
+      };
+      return e(
+        "div",
+        { style: { padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: "2px" } },
+        e("div", { style: { opacity: 0.65 } }, "编译错误（" + String(errors.length) + "）"),
+        errors.map((line, index) => {
+          const parsed = parseCompileError(line);
+          return e(
+            "div",
+            {
+              key: String(index),
+              style: {
+                fontFamily: "ui-monospace, monospace",
+                fontSize: "11px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                cursor: parsed === null ? "default" : "pointer",
+                opacity: picked === index ? 0.95 : 0.8,
+              },
+              title: parsed === null ? String(line) : "点击看源码：" + parsed.file + ":" + String(parsed.line),
+              onClick: () => open(index, parsed),
+            },
+            String(line),
+          );
+        }),
+        error === "" ? null : e("div", { style: { fontSize: "11px", opacity: 0.7 } }, error),
+        e(SourceBlock, { slice: slice }),
+      );
+    }
+
     function Detail(props) {
       const event = props.event;
       if (event === null) {
@@ -1037,6 +1084,10 @@ window.__ModuleLoader__.load({
           event.truncated === true ? e("div", { style: { opacity: 0.65 } }, "payload 超过上限，仅保留预览。") : null,
         ),
         refs,
+        e(CompileErrors, {
+          errors: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" ? event.payload.result.errors : undefined,
+          projectDir: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" && typeof event.payload.result.projectDir === "string" ? event.payload.result.projectDir : (typeof props.projectDir === "string" ? props.projectDir : ""),
+        }),
         payloadText === ""
           ? null
           : e(
@@ -1162,6 +1213,63 @@ window.__ModuleLoader__.load({
         },
         body,
       );
+    }
+
+    /** 读一段源码：给断点命中与编译错误共用，只读，越界由服务端拒绝。 */
+    async function fetchSource(projectDir, file, line, context) {
+      return callApi(
+        "GET",
+        "source?projectDir=" + encodeURIComponent(projectDir) +
+          "&file=" + encodeURIComponent(file) +
+          "&line=" + String(line) +
+          "&context=" + String(context ?? 3),
+      );
+    }
+
+    /** 源码片段：行号在左，焦点行加底色。 */
+    function SourceBlock(props) {
+      const slice = props.slice;
+      if (slice === null || slice === undefined) return null;
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "1px", paddingTop: "2px" } },
+        e(
+          "div",
+          { style: { fontSize: "11px", opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: slice.file },
+          slice.file + ":" + String(slice.line) + "（共 " + String(slice.totalLines) + " 行）",
+        ),
+        slice.lines.map((item) =>
+          e(
+            "div",
+            {
+              key: String(item.line),
+              style: {
+                display: "flex",
+                gap: "6px",
+                fontFamily: "ui-monospace, monospace",
+                fontSize: "11px",
+                whiteSpace: "pre",
+                overflow: "hidden",
+                background: item.line === slice.line ? "color-mix(in srgb, currentColor 10%, transparent)" : "transparent",
+              },
+            },
+            e("span", { style: { flex: "0 0 34px", textAlign: "right", opacity: 0.5 } }, String(item.line)),
+            e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis" } }, item.text),
+          ),
+        ),
+      );
+    }
+
+    /**
+     * 从 gcc 的报错里取「文件:行:列」。
+     *
+     * 常见形状：`Core/Src/main.c:67:5: error: 'x' undeclared`；
+     * 也有 `core/Src/main.c: In function 'main':` 这种无行号的，返回 null。
+     */
+    function parseCompileError(line) {
+      const match = /^\s*(.+?):(\d+):(\d+):\s*(.*)$/u.exec(String(line ?? ""));
+      if (match === null) return null;
+      return { file: match[1], line: Number.parseInt(match[2], 10), column: Number.parseInt(match[3], 10), message: match[4] };
     }
 
     /**
@@ -1293,36 +1401,7 @@ window.__ModuleLoader__.load({
         sliceError === ""
           ? null
           : e("div", { style: { fontSize: "11px", opacity: 0.7 } }, sliceError),
-        slice === null
-          ? null
-          : e(
-              "div",
-              { style: { display: "flex", flexDirection: "column", gap: "1px", paddingTop: "2px" } },
-              e(
-                "div",
-                { style: { display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", opacity: 0.7 } },
-                e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: slice.file }, slice.file + ":" + String(slice.line) + "（共 " + String(slice.totalLines) + " 行）"),
-              ),
-              slice.lines.map((item) =>
-                e(
-                  "div",
-                  {
-                    key: String(item.line),
-                    style: {
-                      display: "flex",
-                      gap: "6px",
-                      fontFamily: "ui-monospace, monospace",
-                      fontSize: "11px",
-                      whiteSpace: "pre",
-                      overflow: "hidden",
-                      background: item.line === slice.line ? "color-mix(in srgb, currentColor 10%, transparent)" : "transparent",
-                    },
-                  },
-                  e("span", { style: { flex: "0 0 34px", textAlign: "right", opacity: 0.5 } }, String(item.line)),
-                  e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis" } }, item.text),
-                ),
-              ),
-            ),
+        e(SourceBlock, { slice: slice }),
       );
     }
 

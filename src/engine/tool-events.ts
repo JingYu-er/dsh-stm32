@@ -27,9 +27,12 @@ function resultDigest(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   const digest: Record<string, unknown> = {};
-  for (const key of ["ok", "summary", "error", "message", "elfPath", "hexPath", "binPath", "port", "taskId", "memoryUsage", "warningCount"]) {
+  for (const key of ["ok", "summary", "error", "message", "elfPath", "hexPath", "binPath", "port", "taskId", "memoryUsage", "warningCount", "projectDir"]) {
     if (record[key] !== undefined) digest[key] = record[key];
   }
+  // 编译错误最多带 20 条：面板用它跳源码，再多也只是刷屏。
+  const errors = record["errors"];
+  if (Array.isArray(errors) && errors.length > 0) digest["errors"] = errors.slice(0, 20);
   return Object.keys(digest).length === 0 ? undefined : digest;
 }
 

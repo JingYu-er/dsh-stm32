@@ -203,6 +203,20 @@ test("工具埋点：start / ok 成对，失败时记 fail 并重新抛出", asy
   assert.equal(events[0].kind, "stm32_build");
   assert.equal(events[1].payload.result.summary, "构建完成");
 
+  // 编译错误与工程目录要进摘要：面板靠它们跳源码，靠 projectDir 判断读哪个工程的源码。
+  const withErrors = withToolEvents({
+    name: "stm32_build",
+    description: "构建",
+    parameters: { type: "object" },
+    output: { schema: { type: "object" }, render: () => [] },
+    execute: async () => ({ ok: false, projectDir: "D:/demo", errors: Array.from({ length: 25 }, (_, i) => "Core/Src/main.c:" + String(i + 1) + ":3: error: boom") }),
+  });
+  await withErrors.execute({}, { signal: new AbortController().signal, agent: { id: "agent-7" } });
+  const digest = eventSnapshot(0).at(-1).payload.result;
+  assert.equal(digest.projectDir, "D:/demo");
+  assert.equal(digest.errors.length, 20, "编译错误最多带 20 条");
+  assert.match(digest.errors[0], /main\.c:1:3/u);
+
   const failing = withToolEvents({
     ...tool,
     execute: async () => {
