@@ -5967,3 +5967,42 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
 - **给工具批量埋点用代理，不要改 25 个 execute**：注册期包一层，零侵入；但 Proxy 必须把方法绑定到真实 ctx，否则 cordis 的 this 语义会被换掉。
+
+## §93 MSYS2 安装包：官方 release 与国内镜像回退（2026-11，0.1.7）
+
+### 一、问题
+
+真机装工具链时，`install/start` 在第二步失败：
+
+```
+下载 43.1 MB（GitHub 官方 release，第 1/1 个候选）：
+https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe
+下载安装包失败：固定版本 2026-09-27 的官方安装包没下来（试过 1 个候选）。
+```
+
+2026-11-12 本机实测：`github.com` 的 release 资产不可达，同一条命令对 TUNA / NJU 的
+`msys2-base-x86_64-20260927.sfx.exe` 都返回 200；Tuna 那份实测 sha256 与官方一致
+（`ad336ccc…37209f`，与 `MSYS2_INSTALLER_SHA256` 相同）。
+
+### 二、改法
+
+- `installerDefaultUrls()`：候选链 = 官方 release → TUNA → NJU → 阿里云，全部指向同一个文件名。
+- 完整性不放宽：每个候选下载后仍走 `checkInstallerFile`（体量下限 + MZ 头 + 对
+  `MSYS2_INSTALLER_SHA256` 逐字节校验）；镜像换了字节就拒收并换下一个候选。
+- `installerSourceLabel()` 增加「国内镜像（主机名）」标签，失败时能看出试过哪几家。
+- 注释里原先写的「镜像只同步 latest、保留不了历史版本」是 2026-11-11 的结论，本次实测已不成立，一并改掉。
+
+### 三、验证
+
+- `installerSourceLabel` 与候选链断言进 `test/install-units.test.mjs`（默认 4 个候选；全失败时 curl 调 4 次）。
+- 计数：64 套件 / 953 pass；包体 1861.1 KB / 276 文件 / 解包 15287.9 KB。
+- 真机：TUNA 下载 43,117,824 B，sha256 相符 → 解压 → `pacman -Syu` → 5 个组件全部装好
+  （gcc 16.2.0 / gdb 18.1 / OpenOCD 0.12.0 / CMake 4.4.5 / Ninja 1.13.2），
+  `stm32_doctor` 报 7/8（缺可选的 STM32CubeProgrammer）。
+
+### 四、教训
+
+- **回退链要和完整性钉一起设计**：只看「有没有下载成功」，镜像就成了可替换执行文件的入口；
+  先钉 sha256、再列候选，才能既好装又不失守。
+- **pacman 的慢不能靠等**：官方源单包 20 KB/s 时，`cmake` 一个包要 25 分钟；
+  把镜像放到 `mirrorlist.mingw` / `mirrorlist.msys` 最前，同样的包在 45 秒内下完。

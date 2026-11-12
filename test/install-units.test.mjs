@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import {
   formatBytes,
+  installerSourceLabel,
   isDriveRoot,
   planOrInstallMsys2,
   parsePacmanQuery,
@@ -819,11 +820,15 @@ test("A28 配置 CAS：读完之后别人改过 → 重读并重新合并，atte
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("F3a 安装包地址：默认只有一个固定版本官方 release，覆盖地址必须同时给 hash", () => {
+test("F3a 安装包地址：默认官方 release 在前、国内镜像随后，覆盖地址必须同时给 hash", () => {
   const plan = resolveInstallerUrls({});
-  assert.deepEqual(plan.urls, [
-    "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe",
+  assert.equal(plan.urls[0], "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe");
+  assert.deepEqual(plan.urls.slice(1), [
+    "https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib/x86_64/msys2-base-x86_64-20260927.sfx.exe",
+    "https://mirror.nju.edu.cn/msys2/distrib/x86_64/msys2-base-x86_64-20260927.sfx.exe",
+    "https://mirrors.aliyun.com/msys2/distrib/x86_64/msys2-base-x86_64-20260927.sfx.exe",
   ]);
+  assert.match(installerSourceLabel(plan.urls[1]), /^国内镜像（mirrors\.tuna\.tsinghua\.edu\.cn）$/u);
   assert.match(plan.sha256, /^[0-9a-f]{64}$/u);
   assert.equal(plan.error, "");
   assert.match(plan.note, /固定为官方 release 2026-09-27/u);
@@ -921,7 +926,8 @@ test("F3d 缓存只有 1 KB：不认这份缓存，真去下固定版本，失�
   );
   const downloadStep = stepOf(report, "download");
   assert.equal(downloadStep.status, "failed", downloadStep.detail);
-  assert.equal(subprocess.calls.filter((line) => line.includes(".sfx.exe")).length, 1, subprocess.calls.join("\n"));
+  // 官方 release 在前、三个国内镜像随后：一条都不通时每个候选各试一次。
+  assert.equal(subprocess.calls.filter((line) => line.includes(".sfx.exe")).length, 4, subprocess.calls.join("\n"));
   assert.match(report.message, /固定版本 2026-09-27/u, report.message);
   assert.match(report.nextStep, /MSYS2_INSTALLER_SHA256/u, report.nextStep);
   assert.equal(stepOf(report, "extract").status, "skipped", "没下下来就不该解压");
@@ -974,7 +980,7 @@ test("P0-1 缓存体量够但哈希不符：不认它、保留原文件、重新
     process.env,
   );
   assert.match(report.notes.join("\n"), /不可用：sha256 不符/u, report.notes.join("\n"));
-  assert.equal(subprocess.calls.filter((line) => line.includes("curl")).length, 1, subprocess.calls.join("\n"));
+  assert.equal(subprocess.calls.filter((line) => line.includes("curl")).length, 4, subprocess.calls.join("\n"));
   assert.ok(existsSync(cachePath), "哈希不符的缓存不该被删（留给用户自己判断）");
   rmSync(dir, { recursive: true, force: true });
 });
