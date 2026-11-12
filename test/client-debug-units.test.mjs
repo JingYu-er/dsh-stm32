@@ -135,6 +135,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("pinMapRows") && source.includes("PinMap"), "引脚页要有按端口排布的图");
     assert.ok(source.includes("ioc-diff/restore") && source.includes("恢复中…"), "变更页要能把某个键写回基线");
     assert.ok(source.includes("interrupts/priority") && source.includes("保存中…"), "中断页要能改优先级");
+    assert.ok(source.includes("已回填当前参数"), "串口卡片要能把当前参数填回输入框");
     assert.ok(source.includes("最近发送") && source.includes("resend"), "串口发送要有历史与重发");
     assert.ok(source.includes("校验和"), "产物页要显示 elf 校验和");
     assert.ok(source.includes("clockFlowRows") && source.includes("ClockFlow"), "时钟页要有流向图");
