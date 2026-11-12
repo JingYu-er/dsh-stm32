@@ -47,6 +47,7 @@ const suites = [
     "fault-hints-units.test.mjs",
     "artifacts-units.test.mjs",
     "ioc-diff-units.test.mjs",
+    "ioc-apply-tool-units.test.mjs",
     "breakpoint-hits-units.test.mjs",
     "watch-recorder-units.test.mjs",
     "interrupts-units.test.mjs",

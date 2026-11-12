@@ -9,6 +9,7 @@
  */
 
 import { applyIocPlan, rollbackIoc } from "../engine/ioc-plan.js";
+import { saveIocSnapshot } from "../engine/ioc-diff.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 
@@ -117,6 +118,12 @@ export function registerIocApply(ctx: DshContext): void {
         };
       }
       const applied = applyIocPlan({ projectDir, planId });
+      // 写入成功后自动记一次基线：变更页的「基线」就是上一次写入的结果，不必人手点「记下当前配置」。
+      if (applied.ok) {
+        const snapshot = saveIocSnapshot(projectDir);
+        if (snapshot.ok) extraNotes.push("已把写入后的 .ioc 记成新基线：" + snapshot.report.iocPath);
+        else extraNotes.push("基线未更新：" + snapshot.error);
+      }
       return {
         message: applied.message,
         mode: "apply",
