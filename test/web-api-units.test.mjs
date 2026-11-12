@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：三十九条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 39);
-  assert.equal(new Set(WEB_API_PATHS).size, 39);
+test("WEB_API_PATHS：四十条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 40);
+  assert.equal(new Set(WEB_API_PATHS).size, 40);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -261,6 +261,7 @@ test("WEB_API_PATHS：三十九条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff"), true, "变更页必须有对比路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff/save"), true, "变更页必须能记基线");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff/restore"), true, "变更页必须能把某个键写回基线");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording"), true, "监视录制状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/stop"), true);
@@ -829,6 +830,29 @@ test("GET /ioc-diff 与 POST /ioc-diff/save：无基线先提示，记下基线�
 
   const wrongMethod = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-diff/save", query: {}, deps: deps });
   assert.equal(wrongMethod.status, 405, "记基线只接受 POST");
+
+  // 恢复：把当前文件里改掉的键写回基线值。
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.IP0=NVIC\n", "utf8");
+  const restored = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ioc-diff/restore",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, key: "Mcu.IP0" }),
+    deps: deps,
+  });
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.restored.after, "NVIC");
+  assert.equal(fs.readFileSync(path.join(dir, "demo.ioc"), "utf8").includes("Mcu.IP0=NVIC"), true);
+
+  const noKey = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ioc-diff/restore",
+    query: {},
+    body: JSON.stringify({ projectDir: dir }),
+    deps: deps,
+  });
+  assert.equal(noKey.status, 400);
+  assert.ok(String(noKey.body.error).includes("key"));
   fs.rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });

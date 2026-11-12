@@ -1,13 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   diffIocEntries,
+  iocBackupDir,
   parseIocEntries,
   readIocDiff,
+  restoreIocKey,
   saveIocSnapshot,
   snapshotPath,
 } from "../lib/engine/ioc-diff.js";
@@ -96,4 +98,66 @@ test("空目录与空参数给出可读错误，不抛", () => {
   assert.equal(saveIocSnapshot(empty, env).ok, false);
   rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
   rmSync(empty, { recursive: true, force: true });
+});
+
+test("恢复某个键：写回基线值并先备份，其它行不动", () => {
+  const env = { DSH_STM32_SNAPSHOTS: mkdtempSync(join(tmpdir(), "dsh-ioc-snap-restore-")) };
+  const dir = projectWithIoc("#注释\nMcu.CPN=STM32F103C8T6\nRCC.SYSCLKSource=RCC_SYSCLKSOURCE_HSI\n");
+  assert.equal(saveIocSnapshot(dir, env).ok, true);
+  writeFileSync(join(dir, "demo.ioc"), "#注释\nMcu.CPN=STM32F103C8T6\nRCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK\n", "utf8");
+
+  const restored = restoreIocKey(dir, "RCC.SYSCLKSource", env);
+  assert.equal(restored.ok, true);
+  assert.equal(restored.report.key, "RCC.SYSCLKSource");
+  assert.equal(restored.report.before, "RCC_SYSCLKSOURCE_PLLCLK");
+  assert.equal(restored.report.after, "RCC_SYSCLKSOURCE_HSI");
+  assert.equal(restored.report.changed, true);
+  const text = readFileSync(join(dir, "demo.ioc"), "utf8");
+  assert.ok(text.includes("RCC.SYSCLKSource=RCC_SYSCLKSOURCE_HSI"));
+  assert.ok(text.includes("Mcu.CPN=STM32F103C8T6"));
+  assert.ok(text.includes("#注释"));
+  assert.equal(restored.report.backupPath.startsWith(iocBackupDir(dir)), true);
+  assert.ok(existsSync(restored.report.backupPath));
+  assert.ok(readFileSync(restored.report.backupPath, "utf8").includes("RCC_SYSCLKSOURCE_PLLCLK"));
+
+  const again = readIocDiff(dir, env);
+  assert.equal(again.ok, true);
+  assert.equal(again.report.counts.total, 0);
+
+  rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("恢复某个键：基线里没有、非法键名、没有基线都被拒", () => {
+  const env = { DSH_STM32_SNAPSHOTS: mkdtempSync(join(tmpdir(), "dsh-ioc-snap-reject-")) };
+  const dir = projectWithIoc("Mcu.CPN=STM32F103C8T6\n");
+  const noBaseline = restoreIocKey(dir, "Mcu.CPN", env);
+  assert.equal(noBaseline.ok, false);
+  assert.ok(noBaseline.error.includes("基线"));
+  assert.equal(saveIocSnapshot(dir, env).ok, true);
+  const unknown = restoreIocKey(dir, "USART1.BaudRate", env);
+  assert.equal(unknown.ok, false);
+  assert.ok(unknown.error.includes("基线里没有这个键"));
+  const bad = restoreIocKey(dir, "Mcu CPN", env);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.error.includes("key"));
+  const empty = restoreIocKey("   ", "Mcu.CPN", env);
+  assert.equal(empty.ok, false);
+  rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("恢复某个键：当前文件里被删掉的键追加回末尾", () => {
+  const env = { DSH_STM32_SNAPSHOTS: mkdtempSync(join(tmpdir(), "dsh-ioc-snap-append-")) };
+  const dir = projectWithIoc("Mcu.CPN=STM32F103C8T6\nRCC.SYSCLKSource=RCC_SYSCLKSOURCE_HSI\n");
+  assert.equal(saveIocSnapshot(dir, env).ok, true);
+  writeFileSync(join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  const restored = restoreIocKey(dir, "RCC.SYSCLKSource", env);
+  assert.equal(restored.ok, true);
+  assert.equal(restored.report.changed, true);
+  const text = readFileSync(join(dir, "demo.ioc"), "utf8");
+  assert.ok(text.includes("RCC.SYSCLKSource=RCC_SYSCLKSOURCE_HSI"));
+  assert.equal(text.endsWith("\n"), false);
+  rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
 });

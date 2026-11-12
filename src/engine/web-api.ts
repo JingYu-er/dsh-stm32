@@ -46,7 +46,7 @@ import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
 import { decodeFault } from "./fault-hints.js";
-import { readIocDiff, saveIocSnapshot } from "./ioc-diff.js";
+import { readIocDiff, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
@@ -430,6 +430,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/evidence/prune",
   WEB_API_PREFIX + "/ioc-diff",
   WEB_API_PREFIX + "/ioc-diff/save",
+  WEB_API_PREFIX + "/ioc-diff/restore",
   WEB_API_PREFIX + "/abort",
   WEB_API_PREFIX + "/channels",
   WEB_API_PREFIX + "/channels/start",
@@ -806,6 +807,15 @@ export async function handleWebApi(input: {
     const saved = saveIocSnapshot(projectDir, env);
     if (!saved.ok) return fail(409, saved.error);
     return ok({ snapshot: saved.report });
+  }
+  if (path === WEB_API_PREFIX + "/ioc-diff/restore") {
+    // 把 baseline 里的一个键写回 .ioc：只改这一行，写前备份。
+    const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
+    const key = typeof parsed.value.key === "string" ? parsed.value.key : "";
+    if (key.trim() === "") return fail(400, "key 不能为空");
+    const restored = restoreIocKey(requested !== "" ? requested : process.cwd(), key, env);
+    if (!restored.ok) return fail(409, restored.error);
+    return ok({ restored: restored.report });
   }
   if (path === WEB_API_PREFIX + "/evidence") {
     // 回放：列出证据目录里可载入的 jsonl 文件。只读目录，不读内容。
