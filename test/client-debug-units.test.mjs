@@ -76,6 +76,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.equal(debug.definition.id, "stm32-debug");
     assert.equal(debug.definition.label(), "调试台");
     assert.equal(typeof debug.component, "function");
+    assert.equal(typeof debug.definition.inject, "function", "必须从宿主拿 sessionId，否则不能按会话过滤事件");
+    assert.deepEqual(debug.definition.inject("session-abc"), { sessionId: "session-abc" });
 
     // 渲染一次：桩 React 只造元素不执行组件，这里递归展开函数组件，
     // 能暴露"少字段/引用未定义"这类错误，也能验证关键文案确实进了树。

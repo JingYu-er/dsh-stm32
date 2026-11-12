@@ -88,7 +88,11 @@ export function registerWebRoutes(ctx: DshContext): void {
           handler: (request: any, response: any) => {
             const url = parseUrl(request?.url);
             const since = Number(url.query.since ?? "0");
-            openEventStream(request, response, { since: Number.isFinite(since) ? since : 0 });
+            const session = typeof url.query.session === "string" ? url.query.session : "";
+            openEventStream(request, response, {
+              since: Number.isFinite(since) ? since : 0,
+              session,
+            });
           },
         });
         continue;

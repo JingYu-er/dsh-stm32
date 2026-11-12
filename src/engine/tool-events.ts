@@ -52,6 +52,7 @@ export function withToolEvents(definition: ToolDefinition): ToolDefinition {
         status: "start",
         summary: definition.name + " 开始",
         payload: { args: args as Record<string, unknown> },
+        session: owner,
       });
       try {
         const value = await original(args, exec);
@@ -61,6 +62,7 @@ export function withToolEvents(definition: ToolDefinition): ToolDefinition {
           status: "ok",
           summary: definition.name + " 完成（" + formatDuration(Date.now() - startedAt) + "）",
           payload: { durationMs: Date.now() - startedAt, result: resultDigest(value) },
+          session: owner,
         });
         return value;
       } catch (error) {
@@ -70,6 +72,7 @@ export function withToolEvents(definition: ToolDefinition): ToolDefinition {
           status: "fail",
           summary: definition.name + " 失败：" + describeError(error),
           payload: { durationMs: Date.now() - startedAt, error: describeError(error) },
+          session: owner,
         });
         throw error;
       }

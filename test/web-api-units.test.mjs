@@ -269,6 +269,31 @@ test("GET /status：返回事件计数、会话键与证据目录", async () => 
   assert.equal(wrong.status, 200);
 });
 
+test("GET /status?session：按会话计数，sessionKey 回显请求的会话", async () => {
+  resetEventBus();
+  setEventSessionKey("sess-status");
+  emitEvent({ source: "system", kind: "probe", summary: "全局一", session: "sess-a" });
+  emitEvent({ source: "system", kind: "probe", summary: "全局二", session: "sess-b" });
+  const result = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/status",
+    query: { session: "sess-a" },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(result.status, 200);
+  const status = result.body.status;
+  assert.equal(status.eventCount, 1, "只数本会话事件");
+  assert.equal(status.latestSeq, 1);
+  assert.equal(status.sessionKey, "sess-a");
+  const all = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/status",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(all.body.status.eventCount, 2, "不带 session 时数全部");
+  assert.equal(all.body.status.sessionKey, "sess-status", "不带 session 时回显绑定键");
+});
+
 test("GET /debug：没有会话时返回空闲摘要，且不接受 POST", async () => {
   resetDebugSessionsForTest();
   const result = await handleWebApi({

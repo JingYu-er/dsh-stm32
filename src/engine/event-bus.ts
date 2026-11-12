@@ -42,6 +42,11 @@ export interface DebugEvent {
   refs?: EventRef[];
   /** payload 超过上限被截断时置真，面板据此提示「展开查看完整内容」。 */
   truncated?: boolean;
+  /**
+   * 事件所属的会话键（工具侧是 agent id，面板侧是 session id）。
+   * 多标签页同时连 SSE 时，按它过滤才能各看各的。
+   */
+  session?: string;
 }
 
 export interface EmitEventInput {
@@ -51,6 +56,8 @@ export interface EmitEventInput {
   summary: string;
   payload?: Record<string, unknown>;
   refs?: EventRef[];
+  /** 所属会话键；省略时用当前绑定的会话键。 */
+  session?: string;
 }
 
 /** 内存里保留的事件条数。 */
@@ -106,6 +113,8 @@ export function emitEvent(input: EmitEventInput): DebugEvent {
   if (trimmed.payload !== undefined) event.payload = trimmed.payload;
   if (trimmed.truncated) event.truncated = true;
   if (input.refs !== undefined && input.refs.length > 0) event.refs = input.refs;
+  const owner = (input.session ?? sessionKey).trim();
+  if (owner !== "") event.session = owner;
   nextSeq += 1;
   ring.push(event);
   if (ring.length > EVENT_RING_LIMIT) {
@@ -134,15 +143,22 @@ export function subscribeEvents(listener: (event: DebugEvent) => void): () => vo
   };
 }
 
-/** 取序号大于 since 的事件（按 seq 升序）。 */
-export function eventSnapshot(since = 0): DebugEvent[] {
-  if (since <= 0) return ring.slice();
-  return ring.filter((event) => event.seq > since);
+/**
+ * 取序号大于 since 的事件（按 seq 升序）。
+ * 传 session 时只返回该会话的事件；不传则返回全部（单会话时面板不传也能用）。
+ */
+export function eventSnapshot(since = 0, session?: string): DebugEvent[] {
+  const wanted = (session ?? "").trim();
+  const base = since <= 0 ? ring.slice() : ring.filter((event) => event.seq > since);
+  if (wanted === "") return base;
+  return base.filter((event) => event.session === wanted);
 }
 
-/** 内存里当前保留的事件条数（面板与诊断用）。 */
-export function eventCount(): number {
-  return ring.length;
+/** 内存里当前保留的事件条数（面板与诊断用）；传 session 时只数该会话的。 */
+export function eventCount(session?: string): number {
+  const wanted = (session ?? "").trim();
+  if (wanted === "") return ring.length;
+  return ring.reduce((total, event) => (event.session === wanted ? total + 1 : total), 0);
 }
 
 /** 取走待落盘的挤出事件；调用方负责写入成功后再确认。 */

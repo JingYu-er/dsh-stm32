@@ -5943,7 +5943,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 ### 四、已知限制与后续
 
 - 通道输出是「一次工具调用一批」，不是后台常驻流；常驻 RTT / 串口流与「AI → 人」的进度/中止留到后续阶段。
-- 证据目录的会话键取工具调用的 `agent.id`；面板自身 sessionId 的显式绑定尚未做，多会话时事件按到达顺序混在一起。
+- 证据目录的会话键取工具调用的 `agent.id`；面板自身 sessionId 的按会话过滤已在 S5 补上（见「七、会话绑定」），两者是同一个串时行为一致。
 - 仅「人 → AI」的复制引用已可用，「AI → 人」的进度与中止按钮未做。
 
 ### 五、调试会话卡与监视历史曲线（S3）
@@ -5962,7 +5962,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 为什么不开放任意 gdb 命令：面板走本机 HTTP，只要能拼命令就等于把调试器交给任何能访问该端口的东西。三种动作加位置白名单已覆盖联调需要，剩下的交给 `stm32_debug_eval` 工具。
 - 计数：64 套件 / 953 pass；`client/client.js` 1565 行；包体 1860.6 KB / 276 文件 / 解包 15286.6 KB。
 
-### 七、教训
+### 七、会话绑定（S5）
+
+- 事件带 `session`：工具埋点写 `ctx.tools` 执行时的 `agent.id`，面板写宿主 `conversation.view` 的 `inject(sessionId)` 拿到的 session id；两者本来就是同一个串（真机 `GET /status` 已复核），这里把它显式化，多标签页同时开着时各看各的。
+- `eventSnapshot(since, session?)` 与 `eventCount(session?)` 按会话过滤，空串表示不过滤——单会话时不传也能用，回归测试与诊断脚本不必关心绑定。
+- SSE：`openEventStream({ since, session })` 先按会话补发存量，再在订阅回调里丢弃别的会话的增量；`/dsh-stm32/api/events?since=N&session=<键>` 由 `web-routes` 从 query 透传。
+- `/dsh-stm32/api/status?session=<键>`：计数与 `latestSeq` 只算本会话，`sessionKey` 回显请求的会话；不带参数时回显当前绑定键，行为与 S1 一致。
+- 客户端：`debugEventsPath(lastSeq, sessionId)` 拼 `&session=`；`useDebugEvents(sessionId)` 与状态轮询的依赖都换成 `[sessionId]`，切标签页即重新订阅、重新计数；注册对象加 `inject: (sessionId) => ({ sessionId })`。
+- 为什么不改协议头：面板走同源 fetch/EventSource，query 是最小改动面，也方便用 curl 复现与验收。
+- 计数：64 套件 / **956 pass / 0 fail**；`client/client.js` 1574 行；包体 1861.9 KB / 276 文件 / 解包 15290.4 KB。
+
+### 八、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

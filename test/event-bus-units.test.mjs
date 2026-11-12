@@ -292,3 +292,44 @@ test("通道事件：统一 kind 前缀、单行截断、总量超限只留前�
   assert.equal(watch.payload.meta.samples[0].value, "42");
   assert.equal(watch.summary, "监视 1 行");
 });
+
+test("会话过滤：快照与计数只认本会话，未带会话键的事件不误入", () => {
+  resetEventBus();
+  emitEvent({ source: "model", kind: "stm32_build", summary: "A 一", session: "session-a" });
+  emitEvent({ source: "model", kind: "stm32_build", summary: "B 一", session: "session-b" });
+  emitEvent({ source: "system", kind: "log", summary: "无会话" });
+  setEventSessionKey("session-a");
+  const fallback = emitEvent({ source: "model", kind: "stm32_flash", summary: "A 二" });
+
+  assert.equal(fallback.session, "session-a", "省略 session 时用当前绑定键");
+  assert.equal(eventSnapshot(0).length, 4, "不带会话时保留全部");
+  assert.deepEqual(
+    eventSnapshot(0, "session-a").map((event) => event.summary),
+    ["A 一", "A 二"],
+  );
+  assert.equal(eventCount("session-a"), 2);
+  assert.equal(eventCount("session-b"), 1);
+  assert.equal(eventCount(), 4);
+  assert.equal(eventSnapshot(2, "session-a").length, 1, "since 与 session 同时生效");
+});
+
+test("事件流：带 session 时只补发并只推送本会话事件", () => {
+  resetEventBus();
+  emitEvent({ source: "model", kind: "stm32_build", summary: "A 存量", session: "session-a" });
+  emitEvent({ source: "model", kind: "stm32_build", summary: "B 存量", session: "session-b" });
+  const writes = [];
+  const response = {
+    writeHead: () => {},
+    write: (chunk) => writes.push(chunk),
+    end: () => {},
+  };
+  const stop = openEventStream({ on: () => {} }, response, { session: "session-a", heartbeatMs: 100000 });
+  const text = () => writes.join("");
+  assert.ok(text().includes("A 存量"));
+  assert.ok(!text().includes("B 存量"), "别的会话的存量不应补发");
+  emitEvent({ source: "model", kind: "stm32_flash", summary: "B 增量", session: "session-b" });
+  assert.ok(!text().includes("B 增量"), "别的会话的增量不应推送");
+  emitEvent({ source: "model", kind: "stm32_flash", summary: "A 增量", session: "session-a" });
+  assert.ok(text().includes("A 增量"));
+  stop();
+});

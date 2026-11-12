@@ -537,12 +537,13 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/status") {
     // 面板状态条用：事件计数、当前会话键、证据目录。都是只读的诊断信息。
-    const ring = eventSnapshot(0);
+    const wanted = (query["session"] ?? "").trim();
+    const ring = eventSnapshot(0, wanted);
     return ok({
       status: {
         eventCount: ring.length,
         latestSeq: ring.length === 0 ? 0 : (ring[ring.length - 1]?.seq ?? 0),
-        sessionKey: eventSessionKey(),
+        sessionKey: wanted === "" ? eventSessionKey() : wanted,
         evidenceRoot: evidenceRoot(env),
         ringLimit: EVENT_RING_LIMIT,
         evidenceOverride:
@@ -581,7 +582,7 @@ function writeEvent(response: any, event: DebugEvent): void {
 export function openEventStream(
   request: any,
   response: any,
-  options: { since?: number; heartbeatMs?: number } = {},
+  options: { since?: number; session?: string; heartbeatMs?: number } = {},
 ): () => void {
   let closed = false;
   let unsubscribe: () => void = () => {};
@@ -609,9 +610,12 @@ export function openEventStream(
   }
   if (typeof response.write === "function") response.write(": connected\n\n");
   const since = typeof options.since === "number" && Number.isFinite(options.since) ? options.since : 0;
-  for (const event of eventSnapshot(since)) writeEvent(response, event);
+  const wanted = (options.session ?? "").trim();
+  for (const event of eventSnapshot(since, wanted)) writeEvent(response, event);
   unsubscribe = subscribeEvents((event) => {
     if (closed) return;
+    // 带 session 的订阅只推本会话事件：多标签页同时开着时各看各的。
+    if (wanted !== "" && event.session !== wanted) return;
     writeEvent(response, event);
   });
   heartbeat = setInterval(() => {
