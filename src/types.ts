@@ -15,7 +15,7 @@
  * 其余关键字一律 UNSUPPORTED_SCHEMA；number 的 minimum/maximum 已不在集合里，
  * 范围写进 description，并在执行期校验（见 engine/serial.ts 的 SERIAL_LIMITS）。
  * additionalProperties 只能是 boolean（不能再带"值 schema"）；properties/required/
- * additionalProperties 只能挂在 type:"object"，items 只能挂在 type:"array"。
+ * additionalProperties 只能用于 type:"object"，items 只能用于 type:"array"。
  */
 export interface JsonSchema {
   type?: string;
@@ -46,9 +46,9 @@ export interface ToolOutput {
 }
 
 export interface ToolExec {
-  /** 工具超时或调用方取消时 abort；插件必须把它透传给子进程。 */
+  /** 工具超时或调用方取消时 abort；插件必须将该信号透传给子进程。 */
   signal: AbortSignal;
-  /** 调用方 agent（后台 job 的 owner 用它的 id 归属）。 */
+  /** 调用方 agent（后台 job 的 owner 以该 agent 的 id 归属）。 */
   agent?: { id: string };
 }
 
@@ -125,10 +125,10 @@ export interface JobsService {
   start(spec: JobSpec): string;
 }
 
-/** commands 服务把 handler 的调用现场交给我们（dsh-commands 的 CommandInvocation）。 */
+/** commands 服务将 handler 的调用现场交给插件（dsh-commands 的 CommandInvocation）。 */
 export interface CommandInvocation {
   commandId: string;
-  /** 发起这次命令的 agent；workingDirectory.ensure 会用它的会话目录。 */
+  /** 发起本次命令的 agent；workingDirectory.ensure 使用该 agent 的会话目录。 */
   agent: unknown;
   /** 斜杠命令后面的原始文本（可能为空串）。 */
   rawInput: string;
@@ -156,10 +156,10 @@ export interface CommandsService {
 /**
  * 运行时注册的 skill（dsh-skill 的 skills.register()）。
  *
- * 坑：register() 只校验 name / description / invocation，但 skill 真正被读取时
+ * 限制：register() 只校验 name / description / invocation，但 skill 实际被读取时
  * 会走 validateDefinition()，那里 source 与 provider 都必须是字符串，否则
  * `skill` 工具直接报 "loaded skill \"x\" source must be a string"。
- * provider 由 register() 兜底成 "runtime"，source 必须自己给。
+ * provider 由 register() 回退为 "runtime"，source 必须显式提供。
  */
 export interface SkillDefinition {
   name: string;
@@ -190,7 +190,7 @@ export interface WebServerService {
   }): () => void;
 }
 
-/** 会话工作目录服务：give 我 cwd，别让我猜 process.cwd()。 */
+/** 会话工作目录服务：由宿主提供 cwd，不使用 process.cwd()。 */
 export interface WorkingDirectoryService {
   ensure(agent: unknown, signal?: AbortSignal): Promise<string>;
 }
@@ -205,7 +205,7 @@ export interface DshContext {
   workingDirectory?: WorkingDirectoryService;
   /** cordis 的动态注入：服务就绪后再执行，宿主缺服务时静默跳过。 */
   inject?(deps: string[], callback: (scope: DshContext) => void): void;
-  /** 事件订阅（cordis）：返回取消订阅函数。turn/end 用它把调试会话在轮次结束时关掉。 */
+  /** 事件订阅（cordis）：返回取消订阅函数。turn/end 通过该回调将调试会话在轮次结束时关闭。 */
   on?(event: string, listener: (...args: any[]) => void): () => void;
   logger?: { info?(message: string): void; warn?(message: string): void };
 }

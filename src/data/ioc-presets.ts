@@ -2,7 +2,7 @@
  * L2 数据：`.ioc` 外设预设 —— "启用一个外设"到底要写哪些键。
  *
  * 为什么必须做成预设：CubeMX **不是**「读到 USART1.VirtualMode 就建 USART1」。
- * 它按「某根脚的 Mode + Signal」推导复用模式，再核对 Mcu.IPn 里有这个实例，才生成
+ * CubeMX 按「某根脚的 Mode + Signal」推导复用模式，再核对 Mcu.IPn 中有该实例，才生成
  * MX_xxx_Init。实测（C8T6 + CubeMX 6.15.0 + STM32Cube_FW_F1_V1.8.7）：只写
  * Mcu.IPn=USART1 + USART1.IPParameters/VirtualMode + PA9.Signal=USART1_TX 时，
  * CubeMX 静默丢弃整个 USART1（生成结果里没有 MX_USART1_UART_Init，
@@ -58,9 +58,9 @@ export interface PeripheralPreset {
 }
 
 /**
- * 族相关的引脚别名：**离线兜底表**，只在读不到 CubeMX db 时用。
+ * 族相关的引脚别名：**离线回退表**，仅在读不到 CubeMX db 时使用。
  *
- * 正常路径是 src/engine/ioc-plan.ts 的 createPinNameResolver：它按 .ioc 里的 Mcu.Name 去本机
+ * 正常路径是 src/engine/ioc-plan.ts 的 createPinNameResolver：该解析器按 .ioc 里的 Mcu.Name 去本机
  * CubeMX 的 `db/mcu/<Mcu.Name>.xml` 查真实引脚名（R16），db 里叫什么就写什么。
  * 这张表只收 F1 的 6 根带后缀的脚（PA0→PA0-WKUP、PC13→PC13-TAMPER-RTC、PC14/PC15、PD0/PD1），
  * 没装 CubeMX 或 db 里没有这颗时才会用到；CubeMX 换版本后 db 名可能变，那时这里就会写错脚，

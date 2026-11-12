@@ -66,7 +66,7 @@ export async function resolveProjectDir(
     projectDir: fallback,
     note:
       "拿不到会话工作目录（" + (failure ?? "未知原因") + "），缺省用了插件进程的 cwd（" + fallback +
-      "）；如果这不是你的工程，请显式传 projectDir",
+      "）；如果该目录不是目标工程，请显式传入 projectDir",
     fallbackToProcessCwd: true,
   };
 }

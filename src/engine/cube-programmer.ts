@@ -1,13 +1,13 @@
 /**
  * L1：STM32CubeProgrammer CLI 烧录后端（openocd 之外的第二条腿）。
  *
- * 为什么需要它（2026-11-08 真机教训）：openocd 0.12 没有 C0/U0 等族的 target 脚本，
+ * 为什么需要该后端（2026-11-08 真机问题）：openocd 0.12 没有 C0/U0 等族的 target 脚本，
  * 插件内置适配版也只覆盖到「flash 驱动能借用」的程度；C0 那次靠会话外手敲
  * STM32_Programmer_CLI 才烧进去——这条能力必须在插件里，而不是在用户的肌肉记忆里。
  *
  * 探针支持面（-h 实测 + 本机 -l 实测）：CLI 的 SWD 路径只认 **ST-LINK**
  * （port=SWD 的参数全是 ST-LINK 系；DAPLink/CMSIS-DAP 不走这条）。
- * 所以它是「插着 ST-LINK 时的第二后端」，不是万能替补，报告里要如实说。
+ * 因此该后端仅适用于已插入 ST-LINK 的场景，不能替代其他探针，报告中须如实说明。
  *
  * 判据短语全部来自对本机 v2.19.0 的 STM32_Programmer_CLI.exe / CubeProgrammer_API.dll
  * 内嵌消息表的实测提取（UTF-16 串扫描），不是文档转述：
@@ -34,7 +34,7 @@ export interface CubeProgrammerRequest {
   cliPath?: string;
   /** SWD 频率 kHz（freq= 参数）；缺省不动（CLI 默认 4000）。 */
   adapterSpeed?: number;
-  /** 烧完复位运行：true 加 -rst；false 保持连接后停住？默认 true。 */
+  /** 烧录后复位运行：true 时加 -rst；false 时保持连接后停住。默认 true。 */
   runAfterReset?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -129,7 +129,7 @@ export async function runCubeProgrammerFlash(
     return empty(
       ["没找到 STM32_Programmer_CLI.exe"],
       "烧不了：本机找不到 STM32CubeProgrammer 的 CLI（查过 " + describeSearchScope(config.cubePrgBins, "STM32_CUBE_PRG_ROOT") + "）。" +
-        "装上它就有了不依赖 openocd target 脚本的第二条后端（H5/WBA/WB0/WL3 只能走它）：" +
+        "安装后即具备不依赖 openocd target 脚本的第二条后端（H5/WBA/WB0/WL3 只能使用该后端）：" +
         "https://www.st.com/en/development-tools/stm32cubeprog.html（默认安装路径会被自动发现；已装在别处就设 STM32_CUBE_PRG_ROOT 指到安装根或 bin）",
     );
   }
@@ -179,5 +179,5 @@ export async function runCubeProgrammerFlash(
 
 /** 报告卡片里给这行署名：烧的是哪条后端。 */
 export function cubeProgrammerBackendNote(cliPath: string): string {
-  return "烧录后端：STM32CubeProgrammer CLI（" + basename(cliPath) + "）；注意它只认 ST-LINK，DAPLink/CMSIS-DAP 探针仍走 openocd。";
+  return "烧录后端：STM32CubeProgrammer CLI（" + basename(cliPath) + "）；注意该后端只认 ST-LINK，DAPLink/CMSIS-DAP 探针仍走 openocd。";
 }

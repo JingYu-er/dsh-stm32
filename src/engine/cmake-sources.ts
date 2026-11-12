@@ -1,12 +1,12 @@
 /**
  * L2：cmake-sources —— 让 cmake/stm32cubemx/CMakeLists.txt 跟着工程的实际内容更新。
  *
- * 背景（审计后补的老洞）：这份文件由脚手架从 templates/scaffold 拷进来，之后 CubeMX 不再重写它。
- * 实测证据：demo 工程里它的 mtime 与模板拷贝时间相同，而 Core/Src/main.c 已经更新过一轮。
- * 于是它一直是「C8T6 + GPIO」的快照：设备宏写死 STM32F103xB、启动文件写死 startup_stm32f103xb.s、
+ * 背景（审计后补充的旧问题）：该文件由脚手架从 templates/scaffold 拷贝进来，此后 CubeMX 不再重写。
+ * 实测证据：demo 工程中该文件的 mtime 与模板拷贝时间相同，而 Core/Src/main.c 已更新过一轮。
+ * 因此该文件一直是「C8T6 + GPIO」的快照：设备宏固定为 STM32F103xB、启动文件固定为 startup_stm32f103xb.s、
  * HAL 模块清单只有 gpio/dma/pwr/flash/exti/cortex/rcc 那一圈。只要在 CubeMX 里开一个 UART/CAN/USB，
  * 编译能过、链接报 undefined reference to HAL_UART_Init —— 而源清单里根本没有那个 .c，
- * 报错信息完全不指向真正的病因，这是最费时间的一类坑。
+ * 报错信息完全不指向真正的成因，这是最耗时的一类问题。
  *
  * 做法：只动三处（设备宏、应用源清单、驱动源清单），文件里其余的行原样保留。
  *   - 设备宏与启动文件：从工程根真实存在的 startup_stm32*.s 反推（stm32f103xb → STM32F103xB），
@@ -54,7 +54,7 @@ export interface StartupPick {
   notes: string[];
 }
 
-/** 选工程根那个启动文件：唯一就是它；多个按字典序取第一个并说明（芯片换了要人删掉旧的）。 */
+/** 选择工程根目录下的启动文件：仅有一个时即使用该文件；有多个时按字典序取第一个并说明（更换芯片后需人工删除旧文件）。 */
 export function pickStartupFile(projectDir: string): StartupPick | null {
   const files = listStartupFiles(projectDir);
   if (files.length === 0) return null;
@@ -84,7 +84,7 @@ export function startupStem(file: string): string {
  */
 export function deviceDefineFromStartup(file: string): string {
   const stem = startupStem(file);
-  // 太短的名字没尾缀可拆（例如 startup_stm32.s）：原样大写，别在这里瞎猜。
+  // 名称过短时无可拆分的后缀（例如 startup_stm32.s）：原样大写，不在此处做猜测。
   if (stem.length < 8) return stem.toUpperCase();
   return stem.slice(0, -2).toUpperCase() + defineSuffix(stem.slice(-2));
 }
@@ -176,7 +176,7 @@ function readTextOrNull(path: string): string | null {
  * 这个工程用到了哪些 HAL 模块。
  *
  * 主依据是 stm32f1xx_hal_conf.h：CubeMX 只把真正用到的外设模块的 HAL_xxx_MODULE_ENABLED 打开，
- * 那份文件就是它对「要编译哪些 .c」的声明（不要扫 hal_conf 里的 #include —— 那里每个模块都列了一遍，
+ * 该文件即「要编译哪些 .c」的声明（不要扫描 hal_conf 中的 #include —— 其中每个模块都列了一遍，
  * 只是被 #ifdef 包住，全当「用到」会把整个 HAL 都编进去）。
  * 再并上 Core 源码里显式 #include 的模块，兜住手写代码的情况。
  */
@@ -237,7 +237,7 @@ export interface CmakeSourcesFacts {
 export function collectCmakeSources(projectDir: string): CmakeSourcesFacts | { error: string } {
   const startup = pickStartupFile(projectDir);
   if (startup === null) {
-    return { error: "工程根没有 startup_stm32*.s（不是脚手架建的 HAL 工程？），无从反推芯片与源清单" };
+    return { error: "工程根没有 startup_stm32*.s（可能不是脚手架创建的 HAL 工程），无法反推芯片与源清单" };
   }
   // 优先信磁盘上的 HAL 目录（WBA/WL 这种三四字符族段的启动文件名拆不出族）；拆不出再回退文件名规则。
   const family = familyTokensFromDriversDir(projectDir) ?? familyTokensFromStartup(startup.file);
@@ -448,7 +448,7 @@ export function refreshCubemxCmakeLists(projectDir: string, options: { dryRun?: 
   const eol = dominantEol(file.text);
   const original = file.text.split(/\r?\n/u);
   const endedWithEol = /\r?\n$/u.test(file.text);
-  // 按行切完末尾会多出一个空串；不摘掉它，每跑一次就多一个空行（幂等就断了）。
+  // 按行切分后末尾会多出一个空字符串；不移除该字符串时，每次运行都会多一个空行（幂等性即被破坏）。
   if (endedWithEol) original.pop();
   let lines = original;
   // 家族目录名（Drivers/STM32F1xx_HAL_Driver、CMSIS/Device/ST/STM32F1xx）跟着启动文件走。

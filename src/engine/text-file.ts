@@ -4,7 +4,7 @@
  * 为什么需要：STM32 的 C 源码在国内经常是被 Keil 编辑过的 GB18030/GBK 文件。
  * 以前 code_patch 用 readFileSync(path, "utf8") 读、writeFileSync(path, text, "utf8") 写，
  * 一次补丁就会把用户的中文注释永久变成替换符（审计 B2）。这里把「怎么读、怎么按原编码写回」
- * 收成一处，所有写用户源码的地方都走它。
+ * 统一收拢，所有写入用户源码的路径都经过该模块。
  *
  * 写回策略：
  * - UTF-8 / UTF-8 BOM：整份按 UTF-8 写回，BOM 原样保留（BOM 在字节层不动，见 replaceLineRange）。
@@ -28,7 +28,7 @@ export interface TextFileRead {
   ok: boolean;
   text: string;
   encoding: TextEncoding;
-  /** 行尾：原文件用 CRLF 就是 CRLF，新写入的行跟随它。 */
+  /** 行尾：原文件使用 CRLF 时保持 CRLF，新写入的行沿用该行尾。 */
   eol: string;
   bytes: number;
   error: string;

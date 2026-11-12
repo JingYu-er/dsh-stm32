@@ -67,7 +67,7 @@ const ST_PAGES: Record<"cubemx" | "cubeprogrammer", { label: string; page: strin
     label: "STM32CubeProgrammer",
     page: "https://www.st.com/en/development-tools/stm32cubeprog.html",
     installHint:
-      "从官方页登录 myST、接受许可并下载安装包；默认路径会被 stm32_doctor 自动发现。它的 SWD 路径只认 ST-LINK。",
+      "从官方页登录 myST、接受许可并下载安装包；默认路径会被 stm32_doctor 自动发现。其 SWD 路径只认 ST-LINK。",
   },
 };
 

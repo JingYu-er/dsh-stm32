@@ -1,13 +1,13 @@
 /**
  * B2：结构化探针错误 —— flash / debug / session 三条路径共用一份分类。
  *
- * 为什么要有它：2d 的错误码只是一张枚举，失败时模型还得去读中文 message 才知道下一步。
+ * 为什么单独定义：2d 的错误码只是一张枚举，失败时模型仍需阅读中文 message 才能确定下一步。
  * 现在一次分类就给全五样东西：
- *   - kind：契约字段（模型可以按它分支），旧错误码字段直接删掉，不做兼容别名（用户已定）；
+ *   - kind：契约字段（模型可按该字段分支），旧错误码字段直接删除，不保留兼容别名（用户已定）；
  *   - cause：一句话根因，给人看也够；
  *   - hint：可执行的下一步（四类真机验过的故障各自有专属文案）；
  *   - evidence：原始日志行，逐字保留，别让模型凭二手转述猜；
- *   - retryable：照 hint 弄完再调一次同一个工具有没有意义（true＝值得重试）。
+ *   - retryable：按 hint 处理后再调用同一个工具是否有意义（true＝值得重试）。
  *
  * 归类顺序敏感：先 no-probe 再 probe-busy —— 把"被占用"读成"没插"会让人白拔线。
  * 同一套规则同时服务 flash（openocd program）与 debug（openocd + gdb），改一处两边一起变。
@@ -15,7 +15,7 @@
 
 import type { JsonSchema } from "../types.js";
 
-/** 探针失败的九类：前七类是日志特征，timeout 由调用方给，unknown 是兜底。 */
+/** 探针失败的九类：前七类来自日志特征，timeout 由调用方给出，unknown 为回退类。 */
 export type ProbeErrorKind =
   | "no-probe"
   | "probe-interface-mismatch"
@@ -27,7 +27,7 @@ export type ProbeErrorKind =
   | "timeout"
   | "unknown";
 
-/** 枚举的运行时形态（工具 schema 的 enum 也用它，避免第二个真相）。 */
+/** 枚举的运行时形态（工具 schema 的 enum 同样使用该数组，避免出现第二份定义）。 */
 export const PROBE_ERROR_KINDS: readonly ProbeErrorKind[] = [
   "no-probe",
   "probe-interface-mismatch",
@@ -68,7 +68,7 @@ export interface ProbeFailureInput {
 export const HINT_PROBE =
   "找不到 CMSIS-DAP 探针：检查 USB、是否被 openocd/调试会话占用（先停掉正在跑的调试），必要时换一根数据线再试。";
 export const HINT_BUSY =
-  "探针没有正常响应：先确认没有第二个 openocd / 调试会话在同时用它（两个 openocd 抢同一个 CMSIS-DAP 时不报错，而是满屏 transfer count mismatch）；如果确认只有一个进程，那就是探针固件卡住了——把探针拔下来等 3 秒再插回，然后重试。";
+  "探针没有正常响应：先确认没有第二个 openocd / 调试会话同时占用该探针（两个 openocd 争用同一个 CMSIS-DAP 时不报错，而是持续输出 transfer count mismatch）；确认只有一个进程时，说明探针固件已无响应——拔下探针等待 3 秒再插回，然后重试。";
 export const HINT_DP =
   "连不上芯片（Error connecting DP）：固件里可能关了 SWD（__HAL_AFIO_REMAP_SWJ_DISABLE），需要 BOOT0=1 重启进系统 bootloader 再烧，或按住复位键在连接瞬间松开。";
 export const HINT_FLASH_PROTECTED =
@@ -183,7 +183,7 @@ const MATCHERS: readonly Matcher[] = [
   },
 ];
 
-/** 一条"看起来像根因"的行；只用于 unknown / 超时的 evidence 兜底。 */
+/** 一条「看起来像根因」的行；只用于 unknown / 超时的 evidence 回退。 */
 const PROBLEM_LINE_RE = /error|unable to find|no device found|couldn't bind|cannot open|invalid/u;
 
 const MAX_EVIDENCE = 4;
@@ -217,13 +217,13 @@ export function probeMissingLines(errors: readonly string[]): string[] {
   return errors.filter((line) => /CMSIS-DAP device|no device found/iu.test(line));
 }
 
-/** USB 形态诊断的结论该以什么 note 呈现（unknown 静默：诊断失败不能把失败报告搞得更吵）。 */
+/** USB 形态诊断结论以何种 note 呈现（unknown 静默：诊断失败不得增加失败报告的噪声）。 */
 export function usbNoteFor(kind: string, detail: string): string | null {
   if (kind === "unknown") return null;
   return "USB 形态：" + detail;
 }
 
-/** 每一类的默认根因（调用方没给更准的说法时用它，避免出现"未知原因"这种废话）。 */
+/** 每一类的默认根因（调用方未给出更准确说法时使用，避免出现「未知原因」这类空泛描述）。 */
 const CAUSE_BY_KIND: Record<ProbeErrorKind, string> = {
   "no-probe": "找不到探针（没插好 / 被占用 / 本机没认到 USB 设备）",
   "probe-interface-mismatch": "openocd 找不到配置里指定的探针驱动（interface 与实插类型不匹配）",

@@ -92,7 +92,7 @@ export interface SvdLineResolution {
   readonly line: string;
   readonly device: SvdDevice | null;
   readonly failure: SvdFailure | null;
-  /** chips.json 找到的 / 从型号编号兜底的 / 没找到。 */
+  /** chips.json 找到的 / 从型号编号回退的 / 未找到。 */
   readonly source: "chips.json" | "cpn" | "none";
   /** 给用户看的一句提示（成功时说明用的是哪份 SVD）。 */
   readonly note: string;
@@ -191,10 +191,10 @@ function svdFailureText(failure: SvdFailure): string {
 }
 
 /**
- * 工程 → SVD：先按型号查 device facts（chips.json 的 line），查不到再按型号里的三位数字兜底。
+ * 工程 → SVD：先按型号查 device facts（chips.json 的 line），查不到再按型号中的三位数字回退。
  *
- * 为什么要兜底：开发机上常把 DSH_STM32_ASSETS 直接指到资源脚本 scripts/assets/本体（未分版本、没有 install.json），
- * 这时 device-facts 读不到，但 SVD 文件其实就在 <root>/device/f1/svd/<line>.json —— 兜底让本地开发可用。
+ * 需要回退的原因：开发机上常将 DSH_STM32_ASSETS 直接指向资源脚本 scripts/assets/本体（未分版本、没有 install.json），
+ * 此时 device-facts 无法读取，但 SVD 文件实际位于 <root>/device/f1/svd/<line>.json —— 该回退使本地开发可用。
  */
 export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = process.env): SvdLineResolution {
   const cpn = readIocCpn(projectDir);
@@ -215,7 +215,7 @@ export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = p
   if (line !== "") {
     source = "chips.json";
   } else {
-    // 兜底：STM32F103C8T6 → "103"。只认 SVD_KNOWN_LINES 里真有的 line，且文件必须能读出来。
+    // 回退：STM32F103C8T6 → "103"。仅接受 SVD_KNOWN_LINES 中确实存在的 line，且文件必须可读。
     const match = /^STM32F(\d{3})/u.exec(cpn.trim().toUpperCase());
     const candidate = match === null ? "" : (match[1] ?? "");
     if (candidate !== "" && SVD_KNOWN_LINES.includes(candidate)) {
@@ -226,7 +226,7 @@ export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = p
 
   if (line === "") {
     return degraded(
-      "型号 " + cpn + " 没能对上 SVD line（device facts 里没有它，或内置资源没装）：这次只按物理地址读，符号名与位域解释不可用；" +
+      "型号 " + cpn + " 没能对上 SVD line（device facts 中没有该型号，或内置资源未安装）：这次只按物理地址读，符号名与位域解释不可用；" +
         SVD_FULL_PROFILE_HINT + "。",
     );
   }
@@ -252,7 +252,7 @@ export function resolveProjectSvd(projectDir: string, env: NodeJS.ProcessEnv = p
       String(device.counts.peripherals) + " 个外设 / " + String(device.counts.registers) + " 个寄存器 / " +
       String(device.counts.fields) + " 个位域" + (device.version === "" ? "" : "，内置资源 " + device.version) + "）",
     source === "cpn"
-      ? "line 是按型号 " + cpn + " 的编号兜底推出来的（device facts 里没有这颗芯片）"
+      ? "line 按型号 " + cpn + " 的编号回退推导（device facts 中没有该芯片）"
       : "型号 " + cpn + " 来自 device facts",
   ];
   return { cpn, line, device, failure: null, source, note: pieces.join("；") };
@@ -368,7 +368,7 @@ export function planRegReads(
       );
     }
     notes.push(
-      "「" + peripheral.name + "」是外设名：dump 了它的 " + String(kept.length) + " 个寄存器（基址 " +
+      "「" + peripheral.name + "」是外设名：dump 了该外设的 " + String(kept.length) + " 个寄存器（基址 " +
         formatAddress(peripheral.baseAddress) + "）",
     );
   };
@@ -475,8 +475,8 @@ export function planRegReads(
 /**
  * 把 engine 的原始样本配上 ref/name/fields。
  *
- * 为什么在工具层做而不是改 engine：readWordsViaSession / gdb 那条路只认地址（它们不该知道 SVD）；
- * 这里按绝对地址把 target 找回来，再拿 SVD 的位域拆值，两边互不侵入。
+ * 在工具层实现而不改 engine 的原因：readWordsViaSession / gdb 路径仅识别地址（不应感知 SVD）；
+ * 此处按绝对地址定位 target，再用 SVD 的位域拆分取值，两侧互不侵入。
  */
 export function decorateSamples(rawSamples: readonly RegsSample[], targets: readonly RegReadTarget[]): RegSample[] {
   const byAddress = new Map<number, RegReadTarget>();
@@ -603,7 +603,7 @@ export function registerRegsRead(ctx: DshContext): void {
       const planNotes: string[] = [svd.note, ...plan.notes];
       const planErrors = plan.errors.length > 0
         ? [...plan.errors]
-        : (plan.addresses.length === 0 ? ["addresses 里没有可读的项（都是空串/重复？）"] : []);
+        : (plan.addresses.length === 0 ? ["addresses 中没有可读项（均为空串或重复项）"] : []);
       if (planErrors.length > 0) {
         const message = "寄存器写法解析失败：" + (planErrors[0] ?? "");
         const report = failureReport(resolution.projectDir, message, planErrors);

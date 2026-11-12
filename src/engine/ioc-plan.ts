@@ -3,8 +3,8 @@
  *
  * 设计要点（规格 §3 I3、§8、§11 A8）：
  * - 插件**永远不静默改 \`.ioc\`**：plan 只算、不写源文件；apply 必须带 planId，且源文件 SHA-256
- *   与 plan 时一致，否则拒绝（防止"plan 之后你自己又用 CubeMX GUI 改过"）。
- * - plan 的候选文件先落在 \`.dsh-stm32/plans/<planId>.ioc\`，apply 前重新核对它的 SHA-256，
+ *   与 plan 时一致，否则拒绝（防止"plan 之后用户又通过 CubeMX GUI 修改过"）。
+ * - plan 的候选文件先落在 \`.dsh-stm32/plans/<planId>.ioc\`，apply 前重新核对候选文件的 SHA-256，
  *   保证"确认的那份"就是"写进去的那份"。
  * - apply 前再跑一遍安全校验（Serial Wire 在、KeepUserCode 开），是第二道闸：plan 通过之后
  *   候选文件也可能被人手改过。
@@ -140,7 +140,7 @@ export interface IocPlanRequest {
   pins?: PinAddRequest[];
   /**
    * 启用外设（预设）。为什么需要这个东西：CubeMX 不认"只写 USART1.VirtualMode"，
-   * 它按引脚的 Mode+Signal 反推复用模式；缺 <pin>.Mode 就静默丢弃整个外设。
+   * CubeMX 按引脚的 Mode+Signal 反推复用模式；缺 <pin>.Mode 就静默丢弃整个外设。
    */
   peripherals?: PeripheralEnableRequest[];
   /**
@@ -276,8 +276,8 @@ interface LineTable {
  * 也就是按 **UTF-16 码元**逐字符比。JS 的 `<` 比较同样是码元序，所以直接比字符串即可。
  * 语料 504 份板级 .ioc 实测：6.x 的 266 份里 261 份（98.1%）是这种序。
  *
- * 以前这里按"数字段比数值"排（Mcu.Pin2 在 Mcu.Pin10 之前），是我们自己的审美：
- * 键数一过 10 就和 CubeMX 的写法错位，用户拿我们的 .ioc 跟 CubeMX 另存的 diff 时满屏挪行。
+ * 以前此处按"数字段比数值"排序（Mcu.Pin2 在 Mcu.Pin10 之前），这是本插件自行确定的排序：
+ * 键数超过 10 就与 CubeMX 的写法错位，用户将本插件生成的 .ioc 与 CubeMX 另存结果对比时会出现大量行位移。
  */
 export function compareIocKeys(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -298,7 +298,7 @@ export interface IocTextDiagnostics {
   duplicates: Map<string, number>;
   /** 既不是注释、也不含 "=" 的行号（1 起；Java properties 的续行不算坏行）。 */
   malformedLines: number[];
-  /** 值跨了多行的键（续行）——改它会破坏续行结构，计划阶段要拒绝。 */
+  /** 值跨了多行的键（续行）——修改该键会破坏续行结构，计划阶段需拒绝。 */
   multiLineKeys: Set<string>;
   /** 文件里既有 CRLF 又有 LF。 */
   mixedEol: boolean;
@@ -350,7 +350,7 @@ export function readIocText(path: string): string {
     throw new Error(
       "不是合法的 UTF-8：" + path +
         "（多半是中文编辑器另存成了 GBK/ANSI）。请用 VS Code 以 UTF-8 另存后再改；" +
-        "插件不会替你猜编码，以免把整份 .ioc 写坏",
+        "插件不推测编码，以免破坏整份 .ioc",
     );
   }
 }
@@ -404,7 +404,7 @@ export function renderIocText(text: string, changes: IocPlanChange[]): string {
     if (!removed.has(position)) out.push({ key: lineKey(line), line });
   });
   // 新增键按 key 排序插到对应位置；末尾的空行是原文件的（可能是"文件末尾有换行"的表现），
-  // 不能吃掉，新键要插在它们**之前**。
+  // 不能移除，新键需插在这些空行**之前**。
   let tail = out.length;
   while (tail > 0 && (out[tail - 1] as { line: string }).line.trim() === "") tail -= 1;
   added.sort((left, right) => compareIocKeys(left.key, right.key));
@@ -455,8 +455,8 @@ const EXTI_MODES: Record<NonNullable<PinAddRequest["interrupt"]>, string> = {
 /**
  * 引脚属性键写进 <pin>.GPIOParameters 的顺序。
  *
- * 这不是"我们觉得好看"的顺序，而是 CubeMX 6.15.0 回写时自己用的顺序——它把 GPIOParameters 当
- * 集合重新序列化，**无视我们写进去的排列**（所以排列只影响 diff 噪声，不影响功能）。
+ * 该顺序并非插件主观选择，而是 CubeMX 6.15.0 回写时自身使用的顺序——CubeMX 把 GPIOParameters 当
+ * 集合重新序列化，**无视插件写入的排列**（因此排列只影响 diff 噪声，不影响功能）。
  *
  * 证据两条：
  * 1) 真机探针（2026-11-02，demo.ioc 副本 load+save）：写 `GPIO_Label,GPIO_PuPd,GPIO_ModeDefaultEXTI`
@@ -498,7 +498,7 @@ function adcPrescalerDiv(token: string): number | null {
 /**
  * DMA 请求参数的白名单顺序（CubeMX 按这个顺序把参数名写进
  * `Dma.<IP>.<n>.RequestParameters`）。F1 的 DMA 没有 FIFO，所以列到 Priority 为止；
- * 后面几个是 F4/H7 才有的字段，留在这里是为了让我们写到它们时顺序仍然对。
+ * 后面几个是 F4/H7 才有的字段，保留在此是为了写入这些字段时顺序仍然正确。
  * 实测依据：richhal.ioc:30（F1，8 个字段）与语料里 F4 的 9 字段版本（多一个 FIFOMode）。
  */
 export const DMA_PARAM_ORDER = [
@@ -508,7 +508,7 @@ export const DMA_PARAM_ORDER = [
 
 /**
  * 解析 `Dma.<IP>.<n>.<参数>` 的分组（`Dma.{ip}.{n}.{name}` 这条 spec 的三段占位符）。
- * 不走手写正则：键名的形状全部由 src/data/ioc-schema.ts 的真值表定义，这里只取它的参数。
+ * 不使用手写正则：键名的形状全部由 src/data/ioc-schema.ts 的真值表定义，此处只取该真值表的参数。
  * 返回 null 表示不是 DMA 请求参数键（含 Dma.RequestParameters 本身）。返回的 name 就是参数名。
  */
 function dmaGroupOf(key: string): { ip: string; n: string; name: string } | null {
@@ -569,8 +569,8 @@ function samePinOrder(left: readonly string[], right: readonly string[]): boolea
  * **按 db 里 <Pin Position> 升序**，虚拟脚（VP_*）永远在最后。
  *
  * 证据：demo.ioc 原序 PC13-TAMPER-RTC(2), PC14-OSC32_IN(3), PC15-OSC32_OUT(4), PD0-OSC_IN(5),
- * PD1-OSC_OUT(6), PA13, PA14, VP_SYS_VS_Systick 正是 Position 序；我们追加 PA5/PA6/PA7/PA0 之后
- * CubeMX 回写成 PA0-WKUP(10), PA5(15), PA6(16), PA7(17)…PA13, PA14, VP_* —— 我们尾部追加的顺序被它重排。
+ * PD1-OSC_OUT(6), PA13, PA14, VP_SYS_VS_Systick 正是 Position 序；插件追加 PA5/PA6/PA7/PA0 之后
+ * CubeMX 回写成 PA0-WKUP(10), PA5(15), PA6(16), PA7(17)…PA13, PA14, VP_* —— 插件尾部追加的顺序被 CubeMX 重排。
  * db 不可用（没装 CubeMX / 查不到这根脚）时保持原序，只在末尾放 VP_*。
  */
 function sortPinsByPosition(order: readonly string[], positionOf: (pin: string) => number | null): string[] {
@@ -614,9 +614,9 @@ function writePinOrder(
  * 证据：单核族全对——F0/F2/F3/F4/F7/G0/G4/L0/L1/L4/WB/WL3/C0/U0 共 302 份 0 反例，F1 12/12；
  * 差别只在 TIM2…TIM4,TIM15（纯字典序会把 TIM15 排到 TIM2 前）。整语料：纯字典序 375/502、
  * natural 392/502、natural + 伪实例置尾 435/502；剩下的反例全是双核/TrustZone 板
- * （NVIC2 在 NVIC1 前、板名插在中间），CubeMX 对它们另有插入序，不在本项目当前范围（F1）。
+ * （NVIC2 在 NVIC1 前、板名插在中间），CubeMX 对这些板另有插入序，不在本项目当前范围（F1）。
  *
- * 我们原来只把新 IP 追加在尾部：只要它的字典序不在末尾，回写就必然被重排（真机往返 B 里
+ * 插件原来只把新 IP 追加在尾部：只要新 IP 的字典序不在末尾，回写就必然被重排（真机往返 B 里
  * ADC1/DMA 被挪到 NVIC/RCC/SYS 前面，5 条 changedValues、benign=false）。
  */
 function compareIpInstance(left: string, right: string): number {
@@ -664,7 +664,7 @@ function sortIpSlots(entries: Map<string, string>): boolean {
 
 /**
  * 引脚属性名 → schema spec id。属性键必须登记在 src/data/ioc-schema.ts 里，
- * 否则覆盖率检查会把它当未知键报出来（这正是我们要的保护：拼错的名字会被抓到）。
+ * 否则覆盖率检查会将该键视为未知键报出（这正是插件所需的保护：拼错的名字会被抓到）。
  */
 const PIN_ATTRIBUTE_SPEC: Readonly<Record<string, string>> = {
   "GPIO_Label": "pin.gpio_label",
@@ -732,8 +732,8 @@ function addPin(table: PinTable, request: PinAddRequest, profile: Stm32FamilyPro
   // 2026-11-02 真机（6.15.0）补充两条：
   // - 写在引脚上的 GPIO_* 属性键，只有同时列进 <pin>.GPIOParameters 才会被保留，
   //   否则 CubeMX 静默删掉（实测 PC13-TAMPER-RTC.PinState 就是这样丢的）；
-  // - GPIO_Mode / PinState 的值它不规范化，写什么回写什么（GPIO_MODE_OUTPUT_OD / GPIO_PIN_SET 都逐字保留），
-  //   所以能不能表达开漏、初始电平只取决于我们写不写这两个键。
+  // - GPIO_Mode / PinState 的值不被 CubeMX 规范化，写什么回写什么（GPIO_MODE_OUTPUT_OD / GPIO_PIN_SET 都逐字保留），
+  //   因此能否表达开漏、初始电平只取决于插件是否写入这两个键。
   const attributes = new Map<string, string>();
   if (label !== "") attributes.set("GPIO_Label", label);
   if (speed !== "low") attributes.set("GPIO_Speed", SPEED_VALUES[speed]);
@@ -787,7 +787,7 @@ function addPin(table: PinTable, request: PinAddRequest, profile: Stm32FamilyPro
  * 把实例名登记进 Mcu.IP<i>（已有就什么都不做）。
  *
  * 真机证据（F4 板级 .ioc 往返）：只写 PA13/PA14 的 Serial_Wire 而不把 SYS 登记进 Mcu.IP<i> 时，
- * CubeMX 会自己补一条 Mcu.IP2=SYS 并把 Mcu.IPNb 从 2 改成 3 —— 也就是"我们漏了一项"，
+ * CubeMX 会自己补一条 Mcu.IP2=SYS 并把 Mcu.IPNb 从 2 改成 3 —— 也就是"插件漏了一项"，
  * 在 ioc_verify 里表现为 Mcu.IPNb 值被改写 + addedKeys 多一个 Mcu.IP2。补上之后往返才干净。
  */
 function ensureIpInstance(entries: Map<string, string>, name: string): boolean {
@@ -810,10 +810,10 @@ function ensureIpInstance(entries: Map<string, string>, name: string): boolean {
  * 真机证据（C0 板级 .ioc 往返，2026-11）：C0 的 db 把调试口单列成一个 IP 实例
  * （`STM32C031C(4-6)Tx.xml` 里有 `<IP InstanceName="DEBUG" Name="DEBUG"/>`；F1/F4 的 db 里**没有**这个实例）。
  * 所以只要引脚上有 `PA13.Signal=DEBUG_SWDIO`，CubeMX 回写就会插一条 `Mcu.IP1=DEBUG`（紧跟 CORTEX_M0+`,
- * 正好是 natural 序）并把 `Mcu.IPNb` 加一。我们不写就永远差这一条：`ioc_verify` 的 `addedKeys` 里挂着它，
+ * 正好是 natural 序）并把 `Mcu.IPNb` 加一。插件不写就永远差这一条：`ioc_verify` 的 `addedKeys` 里保留该键，
  * `Mcu.IP1..IP4` 还会整排位移，看起来像"5 个键的值被改写"。
  *
- * 判据用 db 而不是族 id：db 里没有 DEBUG 实例的族（F1/F4）补了反而多写一个它不认的实例。
+ * 判据用 db 而不是族 id：db 里没有 DEBUG 实例的族（F1/F4）补了反而多写一个 CubeMX 不认的实例。
  */
 function ensureDebugInstance(entries: Map<string, string>, facts: CubemxMcuFacts | null): boolean {
   if (facts === null || !hasIpInstance(facts, "DEBUG")) return false;
@@ -829,7 +829,7 @@ function ensureDebugInstance(entries: Map<string, string>, facts: CubemxMcuFacts
  *
  * 真机证据（C0 板级 .ioc 往返，2026-11）：只要 .ioc 里有引脚——哪怕只有 PA13/PA14 的 SWD——
  * CubeMX 保存时都会把 MX_GPIO_Init 插到清单**第二位**（SystemClock_Config 之后、CORTEX 之前）。
- * 因为是插在中间而不是追加到末尾，ioc_verify 里"纯追加 MX_*_Init 不算差异"的例外盖不住它，
+ * 因为是插在中间而不是追加到末尾，ioc_verify 里"纯追加 MX_*_Init 不算差异"的例外无法覆盖该键，
  * 会记成一条 valueChanged。族模板里本来就有这一项（G0/U0 实测都有），C0 模板是零引脚所以没有。
  */
 function ensureGpioInitEntry(entries: Map<string, string>): boolean {
@@ -839,7 +839,7 @@ function ensureGpioInitEntry(entries: Map<string, string>): boolean {
   const items = current.split(",").map((item) => item.trim()).filter((item) => item !== "");
   if (items.some((item) => item.includes("-MX_GPIO_Init-"))) return false;
   // 判据是"有引脚"而不是"有 GPIO 引脚"：H5 实测纯 SWD（PA13/PA14 的 Serial_Wire）也会被 CubeMX 插进
-  // MX_GPIO_Init；反过来 C0 模板零引脚时它不会插，我们插了反而被删掉（两条都是真机往返看到的）。
+  // MX_GPIO_Init；反之 C0 模板零引脚时 CubeMX 不插入，插件插入反而被删掉（两条都来自真机往返）。
   const hasPins = [...entries.keys()].some((key) => key.endsWith(".Mode"));
   if (!hasPins) return false;
   items.splice(items.length > 0 ? 1 : 0, 0, "2-MX_GPIO_Init-GPIO-false-HAL-true");
@@ -866,15 +866,15 @@ function ensureSerialWire(table: PinTable, pins: PinNameResolver): void {
     }
     table.warnings.push("已删除 " + pin + "（No_Debug 会让 CubeMX 生成 __HAL_AFIO_REMAP_SWJ_DISABLE()）");
   }
-  // 调试口挂在哪个实例下由**本族 db** 决定，不能一律写 SYS：
+  // 调试口归属哪个实例由**本族 db** 决定，不能一律写 SYS：
   //   - F1/F4 的 db 里调试口就是 SYS（Pin 的 signal 叫 SYS_JTMS-SWDIO），要补 Mcu.IPn=SYS；
-  //   - C0/U0 的 db 把它单列成 DEBUG 实例（signal 叫 DEBUG_SWDIO），此时写 SYS 反而多出来的一个
-  //     ——2026-11 C0 板级 .ioc 往返实测：我们写的 Mcu.IP4=SYS 被 CubeMX 整条删掉、IPNb 5→4，
+  //   - C0/U0 的 db 将调试口单列成 DEBUG 实例（signal 叫 DEBUG_SWDIO），此时写 SYS 反而会多出一个实例
+  //     ——2026-11 C0 板级 .ioc 往返实测：插件写入的 Mcu.IP4=SYS 被 CubeMX 整条删除、IPNb 5→4，
   //     ioc_verify 因此报了两条 valueChanged。
   // DEBUG 实例由紧随其后的 ensureDebugInstance 按 db 补，这里只管 SYS。
   const facts = pins.facts;
   const debugSignals: string[] = [];
-  // preferred 的顺序就是"想写成什么"的优先级；fallback 是 db 里有别名笔误时的兜底正则。
+  // preferred 的顺序即目标写法优先级；fallback 是 db 里存在别名笔误时的回退正则。
   const debugPins: Array<{ logical: string; role: "swdio" | "swclk"; preferred: readonly string[]; fallback: RegExp }> = [
     { logical: "PA13", role: "swdio", preferred: ["SYS_JTMS-SWDIO", "DEBUG_SWDIO"], fallback: /SWDIO|JTMS/u },
     { logical: "PA14", role: "swclk", preferred: ["SYS_JTCK-SWCLK", "DEBUG_SWCLK"], fallback: /SWCLK|JTCK/u },
@@ -976,7 +976,7 @@ function applyInterrupts(
     const inIps = context.facts !== null && context.facts.ips.has(name.toUpperCase());
     const inSvd = context.interrupts !== null && context.interrupts.has(name);
     // EXTI 线是按线号分组的（EXTI0…EXTI4 / EXTI9_5 / EXTI15_10），SVD 里就叫这么个名字，
-    // 但它不是外设实例，db 里查不到；写 pins 的 interrupt 时也是同一个名字来源，所以直接放行。
+    // 但该名字不是外设实例，db 里查不到；写 pins 的 interrupt 时也是同一名字来源，因此直接放行。
     const isExtiGroup = /^EXTI[0-9]+(?:_[0-9]+)?$/u.test(name);
     if (!CORE_EXCEPTIONS.has(name) && !inIps && !inSvd && !isExtiGroup) {
       if (context.interrupts === null && context.facts === null) {
@@ -1051,12 +1051,12 @@ function enableSharedSignal(
  * 名字写错 CubeMX 认不到这根脚，整段外设配置会被静默丢弃。
  *
  * db 不可用时（没装 CubeMX / db 里没有这颗 / 该版本里没这根脚）才退回 ioc-presets 的 PIN_DB_ALIASES：
- * 那张表只收 F1 的 6 根脚，CubeMX 换版本就可能漂，所以只是离线兜底，且会在 warnings 里说清楚。
+ * 该表只收 F1 的 6 根脚，CubeMX 换版本即可能漂移，因此仅为离线回退，且会在 warnings 中说明。
  */
 export interface PinNameResolver {
   /** 逻辑名（PA0）→ 写进 .ioc 的名字（PA0-WKUP）。 */
   resolve(logical: string): string;
-  /** 这次用的 db（没有则为 null）：R13/R14/R17 需要它查引脚信号与 IP 模式。 */
+  /** 这次用的 db（没有则为 null）：R13/R14/R17 需要该 db 查询引脚信号与 IP 模式。 */
   db: CubemxDb | null;
   /** 这颗芯片的 db 事实（没有则为 null）。 */
   facts: CubemxMcuFacts | null;
@@ -1069,7 +1069,7 @@ export interface PinNameResolver {
 export function createPinNameResolver(options: {
   /** .ioc 里的 Mcu.Name，例如 STM32F103C(8-B)Tx。 */
   mcuName: string;
-  /** Mcu.Family（只用于兜底别名表）。 */
+  /** Mcu.Family（仅用于回退别名表）。 */
   family: string;
   cubeMxRoots?: readonly string[];
   env?: Record<string, string | undefined>;
@@ -1157,7 +1157,7 @@ function enablePeripheral(
     } else if (builtin !== null) {
       preset = builtin;
       notes.push(
-        "内置表兜底启用 " + preset.name + "（" + preset.label + "）：db 派生不可用 —— " + derived.reason,
+        "内置表回退启用 " + preset.name + "（" + preset.label + "）：db 派生不可用 —— " + derived.reason,
       );
     } else {
       table.errors.push(
@@ -1217,14 +1217,14 @@ function enablePeripheral(
     }
   }
 
-  // 逐字键（DMA 这类键名不受 <ip>.<名字> 约束）：先写它们，再统一重算 Dma.RequestsNb。
+  // 逐字键（DMA 这类键名不受 <ip>.<名字> 约束）：先写这些键，再统一重算 Dma.RequestsNb。
   for (const raw of preset.rawEntries ?? []) {
     table.entries.set(raw.key, paramOverrides.get(raw.key.replace("Dma.", "").replace(/\.0\./u, ".")) ?? raw.value);
   }
   // G1/G2：DMA 三件套。CubeMX 自己写的是
   //   Dma.<IP>.<n>.RequestParameters=Instance,Direction,...,Priority（白名单，与 IPParameters 同机制：
   //   不在名单里的字段会被静默忽略）
-  //   Dma.Request<i>=<IP>（把请求号绑回实例；只有 RequestsNb 时它只是个孤立计数）
+  //   Dma.Request<i>=<IP>（把请求号绑定回实例；只有 RequestsNb 时该键只是孤立计数）
   //   语料 504 份里含 DMA 的 17 份全部三件套齐全，richhal.ioc:30-32 是 F1 的实物证据；
   //   另有 64/64 的 Dma.Request<i> 值等于同号 Dma.<IP>.<n> 的 IP 名，且 RequestParameters 列出的
   //   名字与真的写了的键一一对应（0 处不符）。
@@ -1253,9 +1253,9 @@ function enablePeripheral(
       });
       table.entries.set(renderIocKey("dma.request_parameters", { ip: info.ip, n: info.n }), present.join(","));
       table.entries.set(renderIocKey("dma.request_index", { n: request }), info.ip);
-      // CubeMX 见到 DMA 通道就顺手打开它的中断（实测 6.15.0 + F1：加一条 ADC1 DMA 后
+      // CubeMX 见到 DMA 通道就同时打开对应中断（实测 6.15.0 + F1：加一条 ADC1 DMA 后
       // 保存，diff 里唯一多出来的键就是 NVIC.DMA1_Channel1_IRQn，值固定这一串）。
-      // 我们不补它的话，每次回写都要多一条 added-key 噪声；只在缺失时补，用户设过的不覆盖。
+      // 插件不补该中断时，每次回写都会多一条 added-key 噪声；只在缺失时补，用户设置过的值不覆盖。
       const instance = (table.entries.get(renderIocKey("dma.request_group", { ip: info.ip, n: info.n, name: "Instance" })) ?? "").trim();
       const channelIrq = renderIocKey("nvic.vector", { name: instance });
       if (/^DMA[12]_Channel[0-9]$/u.test(instance) && !table.entries.has(channelIrq)) {
@@ -1328,7 +1328,7 @@ function enablePeripheral(
 /**
  * 自洽校验（都按 CubeMX 的真实推导规则，不是风格洁癖）：
  * - Mcu.IPNb 必须等于 Mcu.IPn 的条数；
- * - 外设进了 Mcu.IPn 就得有引脚 .Signal 指向它；
+ * - 外设进入 Mcu.IPn 就必须有引脚 .Signal 指向该外设；
  * - 多模式外设的引脚还得表达功能：普通外设（USART）用 `.Mode`，共享信号外设（定时器/ADC）
  *   用 `SH.<pin信号>.<n>=<IP 信号>,<IP 模式>` —— 两者都缺时 CubeMX 静默丢弃整个外设，不报错。
  */
@@ -1364,7 +1364,7 @@ function validatePeripheralWiring(entries: Map<string, string>, warnings: string
     if (chipFamilies !== null && !chipFamilies.has(instanceFamilyName(device))) continue;
     const pins = pinsByDevice.get(device) ?? [];
     if (pins.length === 0) {
-      warnings.push(device + " 在 Mcu.IPn 里，但没有引脚的 .Signal 指向它 → CubeMX 会忽略这个外设");
+      warnings.push(device + " 在 Mcu.IPn 里，但没有引脚的 .Signal 指向该外设 → CubeMX 会忽略该外设");
       continue;
     }
     const noMode = pins.filter((pin) => {
@@ -1459,8 +1459,8 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (diagnostics.mixedEol) {
     warnings.push("这份 .ioc 的换行不一致（既有 CRLF 又有 LF）：写回时会统一成多数的那种（CRLF）");
   } else if (source.includes("\n") && !source.includes("\r\n")) {
-    // 纯 LF：CubeMX 自己保存时写 CRLF。我们保留原样（否则用户第一次 apply 就会看到整文件换行变化），
-    // 但要说清代价——拿我们的文件跟 CubeMX 另存的结果逐字节 diff 时会差整文件换行（键值不受影响）。
+    // 纯 LF：CubeMX 保存时写 CRLF。本插件保留原样（否则用户第一次 apply 就会看到整文件换行变化），
+    // 但需说明代价——将本插件文件与 CubeMX 另存结果逐字节对比时会差整文件换行（键值不受影响）。
     warnings.push("这份 .ioc 是纯 LF 换行（CubeMX 自己保存时用 CRLF）：写回保持 LF，逐字节对比 CubeMX 另存的结果会整文件不同");
   }
   if (!diagnostics.finalNewline) {
@@ -1487,7 +1487,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   const family = (after.get(renderIocKey("mcu.family")) ?? "").trim();
   const familyProfile = family === "" ? null : familyProfileOf(family);
   const svdSupported = familyProfile === null || familyProfile.capabilities.svdValidation;
-  // SVD 的中断表先准备好：interrupts 参数要拿它校验中断名，R20 也要用（同一个 set 复用，只读一次盘）。
+  // SVD 的中断表先准备好：interrupts 参数需用该表校验中断名，R20 也需要该表（同一个 set 复用，只读一次盘）。
   // .ioc 里只有 CPN（STM32F103C8T6），先换成 SVD 的 line（103）；没有内置资源时 device 为 null，校验跳过。
   let interrupts: ReadonlySet<string> | null = null;
   const cpn = (after.get(renderIocKey("mcu.cpn")) ?? "").trim();
@@ -1502,7 +1502,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     }
   }
   // 引脚名解析器（本机 db）先建出来：Serial Wire 要按该芯片的脚名/信号名写，
-  // 引脚表排序要 Position，外设预设要 db，都靠它。它只读 db，不改 .ioc。
+  // 引脚表排序需要 Position，外设预设需要 db，都依赖该 db。该函数只读 db，不改 .ioc。
   const pinNames = createPinNameResolver({ mcuName: (after.get(renderIocKey("mcu.name")) ?? "").trim(), family });
   // db 指纹写进报告：任何一条返回路径（包括"没有变化"、失败）都要带上，报 bug 时能一眼看出 db 版本差异。
   empty.dbVersion = pinNames.db?.version ?? "";
@@ -1513,7 +1513,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (ensureDebugInstance(pinTable.entries, pinNames.facts)) {
     notes.push("把 DEBUG 登记进 Mcu.IP<i>：本族 db 把调试口单列成实例 DEBUG，CubeMX 回写时自己会补（C0 实证）");
   }
-  // 有引脚就得有 MX_GPIO_Init 这一项（C0 模板零引脚缺它，CubeMX 保存时插在第二位）。
+  // 有引脚就必须有 MX_GPIO_Init 这一项（C0 模板零引脚缺少该项，CubeMX 保存时插在第二位）。
   if (pinTable.order.length > 0 && ensureGpioInitEntry(pinTable.entries)) {
     notes.push("ProjectManager.functionlistsort 补上 2-MX_GPIO_Init-GPIO-false-HAL-true：有引脚时 CubeMX 会自己插这一项（C0 实证）");
   }
@@ -1535,12 +1535,12 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   }
   // 引脚表变化过才重写 Mcu.PinN。
   // 为什么不再按"有没有 .Signal"过滤：F1 的 PB2 在 CubeMX 里只有 PB2.Mode=B2-BOOT1（BOOT1 是复用功能，
-  // 不带 .Signal）。按 .Signal 过滤会把它从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*
+  // 不带 .Signal）。按 .Signal 过滤会将该引脚从 Mcu.PinN 里静默剔除——PinsNb 缩水，PB2.Mode / PB2.GPIO_*
   // 成了没有引脚指向的孤儿键，CubeMX 下次打开就丢这段配置。所以：已在表里的引脚一个都不删，只追加。
   // 虚拟引脚（VP_*）的清理归 ensureSerialWire 管，这里不掺和。
-  // 排序：CubeMX 自己按 db 的 <Pin Position> 升序写 Mcu.Pin<i>（虚拟脚在最后），我们以前只会尾部追加，
+  // 排序：CubeMX 按 db 的 <Pin Position> 升序写 Mcu.Pin<i>（虚拟脚在最后），本插件以前只会尾部追加，
   // 所以每次加引脚都会多一条"引脚表被重排"的真 diff（三次真机探针一致）。
-  // 没有 db 时所有脚都查不到 Position：排序退化成「原序 + 虚拟脚挪到最后」，仍然是我们想要的
+  // 没有 db 时所有脚都查不到 Position：排序退化为「原序 + 虚拟脚挪到最后」，仍是所需结果
   // （原文件本来就是 CubeMX 写的，顺序已经对；VP_* 无论哪种情况都在最后）。
   const positionOf = (pin: string): number | null => {
     const fact = pinNames.facts === null ? undefined : pinNames.facts.pins.get(pin);
@@ -1587,12 +1587,12 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   //   - pllmul 模型（F0/F1/L0…）且有该族总线上限 → 直接规划（F1 的派生结果与手写表逐项相等，已在单测里钉住）；
   //   - direct 模型（C0：没有 PLL，SYSCLK 直接取源）→ 走 clock-direct.ts；
   //   - unknown（H7/U5 分相 PLL 这类还没实现的模型）→ 明确拒绝，不套别的族的键名；
-  //   - 读不到 db（没装 CubeMX）→ F1 用 F1_FACTS 兜底，别的族拒绝。
+  //   - 读不到 db（未安装 CubeMX）→ F1 使用 F1_FACTS 回退，其它族拒绝。
   const clockDb = pinNames.facts === null || pinNames.db === null ? null : readClockDbFacts(pinNames.db, pinNames.facts);
   const clockDbFacts = clockDb === null ? null : clockFactsFromDb(clockDb, family === "" ? "STM32F1" : family);
   const clockSupported = familyProfile === null || familyProfile.capabilities.clockPlan || clockDbFacts !== null;
   // 拒绝原因按「先看事实、再看族画像」排：族画像里的 clockPlan 是早期「只按 F1 手写表」的粗粒度闸门，
-  // 现在 24 个族都能从 db 现算，拿它当原因会盖掉真正缺口（H7 是分相 PLL 没实现，不是「只支持 F1」）。
+  // 现在 24 个族都能从 db 现算，以该闸门为原因会掩盖真正缺口（H7 是分相 PLL 未实现，不是「只支持 F1」）。
   const clockRefusal = clockSupported
     ? ""
     : (clockDb === null
@@ -1637,7 +1637,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   } else {
     warnings.push(...clockPlan.warnings);
     if (clockPlan.note !== "") notes.push("时钟：" + clockPlan.note);
-    // 派生频率键（RCC.<外设>Freq_Value）的“跟随改写”要在写键之前拍快照：它靠“旧值等于哪个时钟域”
+    // 派生频率键（RCC.<外设>Freq_Value）的“跟随改写”需要在写键之前取快照：该规则依赖“旧值等于哪个时钟域”
     // 判断该跟着谁走，新旧值都从这张表里读。详见 clock-derived.ts 的注释。
     const beforeClockWrite = new Map(after);
     for (const item of clockPlan.entries) after.set(item.key, item.value);
@@ -1670,7 +1670,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   }
   for (const ip of instances) {
     // 只补真外设实例（ADC1/TIM3/USART1…）。NVIC / RCC / SYS / DMA 这些是"伪实例"，
-    // 它们的键（NVIC.TIM2_IRQn、RCC.SYSCLKSource…）不属于 IPParameters 白名单，补进去反而写错。
+    // 这些实例的键（NVIC.TIM2_IRQn、RCC.SYSCLKSource…）不属于 IPParameters 白名单，补进去反而写错。
     if (!/^[A-Z]+[0-9]+$/u.test(ip)) continue;
     const listed = (after.get(ip + ".IPParameters") ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
     const known = new Set(listed);
@@ -1687,21 +1687,21 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     after.set(ip + ".IPParameters", [...listed, ...added].join(","));
     notes.push("自动补 " + ip + ".IPParameters：" + added.join("、") + "（不补会被 CubeMX 静默丢弃）");
   }
-  // schema 覆盖率闸门（两道，S5 收尾）。放在 C6 之后：自动补 IPParameters 会新增一个键，它同样要受审。
+  // schema 覆盖率闸门（两道，S5 收尾）。放在 C6 之后：自动补 IPParameters 会新增一个键，该键同样需要审查。
   // 第一道：键形状必须在真值表里（uncovered 就是"完全没登记的形状"）。
   // 第二道：namespace 级命中（{ip}.{name} / Dma.{ip}.{n}.{name} 这类模板）只证明了"前缀.某东西"，
   // 拼错的键也能命中；所以要按上下文逐条判——是不是 Mcu.IP<i> 里真实启用的实例、参数名在不在
   // db 的 RefParameter 清单里、ip 位写的是不是引脚名、Dma 参数在不在白名单里。
   // 只审"这次计划写或改的键"：文件里原有的键是 CubeMX 自己写的，审了只会误报。
-  // 仍然只告警、不硬失败——老工程模板可能带我们没登记的键，卡死 plan 比漏报更糟；
+  // 仍然只告警、不硬失败——老工程模板可能带本插件未登记的键，阻断 plan 比漏报更糟；
   // 真正的闸门在单测里（schema 覆盖率 0 uncovered + 每类写键点都有 spec）。
   // C7：Mcu.IP<i> 顺序。只有这次动过 IP 槽位才重排——CubeMX 回写时按 natural 序重排
-  // （见 sortIpSlots 注释），我们不排就等于每次启用字典序靠前的外设都制造 5 条假 diff。
+  // （见 sortIpSlots 注释），不排序等于每次启用字典序靠前的外设都制造 5 条假 diff。
   const ipTouched = [...after.keys()].some(
     (key) => matchIocKey(key)?.spec.id === "mcu.ip_index" && after.get(key) !== before.get(key),
   );
   if (ipTouched && sortIpSlots(after)) {
-    notes.push("按 CubeMX 的 natural 序重排 Mcu.IP<i>（TIM2…TIM4,TIM15；板名置尾）：它回写时也是这么排的");
+    notes.push("按 CubeMX 的 natural 序重排 Mcu.IP<i>（TIM2…TIM4,TIM15；板名置尾）：CubeMX 回写时也按此顺序");
   }
 
   const touched = [...after.keys()].filter((key) => after.get(key) !== before.get(key)).sort(compareIocKeys);
@@ -1709,7 +1709,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
   if (coverage.uncovered.length > 0) {
     warnings.push(
       "[SCHEMA] " + String(coverage.uncovered.length) + " 个键不在 .ioc schema 真值表里（" +
-        coverage.uncovered.slice(0, 5).join("、") + "）：可能是 CubeMX 新版本加的键，也可能是我们拼错了键名" +
+        coverage.uncovered.slice(0, 5).join("、") + "）：可能是 CubeMX 新版本加的键，也可能是键名拼写有误" +
         "——拼错的键会被 CubeMX 静默忽略，确认后请补进 src/data/ioc-schema.ts",
     );
   }
@@ -1761,7 +1761,7 @@ export function planIocChanges(request: IocPlanRequest): IocPlanReport {
     );
   }
 
-  // 安全闸：这两条是踩过坑的硬约束，不满足就不给 plan。
+  // 安全闸：这两条是由已发生问题得出的硬约束，不满足则不生成 plan。
   const candidateText = renderIocText(source, planned);
   const summary = summarizeIoc(candidateText, iocPath);
   if (!summary.debug.serialWire) {

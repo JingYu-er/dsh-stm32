@@ -4,7 +4,7 @@
  * 为什么这么做：用户要求「能在 db 查到的，只写查询逻辑」。CubeMX 安装目录里的
  * db/mcu/*.xml 就是芯片事实（引脚、Signal、IP 实例、最高频率），
  * db/mcu/IP/*_Modes.xml 就是各 IP 的合法模式名，db/package.xml 是库版本。
- * 这些文件随用户的 CubeMX 版本变化，所以我们不在插件里内置副本，运行时按版本找。
+ * 这些文件随用户的 CubeMX 版本变化，因此插件不内置副本，运行时按版本查找。
  *
  * 结构（实测 DB.6.0.150）：
  *   db/package.xml                      → <PackDescription Release="DB.6.0.150"/>
@@ -45,7 +45,7 @@ export interface CubemxMcuFacts {
   frequencyMhz: number;
   /**
    * 族（db 的 Family 属性，例如 STM32F1 / STM32L4+）。空串 = 老版本 db 没有这个属性
-   * 或者文件里没写，调用方不要拿它猜型号。
+   * 或者文件内未声明，调用方不得据此推断型号。
    */
   family: string;
   /** 产品线（db 的 Line 属性，例如 STM32F103）。 */
@@ -163,7 +163,7 @@ export function parseMcuXml(text: string): CubemxMcuFacts | null {
 
   const ips = new Map<string, CubemxIpFact>();
   // 两种写法都要认（U5 实测）：自闭合 <IP …/>（F1/F2/F4 这些单上下文族）与带子节点的
-  // <IP …>…</IP>（TrustZone/多上下文族：<IP> 里挂 <ContextSplit>/<ContextIP>）。
+  // <IP …>…</IP>（TrustZone/多上下文族：<IP> 内含 <ContextSplit>/<ContextIP>）。
   // 早先只认自闭合，U5 的 110 个 <IP> 里只有 1 个是自闭合的 —— RCC 正好不是，
   // 于是 readMcuFacts 读出来的 ips 里没有 RCC，时钟事实整族读不到（假结论「db 没有这一族的 RCC」）。
   // 键统一大写：.ioc 的 Mcu.IP<i> 与信号名都是大写实例名，而 ipModesPath/hasIpInstance 也按大写查。
@@ -265,9 +265,9 @@ export function readIpModeNames(db: CubemxDb, facts: CubemxMcuFacts, instanceNam
 /**
  * 读某个 IP 实例的合法参数名（Modes 文件里的 <RefParameter Name="…">），例如 USART1 的
  * BaudRate / WordLength / Parity。.ioc 里 `<IP>.<参数>` 的键名必须逐字等于这些名字，
- * 拼错就会被 CubeMX 静默丢弃——所以覆盖率闸门用它校验「形状对、名字错」。
+ * 拼错会被 CubeMX 静默丢弃，因此覆盖率闸门以该清单校验「形状对、名字错」。
  *
- * F1 系列有个坑：参数名不在 `db/mcu/<Mcu>.xml`（那里只有 <IP> 的实例清单，RefParameter 为 0），
+ * F1 系列存在已知问题：参数名不在 `db/mcu/<Mcu>.xml`（该文件只有 <IP> 的实例清单，RefParameter 为 0），
  * 而在 `db/mcu/IP/<Name>-<Version>_Modes.xml` 里，所以要按 ipModesPath 再走一次。
  * 返回空数组表示「查不到，别据此判错」（调用方据此跳过校验）。
  */
@@ -290,12 +290,12 @@ export function readIpParameterNames(db: CubemxDb, facts: CubemxMcuFacts, instan
  * 这颗芯片上「真的有引脚」的外设族（USART / TIM / ADC / SPI …）。
  *
  * 用途：.ioc 的 Mcu.IPn 里除了真外设，还会出现内核项（CORTEX_M0+）、板名（NUCLEO-C031C6）、
- * SYS / DEBUG 这类没有引脚的东西。判断「进了 Mcu.IPn 却没有脚指向它 → CubeMX 会忽略」时，
- * 必须先排除它们——它们本来就不该有脚。db 的 <Pin><Signal Name=…> 是权威来源：
+ * SYS / DEBUG 这类无引脚的内核项。判断「已进入 Mcu.IPn 却无引脚指向 → CubeMX 会忽略」时，
+ * 必须先排除这些内核项，其本身就不应有引脚。db 的 <Pin><Signal Name=…> 是权威来源：
  * 芯片真实的引脚复用里出现过哪些外设族，就只校验这些族。
  *
  * 实测（2026-11，DB.6.0.150）：C0 的 STM32C031C(4-6)Tx.xml 的引脚信号里没有 CORTEX_M0+、
- * 也没有板名，而 USART2_TX / TIM3_CH1 / ADC1_IN13 都在 → 用它做判据不会误报内核项。
+ * 也没有板名，而 USART2_TX / TIM3_CH1 / ADC1_IN13 均存在 → 以该清单为判据不会误报内核项。
  */
 export function instancesWithPins(facts: CubemxMcuFacts): Set<string> {
   const out = new Set<string>();

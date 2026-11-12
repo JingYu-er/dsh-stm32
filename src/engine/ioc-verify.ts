@@ -1,11 +1,11 @@
 /**
  * L2：`.ioc` 的「CubeMX 到底怎么理解这份配置」诊断（oracle）。
  *
- * 为什么需要：CubeMX 遇到不认识的键**不报错，直接丢**。我们写对了 USART 却丢了 TIM/ADC 时，
+ * 设计动机：CubeMX 遇到不认识的键**不报错，直接丢弃**。本插件写对 USART 却丢失 TIM/ADC 时，
  * 生成日志里一个 ERROR 都没有，只能靠「生成完翻 main.c 看有没有 MX_xxx_Init」倒推。
  *
- * 这里利用 CubeMX 无头脚本的 `config save`：`config load` 之后把**它理解的工程**写回 .ioc。
- * 走的是文本导入（与 `stm32_generate` 同一条路），因此 save 出来的东西就是「它理解的结果」：
+ * 这里利用 CubeMX 无头脚本的 `config save`：`config load` 之后把**CubeMX 理解的工程**写回 .ioc。
+ * 采用文本导入（与 `stm32_generate` 同一条路），因此 save 输出即「CubeMX 理解的结果」：
  * 哪些外设真的激活了（`Mcu.IPn`）、引脚信号被规范化成什么、有没有补 `SH.*` 共享信号块、
  * 计划生成哪些 `MX_*_Init`（`ProjectManager.functionlistsort`）。
  *
@@ -36,7 +36,7 @@ export interface IocSignalRewrite {
   after: string;
 }
 
-/** 两边都有、但值被 CubeMX 改掉的键（它会把值规范化或按自己的不变量重算）。 */
+/** 两边都有、但值被 CubeMX 改写的键（CubeMX 会规范化值或按自身不变量重算）。 */
 export interface IocValueChange {
   key: string;
   before: string;
@@ -46,17 +46,17 @@ export interface IocValueChange {
 /**
  * 归因用的「键名上下文」：本机 CubeMX db 的引脚表、IP 实例表、参数清单。
  *
- * 为什么要把 db 塞进来：missingKeys 只说「它不认这个键」，说不出「为什么不认」——
+ * 注入 db 的原因：missingKeys 只说明「CubeMX 不认该键」，无法说明原因——
  * 键名拼错（db 参数清单里没有）、外设压根没启用（Mcu.IPn 里没有接收方）、
  * 把引脚属性当外设参数写（ip 位写的是引脚名），三种成因的处理办法完全不同。
  * 这些判据全在 db 里（RefParameter 清单 / 引脚表 / IP 实例表），所以由调用方注入，
  * 让 diffIocForVerify 保持纯函数（不碰 fs）。
  *
- * instances 不用传：它等于 after 文本的 Mcu.IPn（CubeMX 最终认的外设表），内部自己填。
+ * instances 无需传入：该字段等于 after 文本的 Mcu.IPn（CubeMX 最终认的外设表），由内部填充。
  */
 export type IocAuditInput = Omit<IocKeyAuditContext, "instances">;
 
-/** 一个被丢/被补的键 + 它在真值表里的成因判定（verdict 空串 = 没有 db 上下文，没判）。 */
+/** 一个被丢/被补的键及其在真值表里的成因判定（verdict 空串 = 无 db 上下文，未判定）。 */
 export interface IocKeyExplanation {
   key: string;
   verdict: IocKeyVerdict | "";
@@ -70,18 +70,18 @@ export interface IocKeyExplanation {
  * 为什么需要：原来的对比只回答「键集合与值是否相等」，回答不了三件更要紧的事——
  *   ① 键一模一样、只是行序被重排（Mcu.PinN 与 IPParameters 的顺序对 CubeMX 有语义）；
  *   ② 值「变了」但只是 CSV 成员被重排/空白被规范化（CubeMX 在维护自己的名单顺序）；
- *   ③ 这个键是我们多写的（它不认 → 我们错）还是它自己补的（我们没有 → 缺口）。
+ *   ③ 该键是本插件多写的（CubeMX 不认 → 本插件错）还是 CubeMX 自行补的（本插件缺失 → 缺口）。
  */
 export interface IocVerifyAttribution {
   /** 值相同、只是行序与 CubeMX 回写不同（不在最长保序子序列里的键，截断后）。 */
   orderOnly: string[];
-  /** 值变了，但只是成员顺序/空白规范化（CSV 集合相等）：不算我们写错。 */
+  /** 值变了，但仅为成员顺序/空白规范化（CSV 集合相等）：不算本插件写错。 */
   valueNormalized: IocValueChange[];
-  /** 值真变了：多半是我们写的不等于它按不变量重算的结果。 */
+  /** 值确实改变：通常为本插件写入的值不等于 CubeMX 按不变量重算的结果。 */
   valueChanged: IocValueChange[];
-  /** 我们写了它没认、被删掉的键（abc-diff 的 B 类：可疑键）。 */
+  /** 本插件写入但 CubeMX 未认、被删除的键（abc-diff 的 B 类：可疑键）。 */
   missingKeys: string[];
-  /** 它补了、我们没有的键（abc-diff 的 C 类：缺口候选）。 */
+  /** CubeMX 补充、本插件缺失的键（abc-diff 的 C 类：缺口候选）。 */
   addedKeys: string[];
   /** 整个外设被丢弃（比单键更严重）。 */
   droppedPeripherals: string[];
@@ -90,34 +90,34 @@ export interface IocVerifyAttribution {
   /**
    * missingKeys 的逐条成因（auditIocKeys 的判定）。
    *
-   * 为什么单列：missingKeys 只说「它不认这个键」，而三种成因的修法完全不同——
+   * 单列原因：missingKeys 只说明「CubeMX 不认该键」，而三种成因的修正方式完全不同——
    * inactive-instance（外设没进 Mcu.IPn，参数键没有接收方）、unknown-parameter（键名拼错，
    * db 的 RefParameter 清单里没有）、pin-attribute（把引脚属性写在 <pin>.<attr> 上却忘了登记
    * GPIOParameters）。verdict 为空串 = 本次没有 db 上下文，只报键名不判成因。
    */
   droppedReasons: IocKeyExplanation[];
-  /** addedKeys 的逐条成因：形状在真值表里（ok）说明是我们漏登记的缺口，unregistered 说明连形状都没登记。 */
+  /** addedKeys 的逐条成因：形状在真值表里（ok）说明为本插件漏登记的缺口，unregistered 说明形状本身未登记。 */
   addedVerdicts: IocKeyExplanation[];
   /**
    * 值变了、但只是 Mcu.IP<i> 槽位重排（两边外设集合完全相同）。
    *
    * 为什么从 valueChanged 里摘出来：CubeMX 按 natural 序重排外设槽位（见 ioc-plan 的 sortIpSlots），
-   * 它改的是「第 i 个槽位放谁」，逐键比值必然「全变了」；从集合看却一个外设都没变，语义上无害。
+   * CubeMX 改的是「第 i 个槽位放谁」，逐键比值必然「全变了」；从集合看却没有任何外设变化，语义上无害。
    */
   ipOrderOnly: string[];
   /**
    * RCC 的派生频率键（时钟树的输出，名字以 Freq_Value/FreqValue 结尾）被 CubeMX 重算的值。
    *
    * 为什么单列：这些键不是「设定」，是 CubeMX 按 PLL/分频重算出来的结果——模板里带的是上一版
-   * 的旧值，我们改 PLL 之后它必然重算一遍。计划文件里没写过它们时，这条差异与「我们写错了」无关，
+   * 的旧值，本插件修改 PLL 之后必然重算一遍。计划文件未写入这些键时，该差异与「本插件写错」无关，
    * 所以不参与 benign 判定（写了却对不上的仍然留在 valueChanged 里）。
    * 实测（2026-11，DB.6.0.150）：F2 的 48MHZClocksFreq_Value/I2SClocksFreq_Value/VCOI2SOutputFreq_Value、
    * F3 的 TIM2Freq_Value/USART1Freq_Value、L1 的 TIMFreq_Value 都是这一类。
    */
   derivedRecomputed: IocValueChange[];
-  /** CubeMX 自己补进 .ioc 的派生频率键（我们不写、它按树补出来的，例如 F2 的 EthernetFreq_Value）。 */
+  /** CubeMX 自行补入 .ioc 的派生频率键（本插件未写入、CubeMX 按树补出，例如 F2 的 EthernetFreq_Value）。 */
   derivedAdded: string[];
-  /** RCC.IPParameters 里被 CubeMX 追加的派生频率名（我们的名单是它的子集）。 */
+  /** RCC.IPParameters 里被 CubeMX 追加的派生频率名（本插件的名单为其子集）。 */
   ipParametersAdded: string[];
   /** 只剩「无害」差异（只重排/只规范化/只自动补清单/只重算派生频率）时为 true —— 这才是可交付的零 diff。 */
   benign: boolean;
@@ -126,7 +126,7 @@ export interface IocVerifyAttribution {
 export interface IocVerifyDiff {
   /** CubeMX 认定激活的外设（after 的 Mcu.IPn）。 */
   afterPeripherals: string[];
-  /** 我们写了、但 CubeMX 没认的外设（before 有 after 无）。 */
+  /** 本插件写入、但 CubeMX 未认的外设（before 有 after 无）。 */
   droppedPeripherals: string[];
   /** CubeMX 自己加进来的外设（before 没有）。 */
   addedPeripherals: string[];
@@ -138,9 +138,9 @@ export interface IocVerifyDiff {
   signalRewrites: IocSignalRewrite[];
   /** CubeMX 补出来的共享信号块（SH.<信号>.0=<IP 信号>,<IP 模式>）。 */
   sharedSignals: Array<{ key: string; entries: string[] }>;
-  /** 我们写了但它没认、被删掉的键（截断后）。 */
+  /** 本插件写入但 CubeMX 未认、被删除的键（截断后）。 */
   removedKeys: string[];
-  /** 它自己补出来的键（截断后）。 */
+  /** CubeMX 自行补出的键（截断后）。 */
   addedKeys: string[];
   /** 值被改写（截断后）：键存在性对比看不出的那类差异。 */
   changedValues: IocValueChange[];
@@ -148,11 +148,11 @@ export interface IocVerifyDiff {
    * CubeMX 保存时自己往 ProjectManager.functionlistsort 追加的 MX_*_Init 条目。
    *
    * 为什么不写：这一列是「生成 main.c 时按什么顺序调初始化」的清单，条目形如
-   * `3-MX_USART1_UART_Init-USART1-false-HAL-true`。实测（2026-11-02，6.15.0）我们启用 USART1
-   * 后不写它，CubeMX 会在保存时按同样的格式、接着现有编号自己补上，回写结果正确；
-   * 而它给每个外设用的函数名后缀并不统一（USART1→MX_USART1_UART_Init，TIM2→MX_TIM2_Init），
-   * 我们猜错反而会把生成顺序写坏。所以这里只是把它从 changedValues 里摘出来单独报告：
-   * 结构差异仍然为 0，但不假装是我们写对了。
+   * `3-MX_USART1_UART_Init-USART1-false-HAL-true`。实测（2026-11-02，6.15.0）本插件启用 USART1
+   * 后不写入该条目，CubeMX 会在保存时按同样格式、接着现有编号自行补上，回写结果正确；
+   * 而 CubeMX 为每个外设使用的函数名后缀并不统一（USART1→MX_USART1_UART_Init，TIM2→MX_TIM2_Init），
+   * 本插件推测错误反而会破坏生成顺序。因此此处仅将该条目从 changedValues 中摘出并单独报告：
+   * 结构差异仍然为 0，但不以此宣称本插件写入正确。
    */
   autoAddedFunctions: string[];
   /** 值相同、但行序与 CubeMX 回写不同的键（截断后）；原来的实现完全看不见这一类。 */
@@ -205,11 +205,11 @@ function pinSignals(entries: Map<string, string>): Map<string, string> {
  * RCC 的派生频率名（不带 `RCC.` 前缀）：`SYSCLKFreq_VALUE`、`APB1Freq_Value`、`ADCFreqValue`、
  * `VCOOutputFreq_Value`、`VcooutputI2S` 这些。
  *
- * 它们不是设定，是 CubeMX 按 PLL/分频**算出来的结果**（db 里只有 Comment/Min/Max，公式在 java 里，
- * 我们不重算）。模板带的是上一版的旧值，改了 PLL 之后它必然重算一遍。
+ * 这些键并非设定，而是 CubeMX 按 PLL/分频**算出的结果**（db 中只有 Comment/Min/Max，公式在 java 里，
+ * 本插件不重算）。模板带的是上一版的旧值，修改 PLL 之后必然重算一遍。
  */
 export function isDerivedClockName(name: string): boolean {
-  // 注意别把 `SYSCLKFreq_VALUE` 放进来：它是「我们写进去的设定」（计划声明目标 SYSCLK），
+  // 注意不要把 `SYSCLKFreq_VALUE` 纳入：该键是「本插件写入的设定」（计划声明目标 SYSCLK），
   // 被 CubeMX 改成别的值就是模型错了，必须报 valueChanged 而不是归到派生重算。
   return /(?:Freq_Value|FreqValue|VcooutputI2S)$/u.test(name.trim());
 }
@@ -222,7 +222,7 @@ export function isDerivedClockKey(key: string): boolean {
 
 /**
  * 两边的值是否只差「CSV 成员顺序 / 空白」——CubeMX 维护自己的名单顺序（如 GPIOParameters、
- * functionlistsort）时会这样改，语义不变，不该算我们写错。
+ * functionlistsort）时会这样改写，语义不变，不应算作本插件写错。
  */
 export function isIocValueNormalized(before: string, after: string): boolean {
   if (before === after) return true;
@@ -343,7 +343,7 @@ function pinsPointingAt(before: Map<string, string>, device: string): string[] {
 }
 
 /**
- * 把被丢/被补的键逐条过一遍真值表审计（auditIocKeys），得出「CubeMX 为什么不认它」。
+ * 将被丢/被补的键逐条过一遍真值表审计（auditIocKeys），得出「CubeMX 不认该键的原因」。
  *
  * 没有 db 上下文时返回 verdict 空串的条目：与其猜一个原因，不如明说没判。
  */
@@ -366,22 +366,22 @@ function explainKeys(
     let detail = finding.detail;
     if (finding.verdict === "ok") {
       // 「形状已登记、上下文也过」但键还是被丢了——必须说清这是「真机才知道」，
-      // 不能让它看起来像「我们写对了、CubeMX 无理丢弃」。典型例子：RCC.<member> 的派生名
-      // 由 CubeMX 自己按时钟树算（语料 847 个不同成员，跨族没法列白名单），写它基本不生效。
+      // 不能使结论呈现为「本插件写对了、CubeMX 无理丢弃」。典型例子：RCC.<member> 的派生名
+      // 由 CubeMX 按时钟树计算（语料 847 个不同成员，跨族无法列白名单），写入该键基本不生效。
       detail =
-        "键名形状已登记（" + finding.specId + "）、上下文也没有明显问题，但它仍然被丢了：" +
+        "键名形状已登记（" + finding.specId + "）、上下文也没有明显问题，但该键仍然被丢弃：" +
         "这类键的生效条件只能靠真机实验确认（例如 RCC.<成员> 的派生名由 CubeMX 自己算）";
     }
     const ip = (matchIocKey(finding.key)?.params.ip ?? "").trim();
     if (finding.verdict === "inactive-instance" && ip !== "" && beforeSet.has(ip.toUpperCase())) {
       detail +=
-        "（before 文本的 Mcu.IP<i> 里本来有它，是 CubeMX 回写时把整个外设删了：指出的引脚/模式不完整，见 hints）";
+        "（before 文本的 Mcu.IP<i> 里本来有该外设，是 CubeMX 回写时删除了整个外设：指出的引脚/模式不完整，见 hints）";
     }
     return { key: finding.key, verdict: finding.verdict, detail };
   });
 }
 
-/** 纯函数：把「我们写的」与「CubeMX 理解的」两份 .ioc 文本对比成诊断。 */
+/** 纯函数：将「本插件写入的」与「CubeMX 理解的」两份 .ioc 文本对比为诊断。 */
 export function diffIocForVerify(
   beforeText: string,
   afterText: string,
@@ -464,7 +464,7 @@ export function diffIocForVerify(
       keptPrefix.length === beforeItems.length &&
       keptPrefix.every((item, index) => item === beforeItems[index]) &&
       appended.length > 0 &&
-      // 外设名里会出现 '+'（U0 的 CORTEX_M0+ 生成 MX_CORTEX_M0+_Init），别把它当成非法条目。
+      // 外设名中会出现 '+'（U0 的 CORTEX_M0+ 生成 MX_CORTEX_M0+_Init），不要将其视为非法条目。
       appended.every((item) => /^[0-9]+-MX_[A-Za-z0-9_+]+_Init-[^,]*$/u.test(item));
     if (onlyAppended) {
       autoAddedFunctions.push(...appended);
@@ -473,9 +473,9 @@ export function diffIocForVerify(
   }
 
   // RCC.IPParameters 只被 CubeMX **追加**派生频率名时不算差异：这一列是「这台 MCU 有哪些 RCC 参数」
-  // 的登记表，我们写的是它的子集，它保存时把重算出来的频率名一并登记进去。
-  // 判据：我们的名字**一个不少**（after ⊇ before），多出来的必须全是派生频率名，只多不少。
-  // 顺序不参与判定——这一列是集合，CubeMX 按 ASCII 升序写，我们跟着排；
+  // 的登记表，本插件写入的是其子集，CubeMX 保存时把重算出的频率名一并登记进去。
+  // 判据：本插件的名字**一个不少**（after ⊇ before），多出来的必须全部是派生频率名，只多不少。
+  // 顺序不参与判定——该列是集合，CubeMX 按 ASCII 升序写，本插件跟随排列；
   // 删名/改名/插进非派生名仍然留在 changedValues 里。
   const ipParametersAdded: string[] = [];
   const ipParametersIndex = changedValues.findIndex((item) => item.key === "RCC.IPParameters");
@@ -505,8 +505,8 @@ export function diffIocForVerify(
   const valueChanged: IocValueChange[] = [];
   const derivedRecomputed: IocValueChange[] = [];
   for (const item of changedValues) {
-    // 派生频率键被 CubeMX 重算：计划里没写过它 → 这是它按树算出来的结果，不是我们写错；
-    // 计划里写过它 → 两边对不上，那是我们算错了，得留在 valueChanged 里让人看见。
+    // 派生频率键被 CubeMX 重算：计划未写入该键 → 这是 CubeMX 按树算出的结果，不是本插件写错；
+    // 计划写入过该键 → 两边对不上，即本插件算错，需留在 valueChanged 中供查看。
     if (isDerived(item.key) && !(plannedKeys?.has(item.key) ?? false)) {
       derivedRecomputed.push(item);
       continue;
@@ -514,7 +514,7 @@ export function diffIocForVerify(
     const bucket = isIocValueNormalized(item.before, item.after) ? valueNormalized : valueChanged;
     bucket.push(item);
   }
-  // CubeMX 自己补出来的派生键（我们不写、它按树算）。计划里写过的仍算缺键。
+  // CubeMX 自行补出的派生键（本插件不写入、CubeMX 按树计算）。计划写入过的仍算缺键。
   const derivedAdded = addedKeys.filter((key) => isDerived(key) && !(plannedKeys?.has(key) ?? false));
   const keptAddedKeys = addedKeys.filter((key) => !derivedAdded.includes(key));
   const attribution: IocVerifyAttribution = {
@@ -550,15 +550,15 @@ export function diffIocForVerify(
     if (ip === "" || ip.startsWith("EXTI")) continue;
     if (peripheralsOf(after).includes(ip)) continue;
     hints.push(
-      key + " 被 CubeMX 删掉了：" + ip + " 不在它认的外设表里（Mcu.IPn）——" +
-        "先启用外设（peripherals）再开它的中断，否则中断键会被静默丢弃",
+      key + " 被 CubeMX 删除了：" + ip + " 不在 CubeMX 认的外设表里（Mcu.IPn）——" +
+        "先启用外设（peripherals）再启用该外设的中断，否则中断键会被静默丢弃",
     );
   }
   for (const device of dropped) {
     const pins = pinsPointingAt(before, device);
     if (pins.length === 0) {
       hints.push(
-        device + " 没有引脚指向它：补 <pin>.Signal=" + device + "_…（普通外设）——" +
+        device + " 没有引脚指向该外设：补 <pin>.Signal=" + device + "_…（普通外设）——" +
           "CubeMX 只从引脚推导外设，光写 " + device + ".IPParameters 不够",
       );
       continue;
@@ -617,7 +617,7 @@ export interface IocVerifyReport {
   ok: boolean;
   projectDir: string;
   iocPath: string;
-  /** 本次落盘的副本（CubeMX 写的就是它）。 */
+  /** 本次落盘的副本（CubeMX 写入的即该文件）。 */
   snapshotPath: string;
   durationMs: number;
   diff: IocVerifyDiff;
@@ -629,7 +629,7 @@ export interface IocVerifyReport {
 /**
  * 读最近一次 ioc 计划写过的键（planIocChanges 落的 <projectDir>/.dsh-stm32/plans/<id>.json）。
  *
- * 用途：区分「派生频率键是 CubeMX 自己重算的」和「我们算错了」。读不到就返回 null（按形状归类），
+ * 用途：区分「派生频率键由 CubeMX 自行重算」与「本插件算错」。读不到则返回 null（按形状归类），
  * 而不是让诊断失败——独立跑 verify 时本来就没有计划。
  */
 function readPlannedKeys(projectDir: string): Set<string> | null {
@@ -683,7 +683,7 @@ function readdirSafe(dir: string): string[] {
  * 给归因准备键名上下文：从 before 文本读 Mcu.Name，去本机 db 拿引脚表 / IP 实例表 / 参数清单。
  *
  * 拿不到 db 时就返回 audit=null（只报键名、不判成因），而不是让整次诊断失败：
- * 「CubeMX 不认这个键」这个结论不依赖 db，只有「为什么不认」依赖它。
+ * 「CubeMX 不认该键」这一结论不依赖 db，仅「不认的原因」依赖 db。
  */
 function buildAuditInput(
   beforeText: string,
@@ -732,7 +732,7 @@ function buildAuditInput(
  * 跑一次「load + save」诊断。
  *
  * 耗时（实测 2026-11，DB.6.0.150，Windows）：**98–120 s**，不是早期记的 25–40 s——这台机器上
- * 光是 load 就要 ~98 s，而且保存完成之后进程有时还不退出（日志已有 `SaveConfig` 但 java 挂着）。
+ * 仅 load 就需 ~98 s，而且保存完成后进程有时仍不退出（日志已有 `SaveConfig` 但 java 尚未退出）。
  * 所以默认超时给 180 s（request.timeoutMs 可调），而判定「成功」只看日志里有没有
  * `SaveConfig`/`Bye bye`，不看进程有没有正常退出——反之，没这一行就绝不能报通过。
  */
@@ -789,7 +789,7 @@ export async function runIocVerify(
     });
     const log = outcome.stdout + "\n" + outcome.stderr;
     const afterText = readFileSync(snapshotPath, "utf8");
-    // 判定成功的唯一依据是日志里走到了保存：CubeMX 卡死/崩溃/超时时快照还是我们复制进去的原文，
+    // 判定成功的唯一依据是日志中已完成保存：CubeMX 卡死/异常终止/超时时快照仍是本插件复制进去的原文，
     // 逐键比出来的「零 diff」是假通过（实测 F2 写错 AHB 枚举名时就是这样，>240 s 不返回）。
     const savedDone = /SaveConfig|Bye bye/iu.test(log);
     const logTail = log.trim().split(/\r?\n/u).slice(-3).join(" | ");
@@ -810,7 +810,7 @@ export async function runIocVerify(
     const auditInfo = buildAuditInput(beforeText, config.cubeMxRoots);
     const diff = diffIocForVerify(beforeText, afterText, auditInfo.audit, readPlannedKeys(projectDir), auditInfo.clockTreeDerived);
     const notes = [
-      "CubeMX 写回的是「它理解的结果」，不是正确答案：被丢掉的外设不会自己补回来。",
+      "CubeMX 写回的是「CubeMX 理解的结果」，并非正确答案：被丢弃的外设不会自行补回。",
       "副本在 " + snapshotPath + "（工程里的 .ioc 没动过）。",
       "判定口径：Mcu.IPn = 真正激活的外设；functionlistsort = 计划生成的 MX_*_Init。",
       auditInfo.note,
@@ -825,8 +825,8 @@ export async function runIocVerify(
     const derived = diff.attribution;
     if (derived.derivedRecomputed.length > 0 || derived.derivedAdded.length > 0 || derived.ipParametersAdded.length > 0) {
       notes.push(
-        "派生频率键（*Freq_Value/*FreqValue）是 CubeMX 按 PLL 与分频**算出来的**，不是我们写的设定：" +
-          "重算 " + String(derived.derivedRecomputed.length) + " 个、它自己补 " + String(derived.derivedAdded.length) +
+        "派生频率键（*Freq_Value/*FreqValue）是 CubeMX 按 PLL 与分频**算出的**，不是本插件写入的设定：" +
+          "重算 " + String(derived.derivedRecomputed.length) + " 个、CubeMX 自行补充 " + String(derived.derivedAdded.length) +
           " 个、RCC.IPParameters 里追加 " + String(derived.ipParametersAdded.length) +
           " 个名字——都不算差异（计划里写过的派生键仍会报）。",
       );
@@ -859,18 +859,18 @@ export async function runIocVerify(
       const parts = [...counts.entries()].map(([verdict, count]) =>
         String(count) + " 个" + (label[verdict] ?? verdict),
       );
-      return "；它丢掉的键里 " + parts.join("、") + "（attribution.droppedReasons 逐条给了原因）";
+      return "；CubeMX 丢弃的键中 " + parts.join("、") + "（attribution.droppedReasons 逐条给出原因）";
     })();
     const autoSuffix = diff.autoAddedFunctions.length === 0
       ? ""
-      : "；它另外自己补了 " + String(diff.autoAddedFunctions.length) + " 条初始化清单（functionlistsort，不影响生成正确性）";
+      : "；CubeMX 另外补充了 " + String(diff.autoAddedFunctions.length) + " 条初始化清单（functionlistsort，不影响生成正确性）";
     const derivedCount = derived.derivedRecomputed.length + derived.derivedAdded.length;
     const derivedSuffix = derivedCount === 0
       ? ""
-      : "；它按时钟树重算了 " + String(derivedCount) + " 个派生频率键（*Freq_Value，不是设定）";
+      : "；CubeMX 按时钟树重算了 " + String(derivedCount) + " 个派生频率键（*Freq_Value，不是设定）";
     const ipSuffix = derived.ipParametersAdded.length === 0
       ? ""
-      : "；RCC.IPParameters 里它自己追加了 " + derived.ipParametersAdded.slice(0, 4).join("/") +
+      : "；RCC.IPParameters 里 CubeMX 自行追加了 " + derived.ipParametersAdded.slice(0, 4).join("/") +
         (derived.ipParametersAdded.length > 4 ? " 等 " + String(derived.ipParametersAdded.length) + " 个派生名" : "");
     return {
       ...base,

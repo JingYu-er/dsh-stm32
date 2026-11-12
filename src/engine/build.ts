@@ -26,7 +26,7 @@ export interface BuildRequest {
   binDirs?: string[];
   /**
    * 构建成功后额外转换的产物格式（2b）。默认不转换——现有用户行为一个字节都不变。
-   * elf 恒有（编译链接本来就产它）；hex / bin 用同一工具链的 arm-none-eabi-objcopy 转出，
+   * elf 恒有（编译链接本身即产出该文件）；hex / bin 由同一工具链的 arm-none-eabi-objcopy 转出，
    * 产线烧录器、CubeProgrammer、J-Flash、串口 ISP 基本只认这两个格式。
    */
   artifacts?: ("elf" | "hex" | "bin")[];

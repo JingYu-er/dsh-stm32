@@ -2,9 +2,9 @@
  * 固件包（STM32Cube_FW_<族>_V<版本>）的组装清单。
  *
  * 背景（2026-10 实测，见 docs §14）：ST 的固件包不是整体下载的，GitHub 上的 STM32Cube<族>
- * 主仓库把 HAL 驱动与 CMSIS 设备支持都挂成了 git 子模块 —— 只拉主仓库 tarball，
+ * 主仓库将 HAL 驱动与 CMSIS 设备支持均设为 git 子模块 —— 仅拉取主仓库 tarball，
  * Drivers/STM32F1xx_HAL_Driver 与 Drivers/CMSIS/Device/ST/STM32F1xx 是**空目录**，
- * 编译必挂。所以要分别拉：
+ * 编译必然失败。因此需分别拉取：
  *   ① HAL 驱动仓库（stm32f1xx-hal-driver）→ Drivers/STM32F1xx_HAL_Driver/{Inc,Src}
  *   ② CMSIS 设备仓库（cmsis-device-f1）  → Drivers/CMSIS/Device/ST/STM32F1xx/{Include,Source}
  *   ③ CMSIS 内核头（STM32CubeF1 主仓库 Drivers/CMSIS/Include 下的 5 个头文件，逐个拉）
@@ -59,9 +59,9 @@ export interface FirmwareFamilySpec {
 /**
  * 归档只有一条官方地址（P0-2）：codeload 直连。
  *
- * 为什么砍掉 ghproxy / api 兜底：同一个 commit 经不同入口打包，gzip 头与顶层目录名不同，
- * 字节哈希对不上——一个 sha256 不能同时校验三条链路。留着它们要么是「校验形同虚设」，
- * 要么是「第二条永远失败」。ghproxy 还是第三方中间人，没有理由让固件包依赖它。
+ * 移除 ghproxy / api 回退的原因：同一个 commit 经不同入口打包，gzip 头与顶层目录名不同，
+ * 字节哈希不一致——单个 sha256 不能同时校验三条链路。保留这类回退要么使「校验形同虚设」，
+ * 要么使「第二条始终失败」。ghproxy 还为第三方中间人，固件包不应依赖该服务。
  */
 function archiveUrls(repo: string, ref: string): string[] {
   return ["https://codeload.github.com/STMicroelectronics/" + repo + "/tar.gz/refs/heads/" + ref];
@@ -604,7 +604,7 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
     coreRepo: "STM32CubeH7",
     coreRef: "master",
     coreIncludeDir: "Drivers/CMSIS/Include",
-    // CM7 的 core_cm7.h 会 include cachel1_armv7.h（L1 cache 维护）：漏了它编译直接 fatal error。
+    // CM7 的 core_cm7.h 会 include cachel1_armv7.h（L1 cache 维护）：缺失该文件将导致编译直接 fatal error。
     coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "cachel1_armv7.h", "core_cm7.h"],
     archives: [
       {
@@ -792,7 +792,7 @@ export function firmwarePlanFor(request: { family?: string; mcu?: string; versio
     "- CMSIS 设备支持（cmsis-device-f1）：Apache-2.0。",
     "- CMSIS 内核头（STM32CubeF1 / Drivers/CMSIS/Include）：Apache-2.0。",
     "",
-    "CubeMX 认这个目录（实测），但 ST 的包管理器不会维护它：要升级请用 CubeMX 包管理器重装官方包。",
+    "CubeMX 识别该目录（实测），但 ST 的包管理器不会维护该目录：升级时请用 CubeMX 包管理器重装官方包。",
     "",
   ].join("\n");
   return {
@@ -848,7 +848,7 @@ export interface FirmwareVerifyResult {
  * 三条判据（与 scaffold.ts 的 resolveFirmwareRoot 一致，多加一条 startup 检查）：
  *   ① Drivers/CMSIS/Include 有内核头   ② Drivers/<族>_HAL_Driver 有 Inc 与 Src
  *   ③ Drivers/CMSIS/Device/ST/<族>/{Include,Source/Templates/gcc/startup_*.s}
- * 为什么必须自查：CubeMX 找不到包时**不报错**（docs §14），只看它打印 Code succesfully generated 会被骗。
+ * 必须自查的原因：CubeMX 找不到包时**不报错**（docs §14），仅凭其打印 Code succesfully generated 会造成误判。
  */
 export function verifyFirmwarePackage(root: string, family: string): FirmwareVerifyResult {
   const spec = FIRMWARE_FAMILIES[family];
@@ -900,7 +900,7 @@ export interface FirmwareNeed {
 }
 
 /**
- * 从 .ioc 正文里读它要哪个固件包。
+ * 从 .ioc 正文中读取所需的固件包。
  * 首选 ProjectManager.FirmwarePackage=STM32Cube FW_F1 V1.8.7；
  * 缺这一条时退回 Mcu.CPN 推族 + 该族默认版本。
  */
@@ -946,7 +946,7 @@ export type FirmwarePackageSource = "repository" | "dsh-firmware" | "cache" | "c
 /**
  * 额外搜索位置（generate 用）：下载缓存 <cacheRoot>/firmware 里放的是包目录们，
  * 而调用方指定的 targetDir 本身就是包目录 —— 两种形状都由 locateFirmwarePackage 认。
- * 为什么需要：固件包装到 cache 或自定义目录后，只搜 CubeMX 根的 generate 结构上看不见它，
+ * 需要该逻辑的原因：固件包安装到 cache 或自定义目录后，仅搜索 CubeMX 根的 generate 在结构上无法发现该包，
  * 于是打印「可以用 stm32_firmware_install 装到 dsh-firmware 下」把用户指回刚做过的事。
  */
 export interface FirmwareExtraDir {
@@ -986,7 +986,7 @@ export interface FirmwareLocation {
 /**
  * 在 CubeMX 根下找 .ioc 要的固件包。两处都找：Repository（官方）与 dsh-firmware（插件组装）。
  * 排序：包名精确匹配最优先 → 版本号大的 → 同版本优先 Repository。
- * 为什么两处都找：官方包零拷贝直接用；没有官方包时才用我们组装的那份。
+ * 两处都查找的原因：官方包零拷贝直接使用；没有官方包时才使用插件组装的那份。
  */
 export function locateFirmwarePackage(
   cubeMxRoots: readonly string[],

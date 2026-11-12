@@ -7,8 +7,8 @@
  * 依赖注入：inject 声明的服务在 apply 时已就绪；tools 注册工具，
  * subprocess 提供 Job 范围的进程终止能力。
  *
- * 唯一的状态清理入口在这里：`turn/end` 到达（我输出完、等你回复）就关掉长调试会话，
- * 这样你随时能在 VS Code 里按 F5 —— 探针不会被插件攥着（规格 §6.4）。
+ * 唯一的状态清理入口在此：`turn/end` 到达（本轮输出结束、等待回复）时关闭长调试会话，
+ * 此后可随时在 VS Code 里按 F5，探针不会被插件长期占用（规格 §6.4）。
  */
 
 import { registerCommands } from "./commands/register.js";
@@ -113,14 +113,14 @@ export function apply(ctx: DshContext): void {
   if (typeof ctx.on === "function") {
     ctx.on("session/event", (session: unknown, event: { type?: string } | undefined) => {
       if (event?.type !== "turn/end") return;
-      // RTT 的 rtt server 挂在同一个 openocd 上：会话一关它也跟着没了，本地状态不能继续
+      // RTT 的 rtt server 依附同一个 openocd：会话关闭后该通道随之终止，本地状态不能继续
       // 报 running。先收 RTT 再收会话，顺序只影响日志好不好看。
       void stopRtt();
       // A9：只关这条会话自己开的调试会话。事件结构宿主没公开，所以按可能的位置逐个试；
       // 全都取不到就传空串，debug-session 会退回原来的「无条件关」行为。
       const owner = callerIdOf(event, session);
       void debugSessions.stop(
-        "turn/end：本轮输出结束，把探针还给你",
+        "turn/end：本轮输出结束，交还探针",
         owner === "" ? {} : { requireOwner: owner },
       );
       // 串口默认不跨 turn：turn 结束就把口放掉，别让一个 COM 口被忘在后台。
@@ -130,7 +130,7 @@ export function apply(ctx: DshContext): void {
     });
     ctx.on("session/disposed", () => {
       void debugSessions.stop("session/disposed");
-      // 会话都没了，persist=true 的串口也不能留（它没有下一个 turn 可以复用）。
+      // 会话已不存在，persist=true 的串口同样不保留（该串口没有下一个 turn 可复用）。
       void closeSerial({}).catch(() => undefined);
     });
     ctx.on("dispose", () => {

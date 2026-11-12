@@ -28,7 +28,7 @@ export interface FetchTarget {
   markers?: string[];
   /**
    * 期望的 sha256（64 位十六进制，小写）。给了的文件在 markers 之后再校验哈希：
-   * 上游 master 漂移、CDN 缓存了旧版、同名不同代的内容都会被它拦下。
+   * 上游 master 漂移、CDN 缓存旧版本、同名不同代的内容均会被该值拦截。
    * 哈希对不上时错误信息带期望值与实际值——维护者一看就知道上游动了、该重新实测。
    * 不给（老数据/还没实测的族）就只走 minBytes + HTML + markers，行为不变。
    */
@@ -88,7 +88,7 @@ interface StreamOutcome {
  * 下一次文件到 partPath（F3c）：支持从 startAt 字节续传。
  *
  * 三个必须的边界：
- *   1. 服务器回 200 而不是 206 = 它忽略了 Range，必须**从头写**（截断），不能接在旧字节后面；
+ *   1. 服务器返回 200 而非 206 表示该服务器忽略了 Range，必须**从头写**（截断），不能接在旧字节之后；
  *   2. 10 s 观察窗口内平均速率不足 1 KB/s 就 abort（半截文件留着，交给上层续传或换源）；
  *   3. 外层 signal 取消要能立刻停（不能让一个 30 s 的下载拖住取消）。
  */
@@ -140,7 +140,7 @@ async function streamOnce(
     if (!response.ok && response.status !== 206) {
       return { ok: false, bytes: 0, reason: "HTTP " + String(response.status), slow: false };
     }
-    // 只有 206 才是"接着上次的字节"；200 说明它整份重发，必须截断重写。
+    // 只有 206 才表示"接着上次的字节"；200 表示整份重发，必须截断重写。
     const append = startAt > 0 && response.status === 206;
     const body = response.body;
     if (body === null) return { ok: false, bytes: 0, reason: "响应没有 body", slow: false };

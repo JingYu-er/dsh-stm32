@@ -39,7 +39,7 @@ export const RTT_TOOL = "stm32_rtt";
  *
  * 为什么记这个：RTT 只用了 openocd 的 rtt 通道，而会话归 probe-session 管（空闲 90 s 才自动收）。
  * 实测踩过：stop 只关通道，openocd 还握着探针，紧接着 stm32_flash 就撞 CMSIS-DAP command mismatch。
- * 所以 stop 时，只要当前会话还是 start 那一次起的（startedAt 没变），就顺手 release 掉；
+ * 所以 stop 时，只要当前会话仍由 start 那次创建（startedAt 未变），就同时 release；
  * 复用的会话不动（那是别人起的）。
  */
 let rttOwnedSessionStartedAt: number | null = null;
@@ -94,7 +94,7 @@ export const reportSchema: JsonSchema = {
     stopped: { type: "boolean", description: "通道是否在窗口内被关掉（目标复位或 stop）" },
     session: SESSION_SCHEMA,
     errors: { type: "array", description: "失败原因（一条一行）", items: { type: "string" } },
-    message: { type: "string", description: "一句话结论" },
+    message: { type: "string", description: "结论摘要" },
     notes: { type: "array", description: "补充说明", items: { type: "string" } },
     probeError: PROBE_ERROR_SCHEMA,
   },
@@ -123,7 +123,7 @@ export const reportSchema: JsonSchema = {
   ],
 };
 
-/** 宿主按 `{ message, report }` 校验工具返回（与其它工具一致）；report 是上面这份扁平形状。
+/** 宿主按 `{ message, report }` 校验工具返回（与其他工具一致）；report 是上面这份扁平形状。
  *  历史 bug：这里曾直接把扁平 report 形状当成 outputSchema 导出，宿主校验时每次都报
  *  "missing required property value.ok"，导致 stm32_rtt 任何调用都失败。 */
 export const outputSchema: JsonSchema = {
@@ -172,7 +172,7 @@ interface ToolValue {
 }
 
 const ACTIONS = ["start", "dump", "follow", "stop", "status"] as const;
-/** follow 的默认窗口：比 dump 长得多——它存在的意义就是"整段时间都挂着读者"，让环不被灌满。 */
+/** follow 的默认窗口：比 dump 长得多——其作用是在整段时间内保持读者在线，避免环被写满。 */
 const DEFAULT_FOLLOW_SECONDS = 10;
 
 function sessionWire(): RttSessionWire {
@@ -265,7 +265,7 @@ export function registerRtt(ctx: DshContext): void {
   ctx.tools.register({
     name: RTT_TOOL,
     description:
-      "RTT（Real Time Transfer）：start 起 openocd 的 rtt 通道并给出 TCP 端口，dump 读一段时间的记录（级别过滤/条数截断），follow 连续读一段（只留最新 N 条，并读固件侧 s_dropped 丢帧计数——想确认「到底丢没丢」就用它），stop 收掉通道（start 自己起的调试会话会一并释放、探针归还），status 看状态。",
+      "RTT（Real Time Transfer）：start 启动 openocd 的 rtt 通道并给出 TCP 端口；dump 读取一段时间的记录（级别过滤/条数截断）；follow 连续读取一段（只保留最新 N 条，并读取固件侧 s_dropped 丢帧计数，用于确认是否发生丢帧）；stop 关闭通道（由 start 自行创建的调试会话一并释放、探针归还）；status 查看状态。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -316,9 +316,9 @@ export function registerRtt(ctx: DshContext): void {
       const binDirs = Array.isArray(args.binDirs) ? (args.binDirs as string[]) : undefined;
 
       // follow / dump 共用：通道没在跑就自动起一个（addr 取参数，其次上次 start 记住的地址）。
-      // 以前这两个动作要求先手动 action=start，多一步而且容易忘；自动起也顺手把会话/探针错误带出来。
+      // 以前这两个动作要求先手动 action=start，多一步且容易遗漏；自动启动同时会把会话/探针错误一并带出。
       const bringUpChannel = async (actionName: string): Promise<ToolValue | null> => {
-        // 「通道在跑」只是内存里的状态：openocd 死了这个标志还亮着。先连一下通道端口确认它真的在，
+        // 「通道在跑」只是内存里的状态：openocd 已结束而该标志仍为真。先连接通道端口确认通道实际存在，
         // 不然 follow 会直接卡到 connect ECONNREFUSED，而不是把死会话清掉重起。
         if (rttStatus().running) {
           const livePort = rttStatus().port;
@@ -400,7 +400,7 @@ export function registerRtt(ctx: DshContext): void {
         }
 
         const gateNotes = gateReportNotes(gate);
-        // 一律走 ensureSession（哪怕 sessionInfo() 看起来有会话）：只有它会在复用前确认 openocd 还活着。
+        // 一律走 ensureSession（哪怕 sessionInfo() 看起来有会话）：只有该函数会在复用前确认 openocd 仍在运行。
         // 真机踩过：探针掉线后 openocd 自己退出，会话记录还在，于是 start 一直"复用"一个死会话。
         const subprocess = ctx.get<SubprocessService>("subprocess");
         if (subprocess === undefined) {
@@ -427,7 +427,7 @@ export function registerRtt(ctx: DshContext): void {
           notes.push("没有活跃会话，先起了一个调试会话（gdb 端口 " + String(session.port) + "，tcl 端口 " + String(session.tclPort) + "）");
         }
         if (ensured.replacedDead) notes.push("旧会话的 openocd 已经不在了（tcl 端口连不上），已清理并重起");
-        // 记下"这是我起的"：stop 时据此决定要不要把 openocd 一起收掉（复用别人的就不动）。
+        // 记录「由本插件创建」：stop 时据此决定是否一并关闭 openocd（复用外部会话则不处理）。
         rttOwnedSessionStartedAt = ensured.reused ? null : session.startedAt;
 
         const started = await startRtt({

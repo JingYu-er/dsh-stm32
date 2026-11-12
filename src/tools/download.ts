@@ -1,7 +1,7 @@
 /**
  * L3：stm32_download —— 只下载安装包，不执行安装器。
  *
- * 为什么不让工具“顺手装一下”：J-Link/CubeMX/CubeProgrammer 的安装器会写注册表、
+ * 为什么下载与安装分离：J-Link/CubeMX/CubeProgrammer 的安装器会写注册表、
  * 装 USB 驱动、改 PATH，甚至要 UAC。插件把下载和安装拆开，用户自己决定什么时候双击。
  */
 

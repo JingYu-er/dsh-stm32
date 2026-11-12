@@ -176,7 +176,7 @@ export async function waitForListening(handle: ProcessHandle, timeoutMs: number,
     return sawListening;
   };
   while (Date.now() - startedAt < timeoutMs) {
-    // openocd 的日志其实走 stderr，两路都要读，否则永远等不到 "Listening on port"。
+    // openocd 的日志实际走 stderr，两路都需读取，否则将一直等不到 "Listening on port"。
     if (drain()) return { ok: true, text };
     const exit = await Promise.race([handle.done.then(() => true), sleep(200).then(() => false)]);
     if (exit === true) {
@@ -232,7 +232,7 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     return { ...empty, message: "没调试：找不到 .elf", durationMs: Date.now() - startedAt };
   }
   // B4：超预算就到此为止——不 spawn openocd（探针不动），也不让 gdb 报一串
-  // "Cannot insert breakpoint" 再把整次调试带崩。文案直接给"超了几个"和"删哪个/换什么"。
+  // "Cannot insert breakpoint" 导致整次调试失败。文案直接给出"超出几个"和"删除哪个/更换什么"。
   if (!plan.ok) {
     errors.push("断点超预算：" + plan.detail);
     notes.push(...collected.notes);
@@ -304,7 +304,7 @@ export async function runDebugRun(subprocess: SubprocessService, request: DebugR
     });
     if (!listening.ok) {
       // F2：旧版只回"openocd 起不来"+15 行尾巴，真正的 adapter init 失败常被挤掉。
-      // 现在先归类（与 flash 同一套规则），再把有信息量的行留下，并顺手做一次 USB 形态诊断。
+      // 先归类（与 flash 使用同一套规则），再保留有信息量的行，同时做一次 USB 形态诊断。
       const lines = listening.text.split(/\r?\n/u).filter((line) => line.trim() !== "");
       // 此时 openocd 还没结算，退出码未知（给 null）；归类规则与 flash 完全同一份。
       const probeError = classifyProbeFailure({ lines, exitCode: null, stage: "debug" });

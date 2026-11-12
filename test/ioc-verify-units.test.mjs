@@ -85,7 +85,7 @@ test("diff：引脚没列进 Mcu.PinN → 单独提示", () => {
 test("diff：完全没引脚指向的外设 → 提示补 <pin>.Signal", () => {
   const before = BEFORE.replace("PA6.Signal=TIM3_CH1\n", "");
   const diff = diffIocForVerify(before, AFTER_DROPPED);
-  assert.match(diff.hints.join(" "), /TIM3 没有引脚指向它/u);
+  assert.match(diff.hints.join(" "), /TIM3 没有引脚指向该外设/u);
 });
 
 test("diff：两边一样时没有任何丢弃与改写（健康配置）", () => {
@@ -248,7 +248,7 @@ test("提示：中断所属外设未被认（Mcu.IPn 里没有）→ 说明为�
   const diff = diffIocForVerify(before, after);
   assert.deepEqual(diff.attribution.missingKeys, ["NVIC.USART1_IRQn"]);
   const text = diff.hints.join(" ");
-  assert.match(text, /NVIC\.USART1_IRQn 被 CubeMX 删掉了：USART1 不在它认的外设表里/u);
+  assert.match(text, /NVIC\.USART1_IRQn 被 CubeMX 删除了：USART1 不在 CubeMX 认的外设表里/u);
   // EXTI 向量是例外，不能误报
   const exti = diffIocForVerify("Mcu.IPNb=0\nNVIC.EXTI9_5_IRQn=true:0:0:false:false:true:true:true:true\n", "Mcu.IPNb=0\n");
   assert.deepEqual(exti.hints, []);
@@ -287,12 +287,12 @@ test("归因成因：外设没进 Mcu.IPn → inactive-instance；它本来在 b
   const orphan = diffIocForVerify("Mcu.IP0=RCC\nMcu.IPNb=1\nUSART1.BaudRate=9600\n", "Mcu.IP0=RCC\nMcu.IPNb=1\n", audit);
   const reasonA = orphan.attribution.droppedReasons.find((item) => item.key === "USART1.BaudRate");
   assert.equal(reasonA.verdict, "inactive-instance");
-  assert.doesNotMatch(reasonA.detail, /本来有它/u);
+  assert.doesNotMatch(reasonA.detail, /本来有该外设/u);
   // (b) before 里 IPn 有 USART1，是 CubeMX 回写时把外设整个删了：成因要指向「引脚/模式不完整」。
   const dropped = diffIocForVerify("Mcu.IP0=USART1\nMcu.IPNb=1\nUSART1.BaudRate=9600\n", "Mcu.IPNb=0\n", audit);
   const reasonB = dropped.attribution.droppedReasons.find((item) => item.key === "USART1.BaudRate");
   assert.equal(reasonB.verdict, "inactive-instance");
-  assert.match(reasonB.detail, /本来有它/u);
+  assert.match(reasonB.detail, /本来有该外设/u);
 });
 
 test("归因成因：引脚名写进 ip 位、属性又没登记 → pin-attribute（真值表登记的引脚属性照旧算 ok）", () => {
@@ -343,7 +343,7 @@ test("归因成因：形状已登记但键还是被丢 → 明说「只能真机
   const diff = diffIocForVerify(before, after, {});
   const reason = diff.attribution.droppedReasons.find((item) => item.key === "RCC.SYSCLKFreq_VALUE");
   assert.equal(reason.verdict, "ok", "形状在真值表里，这一层判不出来");
-  assert.match(reason.detail, /仍然被丢了/u);
+  assert.match(reason.detail, /仍然被丢弃/u);
   assert.match(reason.detail, /真机/u);
 });
 

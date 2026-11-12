@@ -5,7 +5,7 @@
  * 分工：
  *   - 控制块按 SEGGER 的约定（首 10 字节是 "SEGGER RTT"），这样 openocd 原生的
  *     rtt setup / rtt start 能直接认；
- *   - 通道 0 的记录格式是我们自己的（不抄 SEGGER：它没有级别和时间戳）：
+ *   - 通道 0 的记录格式由本插件定义（不沿用 SEGGER：SEGGER 格式不含级别与时间戳）：
  *       [4B 长度 LE][1B 级别][8B 时间戳 ms LE][payload UTF-8]
  *     长度字段 = 9 + payload 字节数，不含这 4 字节本身；
  *   - 级别 1..4 = error / warn / info / debug，dump 的 level 是"保留到哪一级"的上限。
@@ -30,7 +30,7 @@ export const DEFAULT_RTT_SIZE = 0x400;
 export const DEFAULT_DUMP_SECONDS = 3;
 /** 一次 dump 最多返回多少条记录。 */
 export const DEFAULT_MAX_RECORDS = 200;
-/** 单条记录的 payload 上限，超了就认为通道里不是我们的帧。 */
+/** 单条记录的 payload 上限，超出时判定通道内并非本插件的帧。 */
 export const DEFAULT_MAX_FRAME_BYTES = 4096;
 /** 连 RTT 通道端口的超时。 */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 3_000;
@@ -39,7 +39,7 @@ export const RTT_FRAME_HEADER_BYTES = 13;
 /** 长度字段允许的最小值：1B 级别 + 8B 时间戳（空 payload）。 */
 export const RTT_MIN_FRAME_BYTES = 9;
 
-/** 控制块的魔数文本（与 SEGGER 兼容，openocd 靠它找控制块）。 */
+/** 控制块的魔数文本（与 SEGGER 兼容，openocd 依此定位控制块）。 */
 export const RTT_MAGIC_TEXT = "SEGGER RTT";
 /** 魔数第 0 个字：小端读出来是 "SEGG"。 */
 export const RTT_MAGIC_WORD_0 = 0x47474553;
@@ -57,15 +57,15 @@ const HINT_ADDR = "addr 要写成 32 位十六进制（例如 0x20000000），�
 const HINT_NO_SESSION = "先起一个调试会话：stm32_debug_session action=start；也可以直接 stm32_rtt action=start，工具会自动起一个。";
 const HINT_NO_TCL = "会话没有 Tcl RPC 端口（openocd 启动日志里没有 tcl 那一行）：确认 openocd 版本支持 tcl（0.11 以上默认开），再重启会话。";
 const HINT_NO_BLOCK =
-  "目标内存里没有 RTT 控制块：在模板里加最小实现——控制块头 10 字节放 SEGGER RTT 魔数，把它链接到固定 RAM 地址（例如 .noinit 段，地址和 addr 一致），通道 0 按 [4B 长度|1B 级别|8B 时间戳|UTF-8] 写记录；然后核对 addr/size。";
+  "目标内存里没有 RTT 控制块：在模板里加最小实现——控制块头 10 字节放 SEGGER RTT 魔数，将该控制块链接到固定 RAM 地址（例如 .noinit 段，地址和 addr 一致），通道 0 按 [4B 长度|1B 级别|8B 时间戳|UTF-8] 写记录；然后核对 addr/size。";
 const HINT_MAGIC =
   "控制块魔数不符：核对 addr 是不是控制块起始地址（不是通道缓冲区地址），并确认模板里的控制块真的被链接进 RAM（查 .map 文件）。";
-const HINT_PORT_BUSY = "RTT 端口被占用：换一个 rttPort，或关掉占着它的进程（另一个 RTT 客户端 / 上次没停的 rtt server）。";
+const HINT_PORT_BUSY = "RTT 端口被占用：换一个 rttPort，或关闭占用该端口的进程（另一个 RTT 客户端 / 上次未停止的 rtt server）。";
 const HINT_CONNECT = "连不上 RTT 通道：确认 start 成功（openocd 的 rtt server 已在监听该端口），端口没被防火墙挡住；换个 rttPort 或加大 timeoutMs 再试。";
 const HINT_NOT_RUNNING = "RTT 还没启动：先 stm32_rtt action=start，addr 填模板里控制块的地址。";
 const HINT_SETUP = "openocd 拒绝了 RTT 命令：看 evidence 里 openocd 的原话；常见原因是控制块地址/长度不对，或者目标没在跑（rtt start 需要目标在跑）。";
 const HINT_TCL_TIMEOUT = "openocd 的 Tcl 口超时：确认调试会话还在（stm32_debug_session action=status），必要时重启会话再试。";
-/** 连接被拒/被重置 = openocd 已经没了（探针掉线也会这样），别把它报成「目标里没有控制块」。 */
+/** 连接被拒/被重置 = openocd 已经没了（探针掉线亦如此），不要将其报成「目标里没有控制块」。 */
 const HINT_SESSION_GONE = "调试会话的 openocd 已经不在了（连接被拒/被重置）：先 stm32_debug_stop 关掉残留会话，再重试；反复出现就插拔探针（USB）后重来。";
 
 /** 从 Tcl 连接错误里认出「会话已经死了」：这类错误换多少 addr 都没用。 */
@@ -81,8 +81,8 @@ function isConnectRefused(error: string | null): boolean {
 function sleepMs(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
-const HINT_FRAME = "通道字节流不符合我们的帧约定（[4B 长度|1B 级别|8B 时间戳|UTF-8]）：核对模板里写通道 0 的函数，或先 stop 再 start 重来。";
-const HINT_CANCEL = "已取消：重新调用同一个工具即可，RTT 状态不会被这次取消弄坏。";
+const HINT_FRAME = "通道字节流不符合本插件的帧约定（[4B 长度|1B 级别|8B 时间戳|UTF-8]）：核对模板里写通道 0 的函数，或先 stop 再 start 重来。";
+const HINT_CANCEL = "已取消：重新调用同一个工具即可，RTT 状态不会因本次取消而损坏。";
 
 /** 一条 RTT 记录：t 是模板写进来的毫秒时间戳（相对任意起点，通常就用 HAL_GetTick）。 */
 export interface RttRecord {
@@ -255,7 +255,7 @@ function firstErrorReply(replies: string[]): string | null {
 
 /**
  * 解析 RTT 通道字节流。返回解出来的记录、剩下的半个帧字节，以及失步错误。
- * 纯函数：单测直接喂 Buffer 就能验帧格式，不用起 openocd。
+ * 纯函数：单测直接传入 Buffer 即可验证帧格式，无需启动 openocd。
  */
 export function parseRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_MAX_FRAME_BYTES): { records: RttRecord[]; rest: Buffer; error: string | null } {
   const records: RttRecord[] = [];
@@ -273,7 +273,7 @@ export function parseRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_M
       return {
         records,
         rest: Buffer.from(buffer.subarray(offset)),
-        error: "帧长度 " + String(length) + " 超过上限 " + String(maxFrameBytes) + "，通道里很可能不是我们的帧",
+        error: "帧长度 " + String(length) + " 超过上限 " + String(maxFrameBytes) + "，通道内很可能不是本插件的帧",
       };
     }
     if (buffer.length - offset - 4 < length) break;
@@ -288,7 +288,7 @@ export function parseRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_M
     const t = Number(buffer.readBigUInt64LE(offset + 5));
     const rawText = buffer.toString("utf8", offset + RTT_FRAME_HEADER_BYTES, offset + 4 + length);
     // 环形缓冲回绕/残留时，一帧尾部会被环起点处的旧数据或清零区补齐：末尾的 NUL 不是内容，
-    // 裁掉它，否则 dump 出来的文本尾巴挂一串 \0（真机上必现）。
+    // 移除该后缀，否则 dump 输出的文本末尾会带一串 \0（真机上必现）。
     const text = rawText.replace(/\u0000+$/u, "");
     records.push({ t, level, text });
     offset += 4 + length;
@@ -300,11 +300,11 @@ export function parseRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_M
  * 在缓冲区里找第一个「看起来是帧头」的偏移：长度字段在 [9, maxFrameBytes]、级别在 1..4，
  * 且剩余字节够一整帧（不够也算候选：先对齐过来，等后续字节补齐）。
  *
- * 为什么需要它：openocd 的 rtt server 在客户端连上时会把整块通道缓冲（由短及长，正好是
- * 通道大小时就是 1024 字节）一次性推过来，而固件的写指针早就绕过好几圈 —— 首字节往往落在
+ * 为什么需要该步骤：openocd 的 rtt server 在客户端连上时会把整块通道缓冲（由短及长，长度达到
+ * 通道大小 1024 字节时）一次性推过来，而固件的写指针早已绕过数圈 —— 首字节往往落在
  * 某条记录的中间。parseRttFrames 是严格解析器（偏移 0 失步就报错），对齐这一步只能在外面做。
  *
- * 返回 -1 表示整段都找不到帧头（那才是真的「通道里不是我们的帧」）。
+ * 返回 -1 表示整段都找不到帧头（此时才是「通道内不是本插件的帧」）。
  */
 export function resyncRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_MAX_FRAME_BYTES): number {
   for (let offset = 0; offset + 4 <= buffer.length; offset += 1) {
@@ -320,8 +320,8 @@ export function resyncRttFrames(buffer: Buffer, maxFrameBytes: number = DEFAULT_
 
 
 /**
- * 按同一套约定编一帧。引擎自己不用它（记录是固件写的），但它是帧格式的可执行参考：
- * 模板端的 C 实现和单测都对着它写。
+ * 按同一套约定编一帧。引擎本身不使用该函数（记录由固件写入），但该函数是帧格式的可执行参考：
+ * 模板端的 C 实现与单测均以该函数为准。
  */
 export function encodeRttFrame(record: RttRecord): Buffer {
   const payload = Buffer.from(record.text, "utf8");
@@ -338,7 +338,7 @@ async function readControlBlock(addr: string, tclPort: number, timeoutMs: number
   const addresses = [addr, addWords(addr, 4), addWords(addr, 8)];
   const commands = addresses.map((address) => "mdw " + address);
   // openocd 刚起来时 Tcl 口可能还没开始 accept（300 ms 级）：这种 ECONNREFUSED 是"还没好"，
-  // 不是"会话死了"。重试两次再判定，否则会把它误报成 openocd 已经不在了。
+  // 不是"会话死了"。重试两次再判定，否则会误报为 openocd 已不存在。
   let round = await tclRoundTrip(tclPort, commands, timeoutMs, signal);
   for (let attempt = 0; attempt < 2 && !round.ok && isConnectRefused(round.error); attempt += 1) {
     await sleepMs(250);
@@ -580,7 +580,7 @@ async function collectFromPort(port: number, options: { seconds: number; level: 
         notes.push("重复记录 " + String(duplicates) + " 条（时间戳+级别+文本都相同）已去重");
       }
       if (reason === "window" && error === null && records.length === 0 && state.lastError !== null) {
-        // 整段窗口一条都没解出来：通道里确实不是我们的帧（例如固件写的是别的格式）。
+        // 整段窗口一条都没解出来：通道内确实不是本插件的帧（例如固件写入的是其他格式）。
         error = state.lastError;
         failureKind = "unknown";
         failureHint = HINT_FRAME;

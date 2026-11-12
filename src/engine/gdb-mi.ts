@@ -8,7 +8,7 @@
  * MI（Machine Interface）是 gdb 的机器可读协议（`--interpreter=mi2`）：命令带 token、
  * 结果以 `^done`/`^error`/`^running` 回，异步事件以 `*stopped`/`*running` 推。VS Code 的
  * C/C++ 调试器也是这么驱动 gdb 的。这里实现最小可用子集：结果/异步记录解析、带 token 的请求队列、
- * 把 `~"..."` 控制台流挂到当前请求上（否则 `print` 的输出找不到归属）。
+ * 把 `~"..."` 控制台流关联到当前请求（否则 `print` 的输出无法确定归属）。
  *
  * 只读设计约束：零依赖、可单测（解析是纯函数；进程通过 MiSpawner 注入，测试给假进程）。
  */
@@ -32,7 +32,7 @@ export interface MiRecord {
 /**
  * 步进命令映射到 MI 的 -exec-*：n/next、s/step 走整行（-exec-next / -exec-step），
  * ni/nexti、si/stepi 走单指令（-exec-next-instruction / -exec-step-instruction）。
- * continue 不在这里（它走 continueTarget，要先清掉旧的停止记录）。返回 null 表示不是步进命令。
+ * continue 不在此处（由 continueTarget 处理，需先清除旧的停止记录）。返回 null 表示不是步进命令。
  */
 export function steppingCommandFor(command: string): string | null {
   const normalized = command.trim().toLowerCase();
@@ -215,14 +215,14 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-/** 常驻的 gdb MI 会话：保持连接，命令带 token 排队，控制台输出挂到当前请求上。 */
+/** 常驻的 gdb MI 会话：保持连接，命令按 token 排队，控制台输出关联到当前请求。 */
 export class MiSession {
   private child: MiChild | null = null;
   private buffer = "";
   private token = 0;
   private pending: Pending | null = null;
   private lastStopped: MiRecord | null = null;
-  /** 目标是否在跑。运行态下 gdb 不回任何命令（连 console 的 break 都卡），所以动它之前先看这个。 */
+  /** 目标是否处于运行态。运行态下 gdb 不响应任何命令（含 console 的 break），因此操作前先检查该状态。 */
   private runningState = false;
   private stopWaiters: Array<(record: MiRecord) => void> = [];
   private lastPromptResolve: (() => void) | null = null;
@@ -238,7 +238,7 @@ export class MiSession {
     session.child = spawner(argv, options.cwd ?? process.cwd());
     session.attach();
     // MI 模式下 gdb 不一定先吐提示符（而且 "(gdb) " 没有换行，按行读会一直卡着）。
-    // 所以握手改成「发一条必须有 ^done 的命令」：等到它就算连上了。
+    // 因此握手改为「发一条必须返回 ^done 的命令」：收到该回复即视为连接成功。
     await session.send("-gdb-set confirm off", options.timeoutMs ?? 20_000);
     await session.send("-gdb-set pagination off", options.timeoutMs ?? 20_000);
     if (options.elfPath !== undefined && options.elfPath !== "") {
@@ -367,7 +367,7 @@ export class MiSession {
     });
   }
 
-  /** 发一条 MI 命令，等它自己的 ^done/^error/^running。 */
+  /** 发送一条 MI 命令，等待该命令自身的 ^done/^error/^running。 */
   send(command: string, timeoutMs = 20_000): Promise<{ record: MiRecord; text: string }> {
     const child = this.child;
     if (child === null || this.exited) return Promise.reject(new Error("gdb 会话已结束"));
@@ -474,7 +474,7 @@ export class MiSession {
     try {
       await this.send("-gdb-exit", timeoutMs);
     } catch {
-      // 退出时 gdb 常常不回 ^done：忽略，下面兜底 kill。
+      // 退出时 gdb 常不返回 ^done：忽略，随后由回退路径 kill。
     }
     const child = this.child;
     this.child = null;

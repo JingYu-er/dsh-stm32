@@ -1,7 +1,7 @@
 /**
  * STM32F1 时钟树事实表（只放"书上写的数字"，不放算法）。
  *
- * 为什么单独一张表：F1 的时钟上限、PLL 可选倍频、外设挂在哪条总线，这些是芯片事实，
+ * 单独成表的原因：F1 的时钟上限、PLL 可选倍频、外设所属总线，均属芯片事实，
  * 而"给定目标频率怎么挑组合"是策略（src/engine/clock-plan.ts）。事实和策略分开，
  * 以后扩 F0/F4 只换这张表，算法不用动。
  *
@@ -12,7 +12,7 @@
 /**
  * PLL/SYSCLK 的输入源。F1 值料号 PLLSRC 只有 HSE / HSI÷2 两种（RM0008 RCC_CFGR.PLLSRC）。
  * `rc64` 是无线 SoC（WB0/WL3）的 64 MHz 内部 RC 多相时钟（db 里叫 RC64MPLL，频率 PLL64_VALUE）：
- * 它不在 .ioc 里读频率，固定 64 MHz，只能 ÷ SYSCLK64Divider。
+ * RC64MPLL 的频率不从 .ioc 读取，固定 64 MHz，只能经 SYSCLK64Divider 分频。
  */
 export type ClockSourceId = "hse" | "hsi-div2" | "hsi" | "rc64";
 
@@ -43,7 +43,7 @@ export const F1_PLL_SOURCES: readonly PllSourceFact[] = [
     iocValue: "RCC_PLLSOURCE_HSE",
     defaultHz: 8_000_000,
     selectable: true,
-    note: "外部晶振（板上 8 MHz，值料号 HSE 范围 4–16 MHz）。精度由晶振决定，通常 ≤50 ppm，UART 波特率靠它就够准。",
+    note: "外部晶振（开发板 8 MHz，值料号 HSE 范围 4–16 MHz）。精度由晶振决定，通常 ≤50 ppm，UART 波特率精度由晶振保证。",
   },
   {
     id: "hsi-div2",
@@ -197,7 +197,7 @@ export interface VcoBand {
 /**
  * 一套完整的「时钟事实」：planClock 只认这一层，不再直接读 F1_* 常量。
  *
- * F1_FACTS 是兜底（没有 CubeMX db 时用它），正常情况下由 src/data/clock-db.ts 从
+ * F1_FACTS 为回退数据（没有 CubeMX db 时使用），正常情况下由 src/data/clock-db.ts 从
  * db/mcu/<型号>.xml 与 db/mcu/IP/RCC-*.xml 现算出一份同形状的事实。
  * busLimits（APB1/APB2/ADC 上限）与 vco 区间由 clock-db.ts 从 db 的 RCC Modes 读，
  * 核过手册/真机的族用 override 表。
@@ -238,7 +238,7 @@ export interface ClockFacts {
   vcoBands?: readonly VcoBand[];
   /** 写输入频段用哪个键（RCC.PLL1_VCI_Range）；没有键名就不写。 */
   vciRangeKey?: string;
-  /** 写 VCO 档位用哪个键（RCC.PLL1_VCO_SEL，H5 用它切换 150–420/128–560 MHz）。 */
+  /** 写 VCO 档位所用的键（RCC.PLL1_VCO_SEL，H5 通过该键切换 150–420/128–560 MHz）。 */
   vcoSelKey?: string;
   /** 打开 PLL 的键（H5/U5 的 RCC.PLLUsed=1 + RCC.PLLState=RCC_PLL_ON）。 */
   pllEnable?: { usedKey: string; usedValue: string; stateKey: string; stateValue: string };
@@ -248,7 +248,7 @@ export interface ClockFacts {
   /**
    * 写 SYSCLK 源用哪个键：`RCC.SYSCLKSource`（多数族）或 `RCC.SYSCLKSourceVirtual`（F3 这类
    * 把源做成 Virtual 项的族）。由 clock-db 按 RCC Modes 里有没有 SYSCLKSourceVirtual 决定：
-   * 写错的那个会被 CubeMX 静默丢掉（F303 实测），只能靠 PLL 键让它自己反推，等于碰运气。
+   * 键名写错时会被 CubeMX 静默丢弃（F303 实测），只能靠 PLL 键由 CubeMX 反推，结果不可靠。
    */
   sysclkSourceKey?: string;
   apbDivs: readonly DividerFact[];
@@ -264,7 +264,7 @@ export interface ClockFacts {
    */
   apb2Divs?: readonly DividerFact[];
   /**
-   * direct 模型：源分频枚举（C0 的 HSISYSCLKDivider：÷1/2/4/…/128）与它写在 .ioc 里的键名。
+   * direct 模型：源分频枚举（C0 的 HSISYSCLKDivider：÷1/2/4/…/128）与该枚举写入 .ioc 的键名。
    * 枚举为空表示这一族没有源分频（HSE 直连），planner 不写 `RCC.HSISYSCLKDivider`。
    */
   srcDivs?: readonly DividerFact[];
@@ -273,7 +273,7 @@ export interface ClockFacts {
   srcDivSources?: readonly ClockSourceId[];
   /**
    * 每个源各自的分频键（WB0/WL3 这种「一个源一套分频」的族：HSE 走 SYSCLK32Divider/SYSCLK48Divider，
-   * RC64MPLL 走 SYSCLK64Divider）。有这张表时 planner 优先按它查，没有再回落到上面的单键写法。
+   * RC64MPLL 走 SYSCLK64Divider）。有这张表时 planner 优先按该表查询，没有再回落到上面的单键写法。
    */
   srcDivBySource?: Partial<Record<ClockSourceId, { key: string; divs: readonly DividerFact[] }>>;
   /**

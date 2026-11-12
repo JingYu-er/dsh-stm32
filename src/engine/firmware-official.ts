@@ -4,11 +4,11 @@
  * 为什么值得单独一条路（2026-11 实测）：
  *   · swmgr install <本地 zip> ask 是 CubeMX 包管理器自己用的那条命令；装完包落在
  *     <CubeMX>/Repository/<包名>，GUI 与 project generate 都认，不像 dsh-firmware 只能靠
- *     project setCustomFWPath 指过去（那条路在 WBA 上实测会让 project generate 挂住 400 s）。
- *   · 官方 zip 自带完整 HAL + CMSIS + 示例，比我们从 GitHub 拼 HAL+CMSIS 更全，也不用维护
+ *     project setCustomFWPath 指过去（该路径在 WBA 上实测会使 project generate 阻塞 400 s）。
+ *   · 官方 zip 自带完整 HAL + CMSIS + 示例，比插件从 GitHub 拼装的 HAL+CMSIS 更完整，也无需维护
  *     22 张 coreHeaders 表。
  *
- * 为什么不能只靠它（所以默认 auto + 回退）：
+ * 不能仅依赖该通道的原因（因此默认 auto 并保留回退）：
  *   · 新族/新版本第一次装会弹许可协议（swmgr ... ask），无头进程等不到人点同意就卡住；
  *     这是许可协议，插件不代点，只能超时、说明、回退。
  *   · 没有 CubeMX（或没有 JRE）、CubeMX GUI 正开着、公司网络挡住 sw-center，都走不通。
@@ -100,10 +100,10 @@ export function readMcuFwLibrary(file: string): string {
 
 /**
  * 按型号在 db 里找 FwLibrary：只有少数子系列（H7RS / MP13 / WB0 / WL3）才有这个属性，
- * 其余族返回 fallback（= 我们的 packageBase，例如 STM32Cube_FW_F1）。
+ * 其余族返回 fallback（= 插件的 packageBase，例如 STM32Cube_FW_F1）。
  *
  * 为什么按型号而不是按族：STM32H7 里 H743 用 STM32Cube_FW_H7、H7R3 用 STM32Cube_FW_H7RS，
- * 同一族两个包；只按族取会把 H7RS 的包喂给 H743。
+ * 同一族两个包；仅按族取用会误将 H7RS 的包应用到 H743。
  */
 export function resolveFwLibrary(dbRoot: string, partNumber: string, fallback: string): string {
   const part = partNumber.trim().toUpperCase();
@@ -444,7 +444,7 @@ export const SWMGR_TIME_LIMIT_MS = 300_000;
  * CubeMX 每次启动都会打一行：
  *   [INFO] AnalyticsPlugin:257 - Accepted Firmware Licenses: FW.C0.1.3.0,FW.C0.1.4.0,FW.F4.1.28.0
  * 实测许可按「族 + 版本」记账：同一个族的另一个版本也要重新点一次同意（FW.C0.1.3.0 与 FW.C0.1.4.0 各一条）。
- * 没记过的族/版本，swmgr 会挂在那里等 GUI 弹框；无头 -q 模式下那个框根本不会出现。
+ * 没记过的族/版本，swmgr 会阻塞并等待 GUI 弹框；无头 -q 模式下该弹框不会出现。
  */
 export function parseAcceptedFirmwareLicences(log: string): string[] {
   const seen: string[] = [];
@@ -519,7 +519,7 @@ export async function installViaSwmgr(request: SwmgrInstallRequest): Promise<Swm
         if (licenceTag !== "" && !list.includes(licenceTag)) {
           missingLicence = licenceTag;
           if (request.onProgress !== undefined) {
-            request.onProgress("CubeMX 还没接受 " + licenceTag + " 的许可协议（已接受：" + list.join("、") + "），不再干等它。");
+            request.onProgress("CubeMX 还没接受 " + licenceTag + " 的许可协议（已接受：" + list.join("、") + "），不再等待。");
           }
           controller.abort();
         }
@@ -529,7 +529,7 @@ export async function installViaSwmgr(request: SwmgrInstallRequest): Promise<Swm
     if (request.signal !== undefined) request.signal.removeEventListener("abort", relayAbort);
   }
   const log = outcome.stdout + "\n" + outcome.stderr;
-  // 兜底：进程输出可能在 drain 之前就结束（或没走到 onOutput），结束后再从整段日志里读一次许可清单。
+  // 回退：进程输出可能在 drain 之前就结束（或未走到 onOutput），结束后再从整段日志中读取一次许可清单。
   if (acceptedLicences.length === 0) acceptedLicences = parseAcceptedFirmwareLicences(log);
   if (missingLicence === "" && licenceTag !== "" && acceptedLicences.length > 0 && !acceptedLicences.includes(licenceTag)) {
     missingLicence = licenceTag;

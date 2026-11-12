@@ -1,19 +1,14 @@
-# RTT（Real Time Transfer）在 HAL 工程里怎么加
+# RTT（Real Time Transfer）在 HAL 工程中的接入方式
 
-这份文件是**说明**，不是代码：HAL 工程由 CubeMX 生成，`Core/**` 是生成区，
-往里放自己的 `.c` 会被下次 `stm32_generate` 覆盖，也违反"只改 USER CODE"的红线。
-所以 RTT 在你自己的目录里（默认 `App/`），只通过 `cmake/user/CMakeLists.txt` 挂进构建。
+本文件为说明文档，不含代码。HAL 工程由 CubeMX 生成，`Core/**` 属于生成区，向其中放入自定义 `.c` 文件会被后续 `stm32_generate` 覆盖，同时违反"只改 USER CODE"的红线。因此 RTT 源文件放在独立目录（默认 `App/`），仅通过 `cmake/user/CMakeLists.txt` 挂入构建。
 
-寄存器版工程（`stm32_project_create route=register`）**自带** `Core/Src/rtt.c` 与
-`Core/Inc/rtt.h`，那边不需要这个文件；本文件只讲 HAL 版。
+寄存器版工程（`stm32_project_create route=register`）自带 `Core/Src/rtt.c` 与 `Core/Inc/rtt.h`，无需本文件。本文件仅针对 HAL 版。
 
-需要的两个源文件在插件的 `templates/register/Core/Src/rtt.c` 与
-`templates/register/Core/Inc/rtt.h`（实现是同一份：SEGGER 兼容控制块 + 通道 0 的
-`[4B 长度 LE][1B 级别][8B 时间戳 ms LE][UTF-8 payload]` 帧）。
+所需两个源文件位于插件的 `templates/register/Core/Src/rtt.c` 与 `templates/register/Core/Inc/rtt.h`；两者实现一致（SEGGER 兼容控制块与通道 0 的 `[4B 长度 LE][1B 级别][8B 时间戳 ms LE][UTF-8 payload]` 帧）。
 
-## 三步
+## 三个步骤
 
-1) 拷文件（在工程根目录执行）：
+1) 拷贝文件（在工程根目录执行）：
 
 ```bash
 mkdir -p App
@@ -21,14 +16,14 @@ cp <插件目录>/templates/register/Core/Src/rtt.c App/rtt.c
 cp <插件目录>/templates/register/Core/Inc/rtt.h App/rtt.h
 ```
 
-2) 挂进构建——编辑 `cmake/user/CMakeLists.txt`（CubeMX 不生成这个文件的内容）：
+2) 挂入构建——编辑 `cmake/user/CMakeLists.txt`（CubeMX 不生成该文件的内容）：
 
 ```cmake
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../App/rtt.c)
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../App)
 ```
 
-3) 在 `Core/Src/main.c` 里只碰 USER CODE 块：
+3) 在 `Core/Src/main.c` 中仅修改 USER CODE 块：
 
 ```c
 /* USER CODE BEGIN Includes */
@@ -43,9 +38,9 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_
   /* USER CODE END 2 */
 ```
 
-主循环里同理，写在 `USER CODE BEGIN WHILE` 与 `USER CODE END WHILE` 之间。
+主循环同理，写入 `USER CODE BEGIN WHILE` 与 `USER CODE END WHILE` 之间。
 
-## 宿主侧怎么读
+## 宿主侧读取方式
 
 ```bash
 arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT   # 控制块地址
@@ -53,38 +48,35 @@ arm-none-eabi-nm build/<preset>/<工程名>.elf | findstr _SEGGER_RTT   # 控制
 
 ```
 stm32_rtt action=start addr=0x2000xxxx    # openocd: rtt setup <addr> 0x400 / rtt start / rtt server start <port> 0
-stm32_rtt action=dump seconds=3 level=3  # 打印 {t, level, text}，level 是"保留到哪一级"的上限
+stm32_rtt action=dump seconds=3 level=3  # 打印 {t, level, text}，level 为"保留到哪一级"的上限
 stm32_rtt action=stop
 ```
 
-`addr` 别写死：控制块是普通 `.bss` 变量，加一行代码重链接就会漂移，每次 `nm` 一遍。
+`addr` 不要写死：控制块是普通 `.bss` 变量，增加一行代码并重新链接后地址会漂移，每次用 `nm` 重新获取。
 
 ## 代价与限制
 
-- 默认 `RTT_UP_CHANNELS=3`、`RTT_BUF_SIZE=1024` → **3 KB RAM**（.bss）；
-  `RTT_MSG_MAX=120` 是单条 payload 上限。RAM 紧就改 `rtt.h` 的这两个宏（例如 1 个通道 512 字节）。
-- 工具链开了 `--gc-sections`：不调用 `rtt_init()` 时 `rtt.c` 的代码和那块缓冲会被链接器丢掉，不占 RAM/Flash。
-- 环满时**整条丢弃**（不阻塞、不覆盖还没被读走的数据），`rtt_dropped_count()` 能看丢了几条；建议照模板在周期日志里打 `drop=%u`，不然丢了也看不出来。
-- 容量：可容纳条数 = `RTT_BUF_SIZE` ÷ 单条帧字节数（`13 + 正文长`），1024 缓冲 + 80 字节正文 ≈ 12 条；撑多久 = 条数 × 打印间隔（200 ms 一条 ≈ 2.4 s）。掉电前要留的关键日志，别指望环能存下。
-- `WrOff`/`RdOff` 必须始终落在 `[0, RTT_BUF_SIZE)`：早期模板发布过「只增不减」的 `WrOff`，一旦越界，openocd 就算不清还剩多少、**不再推进 `RdOff`**，环灌满一次后永久冻结（现象：每次 dump 都是同一块字节 + 重复记录刷屏 + `drop` 一直涨）。现已在 `rtt_ring_write()` 里回绕并让 `used` 按环长算。
-- **RTT 不是 SWO**：openocd 用 SWD 读目标 RAM 里的环，不占 ITM/引脚，也跟中断优先级无关（改 SysTick 优先级不会改变丢不丢）。
-- 时间戳默认用 DWT 周期计数器；已经有 `HAL_GetTick()` 的话覆盖弱符号更省事：
+- 默认 `RTT_UP_CHANNELS=3`、`RTT_BUF_SIZE=1024` → **3 KB RAM**（.bss）；`RTT_MSG_MAX=120` 为单条 payload 上限。RAM 紧张时修改 `rtt.h` 的这两个宏（例如 1 个通道 512 字节）。
+- 工具链启用 `--gc-sections`：未调用 `rtt_init()` 时，`rtt.c` 的代码与该缓冲会被链接器丢弃，不占 RAM/Flash。
+- 环满时**整条丢弃**（不阻塞、不覆盖尚未读走的数据），`rtt_dropped_count()` 可查看丢弃条数；建议按模板在周期日志中输出 `drop=%u`，否则丢帧不可见。
+- 容量：可容纳条数 = `RTT_BUF_SIZE` ÷ 单条帧字节数（`13 + 正文长度`），1024 缓冲 + 80 字节正文 ≈ 12 条；可维持时长 = 条数 × 打印间隔（200 ms 一条 ≈ 2.4 s）。掉电前需要保留的关键日志不应依赖环缓冲。
+- `WrOff`/`RdOff` 必须始终落在 `[0, RTT_BUF_SIZE)`：早期模板曾发布 `WrOff` 只增不减的版本，越界后 openocd 无法计算剩余容量且不再推进 `RdOff`，环缓冲写满一次后永久冻结（现象：每次 dump 返回相同字节、重复记录刷屏、`drop` 持续增长）。现已在 `rtt_ring_write()` 中回绕，并按环长计算 `used`。
+- **RTT 不是 SWO**：openocd 通过 SWD 读取目标 RAM 中的环缓冲，不占用 ITM/引脚，也与中断优先级无关（修改 SysTick 优先级不会改变是否丢帧）。
+- 时间戳默认使用 DWT 周期计数器；已有 `HAL_GetTick()` 时可覆盖弱符号：
 
 ```c
 uint64_t rtt_time_ms(void) { return (uint64_t)HAL_GetTick(); }
 ```
 
-- 主循环和中断都能写：`rtt_write()` 内部已经过临界区（`rtt_lock()`/`rtt_unlock()` 弱符号，默认存/恢复 PRIMASK），**不需要自己在外面关中断**。
-- 用 RTOS 时覆盖这两个弱符号即可（`rtt.h` 头注释里有 FreeRTOS 例子）：拿 mutex 包住 + 里面再关中断，裸机和 RTOS 就都能用了。
-- `rtt_printf()` 用 newlib 的 `vsnprintf`，会牵进 `_sbrk`。HAL 工程本来就带 `Core/Src/syscalls.c`，不用管；
-  寄存器版没有 syscalls.c，所以 `rtt.c` 里给了一份**弱符号** `_sbrk` 兜底（直接失败，等于没有堆），
-  你自己实现 `_sbrk` 时那份强符号会自动覆盖它。只想要零依赖就用 `rtt_write(level, "已经格式化好的串")`。
+- 主循环与中断均可写入：`rtt_write()` 内部已进入临界区（`rtt_lock()`/`rtt_unlock()` 弱符号，默认保存并恢复 PRIMASK），无需在调用处关闭中断。
+- 使用 RTOS 时覆盖上述两个弱符号即可（`rtt.h` 头注释中有 FreeRTOS 示例）：以 mutex 包裹并在内部关闭中断，裸机与 RTOS 均可使用。
+- `rtt_printf()` 使用 newlib 的 `vsnprintf`，会引入 `_sbrk`。HAL 工程自带 `Core/Src/syscalls.c`，无需处理；寄存器版没有 syscalls.c，`rtt.c` 中提供弱符号 `_sbrk` 回退（直接失败，等同于无堆），自行实现 `_sbrk` 时该强符号会自动覆盖。若需零依赖，使用 `rtt_write(level, "已格式化的字符串")`。
 
 ## 报错对照
 
 | `stm32_rtt` 报什么 | 说明 |
 |---|---|
-| 控制块是空的（读到全 0） | 没调用 `rtt_init()`，或者固件停/reset 过还没跑到初始化那一行 |
-| 魔数不符（不是 "SEGGER RTT"） | `addr` 指错了地址；用 `nm` 重新拿 |
-| 连不上 RTT 通道 / 连接超时 | `rtt server start` 没起来（目标没跑起来、openocd 会话掉了），或端口被别的进程占了 |
-| 端口占用 | `rttPort` 换一个（默认 9090） |
+| 控制块是空的（读到全 0） | 未调用 `rtt_init()`，或固件处于停止/复位状态且尚未执行到初始化 |
+| 魔数不符（不是 "SEGGER RTT"） | `addr` 指向了错误地址；用 `nm` 重新获取 |
+| 连不上 RTT 通道 / 连接超时 | `rtt server start` 未启动（目标未运行、openocd 会话中断），或端口被其它进程占用 |
+| 端口占用 | `rttPort` 更换一个（默认 9090） |

@@ -10,7 +10,7 @@
  *      就停下来报警——宁可让用户换目录，也不猜"这个 msys64 目录能不能覆盖"。
  *
  * 为什么装完不需要用户重读环境变量：插件自己读工具链配置（data/toolchain-config）里的绝对
- * 路径，装完立刻生效；PATH 只是顺手给命令行和其他工具用的。
+ * 路径，安装完成后立即生效；PATH 仅用于命令行和其他工具。
  *
  * 下载只用系统 curl、解压只用官方 sfx，不引第三方包（插件保持零运行时依赖）。
  */
@@ -83,7 +83,7 @@ function systemExe(name: string): string {
  *
  * 以前用 releases/latest 的滚动资产，再靠「MZ 头 + ≥40 MB」判断真伪：镜像和 GitHub 的
  * 字节数每天可能都不一样，钉 sha256 必然误杀，所以只能粗检。代价是下载通道可以被换源、
- * 被中间人塞进任意 40 MB 的 exe，插件随后还会用 `-y` 静默执行它。
+ * 被中间人替换为任意 40 MB 的 exe，插件随后还会用 `-y` 静默执行该文件。
  *
  * 现在钉死一个有版本号的 release（2026-09-27）：文件名、字节数、sha256 全部来自该 release
  * 的 GitHub API 资产元数据，且与 release 自带的 .sha256 文件一致。镜像站只同步 latest、
@@ -111,7 +111,7 @@ export const MSYS2_INSTALLER_SHA256 =
 export const MSYS2_INSTALLER_BYTES = 43_117_824;
 
 /**
- * 真包的体量下限（实测 42.9–43.1 MB）。小于它就是半截文件或错误页：
+ * 真包体量的下限（实测 42.9–43.1 MB）。小于该值即为不完整文件或错误页：
  * 半截文件若被当成有效缓存，解压会永远失败，用户只能自己猜该删哪个文件（F3d）。
  */
 const MIN_INSTALLER_BYTES = 40_000_000;
@@ -366,7 +366,7 @@ export function checkInstallerFile(path: string, expectedSha256: string): Instal
 /**
  * 缓存能不能当"已经下好的安装包"用（P0-1）：体量下限 + MZ 头 + sha256。
  * 只查体量时，一次超时留下的半截文件、或被换掉的镜像包会被下一次当成有效缓存；
- * 哈希不符时保留原文件（不删用户的东西），只是不认它。
+ * 哈希不符时保留原文件（不删除用户文件），仅不认可该文件。
  */
 function cachedInstallerCheck(path: string, expectedSha256: string): InstallerFileCheck {
   if (!existsSync(path)) return { ok: false, bytes: 0, actualSha256: "", reason: "没有缓存" };
@@ -391,7 +391,7 @@ function removeFileQuietly(path: string): void {
 
 /**
  * 清掉暂存目录/半成品。
- * 只对**我们自己建的**路径调用（.part 与 .dsh-msys2-staging）：用户的东西一个都不删。
+ * 只对**本插件创建的**路径调用（.part 与 .dsh-msys2-staging）：用户文件一律不删除。
  */
 function removeDirQuietly(dir: string): void {
   try {
@@ -403,7 +403,7 @@ function removeDirQuietly(dir: string): void {
 
 /**
  * 是不是 Windows 盘根（C:/、C:、D:\ 这类）。
- * Node 的 mkdirSync 对盘根会抛 EPERM（Windows 不允许 mkdir 在盘根上"创建"它），
+ * Node 的 mkdirSync 对盘根会抛 EPERM（Windows 不允许 mkdir 在盘根上"创建"该目录），
  * 而 targetDir=C:/msys64 时 parent 恰好就是盘根——那是本插件自己建议的默认装法，
  * 不能让推荐路径变成必炸路径。
  */
@@ -445,7 +445,7 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 /* -------------------------- 安装包地址与缓存 -------------------------- */
 
 export interface UrlResolution {
-  /** 候选地址，按尝试顺序排列；第一个是"计划里报给你看"的那个。 */
+  /** 候选地址，按尝试顺序排列；第一个即"计划中向用户展示"的地址。 */
   urls: string[];
   /** 这份安装包必须匹配的 sha256（64 位小写十六进制）；配置错误时为空串。 */
   sha256: string;
@@ -489,7 +489,7 @@ export function resolveInstallerUrls(env: Record<string, string | undefined>): U
         note: "安装包地址来自环境变量覆盖，但缺少有效哈希",
         error:
           "环境变量覆盖了安装包地址，但没有同时给 MSYS2_INSTALLER_SHA256。" +
-          "请把官方包（或你镜像里那份）的 64 位 sha256 一起写上；" +
+          "请同时填写官方包（或镜像副本）的 64 位 sha256；" +
           "插件不会执行一个无法校验来源的安装包。官方包哈希见 MSYS2_INSTALLER_SHA256 的默认值说明。",
       };
     }
@@ -555,7 +555,7 @@ function cacheFilePath(env: Record<string, string | undefined>): string {
 
 /**
  * 国内镜像的 pacman 地址。实测 2026-10：四家的 msys/x86_64/msys.db 都是 200 且同一份
- * 516,869 B（校验和一致 → 同步是齐的）。放在官方列表**前面**，官方条目原样保留在后面兜底。
+ * 516,869 B（校验和一致 → 同步完整）。放在官方列表**前面**，官方条目原样保留在后面作为回退。
  */
 const PACMAN_MIRRORS: ReadonlyArray<{ label: string; msys: string; mingw: string }> = [
   {
@@ -581,7 +581,7 @@ const PACMAN_MIRRORS: ReadonlyArray<{ label: string; msys: string; mingw: string
 ];
 
 const MIRRORLIST_HEADER =
-  "# dsh-stm32：把国内镜像放到最前面（官方源原样保留在后面兜底）。\n" +
+  "# dsh-stm32：把国内镜像放到最前面（官方源原样保留在后作为回退）。\n" +
   "# 想去掉这段：删掉本注释与紧随其后的几行 Server = 即可，其余内容不受影响。\n";
 
 /** 把一组 Server 行提到最前；已有的不重复添加（幂等，重复调不会越堆越长）。 */
@@ -630,7 +630,7 @@ export function preferChinaMirrors(msys64: string): { files: string[]; note: str
         PACMAN_MIRRORS.map((item) => item.label).join(" / ") +
         " 放到 pacman 镜像列表最前（" +
         updated.join("、") +
-        "），官方源保留在后面兜底；pacman 补包因此走国内线路。";
+        "），官方源保留在后面作为回退；pacman 补包因此走国内线路。";
   return { files: updated, note };
 }
 
@@ -724,7 +724,7 @@ export function viaLabel(via: Msys2InstallResult["resolvedVia"]): string {
     case "discovered":
       return "自动发现";
     case "suggested":
-      // 契约里的保留值：自动采用建议路径会把"装到哪"变成隐式决定，我们不这么做。
+      // 契约中的保留值：自动采用建议路径会使"安装位置"成为隐式决定，本插件不采用该做法。
       return "建议路径（尚未确认）";
     default:
       return "还没决定";
@@ -918,7 +918,7 @@ function broadcastPathEntry(entry: string): void {
   if (process.platform === "win32") process.env.Path = next;
 }
 
-/** 读不到时的兜底说明：给可手动执行的写法，但要求用户自己先确认旧值（我们读不到就无法替他拼）。 */
+/** 读取失败时的回退说明：给出可手动执行的写法，但要求用户先自行确认旧值（本插件读取失败，无法代为拼接）。 */
 function manualPathHint(entry: string): string {
   return (
     "先在命令行跑 reg query \"" +
@@ -933,7 +933,7 @@ function manualPathHint(entry: string): string {
   );
 }
 
-/** 读失败时的统一开场白：卡片、步骤 detail、message 都用它，测试与用户都能一眼认出。 */
+/** 读失败时的统一开场白：卡片、步骤 detail 与 message 均使用该文案，测试与用户均可直接识别。 */
 const UNREADABLE_PATH_PREFIX = "读不到当前用户 PATH";
 
 function planPathState(
@@ -1040,7 +1040,7 @@ async function applyUserPath(
 
 interface ExtractOutcome {
   ok: boolean;
-  /** 用户中断（不是失败）：暂存目录要留着，下次进来第一条就是清它。 */
+  /** 用户中断（不属于失败）：暂存目录需要保留，下次进入时第一步即清理该目录。 */
   cancelled: boolean;
   detail: string;
   /** 失败时也可能非空：解压结果留在这里，用户可以自己挪。 */
@@ -1066,7 +1066,7 @@ async function extractInstaller(
 ): Promise<ExtractOutcome> {
   const parent = toPosix(dirname(targetDir));
   const staging = parent + "/.dsh-msys2-staging";
-  // 只清自己建的暂存目录（固定名字）：上次崩在中途，残渣也不会被当成成功。
+  // 只清理自身创建的暂存目录（固定名称）：上次中途异常退出时，残留内容不会被当成成功。
   removeDirQuietly(staging);
   try {
     mkdirSync(staging, { recursive: true });
@@ -1095,7 +1095,7 @@ async function extractInstaller(
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     // A29：用户按了停止（或被上层 abort）不是"解压失败"。先判取消，别走失败路径去删暂存目录：
-    // 半份解压结果留着，下次进这里第一件事就是清它，不用用户自己收拾。
+    // 未完成的解压结果会保留，下次进入时第一步即清理该目录，无需用户手动处理。
     if (outcome.aborted || isAborted(request.signal)) {
       return { ok: false, cancelled: true, detail: EXTRACT_CANCELLED, staging };
     }
@@ -1142,7 +1142,7 @@ async function extractInstaller(
           detail:
             "解压好了，但目标目录在解压期间变成非空：" +
             targetDir +
-            "（没有覆盖它）；解压结果留在 " +
+            "（未覆盖原目录）；解压结果留在 " +
             extractedRoot,
           staging,
         };
@@ -1177,7 +1177,7 @@ function pacmanOk(outcome: RunOutcome): boolean {
   return outcome.spawnError === null && !outcome.timedOut && outcome.exitCode === 0;
 }
 
-/** 只用现有数据库补包：已有 MSYS2 上不先 -Sy，免得"局部升级"把依赖解析搞崩。 */
+/** 只用现有数据库补包：已有 MSYS2 上不先执行 -Sy，避免"局部升级"破坏依赖解析。 */
 function pacmanInstallCommand(packages: readonly string[]): string {
   return "pacman -S --noconfirm --needed " + packages.join(" ");
 }
@@ -1309,7 +1309,7 @@ function fillPlanDetails(steps: Msys2InstallStep[], context: PlanDetailContext):
     stepOf(steps, "prepare"),
     context.existing ? "skipped" : "pending",
     context.msys64 === ""
-      ? "目标目录待定；定了之后先确保它的父目录存在"
+      ? "目标目录待定；确定后先确保其父目录存在"
       : context.existing
         ? context.msys64 + " 里已经有一份能用的 MSYS2（有 usr/bin/bash.exe），不用建目录、不用重装"
         : "确保父目录存在：" +
@@ -1323,7 +1323,7 @@ function fillPlanDetails(steps: Msys2InstallStep[], context: PlanDetailContext):
       ? "已有完整 MSYS2，不需要安装包（省 " + formatBytes(MSYS2_INSTALLER_BYTES) + " 下载）"
       : context.cacheOk
         ? "复用缓存：" + context.cachePath + "（" + formatBytes(MSYS2_INSTALLER_BYTES) + "，不会再下载）"
-        : "按候选链下载（国内镜像优先，GitHub 兜底），第一个成功的落盘到 " +
+        : "按候选链下载（国内镜像优先，GitHub 回退），第一个成功的落盘到 " +
             context.cachePath +
             "（约 " +
             formatBytes(MSYS2_INSTALLER_BYTES) +
@@ -1430,7 +1430,7 @@ function planMessage(
       "，有 usr/bin/bash.exe），" +
       String(packages.length) +
       " 个组件也都装着" +
-      (facts.pathEntryPresent ? "，用户 PATH 里也有它" : "") +
+      (facts.pathEntryPresent ? "，用户 PATH 中也包含该目录" : "") +
       (facts.configMatches ? "，配置已经写好" : "") +
       "。没有下载、没有建目录、没有写注册表、没有改配置。"
     );
@@ -1528,16 +1528,16 @@ function decisionMessage(
   download: Msys2InstallDownload,
 ): string {
   return (
-    "需要你先决定装哪：这台机器上没有可用的 MSYS2（配置里没有、自动扫描也没找到 usr/bin/bash.exe），" +
-    "我不猜路径。建议装到 " +
+    "需要先确定安装位置：这台机器上没有可用的 MSYS2（配置中未指定，自动扫描也未找到 usr/bin/bash.exe），" +
+    "本插件不猜测路径。建议安装到 " +
     suggested +
     "（安装包 " +
     formatBytes(download.bytes) +
     " + 分包约 " +
     formatBytes(msys2PackagesTotal(packages)) +
-    " 估算）。给我 targetDir、或回一句「装到 " +
+    " 估算）。请提供 targetDir，或回复「装到 " +
     suggested +
-    "」，我再出计划；现在什么都没装。"
+    "」，随后生成计划；当前未安装任何内容。"
   );
 }
 
@@ -1556,7 +1556,7 @@ function verifySummary(verify: Msys2InstallVerifyState): string {
 
 /**
  * path 是不是在 dir 之下（大小写与斜杠不敏感）。
- * 自检用它确认"跑起来的那个工具"确实来自目标 binDir，而不是 PATH 上的同名文件。
+ * 自检使用该函数确认"实际运行的工具"确实来自目标 binDir，而非 PATH 上的同名文件。
  */
 function isInsideDir(path: string, dir: string): boolean {
   const base = toPosix(dir).replace(/\/+$/u, "").toLowerCase();
@@ -1611,7 +1611,7 @@ async function curlOnce(
     "--speed-time",
     String(Math.round(DOWNLOAD_STALL_MS / 1000)),
   ];
-  // F3c：-C - 断点续传。缓存目录里有 .part 时从它的长度接着下；没有就当普通下载。
+  // F3c：-C - 断点续传。缓存目录中存在 .part 时从其长度继续下载；不存在时按普通下载处理。
   if (resume) argv.push("-C", "-");
   argv.push("-o", partPath, url);
   return runCapture(subprocess, {
@@ -1752,7 +1752,7 @@ export async function planOrInstallMsys2(
         cachePath +
         " 不可用：" +
         cached.reason +
-        "。会重新下载；原文件不删，留给你自己判断。",
+        "。会重新下载；原文件不删除，保留给用户自行判断。",
     );
   }
   if (target.warning !== "") notes.push("⚠ " + target.warning);
@@ -1812,7 +1812,7 @@ export async function planOrInstallMsys2(
     let planProbed: ProbeResult[] = [];
     let verifyOk = false;
     let verifyText = "";
-    // CubeMX 不在这 5 件里，但它决定能不能走 HAL 路线：缺它时紧凑卡片必须补一句，
+    // CubeMX 不在这 5 个组件中，但 CubeMX 决定能否走 HAL 路线：缺少 CubeMX 时紧凑卡片必须补充一句，
     // 否则"工具链完整"会让人以为 HAL 工程也能直接生成。
     let cubemxReady = false;
     if (binDir !== "" && existsSync(binDir)) {
@@ -1897,7 +1897,7 @@ export async function planOrInstallMsys2(
           (cubemxReady
             ? ""
             : "要写 HAL 库程序还需要从 ST 官网装 STM32CubeMX（含内置 JRE，约 1.5 GB，" +
-              "https://www.st.com/en/development-tools/stm32cubemx.html）；纯寄存器程序不需要它。"),
+              "https://www.st.com/en/development-tools/stm32cubemx.html）；纯寄存器程序不需要该组件。"),
         nextStep: "",
         notes: [],
         durationMs: Date.now() - started,
@@ -1945,7 +1945,7 @@ export async function planOrInstallMsys2(
           : decisionMessage(suggested, packages, download)),
       nextStep: decided
         ? confirmHint
-        : "定下安装位置（targetDir，或回一句「装到 " + suggested + "」），我再出一份计划。",
+        : "定下安装位置（targetDir，或回一句「装到 " + suggested + "」），随后生成一份计划。",
       notes,
       durationMs: Date.now() - started,
     };
@@ -2051,7 +2051,7 @@ export async function planOrInstallMsys2(
           skipAfter(steps, "prepare", "目标目录不可用，未执行");
           return finish(
             false,
-            "没有开始：目标目录 " + msys64 + " 已存在且不是一份完整 MSYS2，我不覆盖也不删除它。",
+            "没有开始：目标目录 " + msys64 + " 已存在且不是一份完整的 MSYS2，不覆盖也不删除该目录。",
             "换一个空目录（例如 " +
               (msys64 === MSYS2_SUGGESTED_ROOT ? "D:/msys64" : MSYS2_SUGGESTED_ROOT) +
               "）再装，或先确认那个目录里放的是什么。",
@@ -2063,14 +2063,14 @@ export async function planOrInstallMsys2(
       const reason = describeError(error);
       setStep(prepareStep, "failed", reason);
       skipAfter(steps, "prepare", "父目录建不了，未执行");
-      // 0c：失败时给一条不依赖本工具的手动兜底——下载好的 sfx 安装包自己就能解压，
+      // 0c：失败时给出一条不依赖本工具的手动回退路径——已下载的 sfx 安装包可直接解压，
       // 手动装好后重跑本工具会直接走 alreadyInstalled（检测的是 usr/bin/bash.exe，不是本工具写的标记）。
       const manualSteps = [
-        "手动兜底（不依赖本工具）：",
+        "手动回退方式（不依赖本工具）：",
         "  1. 下载安装包（任一源都行）：" + primaryUrl,
         "  2. 手动解压到目标盘：进入下载目录后执行  <安装包文件> -y -o" + (parent === "" ? "C:\\\\" : toWindowsDir(parent)),
-        "     （sfx 会在所选目录下解压出 msys64/；把它改名或移动到 " + msys64 + " 即可）",
-        "  3. 重跑本工具：它会检测到 usr/bin/bash.exe 并直接复用，不再下载、不再解压。",
+        "     （sfx 会在所选目录下解压出 msys64/；将该目录改名或移动到 " + msys64 + " 即可）",
+        "  3. 重新运行本工具：检测到 usr/bin/bash.exe 后将直接复用，不再下载、不再解压。",
       ].join("\n");
       return finish(
         false,
@@ -2168,7 +2168,7 @@ export async function planOrInstallMsys2(
           cachePath +
           (extracted.staging === "" ? "" : "，暂存目录 " + extracted.staging + " 保留着") +
           "。",
-        "取消不等于失败——要接着装就再调一次（已下载的安装包直接用），暂存目录会在下次解压开始时自动清掉，不用你先收拾。",
+        "取消不属于失败——如需继续安装，再次调用即可（已下载的安装包直接使用），暂存目录会在下次解压开始时自动清理，无需用户手动处理。",
       );
     }
     if (!extracted.ok) {
@@ -2177,7 +2177,7 @@ export async function planOrInstallMsys2(
       return finish(
         false,
         "解压失败：" + extracted.detail,
-        "安装包已缓存在 " + cachePath + "，修好问题后重试不会重新下载；也可以手动把它解压到 " + msys64 + "。",
+        "安装包已缓存在 " + cachePath + "，修复问题后重试不会重新下载；也可以手动将其解压到 " + msys64 + "。",
       );
     }
     // F3d 第三道：解压自检。sfx 退出码 0 不代表解出来的是完整 MSYS2——
@@ -2233,7 +2233,7 @@ export async function planOrInstallMsys2(
       awaitQuiescence: true,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
-  // 先问一句"哪些已经装了"。pacman -S 对已装的包不是"跳过"而是"顺手升级"，
+  // 先查询"哪些已经安装"。pacman -S 对已安装的包不是"跳过"而是"同时升级"，
   // 在第 4 步把用户整套 mingw 工具链升一个大版本不是本工具的活（那是 pacman -Syu 的事）。
   const query = await runPacman("pacman -Q " + packages.join(" "));
   const installed = parsePacmanQuery(query.stdout);
@@ -2290,7 +2290,7 @@ export async function planOrInstallMsys2(
         );
       }
     }
-    // -Syu 成功只代表库和基包是新的，我们缺的 5 个组件还得单独补。
+    // -Syu 成功只代表库和基包为最新，缺少的 5 个组件仍需单独安装。
     if (needsSync && command === PACMAN_UPGRADE_COMMAND && pacmanOk(pacman)) {
       command = installCommand;
       pacman = await runPacman(command);
@@ -2312,7 +2312,7 @@ export async function planOrInstallMsys2(
         notes.push(
           "pacman 的锁还在：" +
             lockPath +
-            "（一般是被中断或强杀留下的）。先确认没有 pacman / bash 进程在跑，删掉它再重试：" +
+            "（通常由中断或强制结束产生）。先确认没有 pacman / bash 进程在运行，删除该锁后再重试：" +
             bashLine(msys64, "rm -f /var/lib/pacman/db.lck") +
             "；锁在的时候 pacman 会一律拒绝开工。",
         );
@@ -2322,7 +2322,7 @@ export async function planOrInstallMsys2(
         notes.push(
           "pacman 报的是文件冲突（conflicting files / exists in filesystem）：先整体升级一次（" +
             bashLine(msys64, PACMAN_UPGRADE_COMMAND) +
-            "）；确认某几个文件被别的包占着、确实要顶掉时再自己加 --overwrite。本工具不会替你覆盖别人的文件。",
+            "）；确认某些文件被其他包占用、确需覆盖时再自行添加 --overwrite。本工具不会覆盖属于其他包的文件。",
         );
       }
       // 不当场放弃：MSYS2 本体在，PATH / 配置照写，报告里把失败点写清楚。
@@ -2372,7 +2372,7 @@ export async function planOrInstallMsys2(
         ? ""
         : "\n手动：把 " +
           toWindowsDir(binDir) +
-          " 追加到「环境变量 → 用户变量 → Path」（不要用 setx，它会在 1024 字符处截断 PATH）";
+          " 追加到「环境变量 → 用户变量 → Path」（不要使用 setx，该命令会在 1024 字符处截断 PATH）";
       setStep(pathStep, "failed", pathState.error + manual);
     }
   }
@@ -2384,7 +2384,7 @@ export async function planOrInstallMsys2(
   const targets = buildTargets(probeConfig).filter((item) => VERIFY_IDS.includes(item.id));
   const probed = await probeAll(subprocess, targets, probeConfig, {
     timeoutMs: PROBE_TIMEOUT_MS,
-    // 自检只认这个目录。允许 PATH 兜底的话，机器上另一份同名工具（STM32CubeIDE 自带、
+    // 自检只认该目录。若允许 PATH 回退，机器上其他同名工具（STM32CubeIDE 自带、
     // xpack、旧的 msys64）会让"没装进目标目录"看起来像"装好了"。
     allowPathFallback: false,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -2432,14 +2432,14 @@ export async function planOrInstallMsys2(
   // 一个例外：pacman 补装失败，但 5 个组件都**从 binDir 里**跑起来了（自检通过且没有外来工具），
   // 说明这个目录本来就不缺东西——那不是"没装成"，如实记一行、继续当成功。
   // 反过来，只要有一个工具来自 binDir 之外，就不能改判：配置里最终指的是这个目录，
-  // 而它其实没装好，用户下次编译才会撞上。
+  // 而该目录实际未安装完整，用户下次编译时才会遇到问题。
   if (verifyState.ok && strayTools.length === 0 && pacmanStep.status === "failed") {
     pacmanStep.status = "done";
     pacmanStep.detail =
       pacmanStep.detail +
       "\n但自检显示 5 个组件都是在 " +
       binDir +
-      " 里跑起来的，按「已装」处理（插件不替你升级，要升级自己跑 pacman -Syu）。";
+      " 里运行的，按「已安装」处理（本插件不代为升级，升级需自行运行 pacman -Syu）。";
   }
   const fatal = steps.find((step) => step.status === "failed" && step.id !== "path");
   const ok = fatal === undefined;
@@ -2450,7 +2450,7 @@ export async function planOrInstallMsys2(
       " 了，" +
       verifySummary(verifyState) +
       "；现在可以编译 / 烧录 / 调试。" +
-      // 读不到 PATH 与"写了但失败"是两种事：前者一句"没写成功"会让用户以为是我们写坏了，
+      // 读取 PATH 失败与"写入但失败"是两种情况：前者仅提示"未写入成功"会让用户误认为是本插件写坏，
       // 所以这里把"为安全起见没动注册表"直接写进 message。
       (pathFailed
         ? pathState.error.startsWith(UNREADABLE_PATH_PREFIX)
@@ -2463,14 +2463,14 @@ export async function planOrInstallMsys2(
         .map((step) => step.label)
         .join("、") +
       "（每一步的原因都在 steps 里）。" +
-      // 自检禁用了 PATH 兜底，这里必须说清"能跑"不等于"装到了目标目录"，
-      // 否则用户看着别处的 gcc 好好的，会以为是我们判错了。
+      // 自检禁用了 PATH 回退，此处必须说明"能运行"不等于"已安装到目标目录"，
+      // 否则用户看到其他位置的 gcc 运行正常时，会误认为是本插件判断错误。
       (strayTools.length > 0
         ? " 能跑的那几个不在 " +
           binDir +
           " 里（" +
           strayTools.map((tool) => tool.path).join("、") +
-          "），说明它们本来就在别的目录，这个目录并没有装好。"
+          "），说明这些工具原本位于其他目录，该目录并未安装完整。"
         : pacmanStep.status === "failed" && !verifyState.ok
           ? " 自检只在 " + binDir + " 里找：PATH 上另一份同名工具不算装到这个目录。"
           : "") +
@@ -2482,7 +2482,7 @@ export async function planOrInstallMsys2(
     ok,
     message,
     ok
-      ? "直接重跑你刚才的工具（stm32_build / stm32_flash / stm32_debug_run）；也可以用 stm32_doctor 复看一遍。"
+      ? "直接重新运行刚才的工具（stm32_build / stm32_flash / stm32_debug_run）；也可使用 stm32_doctor 复查一遍。"
       : "看 steps 里失败那一步的 detail；修好后重调本工具，已完成的步骤会自动跳过（不会重复下载、不会重复写 PATH）。",
   );
 }

@@ -35,16 +35,16 @@ export interface FlashRequest {
   openOcdPath?: string;
   /** 工程内的 openocd 配置文件（相对 projectDir）；缺省依次找 openocd.cfg、openocd/openocd.cfg。 */
   configFile?: string;
-  /** 显式指定 SWD 守卫要看的 .ioc（工程里有多个 .ioc 时用它指定）。 */
+  /** 显式指定 SWD 守卫检查的 .ioc（工程中存在多个 .ioc 时用于指定）。 */
   iocPath?: string;
-  /** 找不到工程配置时的兜底：接口与目标配置文件（相对 openocd scripts 目录）。 */
+  /** 找不到工程配置时的回退配置：接口与目标配置文件（相对 openocd scripts 目录）。 */
   interfaceConfig?: string;
   targetConfig?: string;
   /** -c "adapter speed <kHz>"；缺省不加（用探针默认）。 */
   adapterSpeed?: number;
   /**
    * 烧录后端：auto（默认，openocd 先烧、失败再试 CubeProgrammer CLI）/ openocd / cubeprogrammer。
-   * CLI 只认 ST-LINK；H5/WBA/WB0/WL3 这类 openocd 根本没有 flash 驱动的族只能走它。
+   * CLI 只认 ST-LINK；H5/WBA/WB0/WL3 等 openocd 没有 flash 驱动的族只能使用该后端。
    */
   backend?: FlashBackend;
   /** 烧完是否复位并运行；默认 true（= "只烧录"，不进调试）。 */
@@ -149,7 +149,7 @@ export function checkNoDebugGuard(projectDir: string, allowNoDebug = false, expl
       notes: [
         "SWD 守卫没生效：" + why + "。烧录前请自己确认 .ioc 里 PA13 是 SYS_JTMS-SWDIO、PA14 是 SYS_JTCK-SWCLK；" +
           "没启用 Serial Wire 时烧下去会关掉 SWD，之后只能 BOOT0=1 进系统 bootloader 救回来。",
-        "想让它自动检查：工程根目录只留一个 .ioc，或给 stm32_flash 传 iocPath 指向正确的那份。",
+        "如需自动检查：工程根目录只保留一个 .ioc，或为 stm32_flash 传入 iocPath 指向正确文件。",
       ],
     };
   }
@@ -193,7 +193,7 @@ export function quoteForDisplay(item: string): string {
 }
 
 /**
- * 内置兜底配置：探针只 CMSIS-DAP（规格 §13），target 按芯片族取。
+ * 内置回退配置：探针仅 CMSIS-DAP（规格 §13），target 按芯片族选择。
  *
  * family 省略/null 时保持历史行为回退 stm32f1x。真正的"按族选 target + 选不出来就拒绝"
  * 走 chooseOpenocdTarget（data/family.ts）——这里只负责拼相对路径。
@@ -250,7 +250,7 @@ export function parseFlashLog(text: string): FlashLogVerdict {
   const programmed = /\*\*\s*Programming Finished\s*\*\*/u.test(text);
   const verified = /\*\*\s*Verified OK\s*\*\*/u.test(text);
   // A25：以成功序列为主判据。openocd 成功时也会打 Error: 前缀的行（无关 ACK / DAP 噪声），
-  // 以前把它们一律当失败，于是「烧录成功、已校验」被判成失败。
+  // 以前将这些输出一律视为失败，导致「烧录成功、已校验」被判为失败。
   const succeeded = programmed && verified;
   const errors: string[] = [];
   const noise: string[] = [];
@@ -301,7 +301,7 @@ function prepareFlashTarget(projectDir: string, request: FlashRequest, startedAt
   }
   const elfPath = elfResolved.elf;
   const elfSize = statSync(elfPath).size;
-  // 多个 .elf 并存时说清"烧的是哪一个、为什么是它"。
+  // 多个 .elf 并存时说明"烧录的是哪一个、选择该文件的原因"。
   const selectionNote = elfSelectionNote(dirname(elfPath));
   if (selectionNote !== "") notes.push(selectionNote);
 
@@ -395,7 +395,7 @@ async function runCubeProgrammerBackend(subprocess: SubprocessService, request: 
   };
 }
 
-/** openocd 后端主体；ifaceOverride 只在工程没有自己的 openocd.cfg 时参与兜底 interface 选择。 */
+/** openocd 后端主体；ifaceOverride 仅在工程没有自己的 openocd.cfg 时参与回退 interface 选择。 */
 async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequest, ifaceOverride?: string): Promise<FlashReport> {
   const projectDir = resolve(request.projectDir);
   const config: SearchConfig = resolveSearchConfig(process.env, request.binDirs === undefined ? {} : { binDirs: request.binDirs });
@@ -452,7 +452,7 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
     const cfg = configs[i] ?? "";
     args.push("-f", cfg);
     // J-Link 的 interface/jlink.cfg 只写 `adapter driver jlink`：不显式选 transport 时 openocd
-    // 默认 jtag，SWD 目标会报 "No J-Link device found"。工程自带 cfg 时按它 source 的 interface 判断。
+    // 默认 jtag，SWD 目标会报 "No J-Link device found"。工程自带 cfg 时按其 source 的 interface 判断。
     if (projectConfig !== null && i === 0) {
       let projectText = "";
       try {
@@ -506,7 +506,7 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
     : classifyProbeFailure({
       // 分类要看**完整日志**，不能只看解析出的 Error 行：target 不匹配这类故障，
       // openocd 只打一行 `Warn : Cannot identify target as a STM32 family.`（2026-10-31 实测，
-      // 只看 errors 时就落到 unknown）。errors 里还有我们自己合成的行（spawn 失败/超时），排在后面。
+      // 仅检查 errors 时会落到 unknown）。errors 中还包含本插件合成的行（spawn 失败/超时），排在后面。
       lines: [
         ...log.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line !== ""),
         ...errors,
@@ -518,8 +518,8 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
     });
   if (probeError !== null && probeError.kind !== "unknown") notes.push(probeError.hint);
   if (probeError !== null && probeError.kind === "no-probe" && probeMissingLines(errors).length > 0) {
-    // 2a：找不到设备时顺手做一次 USB 形态诊断——"没插"与"这台机器根本没 USB"是两种答案。
-    // 诊断失败静默（unknown 不进 notes），绝不能让诊断把失败报告搞得更吵。
+    // 2a：找不到设备时同时做一次 USB 形态诊断——"未插入"与"这台机器没有 USB"是两种结论。
+    // 诊断失败静默（unknown 不写入 notes），诊断异常不得增加失败报告的噪声。
     const usb = await usbDiagnosis(subprocess, request.signal);
     const extra = usbNoteFor(usb.kind, usb.detail);
     if (extra !== null) notes.push(extra);
@@ -543,12 +543,12 @@ async function runOpenocdFlash(subprocess: SubprocessService, request: FlashRequ
 /**
  * 烧录编排器（2026-11-08 复盘后的两层修复）：
  *
- * 1. **interface 先探后选**：以前兜底硬编码 cmsis-dap（规格 §13 的旧前提），插 ST-Link 的
+ * 1. **interface 先探后选**：以前回退配置硬编码 cmsis-dap（规格 §13 的旧前提），插 ST-Link 的
  *    用户直接被带偏——openocd 报 "unable to find a matching CMSIS-DAP device"，还得人肉猜。
  *    现在先 usbDiagnosis（VID:PID 分流）按实见探针选 interface；工程自带 openocd.cfg 时不插手
  *    （那是用户显式配置，只在失败后提示改哪一行）。
  * 2. **换 interface 自动重试一次**：仍报 probe-interface-mismatch 就切另一个驱动再跑。
- * 3. **CubeProgrammer 兜底**：openocd 两条都失败、实见探针是 ST-LINK、本机装了 CubeProgrammer、
+ * 3. **CubeProgrammer 回退**：openocd 两条路径均失败、实见探针是 ST-LINK、本机安装了 CubeProgrammer、
  *    且失败不是「换后端也没用」类（swd-locked/no-power/flash-protected）时，走 CLI 第二后端。
  *    DAPLink 用户没有这条腿（CLI 只认 ST-LINK），报告里如实说。
  */
@@ -560,7 +560,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   let sawStLink = false;
   let sawDapFamily = false;
   let sawJlink = false;
-  // CLI 后端也要知道探针类型（它只认 ST-LINK），所以不能只按 interfaceConfig 是否显式给来决定探不探。
+  // CLI 后端同样需要探针类型（该后端只认 ST-LINK），因此不能只按 interfaceConfig 是否显式给出决定是否探测。
   if (request.interfaceConfig === undefined || backend === "cubeprogrammer") {
     const live = await liveProbeChoice(subprocess, request.signal);
     sawStLink = live.swdProbes.some((p) => p.kind === "st-link");
@@ -572,13 +572,13 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
         (backend === "cubeprogrammer"
           ? ""
           : hasProjectCfg
-            ? "（工程自带 openocd.cfg，interface 以它为准）"
+            ? "（工程自带 openocd.cfg，interface 以其为准）"
             : "；interface 用 " + live.cfg + "（" + live.why + "）");
     }
   }
 
   if (backend === "cubeprogrammer") {
-    // 实见的是 DAPLink/CMSIS-DAP：CLI 这条路根本不通，别让它跑一遍再报一句含糊的 "no ST-Link"。
+    // 实见的是 DAPLink/CMSIS-DAP：CLI 路径不可用，不要让其运行一次后仅报出含糊的 "no ST-Link"。
     if (sawDapFamily && !sawStLink) {
       return {
         ok: false, projectDir: resolve(request.projectDir), elfPath: "", elfSize: 0, command: "", args: [], configs: [],
@@ -594,10 +594,10 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
   let report = await runOpenocdFlash(subprocess, request, ifaceOverride);
   if (probeNote !== "") report.notes.unshift(probeNote);
 
-  // 2) 接口不匹配 → 换另一个 interface 重试一次（仅插件兜底配置的工程；手写 cfg 的让用户按 hint 改）
+  // 2) 接口不匹配 → 更换另一个 interface 重试一次（仅限使用插件回退配置的工程；手写 cfg 的工程由用户按 hint 修改）
   if (!report.ok && !hasProjectCfg && report.probeError !== null && report.probeError.kind === "probe-interface-mismatch") {
     // 换哪条由**实见探针**决定，不是"把当前值取反"：取反在探针结论过期/缺失时会把重试引向
-    // 与真实硬件无关的方向（CI 上 2 条用例就是这么挂的）。实见 ST-LINK 就先试 stlink。
+    // 与真实硬件无关的方向（CI 上 2 条用例即因此失败）。实见 ST-LINK 时先试 stlink。
     const firstIface = ifaceOverride ?? "interface/cmsis-dap.cfg";
     const guided = sawStLink ? "interface/stlink-dap.cfg" : sawDapFamily ? "interface/cmsis-dap.cfg" : sawJlink ? "interface/jlink.cfg" : "";
     const other = guided !== "" && guided !== firstIface
@@ -605,7 +605,7 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
       : firstIface === "interface/cmsis-dap.cfg" ? "interface/stlink-dap.cfg" : "interface/cmsis-dap.cfg";
     const firstMessage = report.message;
     const retry = await runOpenocdFlash(subprocess, request, other);
-    // notes 归属：retry 是新报告——探针实见行、换接口说明、第一次失败原因都得挂到它身上
+    // notes 归属：retry 生成新报告——探针实见行、换接口说明、第一次失败原因均需附加到该报告
     // （第一版把"自动换…"push 进了旧 report，随对象丢弃，测试当场抓到）。
     if (probeNote !== "") retry.notes.unshift(probeNote);
     retry.notes.push("openocd 报探针驱动不匹配，自动换 " + other + " 重试一次（第 1 次：" + firstMessage + "）");
@@ -654,23 +654,23 @@ export async function runFlash(subprocess: SubprocessService, request: FlashRequ
           notes: [...report.notes, cubeProgrammerBackendNote(cli)],
         };
       }
-      report.notes.push("CubeProgrammer 兜底也没成：" + alt.message + "（查过 " + alt.searched + "）");
+      report.notes.push("CubeProgrammer 回退同样失败：" + alt.message + "（查过 " + alt.searched + "）");
     } else {
       report.notes.push(
-        "实见 ST-LINK 但本机没装 STM32CubeProgrammer（CLI 没找到）：装上它，ST-Link 就多一条不依赖 openocd target 脚本的后端" +
-          "（backend=cubeprogrammer 可直连；H5/WBA/WB0/WL3 只能走它）。下载：https://www.st.com/en/development-tools/stm32cubeprog.html",
+        "实见 ST-LINK 但本机未安装 STM32CubeProgrammer（CLI 未找到）：安装后可获得一条不依赖 openocd target 脚本的后端" +
+          "（backend=cubeprogrammer 可直连；H5/WBA/WB0/WL3 只能使用该后端）。下载：https://www.st.com/en/development-tools/stm32cubeprog.html",
       );
     }
   }
   if (!report.ok && sawJlink && !sawStLink) {
     // J-Link 也没有 CLI 腿（CubeProgrammer 的 SWD 路径只认 ST-LINK）
-    report.notes.push("J-Link 没有 CubeProgrammer 兜底腿（CLI 只认 ST-LINK）：openocd 的 jlink 驱动需要 `-c \"transport select swd\"`，插着 J-Link 时若仍失败，先确认 J-Link 驱动（SEGGER 的 USB Driver）与 openocd 版本。");
+    report.notes.push("J-Link 没有 CubeProgrammer 备选后端（CLI 只认 ST-LINK）：openocd 的 jlink 驱动需要 `-c \"transport select swd\"`，插着 J-Link 时若仍失败，先确认 J-Link 驱动（SEGGER 的 USB Driver）与 openocd 版本。");
   }
   if (!report.ok && !futile && report.probeError !== null && report.probeError.kind === "no-probe" && sawDapFamily && !sawStLink) {
     // DAPLink 用户走不了 CLI 这条腿，别让人以为还有救
     const config = resolveSearchConfig(process.env, {});
     if (findCubeProgrammerCli(config.cubePrgBins) !== null) {
-      report.notes.push("本机装了 CubeProgrammer，但它的 SWD 路径只认 ST-LINK：你插的是 CMSIS-DAP/DAPLink 类探针，这条路帮不上（docs §79）。");
+      report.notes.push("本机已安装 CubeProgrammer，但其 SWD 路径只认 ST-LINK：当前插入的是 CMSIS-DAP/DAPLink 类探针，该路径不可用（docs §79）。");
     }
   }
   return report;

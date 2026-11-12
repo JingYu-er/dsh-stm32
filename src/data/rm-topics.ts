@@ -1,16 +1,16 @@
 /**
  * rm-topics（主题/锚点清单）的两层装载。
  *
- * 为什么要有「spec」这层：机器是阅卷人不是出题人——自动抽取必须有人（或踩过坑后的会话）
+ * 为什么需要「spec」这一层：机器是阅卷人而非出题人——自动抽取必须有人（或经历过已知问题的会话）
  * 给出「要采信哪几条结论 + 在 RM 里逐字回查什么」，机器才能核验并落 semantics。
  *
  * 装载顺序（两层合并，同 id 用户赢）：
  *   1) 插件自带的族级 spec：lib/data/rm-topics/<族>.json（源在 src/data/rm-topics/，
  *      随包发布；scripts/copy-data.mjs 负责进 lib）。
  *   2) 用户芯片级 spec：<factsRoot>/topics/<族>/<线>.json——只覆盖手上这颗。
- *      用户踩了坑（比如某条选项字节规则害得板子连不上），把「这条结论 + 回查锚点」
- *      写成一份小 JSON 放进这里，这颗芯片下一次烧录前就必须过机检；没写过的其它
- *      芯片不受影响（族级判据太粗，坑通常是芯片级的，见 2026-11-07 决定）。
+ *      用户遇到已知问题（例如某条选项字节规则导致板子无法连接），将「该结论 + 回查锚点」
+ *      写成一份小 JSON 放入此处，该芯片下一次烧录前必须通过机检；未写入的其他
+ *      芯片不受影响（族级判据过粗，已知问题通常是芯片级的，见 2026-11-07 决定）。
  *
  * 判定「这颗芯片要不要过机检」= 合并后主题数 > 0。
  */
@@ -77,7 +77,7 @@ function readJson(file: string): unknown {
 /**
  * 插件自带族级 spec 的目录：lib/data/rm-topics/（JSON 不进 tsc，由
  * scripts/copy-data.mjs 在 build 时复制；仓库里 lib/ 是入库的，装包侧也带）。
- * 没有退回 src 的兜底：那条相对路径在插件真实安装位置（node_modules 深处）
+ * 未回退到 src：该相对路径在插件真实安装位置（node_modules 深处）
  * 基本不可能存在，留着只会把「没跑 copy-data」伪装成「清单在但读不到」。
  */
 export function bundledTopicsDir(): string {
@@ -125,7 +125,7 @@ export function loadRmTopics(family: string, line: string, factsRoot: string): L
 
   const topics = [...merged.values()];
   if (topics.length === 0) return EMPTY;
-  // 用户 spec 没写 lines 时只管自己这颗（fallbackLines 兜底）；族级有 lines 尊重族级
+  // 用户 spec 未写 lines 时仅针对该芯片（fallbackLines 回退）；族级有 lines 时遵循族级
   if (lines.size === 0) lines.add(ln);
   return { topics, lines: [...lines].sort(), docId, origins, hasSpec: true };
 }

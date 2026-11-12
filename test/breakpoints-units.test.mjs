@@ -70,7 +70,7 @@ test("第 7 个硬件断点超限：前 6 个 placed、第 7 个进 overflow，�
   assert.equal(plan.overflow[0].location, "g", "超出来的是最后一个（按请求顺序）");
   assert.match(plan.detail, /7 个硬件断点/u);
   assert.match(plan.detail, /多 1 个硬件断点/u);
-  assert.match(plan.suggestion, /删掉多出来的 1 个 break/u);
+  assert.match(plan.suggestion, /删除多余的 1 个 break/u);
   assert.match(plan.suggestion, /tbreak/u, "建议里要给替代做法");
   assert.match(plan.suggestion, /6\/4/u, "建议里要写芯片上限");
   assert.deepEqual(plan.used, { code: 6, data: 0 });

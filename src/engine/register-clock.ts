@@ -86,7 +86,7 @@ export interface RegisterClockPlan {
   hsiApb1Hz: number;
   /** 一行摘要（进 main.c 注释与 report）。 */
   summary: string;
-  /** 需要提醒用户的事（例如 HSI 兜底跑不满、F100 没有等待周期字段）。 */
+  /** 需要提醒用户的事项（例如 HSI 回退无法达到上限、F100 没有等待周期字段）。 */
   warnings: string[];
 }
 
@@ -130,7 +130,7 @@ export function planRegisterClock(chip: F1Chip): RegisterClockPlan {
     warnings.push("内部不一致：按 HSE " + hseHz + " Hz × " + spec.hseMul + " / " + spec.hseDiv + " 算出来是 " + sysclkHz + " Hz，但 F" + line + " 的上限是 " + spec.maxMHz + " MHz；请检查 register-clock.ts 的表。");
   }
   if (hsiSysclkHz < sysclkHz) {
-    warnings.push("HSE 没起（常见原因：板上没焊 8 MHz 晶振）时会退回 HSI/2 × " + hsiMul + " = " + Math.round(hsiSysclkHz / 1e6) + " MHz，比 " + Math.round(sysclkHz / 1e6) + " MHz 慢；生成的 clock_init() 已经带兜底，不用改代码。");
+    warnings.push("HSE 没起（常见原因：板上没焊 8 MHz 晶振）时会退回 HSI/2 × " + hsiMul + " = " + Math.round(hsiSysclkHz / 1e6) + " MHz，比 " + Math.round(sysclkHz / 1e6) + " MHz 慢；生成的 clock_init() 已包含回退逻辑，不需要修改代码。");
   }
   if (!spec.hasFlashLatency) {
     warnings.push("F" + line + " 的 FLASH_ACR 只有 HLFCYA、没有 LATENCY/PRFTBE 字段，生成的 clock_init() 不写 FLASH->ACR（该 line 的 SYSCLK 上限本来就不需要等待周期）。");
@@ -264,7 +264,7 @@ export function renderClockInit(plan: RegisterClockPlan): string {
 export interface GenericClockPlan {
   mcu: string;
   family: string;
-  /** 0 = 没有由我们决定频率：复位/SystemInit 决定，SystemCoreClock 里是真实值。 */
+  /** 0 = 频率不由插件决定：由复位/SystemInit 决定，SystemCoreClock 内为真实值。 */
   sysclkHz: number;
   /** 一行摘要（进 main.c 注释与 report）。 */
   summary: string;
@@ -279,7 +279,7 @@ export interface GenericClockPlan {
  * PLL 代码，最常见的结局是用户烧进去板子起不来，而且没有任何提示。
  *
  * 现状是诚实的：复位后由启动文件里的 SystemInit()（system_<族>xx.c）决定时钟，多数族
- * 默认跑 HSI；我们不覆盖它，也不谎称一个频率。要用 PLL 就在 main.c 的 clock_init() 里
+ * 默认跑 HSI；插件不覆盖该设置，也不虚报频率。需要 PLL 时在 main.c 的 clock_init() 中
  * 按该族 RM 的 RCC 章补，那一块留了注释和空函数。
  */
 export function planGenericClock(chip: { cpn: string; family: string; systemC: string }): GenericClockPlan {
@@ -290,8 +290,8 @@ export function planGenericClock(chip: { cpn: string; family: string; systemC: s
     summary: "复位默认时钟（由 " + chip.systemC + " 的 SystemInit 决定；寄存器版没有生成 PLL 配置）",
     warnings: [
       "时钟没有配 PLL：复位后由 " + chip.systemC + " 里的 SystemInit() 决定（多数族是 HSI）。" +
-        "要跑到芯片上限，请在 main.c 的 clock_init() 里按 " + chip.family + " 参考手册的 RCC 章补 PLL 配置" +
-        "（源/倍频/分频/Flash 等待周期各代不同，所以没有替你猜）；改完把 DSH_SYSCLK_HZ 与 SystemCoreClock 对上。",
+        "如需达到芯片上限，请在 main.c 的 clock_init() 中按 " + chip.family + " 参考手册的 RCC 章补充 PLL 配置" +
+        "（源/倍频/分频/Flash 等待周期各代不同，插件不代为推断）；修改后需使 DSH_SYSCLK_HZ 与 SystemCoreClock 一致。",
     ],
   };
 }
@@ -303,7 +303,7 @@ export function renderGenericClockInit(plan: GenericClockPlan): string {
     " * 时钟：" + plan.mcu + " —— " + plan.summary,
     " *   这段刻意是空的：PLL 配置按族/按板子（HSE 频率）不同，写错会让芯片起不来。",
     " *   保持 system_<族>xx.c 里 SystemInit() 的结果（SystemCoreClock 已经是真实值），",
-    " *   delay_ms 与 SysTick 都按它算，所以不改也能正常跑。",
+    " *   delay_ms 与 SysTick 均按该值计算，因此不修改也可正常运行。",
     " *   要更高主频：按本族 RM 的 RCC 章在这里配 PLL，并把 SystemCoreClockUpdate() 调一次。",
     " * -------------------------------------------------------------------------*/",
     "static void clock_init(void)",

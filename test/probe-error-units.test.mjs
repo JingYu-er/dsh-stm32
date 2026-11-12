@@ -53,7 +53,7 @@ test("kind=probe-busy：探针固件卡住时只有 CMD_INFO failed（真板子�
   assert.equal(error.kind, "probe-busy");
   // 成因要能同时覆盖「并发访问」与「固件卡住」，hint 必须给拔插这条可执行动作。
   assert.match(error.cause, /另一个进程|固件卡住/u);
-  assert.match(error.hint, /拔下来/u);
+  assert.match(error.hint, /拔下探针/u);
   assert.equal(error.retryable, true);
   assert.deepEqual(error.evidence, ["Error: CMSIS-DAP command CMD_INFO failed."]);
 });

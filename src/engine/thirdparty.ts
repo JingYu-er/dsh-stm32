@@ -54,14 +54,14 @@ function packWarnings(
     if (pack.installed === "missing") {
       out.push(
         "工程要用 " + describePack(pack) +
-          "，但本机第三方包索引里没有这个包（先在 CubeMX 的 Manage embedded software packages 里装上它，否则生成会报缺包）：" +
+          "，但本机第三方包索引中没有该包（先在 CubeMX 的 Manage embedded software packages 中安装该包，否则生成会报缺包）：" +
           pdscDir,
       );
     } else if (pack.installed === "other-version") {
       out.push(
         "工程要用 " + describePack(pack) +
           "，本机索引里只有 " + pack.installedVersions.join("、") +
-          "（CubeMX 会按可用版本处理，必要时在它里面 Migrate）",
+          "（CubeMX 会按可用版本处理，必要时在其中执行 Migrate）",
       );
     }
   }
@@ -172,7 +172,7 @@ function dirIsEmpty(dir: string): boolean {
  * B11：把停放的索引逐项并回目标目录。
  *
  * 原来只肯在目标目录是空的时候整目录改名回去，CubeMX 一旦重建了一个非空 pdsc，
- * 索引就只能靠用户手动合并（插件再也不会还原它）。这里逐项搬，搬不动的留在原地并报出来。
+ * 索引只能由用户手动合并（插件不再还原该索引）。此处逐项搬迁，无法搬迁的条目留在原地并报告。
  */
 function mergeDirectoryInto(from: string, to: string): { moved: number; kept: number; failed: number } {
   let moved = 0;

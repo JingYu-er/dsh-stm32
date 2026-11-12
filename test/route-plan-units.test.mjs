@@ -168,7 +168,7 @@ test("缺 gcc/cmake/ninja 时门禁标 auto，仍可代装（指引为空）", a
   assert.deepEqual(gate.guides, []);
   assert.ok(gate.missing.length >= 1);
   assert.ok(gate.missing.every((item) => item.installability === "auto"));
-  assert.ok(gate.nextStep.includes("回一句「装」"));
+  assert.ok(gate.nextStep.includes("回复「装」"));
   resetGateCache();
 });
 

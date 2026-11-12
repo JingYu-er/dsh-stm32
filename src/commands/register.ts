@@ -56,7 +56,7 @@ interface CommandToken {
  *
  * 为什么不能"先按空白 split 再剥引号"：`"C:/Program Files/ST/demo proj"` 在第一步就被切成两段，
  * 之后再怎么剥都拼不回原路径 —— projectDir 只剩半截，用户看到的却是「找不到 CMakeLists.txt」，
- * 只会以为工程坏了。所以改成一次扫描：引号内不切词、顺手把引号吃掉。
+ * 只会判定为工程故障。因此改为一次扫描：引号内不切词，同时移除引号。
  * 引号没闭合直接抛错：静默按空白切等于把"用户写错了"伪装成"工程坏了"。
  *
  * 引号内不做反斜杠转义：Windows 路径里 `\` 到处都是（C:\Users\...），当转义符只会把路径吃掉；
@@ -182,7 +182,7 @@ function err(text: string): CommandResult {
  *
  * 为什么命令要单独过：/stm32-build、/stm32-flash、/stm32-debug 不经过工具层，缺 gcc 或 openocd 时
  * 用户只得到一屏 cmake / spawn 原始报错，与工具入口那句「缺 X，装法是 Y」差得太远；
- * 而 /stm32-env 摆在那儿，却没人会先想到它。
+ * 而 /stm32-env 虽然存在，却常被忽略。
  *
  * 为什么固定 envCheck=warn：命令是"人已经决定要干"的动作，门禁没资格替人拦掉，
  * 但必须把「缺什么、怎么装」放在输出第一行。门禁自带 60 s 探测缓存，连着敲也不贵。
@@ -246,7 +246,7 @@ function envText(rows: readonly { capability: ToolchainCapability; gate: GateRes
     lines.push(label + "  ✘ 缺 " + missing + (install === undefined ? "" : " —— " + install));
   }
   // 缺件也是体检结果，不是命令错误；所以两种结尾都是 success。
-  lines.push(anyMissing ? "要装：回「装」，我跑 stm32_env_install 出计划（先不下载）" : "都齐了：/stm32-build 就能编译");
+  lines.push(anyMissing ? "要装：回复「装」，插件执行 stm32_env_install 生成计划（不下载）" : "依赖齐备：/stm32-build 即可编译");
   return { kind: "success", text: lines.join("\n") };
 }
 
@@ -306,7 +306,7 @@ export function registerCommands(ctx: DshContext): void {
         lines.push("调试：停在 " + location);
         lines.push("端口：" + String(session.port) + "，探针由调试会话占着（空闲 " + String(Math.round(session.idleTtlMs / 1000)) + " s 自动关）");
         lines.push("· 读变量/寄存器：stm32_debug_eval（每次调用续租）");
-        lines.push("· 想把探针交还给 VS Code：/stm32-stop，或者等我这一轮说完（turn/end 会自动关）");
+        lines.push("· 探针交还 VS Code：/stm32-stop，或等本轮输出结束（turn/end 自动关闭）");
         return withGateWarning(warning, { kind: "success", text: lines.join("\n") });
       } catch (error) {
         return err("调试命令异常：" + (error instanceof Error ? error.message : String(error)));
@@ -320,7 +320,7 @@ export function registerCommands(ctx: DshContext): void {
     description: "关掉调试会话、释放探针（之后可以在 VS Code 里按 F5）",
     handler: async () => {
       try {
-        const result = await debugSessions.stop("你敲了 /stm32-stop");
+        const result = await debugSessions.stop("收到 /stm32-stop");
         return { kind: "success", text: result.message };
       } catch (error) {
         return err("关闭会话异常：" + (error instanceof Error ? error.message : String(error)));

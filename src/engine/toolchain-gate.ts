@@ -6,7 +6,7 @@
  *   - 快路径只做文件存在性检查（resolveFromDirs，不 spawn），命中就零成本放行；
  *   - 没命中才跑 probeAll（一次版本命令，60 s 进程内缓存），拿到版本号和安装建议。
  *
- * 三个档位由工具参数 envCheck 决定：block（默认，缺就拒绝干活）/ warn（只警告）/ off（跳过）。
+ * 三个档位由工具参数 envCheck 决定：block（默认，缺件即拒绝执行）/ warn（只警告）/ off（跳过）。
  * 拒绝时返回的是一句人话 + 一条可粘贴的安装动作，不是一个退出码。
  */
 
@@ -57,7 +57,7 @@ const CAPABILITY_LABEL: Record<ToolchainCapability, string> = {
 export interface GateMissing {
   id: string;
   label: string;
-  /** 一句话：缺了它干不成什么。 */
+  /** 一句话说明：缺少该组件时无法完成的工作。 */
   hint: string;
   /** 影响面（能干什么 / 干不了什么）。 */
   impact: string;
@@ -124,7 +124,7 @@ const probeCache = new Map<string, { at: number; results: ProbeResult[] }>();
 const smokeCache = new Map<string, { at: number; result: ProbeResult }>();
 
 /**
- * 快路径命中后要"真跑一次"的主组件：每种能力挑一个最能代表它的。
+ * 快路径命中后需"实际执行一次"的主组件：每种能力选择一个最具代表性的。
  *
  * 为什么只挑一个：快路径的价值是零 spawn，全量 probe 就退化成慢路径了。
  * 而"文件在、跑不起来"（半截下载、被杀软隔离、架构不符、0 字节）只要核心那一个坏了就够判断，
@@ -239,7 +239,7 @@ function buildMessage(
   let nextStep: string;
   if (manual.length === 0) {
     nextStep =
-      "要我装吗？回一句「装」，我先跑 stm32_env_install 出计划（只列大小与步骤、不下载），确认后才真装；"
+      "如需安装，回复「装」，随后执行 stm32_env_install 生成计划（只列大小与步骤、不下载），确认后才会实际安装；"
       + "想自己装就看下面 missing[0].install 的第一条。";
   } else if (auto.length === 0) {
     nextStep =
@@ -247,8 +247,8 @@ function buildMessage(
       + "照着 guides[].steps 走，装完把路径写进配置再重跑；离线机器可以整目录拷过来（看 guides[].portable）。";
   } else {
     nextStep =
-      "能自动装的（" + joinLabels(auto) + "）回一句「装」，我先出计划（不下载）；"
-      + joinLabels(manual) + " 得你自己装，步骤见 guides[].steps。";
+      "能自动装的（" + joinLabels(auto) + "）回复「装」，随后生成计划（不下载）；"
+      + joinLabels(manual) + " 需要用户自行安装，步骤见 guides[].steps。";
   }
   return {
     message: "缺 " + names + "，这次没有开始" + label + "：" + effect + "。",
@@ -415,7 +415,7 @@ export async function ensureToolchain(
         if (request.signal?.aborted === true) break;
       }
     }
-    // A27：被取消时探测没跑完，缓存它会把「没探到」当成「缺件」记 60 秒，
+    // A27：被取消时探测未完成，缓存结果会把「未探到」当成「缺件」记录 60 秒，
     // 用户接着会被劝去重装一份已经装好的工具链。
     if (request.signal?.aborted === true) {
       return {
@@ -472,7 +472,7 @@ export async function ensureToolchain(
 
 /** 报告里的 notes 行：只在 blocked/warn 时写，免得成功路径噪音。 */
 export function gateReportNotes(result: GateResult): string[] {
-  // 配置告警与成败无关：即使这次齐全，也值得让用户知道"你配的某个路径本机没有"。
+  // 配置告警与成败无关：即使本次齐全，也应让用户知道"配置中的某个路径本机不存在"。
   if (result.ok) return result.warnings.map((warning) => "⚠ " + warning);
   const lines: string[] = [];
   lines.push(result.message);
@@ -481,7 +481,7 @@ export function gateReportNotes(result: GateResult): string[] {
     if (item.install[0] !== undefined) lines.push("  安装：" + item.install[0]);
   }
   if (result.nextStep !== "") lines.push(result.nextStep);
-  // manual 缺件：卡片上就给前两步，够用户判断"这事要不要我自己动手"。
+  // manual 缺件：卡片上只给出前两步，足以让用户判断"是否需要自行处理"。
   for (const guide of result.guides) {
     for (const line of guideLines(guide, 2)) lines.push(line);
   }

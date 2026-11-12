@@ -118,7 +118,7 @@ export function registerFlash(ctx: DshContext): void {
   ctx.tools.register({
     name: FLASH_TOOL,
     description:
-      "只烧录不调试，烧完复位运行并立刻释放探针（不拉调试会话、不停在 main）。后端三选一（backend）：auto（默认）= openocd 先烧、失败再试 STM32CubeProgrammer CLI；openocd = 只用 openocd；cubeprogrammer = 直接用 CLI（只认 ST-LINK，不依赖 openocd 的 target/flash 脚本——H5/WBA/WB0/WL3 只能走它）。烧录前过三道门禁：工具链缺件直接拒（cubeprogrammer 后端不看 openocd）；.ioc 没启用 Serial Wire 也拒（会把 SWD 烧失联，确实要烧带 allowNoDebug=true）；这颗芯片有 rm-topics 主题清单但 facts 机检没过同样拒（allowUnknownFacts=true 强制）。openocd 路径按 USB 实见探针选 interface（ST-Link → interface/stlink-dap.cfg，DAPLink/CMSIS-DAP → interface/cmsis-dap.cfg），工程自带 openocd.cfg 时以它为准；没自带时驱动不匹配会自动换另一个 interface 重试一次。成功证据：openocd 是 Programming Finished + Verified OK，CLI 是 Data downloaded successfully + Download verified successfully。",
+      "只烧录不调试，烧完复位运行并立刻释放探针（不拉调试会话、不停在 main）。后端三选一（backend）：auto（默认）= openocd 先烧、失败再试 STM32CubeProgrammer CLI；openocd = 只用 openocd；cubeprogrammer = 直接用 CLI（只认 ST-LINK，不依赖 openocd 的 target/flash 脚本——H5/WBA/WB0/WL3 只能走该后端）。烧录前过三道门禁：工具链缺件直接拒（cubeprogrammer 后端不看 openocd）；.ioc 没启用 Serial Wire 也拒（会把 SWD 烧失联，确实要烧带 allowNoDebug=true）；这颗芯片有 rm-topics 主题清单但 facts 机检没过同样拒（allowUnknownFacts=true 强制）。openocd 路径按 USB 实见探针选 interface（ST-Link → interface/stlink-dap.cfg，DAPLink/CMSIS-DAP → interface/cmsis-dap.cfg），工程自带 openocd.cfg 时以该文件为准；没自带时驱动不匹配会自动换另一个 interface 重试一次。成功证据：openocd 是 Programming Finished + Verified OK，CLI 是 Data downloaded successfully + Download verified successfully。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -126,17 +126,17 @@ export function registerFlash(ctx: DshContext): void {
         projectDir: { type: "string", description: "工程根目录；缺省为当前工作目录。" },
         elfPath: { type: "string", description: "显式指定要烧的 .elf；缺省从构建目录推断。" },
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先 Debug）。" },
-        configFile: { type: "string", description: "openocd 配置文件（相对工程目录）；缺省找 openocd.cfg。给了且存在时以它为准：不按探针改 interface，也不自动换 interface 重试。" },
-        iocPath: { type: "string", description: "SWD 守卫要看的 .ioc（工程里有多个 .ioc 时用它指定）。" },
-        adapterSpeed: { type: "number", description: "adapter speed（kHz）；连不上时可降到 1000 或 100。openocd 与 CubeProgrammer 兜底都用它。" },
+        configFile: { type: "string", description: "openocd 配置文件（相对工程目录）；缺省查找 openocd.cfg。指定且该文件存在时以其为准：不按探针修改 interface，也不自动切换 interface 重试。" },
+        iocPath: { type: "string", description: "SWD 守卫检查的 .ioc（工程存在多个 .ioc 时由此参数指定）。" },
+        adapterSpeed: { type: "number", description: "adapter speed（kHz）；连接失败时可降至 1000 或 100。openocd 与 CubeProgrammer 回退路径均使用该值。" },
         timeoutMs: { type: "number", description: "超时毫秒数，默认 120000。" },
         allowNoDebug: { type: "boolean", description: ".ioc 里没有 Serial Wire 时是否仍然烧录（默认 false：拒绝，避免烧掉 SWD）。" },
-        allowUnknownFacts: { type: "boolean", description: "这颗芯片有 rm-topics 主题清单（踩过坑）但 facts 语义没机检通过时，是否仍然烧录（默认 false：拒绝）。" },
+        allowUnknownFacts: { type: "boolean", description: "芯片存在 rm-topics 主题清单（已记录已知问题）但 facts 语义未通过机检时，是否仍然烧录（默认 false：拒绝）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值。" },
         backend: {
           type: "string",
           enum: ["auto", "openocd", "cubeprogrammer"],
-          description: "烧录后端：auto（默认，openocd 失败再试 CubeProgrammer CLI 兜底）/ openocd（只用 openocd）/ cubeprogrammer（直接走 STM32_Programmer_CLI，只认 ST-LINK）。",
+          description: "烧录后端：auto（默认，openocd 失败后由 CubeProgrammer CLI 回退）/ openocd（只用 openocd）/ cubeprogrammer（直接走 STM32_Programmer_CLI，只认 ST-LINK）。",
         },
         envCheck: ENV_CHECK_SCHEMA,
       },
@@ -174,7 +174,7 @@ export function registerFlash(ctx: DshContext): void {
       let flashFactsNote = "";
       // 事实层门禁（2026-11-07 用户决定改成三态）：先自愈补书，再按「这颗芯片有没有
       // rm-topics 主题清单」判——有清单必须机检过（verified）才烧；没清单直接放行，
-      // 载体照下、路径照报（族级判据太粗：坑是芯片级的，用户踩坑就给他这颗建 spec）。
+      // 载体照下、路径照报（族级判据过粗：已知问题是芯片级的，用户遇到问题即为该芯片建立 spec）。
       const mcu = mcuFromIoc(resolution.projectDir);
       const ensured = mcu === null ? null : await ensureFacts(mcu, process.env, { timeoutMs: 150_000, signal: exec.signal });
       const facts = ensured === null ? null : ensured.summary;
@@ -183,7 +183,7 @@ export function registerFlash(ctx: DshContext): void {
       }
       if (facts !== null && facts.hasSpec && !facts.verified && args.allowUnknownFacts !== true) {
         const blocked = emptyReport(
-          "没烧：" + facts.line + " 有 rm-topics 主题清单但机检没过——这颗芯片的 RM 结论没被逐字核实，烧下去出坑没人兜底。修清单/重跑 build-facts，或传 allowUnknownFacts=true 强制烧。",
+          "没烧：" + facts.line + " 有 rm-topics 主题清单但机检没过——这颗芯片的 RM 结论没被逐字核实，烧录后出现已知问题无人回退。修清单/重跑 build-facts，或传 allowUnknownFacts=true 强制烧。",
         );
         blocked.notes.push(...describeFacts(facts));
         return { message: blocked.message, report: flashReportForHost(blocked) };

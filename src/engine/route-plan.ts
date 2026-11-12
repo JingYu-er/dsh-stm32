@@ -6,9 +6,9 @@
  * 所以这里的输入是：这台芯片 + 这个工程 + 这句话要做什么；输出是逐个外设的代价与风险。
  *
  * 评判坐标只有两个，都按 1（最省）到 5（最费）：
- *   effort —— 写通它要动多少代码/多少个寄存器（开发效率）；
+ *   effort —— 实现该功能需改动多少代码/多少个寄存器（开发效率）；
  *   risk   —— 时序/状态机/勘误上出错的机会（可靠性）。
- * 二者都不带"我更喜欢哪个"的偏好：寄存器版在 risk<=2 且 effort<=2 时才会被推荐。
+ * 二者均不包含主观偏好：寄存器版仅在 risk<=2 且 effort<=2 时才会被推荐。
  *
  * 纯函数：不读盘、不起进程，便于单测。固件包是否存在由 findFirmwarePackage 单独判（要读盘）。
  */
@@ -117,7 +117,7 @@ export const PERIPHERAL_RULES: readonly PeripheralRule[] = [
     keywords: ["exti", "外部中断", "按键中断", "中断唤醒", "脉冲计数"],
     hal: { effort: 1, risk: 1, setup: "CubeMX 把引脚配成 GPIO_EXTI + 勾 NVIC；HAL_GPIO_EXTI_Callback 里处理" },
     reg: { effort: 2, risk: 3, setup: "AFIO->EXTICR 选端口；EXTI->IMR/RTSR/FTSR；NVIC 使能；中断里清 EXTI->PR" },
-    regGap: "忘了清 PR 会反复进中断；AFIO 时钟（RCC->APB2ENR 的 AFIOEN）漏开是最常见的坑",
+    regGap: "漏清 PR 会反复进中断；AFIO 时钟（RCC->APB2ENR 的 AFIOEN）未开启是最常见的已知问题",
   },
   {
     id: "adc-single",
@@ -251,7 +251,7 @@ export const PERIPHERAL_RULES: readonly PeripheralRule[] = [
     rank: 1,
     keywords: ["看门狗", "iwdg", "wwdg", "watchdog", "喂狗"],
     hal: { effort: 1, risk: 1, setup: "CubeMX 开 IWDG（LSI 分频 + 重装值）；主循环里 HAL_IWDG_Refresh" },
-    reg: { effort: 1, risk: 1, setup: "IWDG->KR 写 0xCCCC 启动；PR/RLR 前先写 0x5555 解锁；喂狗写 0xAAAA" },
+    reg: { effort: 1, risk: 1, setup: "IWDG->KR 写 0xCCCC 启动；PR/RLR 前先写 0x5555 解锁；重装值写 0xAAAA" },
     regGap: "没有（就四条写 KR 的魔数，但魔数写错会静默不生效）",
   },
   {
@@ -314,7 +314,7 @@ export const PERIPHERAL_RULES: readonly PeripheralRule[] = [
     keywords: ["bootloader", "iap", "在线升级", "固件升级", "ota"],
     hal: { effort: 3, risk: 4, setup: "两份工程：boot 跳转到 app（改 SCB->VTOR）+ 校验；app 里写升级标志" },
     reg: { effort: 3, risk: 4, setup: "跳转 = 取 app 向量表首字当 SP、第二字当入口，__set_MSP + 函数指针跳转；Flash 写入同 flash-param" },
-    regGap: "跳转本身寄存器版更直接，但 Flash 写入与向量表重定位的坑一样多；建议先 HAL 跑通再考虑换",
+    regGap: "跳转本身寄存器版更直接，但 Flash 写入与向量表重定位的已知问题同样多；建议先用 HAL 验证通过后再考虑切换",
   },
 ];
 
@@ -476,7 +476,7 @@ export function assessRoute(input: RouteInput): RouteAssessment {
   }
 
   const halSteps = [
-    "先 stm32_ioc_plan 把外设配进 .ioc（CubeMX 会拒绝不认识的外设组合，等于替你校验一遍配置）。",
+    "先调用 stm32_ioc_plan 将外设配置写入 .ioc（CubeMX 会拒绝无法识别的外设组合，相当于代为校验一次配置）。",
     "stm32_generate 用 CubeMX 无头生成 MX_*_Init / HAL_MspInit / 时钟树（生成区不要手改）。",
     "业务只写 USER CODE 段：改参数改 HAL_xxx_Init 的结构体，主循环放业务；中断里只置标志。",
     "用 stm32_build → stm32_flash → stm32_debug_run 验证（能停在断点看变量，是 HAL 路线最大的便利）。",
@@ -505,7 +505,7 @@ export function assessRoute(input: RouteInput): RouteAssessment {
     recommendations.push("这几项用 HAL 才有把握：" + (halNeeded.length === 0 ? "（没有）" : halNeeded.join("、")) + "。");
   }
   if (unknown.length > 0) {
-    recommendations.push("这几个词我没认出对应的外设：" + unknown.join("、") + "；如果它们是别的东西，请换一种说法或直接给 peripherals。");
+    recommendations.push("以下词汇无法识别对应的外设：" + unknown.join("、") + "；若不属于外设，请换一种表述或直接给出 peripherals。");
   }
 
   const notes: string[] = [];
@@ -625,8 +625,8 @@ export function findFirmwarePackage(cubeMxRoots: readonly string[], mcuOrFamily:
       repositoryDir: join(partial.root, "Repository"),
       incomplete: true,
       message:
-        "找到 " + partial.name + " 但它是半成品（缺 Drivers/STM32" + family + "xx_HAL_Driver 或 CMSIS 设备头），"
-        + "编译会挂 —— 多半是只解压了 GitHub 源码包（子模块是空目录）。用 CubeMX 包管理器重装这一个包。",
+        "找到 " + partial.name + " 但该包为半成品（缺 Drivers/STM32" + family + "xx_HAL_Driver 或 CMSIS 设备头），"
+        + "编译将失败 —— 通常是因为仅解压了 GitHub 源码包（子模块为空目录）。请用 CubeMX 包管理器重装该包。",
     };
   }
   return {

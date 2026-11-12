@@ -2,8 +2,8 @@
  * L3：stm32_env_install —— 把"这台机器缺工具链"变成一次可复核的安装。
  *
  * 为什么默认只出计划：装 MSYS2 要写几百 MB 磁盘、要从网上下安装包、还要改用户级 PATH，
- * 这些都不是"看一眼"能顺手做的事。所以本工具先给一张卡片（装哪、下多大、做哪几步、要不要
- * 决策），用户看过之后再说 confirm:true + dryRun:false 才真装。
+ * 这些步骤均无法一步完成。本工具因此先给出卡片（装哪、下多大、做哪几步、是否需要
+ * 决策），用户确认之后再给 confirm:true + dryRun:false 才实际安装。
  *
  * 为什么不做卸载：删目录这种事一旦做错没法撤销，而且用户自己的东西可能就放在那个目录里；
  * 需要卸载就自己删目录 + 删配置项（nextStep / notes 会写清楚）。
@@ -417,7 +417,7 @@ export function registerEnvInstall(ctx: DshContext): void {
           const report = emptyReport(
             "包名不合法：" +
               invalid.map((name) => JSON.stringify(name)).join("、") +
-              "；没有执行任何命令，也没下载任何东西（不会替你猜或改名）。",
+              "；没有执行任何命令，也没有下载任何内容（不进行猜测、不修改名称）。",
             mode,
           );
           report.nextStep =

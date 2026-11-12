@@ -186,7 +186,7 @@ test("needsThirdpartyPacks + pdscDir：本机有该版本 → 无警告，包信
 test("needsThirdpartyPacks + pdscDir：缺包 / 版本不符 → 提前给警告", () => {
   const missing = needsThirdpartyPacks(FOC_IOC, { pdscDir: fakePdsc(["wolfSSL.I-CUBE-wolfMQTT.pdsc"]) });
   assert.equal(missing.warnings.length, 1);
-  assert.match(missing.warnings[0], /没有这个包/u);
+  assert.match(missing.warnings[0], /没有该包/u);
   assert.match(missing.warnings[0], /X-CUBE-ALGOBUILD/u);
   const other = needsThirdpartyPacks(FOC_IOC, { pdscDir: fakePdsc(["STMicroelectronics.X-CUBE-ALGOBUILD.1.5.0.pdsc"]) });
   assert.equal(other.warnings.length, 1);

@@ -6,11 +6,11 @@
  *   · F2/F4/F7：RCC->AHB1ENR + MODER（每引脚 2 位）
  *   · F0/F3/L1：RCC->AHBENR + MODER
  *   · G4/L4/H5/L4+/L5/WBA/WL：RCC->AHB2ENR + MODER
- *   · H7：RCC->AHB4ENR + MODER（H7 把 GPIO 挂到 AHB4）
+ *   · H7：RCC->AHB4ENR + MODER（H7 的 GPIO 位于 AHB4）
  *   · U3/U5：RCC->AHB2ENR1 + MODER（U5 代把 AHB2 拆成 ENR1/ENR2）
  *   · C0/G0/L0/U0：RCC->IOPENR + MODER
- * 拿 F1 的写法去配 F4，编译就过（GPIOC->CRH 在 F4 头里不存在？实际是 GPIO_TypeDef 没有 CRH
- * 字段 → 编译期就报错），所以这张表不是"风格选择"，是能不能编过的问题。
+ * 以 F1 的写法配置 F4 无法通过编译（F4 头文件中不存在 GPIOC->CRH，实际原因是 GPIO_TypeDef 没有 CRH
+ * 字段 → 编译期即报错），因此该表不是「风格选择」，而是能否编译通过的问题。
  *
  * 这张表是按族实测编译过的（见 docs §82 的 build matrix）；新增族必须先真编一次再加进来。
  * 2026-11-09 补的 8 族：时钟门寄存器名不是猜的——逐族从 cmsis-device-<族> 的型号头里查到

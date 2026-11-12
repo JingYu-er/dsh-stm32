@@ -1,12 +1,12 @@
 /**
- * L1：装不上（或不该由插件代装）的东西，怎么把话说清楚。
+ * L1：无法安装（或不应由插件代装）的组件，如何清晰说明。
  *
  * 门禁把缺件分成两档，因为这两档的"下一步"完全不同：
  *   auto   —— MSYS2 里一条 pacman 就能补（gcc / gdb / openocd / cmake / ninja），
  *             插件能跑 stm32_env_install 出计划、确认后自己装；
  *   manual —— 装不了或不该代装：STM32CubeMX 是 InstallAnywhere 的 GUI 向导（要 ST 账号 +
  *             同意许可），固件包只由 CubeMX 的包管理器维护（st.com 包清单 + 22 个 git 子模块）。
- *             这两样只能给人一步步的指引，插件顶多帮它把路径写进配置。
+ *             这两种只能提供分步指引，插件至多将其路径写入配置。
  *
  * 本文件只有文案与元数据，不起进程、不读盘，便于单测与审计（改文案不用碰引擎）。
  */
@@ -41,7 +41,7 @@ export const COMPONENT_INSTALLABILITY: Record<InstallComponent, Installability> 
 };
 
 export interface InstallStep {
-  /** 一句话动作。 */
+  /** 简要动作。 */
   title: string;
   /** 具体怎么做（含点哪里、看什么）。 */
   detail: string;
@@ -53,16 +53,16 @@ export interface InstallGuide {
   component: InstallComponent;
   label: string;
   installability: Installability;
-  /** 为什么不能（或不划算）自动装 —— 这句话要能直接回给用户。 */
+  /** 不能（或不适合）自动安装的原因 —— 该字段可直接回给用户。 */
   why: string;
-  /** 体积/耗时预期，省得用户以为几十 MB 就完事。 */
+  /** 体积/耗时预期，避免用户误以为仅数十 MB。 */
   sizeHint: string;
   /** 是否需要 ST 账号 / 许可同意。 */
   needsAccount: boolean;
   steps: InstallStep[];
   /** 装完怎么自检（一条判据）。 */
   verify: string;
-  /** 免安装路径：把已有安装拷过来就行。 */
+  /** 免安装路径：复制已有安装即可。 */
   portable?: string;
 }
 
@@ -82,7 +82,7 @@ export function cubeMxGuide(): InstallGuide {
     installability: "manual",
     why:
       "CubeMX 是 GUI 安装向导，没有官方静默参数，下载前还要登录 ST 账号并同意许可，"
-      + "插件代装等于替你点同意、替你输账号 —— 这一步不做。",
+      + "插件代为安装等于代用户确认许可、代用户输入账号 —— 此步骤不执行。",
     sizeHint: "安装包数百 MB，装完约 1.5 GB（不含固件包）；固件包另算，见固件包那条指引（实测 250 MB – 1.7 GB）。",
     needsAccount: true,
     steps: [
@@ -92,7 +92,7 @@ export function cubeMxGuide(): InstallGuide {
       },
       {
         title: "GUI 装一遍（默认选项即可）",
-        detail: "双击安装包按向导走完；装到哪个盘都行，别放在受保护目录（例如 C:\\Program Files 需要管理员权限，插件写固件包时会失败）。",
+        detail: "双击安装包按向导走完；安装盘符不限，不要放在受保护目录（例如 C:\\Program Files 需要管理员权限，插件写固件包时会失败）。",
       },
       {
         title: "把安装根写进配置",
@@ -100,7 +100,7 @@ export function cubeMxGuide(): InstallGuide {
       },
       {
         title: "自检",
-        detail: "stm32_doctor 的 tools 里 cubemx 与 cubemx-java 都应带 path；缺 jre 的话无头生成会直接报 java 找不到。",
+        detail: "stm32_doctor 的 tools 里 cubemx 与 cubemx-java 都应带 path；缺 jre 时无头生成会直接报 java 找不到。",
       },
     ],
     verify: "stm32_doctor → capabilities.generate 为 true（cubemx 与 cubemx-java 都找到）。",
@@ -128,7 +128,7 @@ export interface FirmwareGuideInput {
 /**
  * 各系列的固件包实测体积（2026-10 本机 D:\app\STM32CubeMX\Repository 直接量的）。
  *
- * 写死一句话会被别的系列看笑话：F1 293 MB、G4 471 MB、F4 1.67 GB，差 6 倍。
+ * 固定单一数字不适用于其他系列：F1 293 MB、G4 471 MB、F4 1.67 GB，相差 6 倍。
  * 表里没有的系列给区间，不给具体数字。
  */
 const FIRMWARE_SIZE_HINTS: Readonly<Record<string, string>> = {
@@ -143,9 +143,9 @@ const FIRMWARE_SIZE_HINTS: Readonly<Record<string, string>> = {
 };
 
 const FIRMWARE_SIZE_FALLBACK =
-  "一个系列通常 250 MB – 1.7 GB / 一万到四万个文件（不同系列差很多，最多差 6 倍）；装完占盘同量级。";
+  "一个系列通常 250 MB – 1.7 GB / 一万到四万个文件（不同系列差异较大，最多相差 6 倍）；装完占盘同量级。";
 
-/** 固件包体积提示：认识的系列精确、不认识给区间（别把 F1 的数字扣到 H7 头上）。 */
+/** 固件包体积提示：已知系列给精确值、未知系列给区间（不将 F1 的数字套用到 H7）。 */
 export function firmwareSizeHint(family: string): string {
   const key = family.trim().toUpperCase();
   return FIRMWARE_SIZE_HINTS[key] ?? FIRMWARE_SIZE_FALLBACK;
@@ -155,9 +155,9 @@ export function firmwareSizeHint(family: string): string {
  * 固件包（HAL + CMSIS + startup）的安装指引。
  *
  * 为什么不做成自动下载（2026-10 取证）：GitHub 上 STMicroelectronics/STM32CubeF1 有 v1.8.7 标签，
- * 但主仓库挂了 22 个 git 子模块，tarball 里 Drivers/CMSIS/Device/ST/STM32F1xx 与
- * Drivers/STM32F1xx_HAL_Driver 是**空目录**；拼出来的包 CubeMX 认不认还没验证。
- * 所以现在归 manual：让 CubeMX 自己的包管理器装（它写的 package.xml / 包清单才是权威）。
+ * 但主仓库包含 22 个 git 子模块，tarball 里 Drivers/CMSIS/Device/ST/STM32F1xx 与
+ * Drivers/STM32F1xx_HAL_Driver 是**空目录**；拼接出的包 CubeMX 是否识别尚未验证。
+ * 所以现在归入 manual：由 CubeMX 自身的包管理器安装（其写入的 package.xml / 包清单才是权威）。
  */
 export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
   const prefix = familyPrefix(input.family);
@@ -171,17 +171,17 @@ export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
     installability: "manual",
     why:
       "固件包不在 CubeMX 安装包里，而且不是单个压缩包：HAL 驱动、CMSIS 设备头、启动文件分在不同的 git 仓库里，"
-      + "GitHub 的源码压缩包拿到的是空目录。可靠的来源只有 CubeMX 自己的包管理器（它写包清单与 package.xml）。",
+      + "GitHub 的源码压缩包拿到的是空目录。可靠的来源只有 CubeMX 自己的包管理器（由 CubeMX 写入包清单与 package.xml）。",
     sizeHint: firmwareSizeHint(input.family),
     needsAccount: true,
     steps: [
       {
         title: autoDownloadable
-          ? "先试插件代下（这一代已接入）"
-          : "插件还不会代下这一代",
+          ? "先试插件代下载（该系列已接入）"
+          : "插件尚不支持该系列代下载",
         detail: autoDownloadable
-          ? "调 stm32_firmware_install（family 给 " + input.family + "，dryRun:false + confirm:true）：插件从 GitHub 拉 HAL 驱动与 CMSIS 设备两个子模块仓库 + 内核头，自己补 package.xml，实测 CubeMX 认；约 2 MB，几十秒。拉不到或想用官方包再走下面三步。"
-          : "目前只有 F1 接入自动下载（其余代按同样字段补一条即可）；这一代请走下面的 CubeMX 包管理器。",
+          ? "调 stm32_firmware_install（family 给 " + input.family + "，dryRun:false + confirm:true）：插件从 GitHub 拉取 HAL 驱动与 CMSIS 设备两个子模块仓库 + 内核头，自行补齐 package.xml，实测 CubeMX 可识别；约 2 MB，数十秒。拉取失败或需使用官方包时，按下面三步操作。"
+          : "目前只有 F1 接入自动下载（其余系列按同样字段补充一条即可）；该系列请使用下面的 CubeMX 包管理器。",
       },
       {
         title: "在 CubeMX 里打开包管理器",
@@ -193,7 +193,7 @@ export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
       },
       {
         title: "离线机器：整目录拷贝",
-        detail: "从有网的机器把 " + name + " 整个目录（或整个 Repository 目录）拷到目标机同一位置即可，不需要重装 CubeMX。",
+        detail: "从联网机器把 " + name + " 整个目录（或整个 Repository 目录）拷到目标机同一位置即可，不需要重装 CubeMX。",
       },
       {
         title: "自检",
@@ -205,7 +205,7 @@ export function firmwareGuide(input: FirmwareGuideInput): InstallGuide {
 }
 
 /**
- * 组件 id → 指引；auto 组件没有指引（它们走 stm32_env_install）。cubemx 与 cubemx-java 共用一份。
+ * 组件 id → 指引；auto 组件无指引（走 stm32_env_install）。cubemx 与 cubemx-java 共用一份。
  *
  * firmware 需要族名/包名/仓库目录才说得具体，所以第二个参数是可选的补充信息：
  * 调用方（route_plan）手里有这些字段就传，只拿组件 id 的人（门禁、命令卡）也能拿到通用指引 ——

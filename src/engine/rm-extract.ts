@@ -70,7 +70,7 @@ export function normQuote(text: string): string {
 
 /**
  * 页文本核验口径：只折叠空白、保留原大小写（引文要能读回原文写法）。
- * 匹配在它的 toLowerCase 副本上做；两者对 ASCII 等长，稀有 Unicode（如 İ）
+ * 匹配在该文本的 toLowerCase 副本上进行；两者对 ASCII 等长，稀有 Unicode（如 İ）
  * 理论上会让下标偏移，但命中与否用的都是同一份副本，偏移只影响引文截取边界，
  * 不会把「没锚点」判成「有锚点」。
  */
@@ -83,7 +83,7 @@ function findNormalized(hayLower: string, needle: string): number {
 }
 
 /**
- * 逐主题核验。pages 只需覆盖 spec 里各 page±3（CLI 从 PDF 抽好喂进来）。
+ * 逐主题核验。pages 仅需覆盖 spec 中各项 page±3（由 CLI 从 PDF 抽取后传入）。
  */
 export function extractRmFacts(spec: RmTopicSpec, pages: PdfPageText[], svdByLine: Record<string, SvdStructure>): RmExtractReport {
   const items: RmFactsItemOut[] = [];

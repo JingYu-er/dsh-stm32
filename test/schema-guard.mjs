@@ -489,7 +489,7 @@ test("stm32_doctor 的能力矩阵与安装建议（原 stm32_env_probe 的纯�
   });
   const advice = recommendationsOf(missing, missing.map((item) => item.label), missingCaps);
   assert.ok(advice.some((line) => line.includes("pacman.exe -S")), "建议里要带可粘贴的安装命令：" + JSON.stringify(advice));
-  assert.ok(advice.some((line) => line.includes("需要我帮你装吗")), "必须主动问要不要代装");
+  assert.ok(advice.some((line) => line.includes("如需安装")), "必须给出代装入口（回复「装」）");
 
   // 只有 CubeProgrammer、没有 openocd/gdb：能烧 ST-LINK，但不能调试；不能把两台都判成"缺 openocd"。
   const cpOnly = [
@@ -505,7 +505,7 @@ test("stm32_doctor 的能力矩阵与安装建议（原 stm32_env_probe 的纯�
   assert.equal(cpCaps.flashCubeProgrammer, true);
   assert.equal(cpCaps.debug, false);
   const cpAdvice = recommendationsOf(cpOnly, [], cpCaps).join("\n");
-  assert.match(cpAdvice, /只能走 CubeProgrammer/u);
+  assert.match(cpAdvice, /烧录只能使用 CubeProgrammer/u);
   assert.match(cpAdvice, /调试用不了/u);
 });
 

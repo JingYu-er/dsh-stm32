@@ -71,7 +71,7 @@ function nodeText(node: string, tag: string): string {
  *   A. 首选按外设收：<peripheral> 的 name==FLASH 下的**全部** <register>。
  *      modm 的寄存器命名逐族不同——C0 带前缀（FLASH_ACR/FLASH_OPTR/FLASH_SECR）、
  *      F1 不带（ACR/OBR/CR…）；写死名字清单等于拿 C0 约定套全族，F1 会解析出 0 寄存器
- *      （自愈真链路就是这么炸的）。名字清单只是兜底口径，不是主口径。
+ *      （自愈真实链路正是因此失败）。名字清单仅为回退口径，不是主口径。
  *   B. 退回全局按 FACTS_REGISTERS 名单过滤：微型片段 SVD 可能没有 peripheral 包装
  *      （单测夹具就是那形状）。
  */
@@ -116,7 +116,7 @@ function sha256(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-/** SVD 的候选下载 URL，顺序 = 优先级（同 cmsis-sources 的实测结论：jsDelivr 最稳，raw 兜底）。 */
+/** SVD 的候选下载 URL，顺序即优先级（同 cmsis-sources 的实测结论：jsDelivr 最稳定，raw 为回退）。 */
 export function svdSourceUrls(relFile: string, repo: string = SVD_REPO, ref: string = SVD_REF): string[] {
   return [
     "https://fastly.jsdelivr.net/gh/" + repo + "@" + ref + "/" + relFile,
@@ -229,7 +229,7 @@ export interface RmAcquireResult {
   /** 要记进 facts.sources 的载体（PDF/URL 与哈希）。 */
   sources: Record<string, unknown>[];
   notes: string[];
-  /** 非空表示某个明确给的通道失败了（如 URL 下载挂了）；语义照常降级。 */
+  /** 非空表示某个显式指定的通道失败（如 URL 下载失败）；语义照常降级。 */
   error: string;
 }
 
@@ -393,7 +393,7 @@ export async function buildFacts(o: BuildFactsOptions): Promise<BuildFactsReport
   const pdfSource = acquired !== null && acquired.ok
     ? { kind: "rm-pdf", doc: acquired.docId, file: acquired.file.split(/[\\/]/).pop() ?? "", path: acquired.file, sha256: acquired.sha256, bytes: acquired.bytes, url: acquired.url, origin: "auto:" + acquired.channel, coveredLines: Object.keys(acquired.coverage) }
     : null;
-  // spec 自动抽取：人没喂 rm-facts 而且这颗芯片有主题清单时，用可用的载体 PDF 自动抽取。
+  // spec 自动抽取：未传入 rm-facts 且该芯片有主题清单时，用可用的载体 PDF 自动抽取。
   // 载体两种都要认：双通道自动下的，和显式 --rm-pdf/--rm-url 给的（用户本地手册场景）。
   const explicitPdfSource = rm.sources.find((s) => s.kind === "rm-pdf" && typeof s.path === "string" && s.path !== "");
   const explicitPdfPath = typeof explicitPdfSource?.path === "string" ? explicitPdfSource.path : "";

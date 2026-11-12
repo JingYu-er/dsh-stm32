@@ -125,7 +125,7 @@ export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
   const probes = parseProbeVidPid(pnputilText);
   const swdProbes = probes.filter((p) => p.kind === "st-link" || p.kind === "jlink" || p.kind === "cmsis-dap" || p.kind === "daplink");
   // CH341/CH340 串口桥：2a 扩表的历史契约——"板载探针走串口透传"的形态真实存在，算在线；
-  // 但它不是 SWD 驱动，不参与 interface 选择（preferredInterfaceConfig 也不认它）。
+  // 但该文件不是 SWD 驱动，不参与 interface 选择（preferredInterfaceConfig 同样不识别）。
   const serialBridges = probes.filter((p) => p.kind === "ch341-serial");
   const hasDriverProblem = /(?:Problem Code|问题代码)\s*[:：]?\s*(?:1[0-9]|2[0-8]|3[0-9]|4[0-3]|5[0-2])/iu.test(pnputilText);
   const list = swdProbes.map((p) => p.label).join("、");
@@ -175,7 +175,7 @@ export function diagnoseUsb(pnputilText: string): UsbDiagnosis {
 }
 
 export async function usbDiagnosis(subprocess: SubprocessService, signal?: AbortSignal): Promise<UsbDiagnosis> {
-  // 只读枚举；pnputil 不存在（老系统）或被组策略拦时返回 unknown，绝不让诊断把 doctor 搞挂。
+  // 只读枚举；pnputil 不存在（旧系统）或被组策略拦截时返回 unknown，诊断异常不得导致 doctor 失败。
   try {
     const outcome = await runCapture(subprocess, {
       argv: ["pnputil", "/enum-devices", "/connected"],
@@ -203,7 +203,7 @@ export async function usbDiagnosis(subprocess: SubprocessService, signal?: Abort
 }
 
 /**
- * 引擎各处（flash / debug / regs / 会话）兜底 interface 的统一入口。
+ * 引擎各处（flash / debug / regs / 会话）回退 interface 的统一入口。
  *
  * 刻意**不做模块级缓存**：第一版把 60 s 的结果缓存在模块里，同进程连烧两颗不同芯片时
  * 第二颗会拿到第一颗的探针结论（重试方向还会因此算反），测试里表现为用例互相污染。
@@ -332,9 +332,9 @@ export function recommendationsOf(tools: ProbeResult[], missingRequired: string[
       const step = item.install[0] ?? item.hint;
       lines.push(item.label + "：" + step + "（自检：" + item.verify + "）");
     }
-    lines.push("需要我帮你装吗？回一句「装 gcc」「装 openocd」或「把缺的都装上」，我就照上面的命令在这台机器上装，装完再跑一次 stm32_doctor 复测；你也可以自己装完再跑一次。");
+    lines.push("如需安装，回复「装 gcc」「装 openocd」或「把缺的都装上」，将按上面的命令在本机安装，安装完成后再次运行 stm32_doctor 复测；也可自行安装后再次运行。");
   }
-  // gdb/openocd 不再恒为 required（只编译的机器不该被它们拦），但缺了要明确说影响哪条腿。
+  // gdb/openocd 不再恒为 required（仅编译的机器不应被这两个组件拦截），但缺失时需明确说明影响的功能。
   const gdb = tools.find((item) => item.id === "gdb");
   if (!capabilities.flashOpenocd) {
     const openocd = tools.find((item) => item.id === "openocd");
@@ -342,7 +342,7 @@ export function recommendationsOf(tools: ProbeResult[], missingRequired: string[
       lines.push("烧录没有可用后端：openocd 与 CubeProgrammer 都没找到。只编译不受影响；要烧录至少装一个。");
       if (openocd !== undefined) lines.push("openocd：" + (openocd.install[0] ?? openocd.hint) + "（自检：" + openocd.verify + "）");
     } else {
-      lines.push("烧录只能走 CubeProgrammer：它只认 ST-LINK，DAPLink/J-Link 与非 ST 探针仍需 openocd。");
+      lines.push("烧录只能使用 CubeProgrammer：该后端只认 ST-LINK，DAPLink/J-Link 与非 ST 探针仍需 openocd。");
     }
   }
   if (!capabilities.debug) {
@@ -404,7 +404,7 @@ export function checkPortBusy(port: number, timeoutMs = 600): Promise<boolean> {
 //
 // 换芯片最容易漏的四处：工程根还是旧启动文件、cmake 源清单里还是旧设备宏、
 // 链接脚本 MEMORY 还是旧容量、产物早就超出 Flash。这四处任何一处不自洽，
-// 现象都是"编译过了、烧进去跑飞"，所以 doctor 要替人把它们两两对一遍。
+// 现象均为"编译通过、烧录后运行异常"，因此 doctor 需对这些项两两核对一遍。
 // 分级：会让固件直接跑不起来的进 blockers，只是浪费/可疑的进 notes。
 
 /** 链接脚本 MEMORY 里的容量（字节）；没写或写成算式时对应字段为 null。 */
@@ -525,7 +525,7 @@ export function linkerScriptNames(projectDir: string): string[] {
 
 export interface LinkerScriptFacts {
   path: string;
-  /** 文件名（报告里用它，不贴绝对路径）。 */
+  /** 文件名（报告中仅使用文件名，不附带绝对路径）。 */
   name: string;
   text: string;
 }
@@ -553,11 +553,11 @@ export interface ChipConsistencyInput {
   cmakeText?: string | null | undefined;
   /** 工程根链接脚本的文本；没有传 null。 */
   linkerText?: string | null | undefined;
-  /** 链接脚本文件名（报告里用它）。 */
+  /** 链接脚本文件名（报告中仅使用文件名）。 */
   linkerName?: string | undefined;
-  /** 构建出来的 .elf 路径；没有传空串（有它会按 program header 算真实 Flash 占用）。 */
+  /** 构建产出的 .elf 路径；未提供时传空串（提供该路径时按 program header 计算真实 Flash 占用）。 */
   elfPath?: string | undefined;
-  /** .elf 的文件字节数；没有传 0（解析不出 program header 时用它粗算）。 */
+  /** .elf 的文件字节数；未提供时传 0（无法解析 program header 时用于粗算）。 */
   elfSize?: number | undefined;
   /** 本机 CubeMX 的 db/mcu 目录；没有传 null。 */
   dbMcuDir?: string | null | undefined;
@@ -626,7 +626,7 @@ export function checkChipConsistency(input: ChipConsistencyInput): ChipConsisten
   const cmakeText = input.cmakeText ?? null;
   const cmakeDefines = cmakeText === null ? [] : deviceDefinesIn(cmakeText);
   if (cmakeText === null) {
-    notes.push("没有 " + CUBEMX_CMAKE_REL + "：跳过设备宏一致性检查（不是 ST 的 CMake 布局？）");
+    notes.push("没有 " + CUBEMX_CMAKE_REL + "：跳过设备宏一致性检查（可能不是 ST 的 CMake 布局）");
   } else if (cmakeDefines.length === 0) {
     notes.push(CUBEMX_CMAKE_REL + " 里没有 STM32 设备宏（set(MX_Defines_Syms ...)）：跳过设备宏一致性检查");
   } else if (startupDefine !== "" && !cmakeDefines.includes(startupDefine)) {
@@ -649,12 +649,12 @@ export function checkChipConsistency(input: ChipConsistencyInput): ChipConsisten
     notes.push("工程根没有 *_FLASH.ld：跳过 MEMORY 容量校验（链接脚本缺失或命名不同）");
   } else if (memory !== null) {
     if (memory.flashBytes === null) {
-      notes.push(linkerLabel + " 里读不到 FLASH 区的 LENGTH（不是 MEMORY 写法？）：没校验 Flash 容量");
+      notes.push(linkerLabel + " 里读不到 FLASH 区的 LENGTH（可能不是 MEMORY 写法）：未校验 Flash 容量");
     } else if (chip !== null && chip.flashBytes !== null) {
       if (memory.flashBytes > chip.flashBytes) {
         blockers.push(
           linkerLabel + " 的 FLASH 是 " + kib(memory.flashBytes) + "，超过芯片 " + chip.cpn + " 的 " + kib(chip.flashBytes) +
-            "（链接器会照它放代码，超出物理容量的部分写不进去）",
+            "（链接器按该值放置代码，超出物理容量的部分无法写入）",
         );
       } else if (memory.flashBytes < chip.flashBytes) {
         notes.push(
@@ -703,7 +703,7 @@ export function checkChipConsistency(input: ChipConsistencyInput): ChipConsisten
     const unknown = iocPins.filter((pin) => !pins.pins.includes(pin));
     if (unknown.length > 0) {
       notes.push(
-        ".ioc 里这些引脚不在本机 db 的 " + (mcuName === "" ? cpn : mcuName) + " 封装里：" + unknown.join("、") + "（型号或封装选错了？）",
+        ".ioc 里这些引脚不在本机 db 的 " + (mcuName === "" ? cpn : mcuName) + " 封装里：" + unknown.join("、") + "（型号或封装可能选错）",
       );
     }
   }
@@ -711,7 +711,7 @@ export function checkChipConsistency(input: ChipConsistencyInput): ChipConsisten
   return { blockers, notes, chip, memory, pins };
 }
 
-/** 从工程读事实再判：runDoctor 用它把四项一致性接进报告（不 spawn、不写盘）。 */
+/** 从工程读取事实后判定：runDoctor 通过该函数把四项一致性检查接入报告（不 spawn、不写盘）。 */
 export function collectChipConsistency(
   projectDir: string,
   options: {
@@ -828,7 +828,7 @@ export async function runDoctor(subprocess: SubprocessService, request: DoctorRe
   if (openOcdProcesses.length > 0) {
     blockers.push(
       "有 openocd 正在运行（PID " + openOcdProcesses.map((process) => String(process.pid)).join(", ") +
-        "），它很可能占着 CMSIS-DAP 探针；先结束这些进程再烧录/调试",
+        "），该进程很可能占用 CMSIS-DAP 探针；先结束这些进程再烧录/调试",
     );
   }
   if (portBusy) {

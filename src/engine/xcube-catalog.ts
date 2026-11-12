@@ -24,7 +24,7 @@ export interface XCubeCatalogEntry {
 
 /**
  * 生成这份快照时 CubeMX 包索引目录里的 .pdsc 文件数。
- * 它和下面的条目数不是一回事：一个包有多个版本就多个文件，归并后只算一条，所以它 > 条目数。
+ * 该值与下面的条目数含义不同：一个包有多个版本即对应多个文件，归并后只算一条，因此该值大于条目数。
  */
 export const XCUBE_CATALOG_FILE_COUNT = 159;
 

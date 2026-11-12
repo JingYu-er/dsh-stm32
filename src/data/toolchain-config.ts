@@ -1,12 +1,12 @@
 /**
  * 用户级工具链配置：插件自己记住"这台机器把工具装在哪"。
  *
- * 为什么要有它：以前只认三个写死的候选目录 + 两个环境变量，用户把 MSYS2 装在
+ * 为什么需要这一层：此前只识别三个写死的候选目录 + 两个环境变量，用户将 MSYS2 安装在
  * E:/msys64 时，每次都得自己去设 STM32_BIN_DIRS，还得重开 DSH 才生效。这里把
  * 路径落到一个纯文本 JSON 里，插件每次自己读——装完立刻能用，与进程环境变量无关。
  *
  * 位置：%USERPROFILE%/.dsh-stm32/config.json；DSH_STM32_CONFIG 可整体改指到别处
- * （单测与多工程隔离用）。DSH_STM32_NO_CONFIG=1 让所有读配置的地方当它不存在。
+ * （单测与多工程隔离用）。DSH_STM32_NO_CONFIG=1 使所有读取配置的代码按未配置处理。
  *
  * 文件是可选增强，不是前提：读不到、写坏了都只是"没配置"，不抛异常给调用方。
  */
@@ -19,7 +19,7 @@ import { dirname, isAbsolute } from "node:path";
 export const TOOLCHAIN_CONFIG_VERSION = 1;
 
 export interface ToolchainConfig {
-  /** 结构版本；将来加字段时靠它判断要不要迁移。 */
+  /** 结构版本；后续增加字段时据此判断是否需要迁移。 */
   version: number;
   /** MSYS2 安装根（如 D:/app/msys64）；空串表示还没决定装哪。 */
   msys64: string;
@@ -43,7 +43,7 @@ export interface ToolchainConfigRead {
   errors: string[];
   /**
    * 读到这一刻文件的 mtime（毫秒）；文件不存在或关掉了配置时是 0。
-   * 写回时把它当 CAS 的快照：值对不上说明读完之后别人动过，不能直接覆盖。
+   * 写回时以此为 CAS 快照：值不匹配说明读取之后已被其他进程修改，不能直接覆盖。
    */
   mtimeMs: number;
 }
@@ -210,7 +210,7 @@ export function readToolchainConfig(
       path,
       exists: true,
       config: null,
-      errors: ["配置文件不是合法 JSON：" + describeError(error) + "；已按未配置处理（重新写入会覆盖它）"],
+      errors: ["配置文件不是合法 JSON：" + describeError(error) + "；已按未配置处理（重新写入将覆盖该值）"],
       mtimeMs,
     };
     cache = { path, mtimeMs, size, read };

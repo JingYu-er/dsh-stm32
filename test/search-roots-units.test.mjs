@@ -8,10 +8,12 @@ import {
   DEFAULT_CUBEMX_ROOTS,
   decodeRegistryText,
   dedupePaths,
+  dirFromRegistryValue,
   discoverBinDirs,
   discoverCubeMxRoots,
   discoverInstalls,
   discoveryDisabled,
+  installerCubeMxDirs,
   looksLikeBinDir,
   looksLikeCubeMxRoot,
   normalizePathEntry,
@@ -30,12 +32,13 @@ const key = (path) => path.replace(/\\/gu, "/").toLowerCase();
 const cleanEnv = (extra = {}) => ({ DSH_STM32_NO_CONFIG: "1", ...extra });
 
 /** 假文件系统：files 是"存在的文件"，dirs 是"目录 → 直接子目录"，其余由参数给出。 */
-function fakeProbe({ files = [], dirs = {}, registry = [], drives = [], user = [] } = {}) {
+function fakeProbe({ files = [], dirs = {}, registry = [], installer = [], drives = [], user = [] } = {}) {
   const fileSet = new Set(files.map(key));
   const dirMap = new Map(Object.entries(dirs).map(([dir, children]) => [key(dir), children]));
   return {
     exists: (path) => fileSet.has(key(path)),
     listDirs: (dir) => dirMap.get(key(dir)) ?? [],
+    installerDirs: () => installer,
     registryInstallDirs: () => registry,
     driveRoots: () => drives,
     userProgramDirs: () => user,
@@ -84,6 +87,46 @@ test("自动发现 CubeMX：注册表与盘符常见位置都算，缺 jre 的�
   assert.ok(roots.includes("E:/registry/STM32CubeMX"), "注册表登记的安装根要找到");
   assert.ok(roots.includes("E:/tools/STM32CubeMX"), "盘符下的常见位置要找到");
   assert.ok(!roots.includes("E:/tools/half"), "只有 exe、没有 jre/bin/java.exe 的不算");
+});
+
+test("自动发现 CubeMX：安装器写在 STM32CubeMX_PATH 里的路径也算", () => {
+  const root = "D:/app/STMicroelectronics/STM32Cube/STM32CubeMX";
+  const probe = fakeProbe({ installer: [root], files: cubeMxFiles(root) });
+  assert.deepEqual(discoverCubeMxRoots(probe), [root]);
+});
+
+test("自动发现 CubeMX：ST 默认层级 <盘>/app/STMicroelectronics/STM32Cube/STM32CubeMX 也要找到", () => {
+  const root = "D:/app/STMicroelectronics/STM32Cube/STM32CubeMX";
+  const probe = fakeProbe({
+    drives: ["D:"],
+    files: cubeMxFiles(root),
+    dirs: { "D:/": ["D:/app"], "D:/app": ["D:/app/STMicroelectronics"] },
+  });
+  assert.ok(discoverCubeMxRoots(probe).includes(root), "非 Program Files 盘上的 ST 默认层级不能被漏掉");
+});
+
+test("installerCubeMxDirs：只读安装器写的环境变量，两种写法都认且去重", () => {
+  assert.deepEqual(installerCubeMxDirs({}), []);
+  assert.deepEqual(installerCubeMxDirs({ STM32CubeMX_PATH: "D:\\app\\STM32CubeMX" }), ["D:/app/STM32CubeMX"]);
+  assert.deepEqual(
+    installerCubeMxDirs({ STM32CubeMX_PATH: "D:/a", STM32CUBEMX_PATH: '"D:\\a"' }),
+    ["D:/a"],
+    "同一路径的两种写法只留一条",
+  );
+});
+
+test("dirFromRegistryValue：目录原样、exe/bat 取所在目录、图标序号后缀剥掉", () => {
+  assert.equal(
+    dirFromRegistryValue('"D:\\app\\STMicroelectronics\\STM32Cube\\STM32CubeMX\\STM32CubeMX.exe",0'),
+    "D:/app/STMicroelectronics/STM32Cube/STM32CubeMX",
+  );
+  assert.equal(
+    dirFromRegistryValue('"D:\\app\\STMicroelectronics\\STM32Cube\\STM32CubeMX\\Uninstaller\\admin_uninstall.bat"'),
+    "D:/app/STMicroelectronics/STM32Cube/STM32CubeMX/Uninstaller",
+  );
+  assert.equal(dirFromRegistryValue("D:/app/STM32CubeMX"), "D:/app/STM32CubeMX");
+  assert.equal(dirFromRegistryValue('"D:\\app\\x.exe",-1'), "D:/app", "负数图标序号也要剥");
+  assert.equal(dirFromRegistryValue("   "), "");
 });
 
 test("自动发现工具链：<盘>/msys64 下三个变体里挑有 exe 的 bin", () => {

@@ -1,7 +1,7 @@
 /**
  * L1：设备事实（device facts）——唯一来源是本地内置资源里的 device/f1/chips.json。
  *
- * 用户 2026-10-31 的决定（原话「内置表删了吧」）：插件不再自带任何手写芯片事实表。型号 → 容量档 /
+ * 用户 2026-10-31 决定删除内置表：插件不再自带任何手写芯片事实表。型号 → 容量档 /
  * 启动文件 / 设备宏 / 设备头 / Flash / RAM / 引脚数，全部取自随插件包发布的 assets/device/<族>/chips.json
  * （flat 布局，2026-11 起不再走独立资源仓与联网下载）。
  *
@@ -20,10 +20,10 @@ import path from "node:path";
 import { ASSETS_DEVICE_FACTS_FILE, ASSETS_REFRESH_HINT, errText, readLocalManifest } from "../engine/assets.js";
 import { familyIdOfPart, familyProfileOf } from "./family.js";
 
-/** chips.json 在内置资源里的相对路径（manifest 的 profiles.core 也按 device/** 收录它）。 */
+/** chips.json 在内置资源里的相对路径（manifest 的 profiles.core 也按 device/** 收录该文件）。 */
 export const DEVICE_FACTS_REL = ASSETS_DEVICE_FACTS_FILE;
 
-/** 没缓存/没这颗芯片时，给用户的那句可执行提示（所有结构化错误都带上它）。 */
+/** 无缓存/无该芯片时提供给用户的可执行提示（所有结构化错误均携带该提示）。 */
 export const DEVICE_FACTS_HINT = ASSETS_REFRESH_HINT;
 
 /** chips.json 里的一颗芯片（字段就是资源脚本 scripts/build-assets.mjs 写出来的那 13 个）。 */
@@ -61,7 +61,7 @@ export interface DeviceFactsChip {
    * 为什么不能只用 ramBytes：db 的 <Ram> 是「芯片共有多少 RAM」，可能跨不连续区域——
    * H7 是 DTCM 128K@0x20000000 + AXI SRAM@0x24000000；U5 是主 SRAM + SRAM4 16K@0x28000000
    * + 2K backup。按 ramBytes 整块写进 MEMORY，_estack 就会落在空洞里，链接能过、烧进去 HardFault。
-   * 有 linkerRam 时 planRegisterLinker 优先用它；没有（F1 等连续族）保持原行为。
+   * 有 linkerRam 时 planRegisterLinker 优先使用该字段；不存在时（F1 等连续族）保持原行为。
    */
   readonly linkerRam?: DeviceLinkerRam;
 }
@@ -175,7 +175,7 @@ export function defineSuffix(group: string): string {
 /**
  * 一条 chips.json 记录 → DeviceFactsChip。
  * 关键字段（cpn / line / group / Flash / RAM / 引脚数）缺一个就丢掉：
- * 半条事实比没有事实更危险——它会算出错误的链接脚本内存布局。
+ * 不完整事实比缺失事实更危险——会算出错误的链接脚本内存布局。
  * 启动文件 / 设备宏 / 设备头 缺失时按 line + group 现算（见 namingFrom）。
  */
 function chipFrom(value: unknown): DeviceFactsChip | null {
@@ -232,7 +232,7 @@ function emptyFacts(filePath: string, version: string, error: string): DeviceFac
   };
 }
 
-/** 解析 chips.json 文本 → DeviceFacts（纯函数，测试可直接喂字符串）。 */
+/** 解析 chips.json 文本 → DeviceFacts（纯函数，测试可直接传入字符串）。 */
 export function parseDeviceFacts(text: string, filePath: string, version = ""): DeviceFacts {
   let parsed: unknown;
   try {
@@ -289,7 +289,7 @@ export function loadDeviceFacts(env: NodeJS.ProcessEnv = process.env): DeviceFac
  * STM32L4+ → device/l4+/chips.json；STM32WBA → device/wba/chips.json。
  *
  * 目录名取族画像的族段（小写、保留 +）—— 资源脚本就是这么建的目录。
- * 不能按「前两个字符」推：WBA 会被推成 wb、L4+ 会被推成 l4（都是别的族，读到的芯片表是错的）。
+ * 不能按「前两个字符」推：WBA 会被推成 wb、L4+ 会被推成 l4（均属于其他族，读到的芯片表是错的）。
  */
 export function familyFactsRelOf(familyId: string): string {
   const raw = familyId.trim().toUpperCase();

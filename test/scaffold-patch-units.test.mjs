@@ -433,7 +433,7 @@ test("A1 .ioc 保护：hal 路线遇到已有同名 .ioc 时直接拒绝，一�
   assert.equal(report.ok, false);
   assert.match(report.message, /stm32_ioc_plan/u);
   assert.match(report.message, /stm32_ioc_apply/u);
-  assert.match(report.message, /先自己备份或删掉/u);
+  assert.match(report.message, /先自行备份或删除/u);
   assert.equal(fs.readFileSync(iocPath, "utf8"), IOC_SERIAL_WIRE);
   assert.ok(!fs.existsSync(path.join(targetDir, ".dsh-stm32")), "拒绝时不该留下备份目录或半成品");
   fs.rmSync(root, { recursive: true, force: true });

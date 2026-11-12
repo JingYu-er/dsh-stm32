@@ -570,7 +570,7 @@ test("planRegReads：只给外设名 → dump 该外设全部寄存器（按偏�
   assert.deepEqual(plan.targets.map((target) => target.address), [0x40011000, 0x40011004, 0x40011008, 0x4001100c, 0x40011010, 0x40011014]);
   assert.equal(plan.targets.every((target) => target.kind === "peripheral"), true);
   assert.equal(plan.targets[3].fields.length, 16, "ODR 的位域要带上，dump 才能逐条解释");
-  assert.match(plan.notes.join("\n"), /是外设名：dump 了它的 6 个寄存器/u);
+  assert.match(plan.notes.join("\n"), /是外设名：dump 了该外设的 6 个寄存器/u);
 });
 
 test("planRegReads：外设寄存器超过 REG_DUMP_MAX 时截断并说明（不静默丢）", () => {
@@ -713,7 +713,7 @@ test("execute：只给 GPIOC → dump 6 个寄存器并逐条解释（含 ODR �
     assert.deepEqual(addresses, [...addresses].sort((left, right) => left - right), "dump 按地址升序");
     const odr = value.report.samples[3];
     assert.deepEqual(odr.fields, [{ name: "ODR5", bits: "5", value: 1 }]);
-    assert.match(value.report.notes.join("\n"), /是外设名：dump 了它的 6 个寄存器/u);
+    assert.match(value.report.notes.join("\n"), /是外设名：dump 了该外设的 6 个寄存器/u);
     assert.match(value.message, /读到 6 个寄存器/u);
   } finally {
     await session.close();

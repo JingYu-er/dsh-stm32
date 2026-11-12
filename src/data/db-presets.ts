@@ -10,11 +10,11 @@
  *   - db 推不出来的留手写表：`TIMx:timebase`（不占脚、只有 Prescaler/Period 取值）、
  *     `DMA:<IP>`（DMA 请求表不在 db 的引脚信息里）、`ADC1:1,4,5`（多 Rank 扫描的通道顺序）。
  *
- * 两个「.ioc 里的写法与 db 不同」的坑（语料实证：CubeMX 官方板级 .ioc 504 份）：
+ * 两处「.ioc 写法与 db 不同」的差异（语料实证：CubeMX 官方板级 .ioc 504 份）：
  *   1. 定时器通道：db 写 `TIM2_CH1`，.ioc 里的 <pin>.Signal 要写 `S_TIM2_CH1`（共享信号加 S_ 前缀）；
  *   2. ADC 通道：db 写 `ADC1_IN1`，.ioc 里统一写 `ADCx_IN1`（x = 任意 ADC 实例），
  *      具体是哪个 ADC 由 SH 块的 `ADC1_IN1,IN1` 表达。
- * 这两条不能靠猜：写错就会被 CubeMX 静默丢掉（§60 记过这个坑）。
+ * 这两条不可推测：写错会被 CubeMX 静默丢弃（§60 记录过该问题）。
  */
 
 import { logicalPinName, type CubemxMcuFacts } from "../engine/cubemx-db.js";
@@ -36,9 +36,9 @@ const TIMER_RE = /^(TIM|HRTIM)([0-9A-Z]+)$/u;
 const ADC_RE = /^(ADC)([0-9])$/u;
 
 interface PinHit {
-  /** db 里的引脚名（PA0-WKUP）——选脚时按它去查信号。 */
+  /** db 里的引脚名（PA0-WKUP）——选脚时按该名查询信号。 */
   dbPin: string;
-  /** 逻辑名（PA0）——预设里写它，落键前由 ioc-plan 的 pinNameResolver 换回 db 名。 */
+  /** 逻辑名（PA0）——预设中写逻辑名，落键前由 ioc-plan 的 pinNameResolver 换回 db 名。 */
   logical: string;
   port: string;
   number: number;
@@ -61,8 +61,8 @@ function pinOrder(hit: PinHit): number {
 /**
  * db 里带某条复用例信号的引脚，按端口/脚号升序。
  *
- * 为什么用 `logicalPinName` 而不是直接丢带后缀的引脚：F1 的 PA0 在 db 里叫 PA0-WKUP，
- * 它就是 TIM2_CH1 的默认脚。按「带 - 就跳过」会把它整根脚丢掉（F1 上 TIM2 就再也选不到脚）。
+ * 使用 `logicalPinName` 的原因：直接丢弃带后缀的引脚会造成误删。F1 的 PA0 在 db 里叫 PA0-WKUP，
+ * 该引脚即 TIM2_CH1 的默认脚。按「带 - 就跳过」会丢弃整根引脚（F1 上 TIM2 将无法选到引脚）。
  */
 function pinsWithSignal(facts: CubemxMcuFacts, signal: string): PinHit[] {
   const wanted = signal.trim().toUpperCase();

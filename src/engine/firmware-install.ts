@@ -9,7 +9,7 @@
  *   ④ 上面都不行 → 落到用户缓存 <cacheRoot>/firmware/<包名>（cache）
  *
  * 为什么默认不装进 Repository（2026-10 实测，docs §14）：把自造版本号丢进官方仓库，
- * CubeMX **不报错也不认**，生成时静默退回它自己认识的版本（拷出来的 HAL 字节数不对）。
+ * CubeMX **不报错，也不识别该版本**，生成时静默回退到其自身识别的版本（导出的 HAL 字节数不符）。
  * 真正让 CubeMX 用上指定包的唯一机制是脚本命令 project setCustomFWPath <包目录>，
  * 由 generate.ts 在 config load 之后发出去 —— 所以落点与 .ioc 无关，换机器也没有绝对路径残留。
  *
@@ -60,8 +60,8 @@ export interface FirmwareInstallRequest {
   /** CubeMX 安装根的候选列表（拼 <root>/Repository/<包名>）。 */
   cubeMxRoots: string[];
   /**
-   * 装哪。默认 auto：已装就地用 → <cubeMxRoot>/dsh-firmware（可写即用）→ 用户缓存兜底。
-   * repository = 硬塞官方仓库（CubeMX 可能不认这个版本号，生成照样靠 setCustomFWPath）；
+   * 安装位置。默认 auto：已安装则就地使用 → <cubeMxRoot>/dsh-firmware（可写即用）→ 用户缓存回退。
+   * repository = 强制放入官方仓库（CubeMX 可能不识别该版本号，生成仍依赖 setCustomFWPath）；
    * cache = 只落用户缓存。
    */
   target?: "auto" | "repository" | "cache";
@@ -100,7 +100,7 @@ export interface FirmwareInstallResult {
   verify: { ok: boolean; checks: FirmwareVerifyCheck[] };
   download: { files: number; bytes: number };
   /**
-   * 包从哪来：official = ST 官网 zip 经 CubeMX 装进 Repository；github = 我们拼的 HAL+CMSIS；
+   * 包来源：official = ST 官网 zip 经 CubeMX 装入 Repository；github = 插件自行拼装的 HAL+CMSIS；
    * existing = 本机本来就有；空串 = 计划/失败还没定。
    */
   source: "official" | "github" | "existing" | "";
@@ -154,7 +154,7 @@ export function findInstalledFirmware(cubeMxRoots: readonly string[], packageNam
 
 /* ------------------------- 安装记录（B10 的桥） ------------------------- */
 
-/** 安装记录文件名：<cacheRoot>/firmware/installed.json 里一串落点，generate 靠它找回落在 CubeMX 根以外的包。 */
+/** 安装记录文件名：<cacheRoot>/firmware/installed.json 中记录若干落点，generate 依据该记录找回位于 CubeMX 根以外的包。 */
 export const FIRMWARE_RECORD_FILE = "installed.json";
 
 export interface FirmwareInstallRecord {
@@ -227,7 +227,7 @@ export function firmwareExtraDirs(env: NodeJS.ProcessEnv = process.env): Firmwar
 
 /**
  * 记一条落点（同一个包名后写的覆盖先写的）。返回空串表示记下了，否则是给人看的一句原因。
- * 为什么不让它失败：记录只是给 generate 的线索，写不进去不该把"包已经装好并自检通过"反转成失败。
+ * 该步骤不设为失败的原因：记录仅为 generate 提供线索，写入失败不应将「包已安装并自检通过」反转为失败。
  */
 function rememberFirmwareInstall(
   env: NodeJS.ProcessEnv,
@@ -297,7 +297,7 @@ export function orderCubeMxRoots(roots: readonly string[]): string[] {
  * 这个根里有没有 STM32CubeMX.exe（判定"像不像装过 CubeMX"的宽松版）。
  * 为什么必须判：自动发现会把别的机器上的默认安装路径也列进来；对那种"假根"建 dsh-firmware，
  * 盘上就多出一份谁也认不到的包，而计划与真装还会给出两个不同落点（B12）。
- * 与 data/search-roots.ts 的 looksLikeCubeMxRoot 的区别：那个还要求 jre/bin/java.exe（无头生成要它），
+ * 与 data/search-roots.ts 的 looksLikeCubeMxRoot 的区别：后者还要求 jre/bin/java.exe（无头生成依赖该文件），
  * 这里只决定"往哪放固件包"，缺 JRE 但装了 CubeMX 的机器也该能落到 dsh-firmware。
  */
 export function hasCubeMxExe(root: string): boolean {
@@ -372,7 +372,7 @@ function decideTarget(request: FirmwareInstallRequest, plan: FirmwarePackagePlan
   }
   const existing = findInstalledFirmware(request.cubeMxRoots, plan.dirName);
   if (existing !== "") {
-    return { kind: "existing", dir: existing, notes: ["CubeMX 仓库里已经有 " + plan.dirName + "，直接用它，不下载。"] };
+    return { kind: "existing", dir: existing, notes: ["CubeMX 仓库中已存在 " + plan.dirName + "，直接使用，不下载。"] };
   }
   const want = request.target ?? "auto";
   // 本机真存在的根优先：自动发现会把别的机器上的默认安装路径也列进来，
@@ -425,7 +425,7 @@ function decideTarget(request: FirmwareInstallRequest, plan: FirmwarePackagePlan
   const dir = slash(cacheRoot(request.env ?? process.env)) + "/firmware/" + plan.dirName;
   notes.push(
     "落点：" + dir + "：没有可用的 CubeMX 目录（没装、或装的位置写不进去、或候选根里没有 STM32CubeMX.exe），" +
-      "只能放用户目录下的缓存；生成时 stm32_generate 会按缓存与安装记录找到它，靠脚本命令 setCustomFWPath 指过去，不会写进 .ioc。",
+      "只能存放于用户目录下的缓存；生成时 stm32_generate 依据缓存与安装记录定位该包，通过脚本命令 setCustomFWPath 指向该目录，不写入 .ioc。",
   );
   return { kind: "cache", dir, notes };
 }
@@ -549,7 +549,7 @@ function planResult(request: FirmwareInstallRequest, plan: FirmwarePackagePlan, 
       "）：2 个归档 + " +
       String(plan.coreTargets.length) +
       " 个内核头，约 2 MB；现在没有下载、没有建目录、没动 CubeMX 安装目录。",
-    nextStep: "要我装吗？回一句「装固件包」，我给 dryRun:false + confirm:true 真下（约 2 MB）。",
+    nextStep: "如需安装，回复「装固件包」，插件将以 dryRun:false + confirm:true 实际下载（约 2 MB）。",
   };
 }
 
@@ -581,7 +581,7 @@ interface InstallLock {
 
 /**
  * 同一落点的跨进程安装锁：文件用 O_EXCL 创建，内容是持有者 pid。
- * 崩溃留下的锁在下次进入时按 pid 是否还活着回收；pid 被复用也无害——文件里还有 startedAt，
+ * 异常退出遗留的锁在下次进入时按 pid 是否存活回收；pid 被复用亦无影响，文件内还记录 startedAt，
  * 超过 6 小时一律当陈旧锁。
  */
 function acquireInstallLock(dir: string): InstallLock {
@@ -642,7 +642,7 @@ function acquireInstallLock(dir: string): InstallLock {
 
 const NOTICES_FILE = "THIRD_PARTY_NOTICES.md";
 
-/** 清掉以前崩溃/被杀留下的 .dsh-download-* 暂存目录（只清超过 1 小时的，不碰并发的那一份）。 */
+/** 清理此前异常退出/被终止遗留的 .dsh-download-* 暂存目录（仅清理超过 1 小时的条目，不影响并发中的那一份）。 */
 function sweepStaleTemps(dir: string): void {
   try {
     const now = Date.now();
@@ -668,17 +668,17 @@ function sweepStaleTemps(dir: string): void {
  */
 function nextStepFor(kind: FirmwareTargetKind, dir: string, packageName: string): string {
   const locate =
-    "它会按 .ioc 的 ProjectManager.FirmwarePackage 找这个包（CubeMX 根、" + packageName +
+    "该流程按 .ioc 的 ProjectManager.FirmwarePackage 查找此包（CubeMX 根、" + packageName +
     " 的安装记录、下载缓存都搜），用脚本命令 setCustomFWPath 指过去（" + dir + "），不往 .ioc 里写绝对路径。";
   if (kind === "cubeMx") {
-    return "直接调 stm32_generate：" + locate + "CubeMX GUI 如果正开着，先关掉或重启它——它只在启动时扫这类自建目录。";
+    return "直接调 stm32_generate：" + locate + "若 CubeMX GUI 正在运行，请先关闭或重启——该程序仅在启动时扫描这类自建目录。";
   }
   if (kind === "repository") {
-    return "直接调 stm32_generate：" + locate + "这个包在 CubeMX 官方 Repository 里，GUI 的包管理器也能看到它。";
+    return "直接调 stm32_generate：" + locate + "该包位于 CubeMX 官方 Repository 中，GUI 包管理器亦可看到。";
   }
   if (kind === "cache") {
     return "直接调 stm32_generate：" + locate + "注意包在下载缓存里、不在 CubeMX 安装目录，CubeMX 包管理器里看不到；" +
-      "要让它出现在包管理器里，重装时用 target=auto 并保证 CubeMX 根可写（落到 dsh-firmware）。";
+      "如需该包出现在包管理器中，重装时使用 target=auto 并确保 CubeMX 根可写（落到 dsh-firmware）。";
   }
   return "直接调 stm32_generate：" + locate + "这个目录是调用方显式指定的：换机器或挪了目录之后要重新装（或更新安装记录），否则 generate 找不到。";
 }
@@ -891,7 +891,7 @@ export async function installFirmware(request: FirmwareInstallRequest): Promise<
   }
 
   // 官网直取（默认 auto）：能走通就装进 CubeMX 自己的 Repository，走不通才回退下面的 GitHub 拼包。
-  // 显式 target=repository 也走这条路——反正落点相同，但官方包更全、不用我们维护 coreHeaders 表。
+  // 显式 target=repository 同样走此路径：落点相同，但官方包更完整，无需插件维护 coreHeaders 表。
   const source = request.source ?? "auto";
   if (source !== "github" && request.targetDir === undefined && (request.target ?? "auto") !== "cache") {
     const official = await tryOfficial(request, plan, decision, steps, notes, progress);
@@ -1004,7 +1004,7 @@ export async function installFirmware(request: FirmwareInstallRequest): Promise<
         download: { files, bytes },
         verify: stagedVerify,
         message: "固件包没装成：暂存包自检缺 " + stagedVerify.missing.join("、") + "。目标目录没有被改动。",
-        nextStep: "把这段报错贴给我；或者改用 CubeMX 包管理器装官方包。",
+        nextStep: "请提供上述报错；或改用 CubeMX 包管理器安装官方包。",
       });
     }
 
@@ -1047,7 +1047,7 @@ export async function installFirmware(request: FirmwareInstallRequest): Promise<
     verifyStep.detail = "三条判据全过（" + String(verify.checks.length) + " 项检查；原子换入）";
 
     // 落点记进 <cacheRoot>/firmware/installed.json：cubeMx 落点靠扫根就能找到，但 cache / 显式 targetDir
-    // 在 CubeMX 根以外，generate 只能靠这条记录 + 缓存目录把它们找回来（B10）。
+    // 位于 CubeMX 根以外，generate 只能依据该记录与缓存目录定位这些包（B10）。
     const recordProblem = rememberFirmwareInstall(request.env ?? process.env, plan.dirName, decision.dir, decision.kind);
     if (recordProblem !== "") {
       notes.push("没写进安装记录（" + recordProblem + "）：stm32_generate 仍会搜下载缓存，但显式指定的目录可能找不到。");

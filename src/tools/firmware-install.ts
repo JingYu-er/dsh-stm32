@@ -2,10 +2,10 @@
  * L3：stm32_firmware_install —— 把"这台机器缺固件包"变成一次可复核的下载。
  *
  * 为什么默认只出计划：要联网下 ~2 MB、要往 CubeMX 目录（dsh-firmware）或用户缓存里写目录，
- * 用户看过"装哪、下多少、做哪几步"再说 confirm:true + dryRun:false 才真下。
+ * 用户确认"装哪、下多少、做哪几步"后再给 confirm:true + dryRun:false 才实际下载。
  *
  * 为什么不代装 CubeMX 本体：那是 GUI 向导 + 要 ST 账号，没法静默装（见 install-guides.ts）。
- * 固件包不一样 —— 它就是一棵目录树 + 一个 257 字节的 package.xml，可以完全自动化。
+ * 固件包不同：其内容为一棵目录树加一个 257 字节的 package.xml，可以完全自动化。
  */
 
 import { firmwareInstallPlan, installFirmware, type FirmwareInstallResult, type FirmwareInstallStep } from "../engine/firmware-install.js";
@@ -188,10 +188,10 @@ export function registerFirmwareInstall(ctx: DshContext): void {
     name: FIRMWARE_INSTALL_TOOL,
     description:
       "下载并组装 STM32 固件包（STM32Cube_FW_<族>_V<版本>），默认装到 <CubeMX>/dsh-firmware（与 Repository 并列，不动官方包）。" +
-      "两条通道（source 默认 auto）：官网直取 = 按 db 的 FwLibrary 拼官网 zip 地址（sw-center.st.com），校验 Content-Length 与每条 CRC32 后交给 CubeMX 的 swmgr install 装进 Repository（许可按「族+版本」记账，首装要先在 CubeMX 里点一次同意：插件从 CubeMX 日志读 Accepted Firmware Licenses，缺 FW.<族>.<版本> 就直接告诉你缺哪个标签并回退 GitHub 拼包，不再干等；等 CubeMX 的上限 5 分钟）；" +
+      "两条通道（source 默认 auto）：官网直取 = 按 db 的 FwLibrary 拼官网 zip 地址（sw-center.st.com），校验 Content-Length 与每条 CRC32 后交给 CubeMX 的 swmgr install 装进 Repository（许可按「族+版本」记账，首装要先在 CubeMX 里点一次同意：插件从 CubeMX 日志读 Accepted Firmware Licenses，缺 FW.<族>.<版本> 则直接报告缺少的标签并回退 GitHub 拼包，不再等待；等待 CubeMX 的上限为 5 分钟）；" +
       "回退通道 = 从 GitHub 拉 HAL 驱动与 CMSIS 设备支持两个子模块仓库 + 5 个内核头，自己补 package.xml。" +
       "重要：拼包落点若在 Repository 之外，实测 CubeMX 会静默忽略自造版本号，真正生效的是生成脚本里的 project setCustomFWPath —— 那一步由 stm32_generate 自动做。" +
-      "默认只出计划：列出装到哪、下多大、做哪几步，不下载、不建目录。真装必须同时给 dryRun:false 与 confirm:true。已有官方包时什么都不做。",
+      "默认只出计划：列出装到哪、下多大、做哪几步，不下载、不建目录。实际安装必须同时给 dryRun:false 与 confirm:true。已有官方包时什么都不做。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -202,7 +202,7 @@ export function registerFirmwareInstall(ctx: DshContext): void {
         target: {
           type: "string",
           enum: ["auto", "repository", "cache"],
-          description: "装哪：auto（默认，装到 <CubeMX>/dsh-firmware；CubeMX 目录不可写才落用户缓存）/ repository（硬塞官方仓库）/ cache（只落用户缓存）",
+          description: "安装位置：auto（默认，装到 <CubeMX>/dsh-firmware；CubeMX 目录不可写时落到用户缓存）/ repository（强制装入官方仓库）/ cache（只落到用户缓存）",
         },
         targetDir: { type: "string", description: "直接指定包目录（自定义布局用，跳过自动选址）" },
         cubeMxRoot: { type: "string", description: "CubeMX 安装根；不给就用配置/自动发现" },

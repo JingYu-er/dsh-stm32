@@ -1,7 +1,7 @@
 /**
  * 下载缓存（"可检索的缓存目录"）。
  *
- * 为什么要有它：寄存器版模板、未来的各类模板与工具链产物都不能预置进插件（用户 2026-10-24 决定：
+ * 设计原因：寄存器版模板、后续各类模板与工具链产物都不能预置进插件（用户 2026-10-24 决定：
  * 插件要能覆盖任意 STM32，不可能每颗芯片都打一份进 npm 包）。做法是第一次用时从网上下载，
  * 落到一个**可检索**的本地缓存目录，之后一律复用——所以缓存必须自带一份 index.json：
  * 谁、哪一代、从哪个 URL 下的、多大、什么时候下的，都要能直接读出来，而不是靠猜目录里有什么。
@@ -117,7 +117,7 @@ export function readCacheIndex(env: NodeJS.ProcessEnv = process.env): { index: C
       path: info.indexPath,
     };
   } catch (error) {
-    return { index: emptyCacheIndex(), error: "缓存索引读不了（" + info.indexPath + "）：" + errorText(error) + "；当作空索引，重新下载会覆盖它。", path: info.indexPath };
+    return { index: emptyCacheIndex(), error: "缓存索引读不了（" + info.indexPath + "）：" + errorText(error) + "；当作空索引，重新下载会覆盖该索引。", path: info.indexPath };
   }
 }
 
@@ -129,7 +129,7 @@ function isCacheEntry(value: unknown): value is CacheEntry {
 
 /**
  * 写索引失败（可识别、带路径）。单独一个类型是为了让调用方把「索引没写成」和
- * 「网络挂了」分开，并且能依赖一条硬承诺：抛错时旧索引逐字节没动。
+ * 「网络故障」分开，并且可依赖一条硬承诺：抛错时旧索引逐字节未变。
  */
 export class CacheIndexWriteError extends Error {
   readonly indexPath: string;
@@ -183,7 +183,7 @@ function safeRemove(remove: (file: string) => void, file: string): void {
 
 /**
  * 索引读不出来时先留一份 index.json.broken-<ts> 再重建：
- * 坏文件里其它条目还有人工救回来的价值，直接覆盖等于把它们一起抹掉。
+ * 损坏文件中其余条目仍有手工恢复的价值，直接覆盖会将其一并清除。
  */
 function preserveBrokenIndex(indexPath: string, reason: string): string {
   const backup = freeBackupPath(indexPath, "broken");

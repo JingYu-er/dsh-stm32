@@ -2,7 +2,7 @@
  * L1：SVD 寄存器表（device/f1/svd/<line>.json）——按名字找寄存器、按值解释位域。
  *
  * 为什么要这一层：regs_read 以前只认裸地址（0x4001100C），用户手里拿的是手册里的
- * "GPIOC_ODR" / "GPIOC.ODR"，读回来的 0x00000004 也没人告诉你那是 ODR2（PC2 输出高）。
+ * "GPIOC_ODR" / "GPIOC.ODR"，读回的 0x00000004 无法指示其为 ODR2（PC2 输出高）。
  * SVD 里这些都有：外设 baseAddress + 寄存器 addressOffset + 字段 bitOffset/bitWidth。
  *
  * 数据来源只有一个：内置资源 插件内置 assets/ 的 device/f1/svd/<line>.json，装到
@@ -12,7 +12,7 @@
  *   · 直接检出/自定义布局：<root>/device/f1/svd/103.json（开发时把 DSH_STM32_ASSETS 指到资源脚本 scripts/assets/）。
  *
  * 关键约定：
- *   · SVD 只在 profile=full 里。缺了不是"静默降级"，而是结构化失败 + 一句能照着敲的
+ *   · SVD 只在 profile=full 里。缺了不是"静默降级"，而是结构化失败 + 可直接照做的提示
  *     "随插件内置（profile=full 也随包安装）"（见 SVD_FULL_PROFILE_HINT）；
  *   · 读不到不抛：loadSvd() 返回 { device, failure }，loadSvdForLine() 复用前者的便捷版（返回 null）；
  *     只有"明确要一个寄存器/一段地址"的 API（resolveRegisterRef / describeAddress）才抛 SvdError，
@@ -69,7 +69,7 @@ export interface SvdPeripheral {
   readonly registers: readonly SvdRegister[];
 }
 
-/** 摊平之后的一条"绝对地址 → 外设/寄存器"。describeAddress 与按地址解析都走它。 */
+/** 摊平之后的一条"绝对地址 → 外设/寄存器"。describeAddress 与按地址解析均使用该结构。 */
 export interface SvdFlatRegister {
   readonly address: number;
   readonly peripheral: SvdPeripheral;
@@ -252,7 +252,7 @@ function isDirectory(dir: string): boolean {
 
 /**
  * SVD 里的数值：内置资源写的是十六进制字符串（"0x40011000" / "0x0C"），
- * 也接受数字与纯十进制字符串，别的都算坏数据。
+ * 也接受数字与纯十进制字符串，其他形式均视为坏数据。
  */
 export function parseSvdNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
@@ -328,7 +328,7 @@ const svdCache = new Map<string, SvdCacheEntry>();
 
 const svdStats = { reads: 0, hits: 0 };
 
-/** 缓存诊断：单测用它证明"第二次没再读盘"（reads 不涨、hits 涨）。 */
+/** 缓存诊断：单测据此证明「第二次未再读盘」（reads 不增加、hits 增加）。 */
 export function svdCacheStats(): { reads: number; hits: number; entries: number } {
   return { reads: svdStats.reads, hits: svdStats.hits, entries: svdCache.size };
 }
@@ -397,7 +397,7 @@ function fieldFrom(value: unknown, where: string): { field: SvdField | null; err
 }
 
 /**
- * 解析一份 SVD 文本。纯函数：测试可以直接喂字符串，不走磁盘。
+ * 解析一份 SVD 文本。纯函数：测试可直接传入字符串，不访问磁盘。
  * 任何一条外设/寄存器/字段不合法都返回 error（宁缺勿错，见文件头）。
  */
 export function parseSvd(text: string, filePath = "", version = "", expectedLine = ""): SvdParse {
@@ -667,7 +667,7 @@ function resolvedOf(entry: SvdFlatRegister): ResolvedRegister {
 function locateAddress(device: SvdDevice, address: number): SvdFlatRegister | null {
   const exact = device.byAddress.get(address);
   if (exact !== undefined) return exact;
-  // flat 已按地址升序：找到最后一条起点 <= address 的，看它是否覆盖该地址。
+  // flat 已按地址升序：找到最后一条起点 <= address 的记录，判断其是否覆盖该地址。
   let low = 0;
   let high = device.flat.length - 1;
   let candidate: SvdFlatRegister | null = null;
@@ -706,7 +706,7 @@ export function resolveRegisterRef(ref: string, line: string, env: NodeJS.Proces
     if (inside !== null) {
       throw new SvdError(
         "register-unknown",
-        formatAddress(address) + " 不是寄存器起点：它落在 " + inside.peripheral.name + "." + inside.register.name +
+        formatAddress(address) + " 不是寄存器起点：该地址落在 " + inside.peripheral.name + "." + inside.register.name +
           "（起点 " + formatAddress(inside.address) + "，位宽 " + String(inside.register.size) + " 位）内部。",
         { line: device.line, ref: text },
       );

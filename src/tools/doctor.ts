@@ -80,7 +80,7 @@ export const outputSchema: JsonSchema = {
             debug: { type: "boolean", description: "openocd + gdb 可用（烧录并调试）" },
             generate: { type: "boolean", description: "CubeMX + 内置 JRE 可用（建工程/重新生成）" },
             flashOpenocd: { type: "boolean", description: "openocd 可用（可烧录/调试，覆盖 ST-LINK/J-Link/DAPLink）" },
-            flashCubeProgrammer: { type: "boolean", description: "CubeProgrammer 可用（仅 ST-LINK 烧录兜底，不能调试）" },
+            flashCubeProgrammer: { type: "boolean", description: "CubeProgrammer 可用（仅作 ST-LINK 烧录回退，不能调试）" },
             debugOpenocd: { type: "boolean", description: "调试服务端 openocd 可用" },
           },
           required: ["build", "flash", "debug", "generate", "flashOpenocd", "flashCubeProgrammer", "debugOpenocd"],
@@ -188,7 +188,7 @@ export function registerDoctor(ctx: DshContext): void {
   ctx.tools.register({
     name: DOCTOR_TOOL,
     description:
-      "STM32 环境体检（只读）：工具链版本是否齐全、有没有残留的 openocd/gdb 占着探针（CMSIS-DAP / ST-Link）、gdb 端口是否被占、构建目录与 .elf 是否就位、.ioc 有没有致命告警（例如没启用 Serial Wire）。烧录/调试失败时先跑它。",
+      "STM32 环境体检（只读）：工具链版本是否齐全、是否存在残留的 openocd/gdb 进程占用探针（CMSIS-DAP / ST-Link）、gdb 端口是否被占用、构建目录与 .elf 是否就位、.ioc 是否存在致命告警（例如未启用 Serial Wire）。烧录/调试失败时先执行此项检查。",
     parameters: {
       type: "object",
       additionalProperties: false,

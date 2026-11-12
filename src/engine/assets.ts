@@ -22,19 +22,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ASSETS_MANIFEST_FILE = "manifest.json";
-/** 老版本安装布局的标记文件（flat 内置资源没有它）。 */
+/** 老版本安装布局的标记文件（flat 内置资源不含该文件）。 */
 export const ASSETS_INSTALL_FILE = "install.json";
 
 /** 设备事实在资源根里的相对路径（插件唯一的芯片事实来源）。 */
 export const ASSETS_DEVICE_FACTS_FILE = "device/f1/chips.json";
 
-/** 缺资源时对用户说的那句话（工具卡片、错误、note 都复用它，避免各写一套）。 */
+/** 缺资源时面向用户的固定提示（工具卡片、错误与 note 共用该文案，避免各处重复编写）。 */
 export const ASSETS_REFRESH_HINT =
   "资源随插件内置（assets/）：缺文件说明插件安装不完整，重装插件后重试；stm32_assets verify 可定位缺了哪些";
 
 export type AssetsProfile = "core" | "full";
 
-/** 只给 core / full；空串按 core 处理，别的值返回 null（由调用方给可读报错，不瞎猜）。 */
+/** 仅接受 core / full；空串按 core 处理，其他值返回 null（由调用方给出可读报错，不做猜测）。 */
 export function normalizeProfile(value: string | undefined): AssetsProfile | null {
   const text = (value ?? "core").trim().toLowerCase();
   if (text === "") return "core";
@@ -213,7 +213,7 @@ export function normalizeAssetPath(raw: string): string | null {
   return parts.join("/");
 }
 
-/** glob → 正则：** 跨目录，* 不跨目录，? 单字符。manifest 的 profiles 就靠它筛文件。 */
+/** glob → 正则：** 跨目录，* 不跨目录，? 匹配单字符。manifest 的 profiles 依赖该规则筛选文件。 */
 function globToRegExp(pattern: string): RegExp {
   let out = "^";
   let index = 0;
@@ -558,7 +558,7 @@ export interface EnsureAssetsResult {
   profile: string;
   /** 资源来源：内置 flat 为 bundled，历史版本目录为 cache。 */
   source: string;
-  /** 保留字段（内置后恒为空数组），调用方输出 schema 还带着它。 */
+  /** 保留字段（内置后恒为空数组），调用方输出 schema 仍包含该字段。 */
   attempts: string[];
   message: string;
 }
@@ -644,7 +644,7 @@ export function resolveAssetFile(
   const allowed = profileFiles(state.manifest, normalizedProfile).some((file) => file.path === normalized);
   if (!allowed) {
     return empty(
-      "文件 " + normalized + " 不在 profile=" + normalizedProfile + " 里（它属于 profile=" + entry.profile + "）；用 profile=full 查一次。",
+      "文件 " + normalized + " 不在 profile=" + normalizedProfile + " 里（该项属于 profile=" + entry.profile + "）；用 profile=full 查一次。",
     );
   }
   const localPath = path.join(state.versionDir, normalized);

@@ -1,11 +1,11 @@
 /**
- * L2：F1 时钟规划 —— 把「我要 60 MHz」变成一整套 RCC 键值 + 逐外设频率表。
+ * L2：F1 时钟规划 —— 把「目标 60 MHz」转换为一整套 RCC 键值 + 逐外设频率表。
  *
  * 为什么不是独立工具：时钟就是 .ioc 里的一段键，单开一个 stm32_clock_plan 会让"改引脚"和
  * "改时钟"变成两次 plan、两次 apply，中间还可能出现 PLL 与 APB 分频不自洽的中间态。
  * 所以 clock 作为 stm32_ioc_plan 的一个入参，和 entries/pins 一起算、一起写、一起回滚。
  *
- * 三条硬规则（踩坑换来的）：
+ * 三条硬性规则（由已发生的问题得出）：
  * 1) 只改 RCC.PLLMUL 是不够的：CubeMX 按 RCC.*Freq_Value 生成 SystemClock_Config，
  *    20 个派生键必须成套重算，否则 HAL_RCC_ClockConfig 用旧值算错总线频率。
  * 2) 目标频率可能根本不可达（板上 8 MHz HSE 只能出 8 的整数倍）。这时不猜、不静默：取
@@ -23,7 +23,7 @@ import {
   pllMulValue,
   pllSourceById,
 } from "../data/clock-f1.js";
-/** 当前这次规划用的时钟事实（db 派生或 F1 兜底）。planClock 是同步单线程，入口赋值即可。 */
+/** 本次规划使用的时钟事实（db 派生或 F1 回退）。planClock 为同步单线程，入口赋值即可。 */
 let activeFacts: ClockFacts = F1_FACTS;
 /** 当前这颗芯片的 HSI 频率（Hz）。planClock 入口从 .ioc 的 RCC.HSI_VALUE 读，缺省 8 MHz。 */
 let activeHsiHz = 8_000_000;
@@ -170,7 +170,7 @@ export interface ClockPlan {
 }
 
 export interface ClockPlanContext {
-  /** 当前 .ioc 的键值（只读）：用它判断有没有 HSE 晶振、HSE_VALUE、MCOSource、USB 是否启用。 */
+  /** 当前 .ioc 的键值（只读）：用于判断是否有 HSE 晶振、HSE_VALUE、MCOSource 以及 USB 是否启用。 */
   entries: Map<string, string>;
   /**
    * 时钟事实：正常由 src/data/clock-db.ts 从 CubeMX db 现算（PLL 倍频/分频枚举、SYSCLK 上限、PLL 源）；
@@ -697,7 +697,7 @@ function finish(input: FinishInput): ClockPlan {
       parts.push(chain.pllSourceLabel + " 拼不出这一档");
     }
   }
-  // 换源提示：另一个可用源也许正好凑得出目标，但没说它能替代（HSI 精度差 / 要换晶振）。
+  // 换源提示：另一个可用源可能刚好能命中目标，但该提示不表示此源可替代（HSI 精度较差 / 需更换晶振）。
   if (!input.reachable && input.targetHz > 0 && input.targetHz <= activeFacts.limits.sysclkHz) {
     const mulList = activeFacts.muls.map((fact) => fact.mul);
     const lowestMul = mulList.length === 0 ? 2 : Math.min(...mulList);
@@ -719,7 +719,7 @@ function finish(input: FinishInput): ClockPlan {
           : "需要板上换晶振";
       parts.push(
         "（改用 " + other.label + " ×" + String(mul) + " 正好 " + formatHz(input.targetHz) +
-        "，但 " + why + "，默认没选它）",
+        "，但 " + why + "，默认未选该项）",
       );
       break;
     }
@@ -730,7 +730,7 @@ function finish(input: FinishInput): ClockPlan {
   }
   if (!chain.usbAvailable && input.usbWanted) {
     // 同样别写死 "F1 的"：db 派生的族把 requiresPllClkHz 记 0（USB 规则没建模），
-    // 这里得说「没建模」，不能声称它们有 F1 那条 PLLCLK÷1.5 的路。
+    // 此处需说明「未建模」，不能声称这些族具备 F1 的 PLLCLK÷1.5 路径。
     const requires = activeFacts.usb.requiresPllClkHz;
     warnings.push(
       requires > 0
@@ -811,7 +811,7 @@ function finish(input: FinishInput): ClockPlan {
   };
 }
 
-/** 定点模式没命中目标时，顺手给出附近的可选档（方便用户改主意）。 */
+/** 定点模式未命中目标时，同时给出附近的可选档（便于用户调整目标）。 */
 function nearestList(
   base: readonly ClockAlternative[],
   chosenHz: number,

@@ -5,7 +5,7 @@
  * 为什么这么绕：插件有硬性的零 npm 依赖要求，而 Node 没有内建串口；Windows 自带
  * PowerShell + System.IO.Ports.SerialPort，于是把「谁持有 COM 口」这件事隔离到桥进程：
  *   - 桥进程 detached + unref：DSH 的工具调用是短命的，串口不能跟着一次调用结束；
- *   - 桥自己每 5 s 查一次 parent PID：DSH 被杀（关窗口 / 重启宿主）时它必须自己退，
+ *   - 桥自己每 5 s 查一次 parent PID：DSH 终止（关闭窗口 / 重启宿主）时桥必须自行退出，
  *     否则那个 COM 口就永远是「被占用」，用户只能重启机器；
  *   - 通信只走文件：不用 socket、不用额外端口，出问题能直接 cat 目录里的东西复现。
  *
@@ -85,7 +85,7 @@ export const SERIAL_DEFAULTS = {
   rts: false,
   encoding: "utf8" as SerialEncoding,
   newline: "crlf" as SerialNewline,
-  /** 读/等回包的单次超时（ms）；transact 的采集窗口也用它。 */
+  /** 读/等回包的单次超时（ms）；transact 的采集窗口也使用该值。 */
   timeoutMs: 1000,
   /** read 一次最多返回多少行。 */
   maxLines: 200,
@@ -95,7 +95,7 @@ export const SERIAL_DEFAULTS = {
   idleTimeoutMs: 600_000,
   /** rx/tx/bridge.log 单个文件的上限（字节），超了桥自己留最新一半。 */
   maxLogBytes: 8 * 1024 * 1024,
-  /** true = 会话跨 turn 保留（turn/end 清理时不动它）。 */
+  /** true = 会话跨 turn 保留（turn/end 清理时跳过该会话）。 */
   persist: false,
 } as const;
 
@@ -193,13 +193,13 @@ export interface SerialError {
 
 const HINT_BY_KIND: Record<SerialErrorKind, string> = {
   "unsupported-platform":
-    "串口 P1 只支持 Windows（靠 PowerShell 的 System.IO.Ports 常驻进程）。在 mac/Linux 上先用别的串口工具，或等后续版本。",
+    "串口 P1 只支持 Windows（靠 PowerShell 的 System.IO.Ports 常驻进程）。在 mac/Linux 上先用其他串口工具，或等后续版本。",
   "powershell-missing":
     "找不到可用的 PowerShell：Windows 自带 powershell.exe（5.1），若被精简/改路径，就用 DSH_STM32_SERIAL_POWERSHELL 指向 pwsh.exe 或 powershell.exe。",
   "port-not-found":
     "这个 COM 号当前不存在：换根 USB 数据线、确认板子供电，再 stm32_serial action=list 看现有端口（插拔后 Windows 常把 COM5 变成 COM7）。",
   "port-busy":
-    "端口被别的程序占着：关掉串口助手 / 另一个 stm32_serial 会话 / 驱动自带的监视工具，再试一次。",
+    "端口被其他程序占用：关闭串口助手 / 另一个 stm32_serial 会话 / 驱动自带的监视工具，再试一次。",
   "access-denied":
     "文件或目录权限不足：检查 %USERPROFILE%\\.dsh-stm32\\serial 是否可写，或把 DSH_STM32_SERIAL_HOME 指到可写目录。",
   "settings-invalid":
@@ -207,7 +207,7 @@ const HINT_BY_KIND: Record<SerialErrorKind, string> = {
   "bridge-start-timeout":
     "桥进程 5 s 内没有把 status.state 变成 open：看 evidence 里的 bridge.log 末尾，常见是 PowerShell 启动慢、脚本被安全软件拦下，或端口打不开。重试一次；反复失败就用 DSH_STM32_SERIAL_BRIDGE 换一份脚本路径确认不是安装问题。",
   "bridge-crashed":
-    "桥进程已经退出（pid 不在了）：会话随之失效，重新 open 即可；反复崩溃就看 evidence 里 bridge.log 的异常栈。",
+    "桥进程已经退出（pid 不在了）：会话随之失效，重新 open 即可；反复失败时查看 evidence 里 bridge.log 的异常栈。",
   disconnected:
     "串口连接已经断了（拔线 / 板子复位 / 端口被系统回收）：重新 open；若一直断，换数据线并确认板子没有掉电。",
   "already-open": "已经有一个串口会话开着（P1 只支持单会话）：先 stm32_serial action=close 再开新的。",
@@ -263,7 +263,7 @@ export function formatSerialError(error: SerialError): string {
 
 /**
  * 工具 output schema 里的 serialError 片段（与 PROBE_ERROR_SCHEMA 同构）。
- * **不进 required**：成功时引擎给 null，而宿主不接受 null，工具层要把它摘掉再交出去。
+ * **不进 required**：成功时引擎给 null，而宿主不接受 null，工具层需移除该字段再交出。
  */
 export const SERIAL_ERROR_SCHEMA: JsonSchema = {
   type: "object",
@@ -328,7 +328,7 @@ function isNodeScript(path: string): boolean {
 }
 
 function isWindows(env: Env = process.env): boolean {
-  // 显式给了 OS 就以它为准（单测/CI 里模拟别的平台）；否则看真实进程平台。
+  // 显式给出 OS 时以该值为准（单测/CI 里模拟其他平台）；否则看真实进程平台。
   const declared = env["OS"];
   if (declared !== undefined && declared !== "") return declared === "Windows_NT";
   return process.platform === "win32";
@@ -452,7 +452,7 @@ export interface SerialSupport {
 
 /**
  * 串口能不能用：平台 + PowerShell + 桥脚本三件都齐才算 ok。
- * 每次操作前都调它（有缓存，几乎不要钱），省得把「环境缺件」报成「端口打不开」。
+ * 每次操作前都调用该函数（有缓存，开销很小），避免把「环境缺件」报成「端口打不开」。
  */
 export async function serialSupport(env: Env = process.env): Promise<SerialSupport> {
   const scriptPath = serialBridgeScriptPath(env);
@@ -540,7 +540,7 @@ interface PortEnumeration {
   names: string[];
   ports: SerialPortFacts[];
   error: string;
-  /** 用的是哪条路（wmi / 环境变量覆盖 / GetPortNames 兜底），报告里写清楚。 */
+  /** 用的是哪条路（wmi / 环境变量覆盖 / GetPortNames 回退），报告里需写明。 */
   source: string;
 }
 
@@ -702,7 +702,7 @@ function findFacts(list: readonly SerialPortFacts[], port: string): SerialPortFa
   return list.find((facts) => facts.port === wanted) ?? null;
 }
 
-/** 端口名归一：接受 com3 / COM3 / \\.\COM3，返回 COM3；其它返回 null。 */
+/** 端口名归一：接受 com3 / COM3 / \\.\COM3，返回 COM3；其他输入返回 null。 */
 export function normalizePortName(raw: unknown): string | null {
   const text = typeof raw === "string" ? raw.trim() : "";
   if (text === "") return null;
@@ -878,7 +878,7 @@ export function pidAlive(pid: number): boolean {
     return true;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // EPERM = 进程在，只是不归我们杀（比如另一个用户起的）：算活着。
+    // EPERM = 进程在，但不由本插件终止（例如其他用户启动）：视为存活。
     return code === "EPERM";
   }
 }
@@ -944,7 +944,7 @@ function snapshotOf(session: ActiveSession, status: BridgeStatusFile | null): Se
   };
 }
 
-/** 会话还活着吗：pid 在 + 状态不是 closed/error。桥死了就把 active 清掉（stale 自愈）。 */
+/** 会话存活判定：pid 存在且状态不是 closed/error。桥已结束则清除 active 条目（stale 自愈）。 */
 function liveSession(): ActiveSession | null {
   if (active === null) return null;
   const status = readStatusFile(active.ipcDir);
@@ -1024,7 +1024,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs: numbe
   }
 }
 
-/** 把桥的 status.error 映射成我们的分类（桥只会给 4 个 kind，其余兜底）。 */
+/** 把桥的 status.error 映射为插件侧分类（桥只给出 4 个 kind，其余回退）。 */
 function bridgeErrorToSerial(status: BridgeStatusFile | null, evidence: string[]): SerialError {
   const kindRaw = status?.error?.kind ?? "";
   const known = SERIAL_ERROR_KINDS.find((kind) => kind === kindRaw);
@@ -1035,7 +1035,7 @@ function bridgeErrorToSerial(status: BridgeStatusFile | null, evidence: string[]
   if (/denied|in use|busy|being used/iu.test(message)) return makeSerialError("port-busy", { cause: message !== "" ? message : undefined, evidence });
   if (/does not exist|not exist|no such/iu.test(message)) return makeSerialError("port-not-found", { cause: message !== "" ? message : undefined, evidence });
   if (/access .*path|permission|EACCES/iu.test(message)) return makeSerialError("access-denied", { cause: message !== "" ? message : undefined, evidence });
-  return makeSerialError("bridge-crashed", { cause: message !== "" ? message : "桥没有给出可识别的错误", evidence });
+  return makeSerialError("bridge-crashed", { cause: message !== "" ? message : "桥未给出可识别的错误", evidence });
 }
 
 // 并发 open 的互斥：工具层的 isConcurrencySafe 只挡住同时发起的工具调用，挡不住两次
@@ -1152,7 +1152,7 @@ async function openSerialLocked(request: OpenSerialRequest): Promise<OpenSerialR
     notes.push(
       "参数取自这块板子上次的记录（" + facts.port + " → " + (facts.vid !== "" ? "USB " + facts.vid + ":" + facts.pid : identity) + (recall.lastUsedAt !== "" ? "，" + recall.lastUsedAt : "") + "）",
     );
-    if (recall.comPort !== "" && recall.comPort !== portText) notes.push("上次它在 " + recall.comPort + "（换过 USB 口，COM 号会变，参数照旧）");
+    if (recall.comPort !== "" && recall.comPort !== portText) notes.push("上次记录在 " + recall.comPort + "（更换过 USB 口，COM 号会变化，参数沿用）");
   }
 
   // 显式参数覆盖记忆值：记忆只是基准。
@@ -1220,7 +1220,7 @@ async function openSerialLocked(request: OpenSerialRequest): Promise<OpenSerialR
   // 这里刻意**不用** detached: true。Node 在 Windows 上把 detached 翻成 DETACHED_PROCESS，
   // 而 powershell.exe 5.1 在没有控制台时启动即退出（连脚本都不执行，exit 0、无任何输出）——
   // 实测四台机器都一样。非 detached + unref 已经满足需求：Windows 上父进程退出不会带走子进程，
-  // unref 只是不让它拖住事件循环；真正的「防残留」由桥自己的 parent-PID 看门狗负责。
+  // unref 只是不让该进程拖住事件循环；真正的「防残留」由桥自己的 parent-PID 看门狗负责。
   let child: ChildProcess;
   try {
     child = spawn(support.exe, support.exeArgs, {
@@ -1307,7 +1307,7 @@ async function openSerialLocked(request: OpenSerialRequest): Promise<OpenSerialR
       serialError = makeSerialError("bridge-start-timeout", { evidence: evidence.length > 0 ? evidence : ["status.json 没有出现 open"] });
     }
     // 启动失败也要收尸：慢桥可能在 5 s 窗口之后才把串口打开，这时只报错不 kill，
-    // 就会留下一个活着却没人认领的进程占住 COM 口（active 里没有它，close/status 都碰不到）。
+    // 就会留下一个活着却没人认领的进程占住 COM 口（active 里没有该进程，close/status 都无法处理）。
     const abandoned = await abandonBridge(ipcDir, pid, notes);
     if (abandoned.initialAlive) {
       notes.push(
@@ -1389,14 +1389,14 @@ function cleanupDir(ipcDir: string): void {
   try {
     rmSync(ipcDir, { recursive: true, force: true });
   } catch {
-    // 清不掉就算了：反正它是死的，turn/end 还会再扫一遍
+    // 清理失败可忽略：该进程已结束，turn/end 还会再扫描一遍
   }
 }
 
 interface AbandonOutcome {
-  /** 收尸前 pid 还活着吗（活着才谈得上「收掉」）。 */
+  /** 终止前确认 pid 是否存活（存活方可终止）。 */
   initialAlive: boolean;
-  /** 收尸之后还活着吗（true = 杀不掉，仍可能占着串口）。 */
+  /** 终止后确认是否仍存活（true = 无法终止，仍可能占用串口）。 */
   alive: boolean;
 }
 
@@ -1404,8 +1404,8 @@ interface AbandonOutcome {
  * 收掉一个启动失败的桥。
  *
  * 为什么必须专门收尾：open 只等 5 s，但 PowerShell 桥可能更晚才把串口打开。如果这时只是
- * 报错返回，桥会继续活着占住 COM 口，而 active 里没有它，close/status 都碰不到它。
- * 先发 close 命令让它自己体面退出，等不到再 kill；目录不删（bridge.log 是唯一线索），
+ * 报错返回，桥会继续活着占住 COM 口，而 active 里没有该进程，close/status 都无法处理。
+ * 先发 close 命令使其正常退出，等不到再 kill；目录不删（bridge.log 是唯一线索），
  * 写 abandoned.json 标记，serialStatus 会把这种「活着但不在当前会话里」的目录算成 orphanDirs。
  */
 async function abandonBridge(ipcDir: string, pid: number, notes: string[]): Promise<AbandonOutcome> {
@@ -1456,7 +1456,7 @@ export interface ReadSerialResult {
   records: SerialRecord[];
   /** 这次读了多少字节。 */
   bytes: number;
-  /** rx.ndjson 的总字节数（增量读取用：下次只在它变大时再读）。 */
+  /** rx.ndjson 的总字节数（增量读取用：下次仅在该值变大时再读）。 */
   fileBytes: number;
   /** true = 文件比 maxBytes 大，只读了尾部（更早的行没给）。 */
   truncated: boolean;
@@ -1498,7 +1498,7 @@ function readNdjsonTail(path: string, maxBytes: number, maxLines: number): TailR
     return { records: [], bytes: 0, fileBytes: size, truncated: false, badLines: 0 };
   }
   let text = buffer.toString("utf8");
-  // 从文件中间开始时，第一行可能是半截：丢掉它（它的完整内容在更早的位置，反正已经超出 maxBytes）
+  // 从文件中间开始时，第一行可能是半截：丢弃该行（其完整内容在更早的位置，且已超出 maxBytes）
   if (start > 0) {
     const index = text.indexOf("\n");
     text = index >= 0 ? text.slice(index + 1) : "";
@@ -1630,7 +1630,7 @@ export async function sendSerial(request: SendSerialRequest): Promise<SendSerial
   }
   const text = typeof request.text === "string" ? request.text : "";
   // 空正文也可以：只发换行是合法操作（敲回车、flush 一行）。但「空正文 + 不补换行」等于什么都没发，
-  // 这种调用几乎一定是参数写错了，直接说清楚比让它静默成功好。
+  // 这种调用几乎一定是参数写错了，明确报错优于静默成功。
   const effectiveNewline = request.raw === true ? "none" : request.newline ?? session.settings.newline;
   if (text === "" && effectiveNewline === "none") {
     const error = makeSerialError("settings-invalid", { cause: "text 是空的且 newline=none：这条命令什么都不会发出去" });
@@ -1854,7 +1854,7 @@ export interface SerialStatusResult {
   /** 磁盘上还留着几个会话目录（含已死的），turn/end 会清。 */
   sessionDirs: number;
   staleDirs: string[];
-  /** 目录里的 bridge.pid 还活着、但它不是当前会话：多半是 open 超时/宿主重启留下的孤儿桥。 */
+  /** 目录里的 bridge.pid 还活着、但不属于当前会话：多为 open 超时/宿主重启留下的孤儿桥进程。 */
   orphanDirs: string[];
   bridge: { pid: number; alive: boolean; state: string; reason: string; lastError: string };
   files: { rxBytes: number; txBytes: number; logBytes: number; pidBytes: number };
@@ -2077,10 +2077,10 @@ export interface TurnEndCleanupResult {
 }
 
 /**
- * turn/end 的收尾：persist=false 的会话在这里关掉，顺手清死掉的会话目录。
+ * turn/end 的收尾：persist=false 的会话在此关闭，同时清理已结束的会话目录。
  *
  * 为什么要由工具层触发而不是引擎自己定时：插件在 turn 结束时有明确的生命周期钩子，
- * 那边调用一次比在引擎里挂定时器更准（定时器全关掉不影响，漏关会一直占着 COM 口）。
+ * 那边调用一次比在引擎里注册定时器更准确（定时器全部关闭不影响，漏关会一直占用 COM 口）。
  */
 export async function cleanupSerialOnTurnEnd(request: { env?: Env } = {}): Promise<TurnEndCleanupResult> {
   const env = request.env ?? process.env;

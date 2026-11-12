@@ -14,7 +14,7 @@
  *
  * 环境变量：
  *   DSH_STM32_SERIAL_CONFIG  整体改指配置文件（单测与多工程隔离用；相对路径按主目录解析）
- *   DSH_STM32_NO_CONFIG=1    让读配置的地方当它不存在（与 config.json 同一套开关语义）
+ *   DSH_STM32_NO_CONFIG=1    使读取配置的代码按未配置处理（与 config.json 同一套开关语义）
  */
 
 import { randomBytes } from "node:crypto";
@@ -82,7 +82,7 @@ function asString(value: unknown): string {
 
 /**
  * DTR/RTS 只认真正的布尔值，外加 "true"/"false"/"1"/"0" 这些常见字符串写法。
- * 认不出来返回 null（由调用方记一条错误）——悄悄回落到缺省值会让"我明明设了 rts"变成静默无效。
+ * 无法识别时返回 null（由调用方记录一条错误）——静默回退到缺省值会使「已设置的 rts」静默失效。
  */
 function asOptionalBoolean(value: unknown): boolean | null {
   if (typeof value === "boolean") return value;
@@ -108,7 +108,7 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | nul
 
 /**
  * 把任意 JSON / 工具参数归一成合法参数：非法的字段按缺省值处理并记一条 errors。
- * 不抛异常——参数写错要能变成 settings-invalid 的一次报告，而不是把调用方打崩。
+ * 不抛异常——参数写错要能变成 settings-invalid 的一次报告，而非导致调用方失败。
  */
 export function normalizeSerialSettings(
   raw: unknown,
@@ -183,7 +183,7 @@ export function settingsAreDefault(settings: SerialSettings): boolean {
 
 // ── 端口身份：三档，由强到弱 ────────────────────────────────────────────────
 
-/** 一个串口的「底细」（由 engine 的 listPorts 采集，这里只负责怎么用它算身份）。 */
+/** 一个串口的「底细」（由 engine 的 listPorts 采集，本模块仅负责据此计算身份）。 */
 export interface SerialPortFacts {
   /** COM3（大写 COM + 数字；引擎侧统一过）。 */
   port: string;
@@ -215,7 +215,7 @@ function isBusPathId(value: string): boolean {
  */
 export function portIdentity(facts: SerialPortFacts): string {
   // 字段声明成 string，但调用方可能是「手工改过的 serial.json / 老版本记录」，
-  // 缺字段时按空串处理，别让一个半截配置把整条打开流程打崩。
+  // 缺字段时按空串处理，避免不完整配置导致整条打开流程失败。
   const vid = text(facts.vid).toUpperCase();
   const pid = text(facts.pid).toUpperCase();
   const serial = text(facts.serialNumber);
@@ -240,7 +240,7 @@ export function describeIdentity(identity: string): string {
 export interface SerialPortMemory {
   /** portIdentity() 算出来的键。 */
   identity: string;
-  /** 上次用它时的 COM 号（换口后会变，只作提示）。 */
+  /** 上次使用该端口时的 COM 号（更换端口后会变化，仅作提示）。 */
   comPort: string;
   description: string;
   vid: string;
@@ -405,7 +405,7 @@ export function readSerialConfig(env: Record<string, string | undefined> = proce
       path,
       exists: true,
       config: null,
-      errors: ["串口配置文件不是合法 JSON：" + describeError(error) + "；已按无记忆处理（重新写入会覆盖它）"],
+      errors: ["串口配置文件不是合法 JSON：" + describeError(error) + "；已按无记忆处理（重新写入将覆盖该值）"],
       mtimeMs,
     };
     cache = { path, mtimeMs, size, read };
@@ -470,7 +470,7 @@ export interface SerialRecall {
 
 /**
  * 取这块板子的历史参数。
- * 记忆只是「基准」：调用方显式给的参数永远覆盖它，缺省的字段才落到历史值上。
+ * 记忆仅作「基准」：调用方显式给出的参数始终优先，缺省字段才取历史值。
  */
 export function recallPortSettings(facts: SerialPortFacts, env: Record<string, string | undefined> = process.env): SerialRecall {
   const read = readSerialConfig(env);
@@ -497,7 +497,7 @@ export interface RememberResult {
 }
 
 /**
- * 打开成功后记一笔：按身份 upsert，其余条目原样保留（别人的板子不能被我们的打开挤掉）。
+ * 打开成功后记一笔：按身份 upsert，其余条目原样保留（其他设备的条目不受本插件打开操作影响）。
  * 只记「这次真的通了」的参数——失败时调用方不该写，否则下次 recover 会复用一个错参数。
  */
 export function rememberPort(

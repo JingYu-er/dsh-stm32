@@ -142,7 +142,7 @@ export async function runExport(request: ExportRequest): Promise<ExportReport> {
   try {
     zipBytes = statSync(zipPath).size;
   } catch {
-    // 注入的 zipImpl 可能没真写文件（测试替身）；报告里的字节数只是给人看的，不该让它炸掉。
+    // 注入的 zipImpl 可能未实际写文件（测试替身）；报告中的字节数仅用于展示，不应因此抛出异常。
     zipBytes = 0;
   }
   const message =

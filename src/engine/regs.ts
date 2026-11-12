@@ -184,7 +184,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
   const tmpDir = join(projectDir, STATE_DIR, "tmp");
   const scriptPath = join(tmpDir, "regs-" + String(startedAt) + ".tcl");
   // A5：工程只读（Program Files、只读共享、库目录）时 mkdirSync 会直接抛，
-  // 以前整个工具崩成未捕获异常；现在干净失败，并说清是哪个路径写不进去。
+  // 此前整个工具失败为未捕获异常；现在以错误结果返回，并指明哪个路径不可写。
   try {
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(scriptPath, script, "utf8");
@@ -195,7 +195,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
       ok: false,
       errors: ["写不了 openocd 脚本（" + scriptPath + "）：" + message],
       message: "没读：工程目录写不进临时脚本",
-      notes: [...notes, "工程目录可能只读；把工程放到可写位置，或先关掉占用它的程序再试。"],
+      notes: [...notes, "工程目录可能为只读；将工程放到可写位置，或先关闭占用该目录的程序后重试。"],
     };
   }
 
@@ -204,7 +204,7 @@ export async function runRegsRead(subprocess: SubprocessService, request: RegsRe
     const cfg = configs[i] ?? "";
     args.push("-f", cfg);
     if (i !== 0) continue;
-    // J-Link 要在 interface 与 target 之间补 transport：它的 interface 配置不选 transport，openocd 默认 jtag。
+    // J-Link 需在 interface 与 target 之间补充 transport：其 interface 配置不选择 transport，openocd 默认为 jtag。
     const transport = openocdTransportArgs(cfg);
     if (transport.length > 0) {
       args.push(...transport);

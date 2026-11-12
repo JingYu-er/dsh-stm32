@@ -2,7 +2,7 @@
  * 寄存器路线的链接脚本（按芯片型号渲染一份 <DeviceId>_FLASH.ld）。
  *
  * 为什么必须按型号渲染：templates/scaffold/STM32F103XX_FLASH.ld 是给 F103C8T6 写的——
- * MEMORY 里写死 LENGTH = 64K FLASH / 20K RAM。拿它去链 F103RBT6（128K/20K）还能跑，
+ * MEMORY 里写死 LENGTH = 64K FLASH / 20K RAM。用于链接 F103RBT6（128K/20K）尚可运行，
  * 但链 F103ZET6（512K/64K）就只用到前 64K，超出部分链接器直接报 overflow；
  * 反过来链 F100C6（16K/4K）更糟：链接器以为有 64K Flash，把 .data/.bss 摆到不存在的
  * 内存上，烧进去就是 HardFault。所以寄存器路线不从模板拷死脚本，而是改 MEMORY 两行。
@@ -10,15 +10,15 @@
  * 时间/复杂度上这也是最省的做法：链接脚本是 ASCII 文本，改两行比引一个链接脚本生成器简单。
  *
  * 例外：H7/U5 的 RAM 不是一块连续内存（H7 = DTCM 128K + AXI SRAM；U5 = 主 SRAM + SRAM4@0x28000000）。
- * 这时 chips.json 的 ramBytes 会把不相邻的区域加在一起，按它写 LENGTH 会让 _estack 落进空洞。
- * 这类族在 chips.json 里带 linkerRam（连续窗口的 origin/sizeBytes），本文件优先用它并同时改 ORIGIN。
+ * 这时 chips.json 的 ramBytes 会把不相邻的区域相加，按该值写 LENGTH 会使 _estack 落进空洞。
+ * 这类族在 chips.json 中带 linkerRam（连续窗口的 origin/sizeBytes），本文件优先使用该字段并同时修改 ORIGIN。
  */
 
 import type { DeviceLinkerRam } from "../data/device-facts.js";
 
 /**
  * 链接脚本只需要这几项事实：Flash/RAM 尺寸 + 一个像样的器件代号。
- * F1Chip 与 chips.json 的 DeviceFactsChip 都满足它（后者带 deviceId，直接用它）。
+ * F1Chip 与 chips.json 的 DeviceFactsChip 均满足该接口（后者带 deviceId，直接使用）。
  */
 export interface RegisterLinkerChip {
   readonly cpn: string;
@@ -37,10 +37,10 @@ export interface RegisterLinkerChip {
 }
 
 /**
- * F100/F101/F102 的 RAM 兜底表（KB），取值来自 STM32CubeMX 的 db/mcu/*.xml：
+ * F100/F101/F102 的 RAM 回退表（KB），取值来自 STM32CubeMX 的 db/mcu/*.xml：
  * 同一 line+档位在 db 里是一个合并条目，<Ram> 取的是该组内最小封装的值。
  * 为什么用最小值：链接脚本把 RAM 写小只会"少用"，写大才会把栈顶伸到不存在的空间；
- * 所以兜底宁可小，同时往 report 里写一条 warning 让用户去确认。
+ * 因此回退值宁可偏小，同时在 report 中写入一条 warning 提示用户确认。
  * （F103/F105/F107 用 stm32f1.ts 里已核对的 RAM_BY_LINE_LETTER，不走这张表。）
  */
 const RAM_FALLBACK_KB: Readonly<Record<string, number>> = {
@@ -63,7 +63,7 @@ const RAM_FALLBACK_KB: Readonly<Record<string, number>> = {
 
 export interface RegisterLinkerPlan {
   mcu: string;
-  /** ST 的器件代号，例如 STM32F103C8Tx（链接脚本名、注释都用它）。 */
+  /** ST 的器件代号，例如 STM32F103C8Tx（链接脚本名与注释均使用该代号）。 */
   deviceId: string;
   /** 链接脚本文件名，例如 STM32F103C8Tx_FLASH.ld。 */
   fileName: string;
@@ -73,7 +73,7 @@ export interface RegisterLinkerPlan {
   ramOrigin: number;
   /** linkerRam 的区域名（DTCM / SRAM），只用于摘要与警告文案。 */
   ramRegion?: string;
-  /** RAM 是不是从兜底表来的（false 表示不是精确值，要提醒）。 */
+  /** RAM 是否来自回退表（false 表示非精确值，需提醒）。 */
   ramExact: boolean;
   /** 一行摘要（进 main.c 注释与 report）：64K FLASH + 20K RAM。 */
   summary: string;
@@ -93,7 +93,7 @@ function lineOf(chip: RegisterLinkerChip): string {
  */
 export function deviceIdFor(chip: RegisterLinkerChip): string {
   // chips.json 已经把 CubeMX 的 DeviceId 算好了（STM32F401CBUx 这种），直接用；
-  // 只有 F1Chip 走下面按型号命名的兜底。
+  // 仅 F1Chip 走下面按型号命名的回退路径。
   if (chip.deviceId !== undefined && chip.deviceId !== "") return chip.deviceId;
   const prefix = chip.prefix ?? chip.cpn.slice(0, "STM32F103".length);
   const cpn = chip.cpn.toUpperCase();
@@ -134,7 +134,7 @@ export function planRegisterLinker(chip: RegisterLinkerChip): RegisterLinkerPlan
     );
   }
   if (exactRam === null && fallbackKb === undefined) {
-    warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 兜底；确认后请更新内置资源（chips.json 的 ramBytes）。");
+    warnings.push((line === "" ? "这颗芯片" : "F" + line + " 的档位 " + chip.group) + " 的 RAM 大小没收录，链接脚本按 20K 保底；确认后请更新内置资源（chips.json 的 ramBytes）。");
   } else if (exactRam === null) {
     warnings.push("F" + line + " 的档位 " + chip.group + " 的 RAM 没收录，链接脚本按 CubeMX db 的最小值 " + kbOf(ramBytes) + "K 生成（宁可小，栈不会越界）；封装更大时可以把 LENGTH 改大。");
   }

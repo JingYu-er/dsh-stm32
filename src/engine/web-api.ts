@@ -40,7 +40,7 @@ export interface WebJson {
 }
 
 export interface WebApiDeps {
-  /** 宿主 subprocess：探测版本、跑 pacman 都要它。 */
+  /** 宿主 subprocess：版本探测与 pacman 执行均依赖该服务。 */
   subprocess: SubprocessService;
   env?: Record<string, string | undefined>;
   signal?: AbortSignal;
@@ -92,7 +92,7 @@ export interface ConfigSnapshot {
   cubeMxRoots: string[];
 }
 
-/** 面板打开时读一次：配置内容 + 由它推导出的 binDirs / CubeMX 根。 */
+/** 面板打开时读取一次：配置内容，以及据此推导的 binDirs / CubeMX 根。 */
 export function configSnapshot(env: Record<string, string | undefined> = process.env): ConfigSnapshot {
   const read = readToolchainConfig(env);
   return {
