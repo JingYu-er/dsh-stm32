@@ -2194,11 +2194,43 @@ window.__ModuleLoader__.load({
     }
 
     /** 概览：把型号、时钟、容量与会话状态压成一屏，先看这里再看细节页。 */
+    /** 工具链探测摘要：概览页只读用它，60 秒一次；探测本身会跑版本命令，不能太勤。 */
+    function useProbeSummary(intervalMs) {
+      const [summary, setSummary] = useState(null);
+      useEffect(() => {
+        let closed = false;
+        const load = async () => {
+          const result = await callApi("GET", "probe");
+          if (!closed && result.ok) setSummary(result.value.summary);
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [intervalMs]);
+      return summary;
+    }
+
+    /** 能力四项一行：编译 / 烧录 / 调试 / 生成，缺哪项一眼能看出。 */
+    function capabilitiesText(capabilities) {
+      if (capabilities === null || capabilities === undefined) return "—";
+      const marks = [
+        ["编译", capabilities.build === true],
+        ["烧录", capabilities.flash === true],
+        ["调试", capabilities.debug === true],
+        ["生成", capabilities.generate === true],
+      ];
+      return marks.map((pair) => pair[0] + (pair[1] ? " ✓" : " ✗")).join(" ");
+    }
+
     function OverviewPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const pinout = usePinout(projectDir, 10000);
       const clocks = useClockTree(projectDir, 10000);
       const artifacts = useArtifacts(projectDir, 10000);
+      const probe = useProbeSummary(60000);
       const memory = collectMemoryUsage(props.events ?? []);
       const build = lastEventOf(props.events ?? [], "stm32_build");
       const flash = lastEventOf(props.events ?? [], "stm32_flash");
@@ -2223,6 +2255,14 @@ window.__ModuleLoader__.load({
           : debug.active === true
             ? "进行中 · " + (debug.sessionId ?? "") + " · 剩 " + Math.max(0, Math.round((debug.remainingMs ?? 0) / 1000)) + " s"
             : "空闲",
+      ]);
+      chips.push([
+        "工具链",
+        probe === null
+          ? "—"
+          : (probe.ok === true ? "就绪" : "缺 " + (probe.missingRequired ?? []).join("、")) +
+            " · " + String((probe.tools ?? []).filter((tool) => tool.found === true).length) + "/" + String((probe.tools ?? []).length) +
+            " 项 · " + capabilitiesText(probe.capabilities),
       ]);
       chips.push(["上次构建", build === null ? "—" : clockText(build.time)]);
       chips.push(["上次烧录", flash === null ? "—" : clockText(flash.time)]);

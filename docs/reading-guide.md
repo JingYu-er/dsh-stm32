@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S23）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S24）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -886,6 +886,7 @@ const fake = {
 - 时间线工具栏：状态筛选（全部 / 只看失败）与「导出 JSONL」，纯客户端，导出的是当前视图。
 - 时间线勾选与「复制已选（N）」：`eventRefBlock` 把多条事件拼成一段引用，顺序按时间线而不是勾选顺序；纯客户端。
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
+- 客户端 `OverviewPanel` 的工具链一行：`useProbeSummary(60000)` 读 `GET /probe`，能力四项只认 `capabilities`，缺件直接列名。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
 - `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
 - `src/engine/interrupts.ts` 与 `/interrupts`：中断页。只读 `.ioc` 的 `NVIC.*`（值里的冒号是转义的），优先级排序按抢占→子→名字；段数不足给 -1，不冒充 0。
@@ -906,5 +907,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 125 个文件 |
 | 单测 | 74 个套件 / 1013 pass / 0 fail |
-| 客户端 | `client/client.js` 2756 行（手写，不经 tsc） |
-| 包体 | 1905.3 KB / 287 文件 / 解包 15462.2 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 2796 行（手写，不经 tsc） |
+| 包体 | 1906.2 KB / 287 文件 / 解包 15465.6 KB（护栏上限 3906.3 KB） |

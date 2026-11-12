@@ -4,6 +4,7 @@
 // 钉住两件事：两个槽位都注册了；调试台组件能完成一次渲染。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 /** 最小 React 桩：只实现 client/client.js 用到的 API。 */
 const React = {
@@ -117,6 +118,11 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(text.includes("错误") && text.includes("警告"), "RTT 通道要有级别过滤：" + text.slice(0, 600));
     assert.ok(text.includes("回放…") && text.includes("变更") && text.includes("中断"), "工具栏与工作区标签要齐全：" + text.slice(0, 600));
     assert.ok(text.includes("复制已选"), "批量复制引用的按钮要常驻：" + text.slice(0, 600));
+    // 概览页不在默认标签里，渲染文本看不到它；改从源码钉住「工具链一行」的实现。
+    const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+    assert.ok(source.includes("useProbeSummary"), "概览页要用工具链探测摘要");
+    assert.ok(source.includes("capabilitiesText"), "概览页要显示编译/烧录/调试/生成四项能力");
+    assert.ok(source.includes('"工具链"'), "概览页要有工具链一行");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
