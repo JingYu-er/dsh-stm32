@@ -232,9 +232,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：九条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 9);
-  assert.equal(new Set(WEB_API_PATHS).size, 9);
+test("WEB_API_PATHS：十条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 10);
+  assert.equal(new Set(WEB_API_PATHS).size, 10);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -243,6 +243,7 @@ test("WEB_API_PATHS：九条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/events"), true, "调试台的事件流必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/status"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug"), true, "调试会话摘要必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/breakpoints"), true, "断点面板必须有独立路由");
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -289,4 +290,34 @@ test("GET /debug：没有会话时返回空闲摘要，且不接受 POST", async
     deps: { subprocess: fakeSubprocess, env: {} },
   });
   assert.equal(wrong.status, 405, "只读接口不接受 POST");
+});
+
+test("POST /debug/breakpoints：白名单动作、位置与编号先校验，没有会话时回 409", async () => {
+  resetDebugSessionsForTest();
+  const post = (body) =>
+    handleWebApi({
+      method: "POST",
+      path: WEB_API_PREFIX + "/debug/breakpoints",
+      body: JSON.stringify(body),
+      deps: { subprocess: fakeSubprocess, env: {} },
+    });
+
+  const badAction = await post({ action: "eval", commands: ["shell rm -rf /"] });
+  assert.equal(badAction.status, 400, "只接受 add / remove / list");
+  assert.match(String(badAction.body.error), /add \/ remove \/ list/u);
+
+  const badLocation = await post({ action: "add", location: "main; shell echo hi" });
+  assert.equal(badLocation.status, 400);
+  assert.match(String(badLocation.body.error), /location/u);
+
+  const emptyLocation = await post({ action: "add", location: "   " });
+  assert.equal(emptyLocation.status, 400);
+
+  const badId = await post({ action: "remove", id: 0 });
+  assert.equal(badId.status, 400);
+  assert.match(String(badId.body.error), /id/u);
+
+  const noSession = await post({ action: "list" });
+  assert.equal(noSession.status, 409);
+  assert.match(String(noSession.body.error), /没有调试会话/u);
 });

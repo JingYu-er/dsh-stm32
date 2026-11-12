@@ -871,6 +871,7 @@ const fake = {
 - `src/engine/web-api.ts` 的 `openEventStream` 与 `EVENT_STREAM_PATH`（`/dsh-stm32/api/events`，SSE，`?since=` 续播）；`/status` 返回计数与证据目录。
 - `src/engine/web-routes.ts`：事件流单独分支，直接写原始 `response`，不进 JSON 分发器。
 - `GET /dsh-stm32/api/debug` 与客户端会话卡：只读调试会话摘要（端口、剩余租约、断点与观察点配额），5 秒轮询。
+- `POST /dsh-stm32/api/debug/breakpoints`：断点面板的三个动作（list / add / remove），位置与编号白名单，不做任意 gdb 命令转发。
 - `client/client.js`：`DebugConsole`（时间线 / 详情 / 通道 / 控制台 / 抽屉）、`SessionCard`、`WatchCurves`（按表达式画最近 120 点），布局存 `dsh-stm32.debug.layout.v1`。
 - `test/event-bus-units.test.mjs`、`test/client-debug-units.test.mjs`：改事件层或客户端结构后先跑这两个。
 
@@ -886,6 +887,6 @@ const fake = {
 | --- | --- |
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 115 个文件 |
-| 单测 | 64 个套件 / 952 pass / 0 fail |
-| 客户端 | `client/client.js` 1484 行（手写，不经 tsc） |
-| 包体 | 1858.5 KB / 276 文件 / 解包 15277.6 KB（护栏上限 3906.3 KB） |
+| 单测 | 64 个套件 / 953 pass / 0 fail |
+| 客户端 | `client/client.js` 1565 行（手写，不经 tsc） |
+| 包体 | 1860.6 KB / 276 文件 / 解包 15286.6 KB（护栏上限 3906.3 KB） |

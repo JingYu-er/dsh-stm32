@@ -1018,10 +1018,11 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 调试会话摘要：只读查询 /debug，不触发探针动作。 */
-    function SessionCard() {
+    /** 调试会话状态：面板里与「当前会话」相关的块共用一次轮询。 */
+    function useDebugStatus(intervalMs) {
       const [debug, setDebug] = useState(null);
       const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
       useEffect(() => {
         let closed = false;
         const load = async () => {
@@ -1035,12 +1036,19 @@ window.__ModuleLoader__.load({
           }
         };
         load();
-        const timer = setInterval(load, 5000);
+        const timer = setInterval(load, intervalMs);
         return () => {
           closed = true;
           clearInterval(timer);
         };
-      }, []);
+      }, [tick]);
+      return { debug, error, reload: () => setTick((value) => value + 1) };
+    }
+
+    /** 调试会话摘要：只读呈现 /debug 的结果，不触发探针动作。 */
+    function SessionCard(props) {
+      const debug = props.debug ?? null;
+      const error = props.error ?? "";
       const quota = (value) => (value !== null && typeof value === "object" && value.used !== undefined ? String(value.used) + "/" + String(value.budget) : "—");
       const body = [];
       if (error !== "") {
@@ -1071,6 +1079,77 @@ window.__ModuleLoader__.load({
           },
         },
         body,
+      );
+    }
+
+    /** 断点面板：只发 add / remove / list 三种动作，location 与 id 由服务端再校验一遍。 */
+    function BreakpointPanel(props) {
+      const active = props.debug !== null && typeof props.debug === "object" && props.debug.active === true;
+      const [location, setLocation] = useState("");
+      const [removeId, setRemoveId] = useState("");
+      const [output, setOutput] = useState("");
+      const [busy, setBusy] = useState(false);
+      const run = async (body) => {
+        if (busy) return;
+        setBusy(true);
+        const result = await callApi("POST", "debug/breakpoints", body);
+        setBusy(false);
+        if (result.ok) {
+          const payload = result.value.breakpoints;
+          const text = String(payload.output ?? "").trim();
+          setOutput(text === "" ? String(payload.message ?? "") : text);
+          if (typeof props.onChanged === "function") props.onChanged();
+        } else {
+          setOutput(String(result.error ?? "请求失败"));
+        }
+      };
+      const disabled = busy === true || active !== true;
+      const button = (label, onClick) => e("button", { style: debugStyles.button, disabled, onClick }, label);
+      return e(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            padding: "6px 10px",
+            borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)",
+            fontSize: "12px",
+          },
+        },
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "6px" } },
+          e("strong", null, "断点"),
+          e("span", { style: { opacity: 0.55 } }, active ? "会话进行中" : "无会话"),
+          e("span", { style: debugStyles.spacer }),
+          button("列出", () => run({ action: "list" })),
+        ),
+        e(
+          "div",
+          { style: { display: "flex", gap: "6px" } },
+          e("input", {
+            style: Object.assign({}, debugStyles.input, { flex: "1 1 auto" }),
+            placeholder: "符号名或 文件:行，例如 main",
+            value: location,
+            onChange: (event) => setLocation(event.target.value),
+          }),
+          button("添加", () => run({ action: "add", location: location.trim() })),
+        ),
+        e(
+          "div",
+          { style: { display: "flex", gap: "6px" } },
+          e("input", {
+            style: Object.assign({}, debugStyles.input, { flex: "0 0 90px" }),
+            placeholder: "编号",
+            value: removeId,
+            onChange: (event) => setRemoveId(event.target.value),
+          }),
+          button("移除", () => run({ action: "remove", id: Number(removeId) })),
+        ),
+        output === ""
+          ? null
+          : e("pre", { style: Object.assign({}, debugStyles.pre, { padding: 0, maxHeight: "140px", overflow: "auto" }) }, output),
       );
     }
 
@@ -1217,6 +1296,7 @@ window.__ModuleLoader__.load({
 
     function Channels(props) {
       const [view, setView] = useState({});
+      const debugInfo = useDebugStatus(5000);
       const tails = collectChannelTails(props.events);
       const setStateFor = (key, patch) => {
         setView((previous) => {
@@ -1228,7 +1308,8 @@ window.__ModuleLoader__.load({
       return e(
         DebugPanel,
         { title: DEBUG_LABELS.channels, onCollapse: props.onCollapse },
-        e(SessionCard, { key: "session" }),
+        e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error }),
+        e(BreakpointPanel, { key: "breakpoints", debug: debugInfo.debug, onChanged: debugInfo.reload }),
         e(WatchCurves, { key: "curves", events: props.events }),
         CHANNEL_DEFS.map((def) =>
           e(ChannelBlock, {
