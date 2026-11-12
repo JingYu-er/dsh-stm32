@@ -659,6 +659,11 @@ test("GET /status：返回事件计数、会话键与证据目录", async () => 
   assert.equal(status.ringLimit, 5000);
   assert.equal(status.evidenceOverride, true);
   assert.ok(String(status.evidenceRoot).replace(/\\/gu, "/").endsWith("D:/evidence"), String(status.evidenceRoot));
+  // 自检：版本来自 package.json，路由数是本次注册的数量，时间戳都是正数。
+  assert.match(status.self.version, /^0\.1\.7$/u, JSON.stringify(status.self));
+  assert.equal(status.self.routeCount, WEB_API_PATHS.length);
+  assert.ok(status.self.startedAt > 0);
+  assert.ok(status.self.libMtimeMs > 0);
   // 事件流路由不接受 JSON 分发
   const wrong = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/status", deps: { subprocess: fakeSubprocess, env: {} } });
   assert.equal(wrong.status, 200);

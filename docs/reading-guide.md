@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S44）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S45）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -868,7 +868,7 @@ const fake = {
 - `src/engine/event-log.ts`：被挤出的事件按 30 秒一批写到 `<证据根>/<日期>/<会话键>/events-<HHmmss>.jsonl`；缺口先写一条 `kind:"log"` 的事件。
 - `src/engine/tool-events.ts`：装配期 Proxy 只包 `tools.register`，给 `stm32_*` 工具加 start / ok / fail。
 - `src/engine/channels.ts`：串口 / RTT / 监视的输出编成 `channel:<名字>` 事件（单行 ≤400 字符、单次 ≤400 行）。
-- `src/engine/web-api.ts` 的 `openEventStream` 与 `EVENT_STREAM_PATH`（`/dsh-stm32/api/events`，SSE，`?since=` 续播、`&session=` 按会话过滤）；`/status` 返回计数与证据目录，`?session=` 只数本会话。
+- `src/engine/web-api.ts` 的 `openEventStream` 与 `EVENT_STREAM_PATH`（`/dsh-stm32/api/events`，SSE，`?since=` 续播、`&session=` 按会话过滤）；`/status` 返回计数与证据目录，`?session=` 只数本会话。`self` 带版本、`libMtimeMs`、`startedAt`、`routeCount`——状态条据此提示「有新构建」。
 - `src/engine/web-routes.ts`：事件流单独分支，直接写原始 `response`，不进 JSON 分发器。
 - `GET /dsh-stm32/api/debug` 与客户端会话卡：只读调试会话摘要（端口、剩余租约、断点与观察点配额），5 秒轮询。
 - `POST /dsh-stm32/api/debug/breakpoints`：断点面板的三个动作（list / add / remove），位置与编号白名单，不做任意 gdb 命令转发。
@@ -914,5 +914,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
 | 单测 | 79 个套件 / 1049 pass / 0 fail |
-| 客户端 | `client/client.js` 3719 行（手写，不经 tsc） |
-| 包体 | 1933.8 KB / 292 文件 / 解包 15591.7 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 3735 行（手写，不经 tsc） |
+| 包体 | 1935.0 KB / 292 文件 / 解包 15594.7 KB（护栏上限 3906.3 KB） |

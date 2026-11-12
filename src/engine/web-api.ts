@@ -21,6 +21,9 @@ import {
   updateToolchainConfig,
   type ToolchainConfig,
 } from "../data/toolchain-config.js";
+import { readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { buildTargets, probeAll, type ProbeResult } from "./probe.js";
 import { planOrInstallMsys2, type Msys2InstallResult } from "./msys2-install.js";
@@ -409,6 +412,32 @@ export function installStart(payload: Record<string, unknown>, deps: WebApiDeps)
 /* ---------------------------- 分发 ---------------------------- */
 
 export const WEB_API_PREFIX = "/dsh-stm32/api";
+
+/** 模块加载时刻：用来判断运行中的进程是不是本次构建后的实例。 */
+const PLUGIN_STARTED_AT = Date.now();
+
+/**
+ * 插件自检：版本、lib 构建时间、路由数。
+ *
+ * 面板拿到这三个值就能回答「页面功能是不是已经生效」——路由数是本次注册的数量，
+ * 旧进程加载的是旧 lib，路由数与构建时间都会停在重启之前。
+ */
+function pluginSelfCheck(): { version: string; libMtimeMs: number; startedAt: number; routeCount: number } {
+  let version = "";
+  let libMtimeMs = 0;
+  try {
+    const text = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
+    version = String((JSON.parse(text) as { version?: unknown }).version ?? "");
+  } catch {
+    version = "";
+  }
+  try {
+    libMtimeMs = statSync(fileURLToPath(import.meta.url)).mtimeMs;
+  } catch {
+    libMtimeMs = 0;
+  }
+  return { version, libMtimeMs, startedAt: PLUGIN_STARTED_AT, routeCount: WEB_API_PATHS.length };
+}
 
 export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/config",
@@ -911,6 +940,7 @@ export async function handleWebApi(input: {
         evidenceOverride:
           typeof env.DSH_STM32_EVIDENCE === "string" && env.DSH_STM32_EVIDENCE.trim() !== "",
         running: listRunning(wanted),
+        self: pluginSelfCheck(),
       },
     });
   }
