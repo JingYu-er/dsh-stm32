@@ -119,16 +119,24 @@ export function planDownload(
   const info = downloadRootInfo(env);
   const root = options.outDir !== undefined && options.outDir.trim() !== "" ? path.resolve(options.outDir) : info.root;
   if (component === "jlink") {
+    // 官方只有一条可校验的直链。允许内网镜像覆盖，但必须同时给 sha256——
+    // 没有哈希的覆盖会让"下载 J-Link"变成"执行一个来源不明的 exe"，一律拒绝并回默认源。
+    const overrideUrl = (env.DSH_STM32_JLINK_URL ?? "").trim();
+    const overrideSha = (env.DSH_STM32_JLINK_SHA256 ?? "").trim().toLowerCase();
+    const useOverride = /^https?:\/\//iu.test(overrideUrl) && /^[0-9a-f]{64}$/u.test(overrideSha);
+    const url = useOverride ? overrideUrl : JLINK_DOWNLOAD.url;
+    const sha256 = useOverride ? overrideSha : JLINK_DOWNLOAD.sha256;
+    const fileName = useOverride ? path.basename(new URL(overrideUrl).pathname) : JLINK_DOWNLOAD.fileName;
     return {
       component,
       label: "SEGGER J-Link Software and Documentation Pack",
       mode: "direct",
       version: JLINK_DOWNLOAD.version,
-      url: JLINK_DOWNLOAD.url,
+      url,
       page: JLINK_DOWNLOAD.page,
-      expectedSha256: JLINK_DOWNLOAD.sha256,
-      fileName: JLINK_DOWNLOAD.fileName,
-      targetPath: path.join(root, JLINK_DOWNLOAD.fileName),
+      expectedSha256: sha256,
+      fileName,
+      targetPath: path.join(root, fileName),
       installHint:
         "下载后双击安装。只装软件可不请求管理员；要装 USB 驱动需要在安装器里选 all users 并允许 UAC。现代 J-Link 探针默认 WinUSB，老探针才需要 legacy USB 驱动。",
       licenseNote: "SEGGER 软件许可；插件只下载，不执行安装器。",

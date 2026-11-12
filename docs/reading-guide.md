@@ -223,7 +223,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 ## 5. engine 层：D 阶段的 45 个模块，十个域（现 65 个 .ts）
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。这里保留 D 阶段的 45 个模块表；`src/engine/` 现在有 65 个 `.ts`，0.1.5 的 `serial.ts`、0.1.6 的 `download.ts` 与 `assets.ts`（内置资源装配与完整性校验，flat 布局）等后续模块见 §12、§13 与目录本身；读内置资源链路时从 §5.7 与 `src/data/device-facts.ts` 一起看。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。这里保留 D 阶段的 45 个模块表；`src/engine/` 现在有 65 个 `.ts`，0.1.5 的 `serial.ts`、`download.ts` 与 `assets.ts`（内置资源装配与完整性校验，flat 布局）等后续模块见 §12、§13 与目录本身；读内置资源链路时从 §5.7 与 `src/data/device-facts.ts` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -308,7 +308,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 | 模块 | 职责与关键导出 |
 | --- | --- |
-| msys2-install.ts（2313） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrls(env)`（**F3a 候选链**：`MSYS2_INSTALLER_URL` 单源 > `MSYS2_MIRROR` > 清华 TUNA / 中科大 USTC / 南大 NJU / 阿里云 × 两个文件名 > GitHub，共 10 个候选；`installerSourceLabel` 把 URL 变成「清华 TUNA」这样的人话）、`installerSourceLabel`、`preferMirrorServers(text, servers)` / `preferChinaMirrors(msys64)`（**F3b**：只把国内镜像插到 `etc/pacman.d/mirrorlist.msys` 与 `mirrorlist.mingw` 最前，官方条目不删，幂等，已有 MSYS2 一个字都不改）、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。**F3d 三道粗检**：缓存要 MZ 头 + ≥ `MIN_INSTALLER_BYTES`（40 MB）才算数（`cachedInstallerBytes`）；下载后查退出码/体量/MZ；解压后再查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删）。**F3c**：`curl -C -` 同源续传、`--speed-limit 1024 --speed-time 10` 低速自退（退出码 28 单独说明），退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次，换源前删 `.part`。 |
+| msys2-install.ts（2313） | 最大也最脏的一块：下载 MSYS2 安装包 → 静默安装 → pacman 装 5 个组件 → 写用户级 PATH → 写配置 → 自检。关键导出：`MSYS2_INSTALLER_URL` / `MSYS2_INSTALLER_BYTES`、`DEFAULT_MSYS2_PACKAGES`、`MSYS2_SUGGESTED_ROOT`、`planOrInstallMsys2(subprocess, request)`（plan / install 两条路）、`msys2StepSkeleton`、`parsePacmanQuery`、`resolveInstallerUrls(env)`（**P0-1 固定版本**：稳定 release `2026-09-27` 的官方 exe 单源；`MSYS2_INSTALLER_URL` 或 `MSYS2_MIRROR` 可覆盖，但必须同时给 `MSYS2_INSTALLER_SHA256`，否则直接拒绝、不退回官方源；`installerSourceLabel` 只认官方 release 与自定义源）、`installerSourceLabel`、`preferMirrorServers(text, servers)` / `preferChinaMirrors(msys64)`（**F3b**：只把国内镜像插到 `etc/pacman.d/mirrorlist.msys` 与 `mirrorlist.mingw` 最前，官方条目不删，幂等，已有 MSYS2 一个字都不改）、`resolveTargetDir` / `viaLabel`、`formatBytes`、`isDriveRoot` / `ensureParentDir`（盘根不能 mkdir，审计 ③）、`usageNote` / `planMessage`（**计划模式只报缺件**：已装齐时 steps 为空、download.bytes 0、一句话收尾）。**P0-1 四道闸**：`checkInstallerFile` 统一查体量 ≥40 MB、MZ 头、sha256（错误带期望/实际值）；缓存复用、下载完成、**解压执行前**各校验一次，哈希不符的下载删 `.part`、哈希不符的缓存保留原文件但重下；缓存名带版本 `msys2-2026-09-27.sfx.exe`。解压后再查 `<msys64>/usr/bin/bash.exe`，缺了就把坏缓存改名 `.broken`（不删）。**F3c**：`curl -C -` 同源续传、`--speed-limit 1024 --speed-time 10` 低速自退（退出码 28 单独说明），退出码 33（服务器不支持 Range）去掉 `-C -` 重下一次，换源前删 `.part`。 |
 
 ### 5.9 设置面板的宿主侧（2 个，577 行）
 
@@ -769,7 +769,7 @@ const fake = {
 - 阅读顺序：`tools/serial.ts` 的参数 schema 与 `ACTIONS` → `engine/serial.ts` 的 `openSerial` / `sendSerial` / `readSerial` / `transactSerial` / `closeSerial` / `serialStatus` → `templates/serial/bridge.ps1` 的 `Main` 循环（20 ms 轮询串口 / 100 ms 扫 cmd / 1 s 心跳 / 5 s 查父进程）。**契约不是 RPC，而是目录里的文件**：`cmd/<id>.json` 进、`done/<id>.json` 回，流水在 `rx.ndjson` / `tx.ndjson`，状态在 `status.json`。
 - 不要踩的：`spawn` 不能用 `detached`（Windows 上会翻成 `DETACHED_PROCESS`，powershell.exe 5.1 直接 exit 0）；`bridge.ps1` 必须保持 ASCII（PS 5.1 按 ANSI 解码无 BOM 脚本）；重复 `open` 由引擎的 `openChain` 串行化并返回 `already-open`；`read` 的 `cursor` 是 `rx.ndjson` 的字节偏移（`nextCursor`），跨轮不重贴历史靠它。
 - 边界：P1 只做 Windows；不含 UI 面板 / SSE / 自动重连 / 多会话。真机缺口见 development-notes §86（真桥只验过失败路径）。
-- 计数口径（0.1.6 起）：`src/tools/` 共 24 个文件（23 个工具文件 + `project-dir.ts`），注册工具 **25 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章已按这个口径更新。
+- 计数口径（0.1.5 起）：`src/tools/` 共 24 个文件（23 个工具文件 + `project-dir.ts`），注册工具 **25 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章已按这个口径更新。
 
 ### 12.2 寄存器路线：13 → 21 族
 
@@ -778,7 +778,7 @@ const fake = {
 - 链接脚本：`DeviceFactsChip` 新增可选 `linkerRam`（origin / sizeBytes / region），H7 的 138 颗都带 DTCM 128 KiB，U5 按 line 给 256 / 768 / 2496 KiB 窗口；`planRegisterLinker` 优先用它。L4+ 与 L5 是连续单块，不需要 `linkerRam`。
 - 8 族矩阵已跑完（t6）：`create→build` 8/8 通过、warning 0 / error 0，逐族 FLASH/RAM 与两处模板修复（按族 `-mcpu`、H7 的 `cachel1_armv7.h`）见 development-notes §87.5；别把「已下载 CMSIS + 生成 .ld」当成「已编译验收」。
 
-## 13. 0.1.6 增补：安装包下载（`stm32_download`）
+## 13. 0.1.5 增补：安装包下载（`stm32_download`）
 
 > 接续 §12。只做「拿到安装包」，不做「安装」：插件负责下载与 SHA256 校验，双击安装器、接受许可、过 UAC 都由用户完成。
 
@@ -810,10 +810,15 @@ const fake = {
 - 下载/校验/缓存/失败清理由本地 HTTP 服务覆盖；ST 的两个页面只验证了 URL 与计划输出，没有打开浏览器。
 - 真机安装、驱动加载、CubeMX/CubeProgrammer 的 myST 下载仍未验。
 
-### 13.5 计数口径（0.1.6 起）
+### 13.5 计数口径（0.1.5 起）
 
 | 项 | 当前值 |
 | --- | --- |
+| TypeScript | 111 个文件、43,057 行（`src/`，不含 client） |
+| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,616 行 |
+| `src/engine/` | 65 个 `.ts` / 26,961 行 |
+| `src/data/` | 18 个 `.ts` / 7,785 行 |
+| 单测 | 60 个套件 / 947 pass / 0 fail（`node test/run-units.mjs`） |
 | TypeScript | 110 个文件、42,261 行（`src/`，不含 client） |
 | `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
 | `src/engine/` | 65 个 `.ts` / 26,358 行 |

@@ -68,6 +68,8 @@ test("looksLike*：只认完整安装（CubeMX 必须 exe + jre 都在）", () =
   assert.equal(looksLikeCubeMxRoot(cube, (path) => cubeMxFiles(cube).includes(path)), true);
   assert.equal(looksLikeCubeMxRoot(cube, (path) => path.endsWith("STM32CubeMX.exe")), false, "缺 jre 不算完整安装");
   assert.equal(looksLikeBinDir("E:/msys64/ucrt64/bin", (path) => path === "E:/msys64/ucrt64/bin/openocd.exe"), true);
+  assert.equal(looksLikeBinDir("E:/msys64/ucrt64/bin", (path) => path === "E:/msys64/ucrt64/bin/gdb-multiarch.exe"), true, "只补了 gdb 的目录也要发现");
+  assert.equal(looksLikeBinDir("E:/msys64/ucrt64/bin", (path) => path === "E:/msys64/ucrt64/bin/ninja.exe"), true, "只补了 ninja 的目录也要发现");
   assert.equal(looksLikeBinDir("E:/empty", () => false), false);
 });
 

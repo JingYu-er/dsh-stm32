@@ -5,6 +5,7 @@
 // 这里用"脚本化的假 subprocess"把这两种局面钉死，不碰真磁盘、不跑真 pacman。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,9 @@ delete process.env.DSH_STM32_NO_CONFIG;
 process.env.STM32_NO_DISCOVER = "1";
 delete process.env.STM32_BIN_DIRS;
 delete process.env.STM32_CUBEMX_ROOT;
+
+/** 引擎现在用 System32 绝对路径调 reg.exe（可能带引号），测试只认「reg.exe + 动作」。 */
+const isRegCall = (line, action) => new RegExp("reg\\.exe\"?\\s+" + action, "u").test(line);
 
 const PACKAGES = [
   "mingw-w64-ucrt-x86_64-arm-none-eabi-gcc",
@@ -411,7 +415,7 @@ test("reg query 读不到（起不来/被拦）：不写 PATH、不拿空串备�
   const root = makeMsys64(join(dir, "msys64"));
   const subprocess = scriptedSubprocess((line) => {
     // 只让"读 PATH"失败。真实世界里这是被组策略 / EDR 拦住，或 reg.exe 根本起不来。
-    if (line.includes("reg.exe query")) throw new Error("reg.exe 被安全软件拦住");
+    if (isRegCall(line, "query")) throw new Error("reg.exe 被安全软件拦住");
     if (isPacmanQuery(line)) {
       return { exitCode: 0, stdout: PACKAGES.map((name) => name + " 1.0.0-1").join("\n") + "\n" };
     }
@@ -428,7 +432,7 @@ test("reg query 读不到（起不来/被拦）：不写 PATH、不拿空串备�
   assert.match(pathStep.detail, /不会写注册表/u);
   assert.match(report.message, /不会写注册表/u, "message 也要说清是「为安全起见没动」，不是「写坏了」");
   // 红线：一条 reg add 都不能有——读不到旧值时写进去就是把用户整条用户级 PATH 换掉。
-  assert.deepEqual(subprocess.calls.filter((line) => line.includes("reg.exe add")), []);
+  assert.deepEqual(subprocess.calls.filter((line) => isRegCall(line, "add")), []);
   assert.equal(report.path.changed, false);
   assert.equal(report.path.done, false);
   assert.equal(report.path.after, "", "读失败时不该编出一个 after 值");
@@ -455,7 +459,7 @@ test("用户变量里确实没有 Path：照常新建一条（危险的是「读
   const dir = tempDir("path-missing");
   const root = makeMsys64(join(dir, "msys64"));
   const subprocess = scriptedSubprocess((line) => {
-    if (line.includes("reg.exe query")) {
+    if (isRegCall(line, "query")) {
       // 中文 Windows 上 reg.exe 的原话；英文系统是 "The system was unable to find ..."。
       return { exitCode: 1, stdout: "", stderr: "错误: 系统找不到指定的注册表项或值。\r\n" };
     }
@@ -471,7 +475,7 @@ test("用户变量里确实没有 Path：照常新建一条（危险的是「读
   );
   const pathStep = stepOf(report, "path");
   assert.equal(pathStep.status, "done", pathStep.detail);
-  const adds = subprocess.calls.filter((line) => line.includes("reg.exe add"));
+  const adds = subprocess.calls.filter((line) => isRegCall(line, "add"));
   assert.equal(adds.length, 1, "只该写一次：计划阶段与真装各读一次，但只有真装那一次能写");
   const entry = root.replaceAll("/", "\\") + "\\ucrt64\\bin";
   assert.ok(
@@ -549,8 +553,8 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   // 一个最小的注册表模拟：query 照当前值吐 GBK 字节，add 改当前值。
   let currentPath = "C:/Users/张三/tools";
   const subprocess = scriptedSubprocess((line) => {
-    if (line.includes("reg.exe query")) return { exitCode: 0, stdout: "", stderr: "" };
-    if (line.includes("reg.exe add")) {
+    if (isRegCall(line, "query")) return { exitCode: 0, stdout: "", stderr: "" };
+    if (isRegCall(line, "add")) {
       const matched = / \/d ([\s\S]*) \/f$/u.exec(line);
       if (matched !== null) currentPath = matched[1];
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -563,7 +567,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   // 引擎用 cmd.exe 把 reg 输出重定向到临时目录里的 dump.txt；这里替它写 GBK 字节。
   const spawn = subprocess.spawn;
   subprocess.spawn = (spec) => {
-    if (spec.argv.join(" ").includes("reg.exe query")) {
+    if (isRegCall(spec.argv.join(" "), "query")) {
       writeFileSync(join(spec.cwd, "dump.txt"), gbkDump(currentPath));
     }
     return spawn(spec);
@@ -576,7 +580,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   const pathStep = stepOf(report, "path");
   assert.equal(pathStep.status, "done", pathStep.detail);
   assert.equal(report.path.changed, true);
-  const adds = subprocess.calls.filter((line) => line.includes("reg.exe add"));
+  const adds = subprocess.calls.filter((line) => isRegCall(line, "add"));
   assert.equal(adds.length, 1, "只有真装那一次能写注册表");
   assert.ok((adds[0] ?? "").includes("C:/Users/张三/tools"), "旧值里的中文必须原样带过去：" + (adds[0] ?? ""));
   assert.ok(!(adds[0] ?? "").includes("\u{FFFD}"), "乱码绝不能写回注册表");
@@ -593,7 +597,7 @@ test("reg query 输出是 GBK 字节：中文 PATH 条目解得出来，写回�
   assert.equal(stepOf(again, "path").status, "done", stepOf(again, "path").detail);
   assert.equal(again.path.changed, false);
   assert.equal(
-    subprocess.calls.filter((line) => line.includes("reg.exe add")).length,
+    subprocess.calls.filter((line) => isRegCall(line, "add")).length,
     1,
     "第二次不该重复写 PATH",
   );
@@ -692,7 +696,11 @@ test("A29 解压中途被取消：不当失败、不删暂存目录、消息说�
   mkdirSync(join(dir, "cfg"), { recursive: true });
   const fakeExe = Buffer.alloc(40_000_002);
   fakeExe.write("MZ", 0, "latin1");
-  writeFileSync(join(dir, "cfg", "msys2-latest.sfx.exe"), fakeExe);
+  const fakeSha = createHash("sha256").update(fakeExe).digest("hex");
+  writeFileSync(join(dir, "cfg", "msys2-2026-09-27.sfx.exe"), fakeExe);
+  // 缓存要过哈希闸：用环境变量把期望哈希指到这份假包（地址也得一起覆盖）。
+  process.env.MSYS2_INSTALLER_URL = "https://example.test/msys2-test.sfx.exe";
+  process.env.MSYS2_INSTALLER_SHA256 = fakeSha;
   const root = join(dir, "msys64");
   const controller = new AbortController();
   const subprocess = scriptedSubprocess((line) => {
@@ -715,6 +723,8 @@ test("A29 解压中途被取消：不当失败、不删暂存目录、消息说�
   // 暂存目录保留着（下次进来再清），什么都没被删。
   assert.ok(existsSync(join(dir, ".dsh-msys2-staging")), "取消路径不该删暂存目录");
   assert.equal(report.config.written, false, "取消后不该写配置");
+  delete process.env.MSYS2_INSTALLER_URL;
+  delete process.env.MSYS2_INSTALLER_SHA256;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -809,33 +819,43 @@ test("A28 配置 CAS：读完之后别人改过 → 重读并重新合并，atte
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("F3a 安装包候选链：国内镜像在前、GitHub 兜底，每个源两个文件名", () => {
+test("F3a 安装包地址：默认只有一个固定版本官方 release，覆盖地址必须同时给 hash", () => {
   const plan = resolveInstallerUrls({});
-  assert.equal(plan.urls.length, 10, plan.urls.join("\n"));
-  assert.ok(plan.urls[0].startsWith("https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib/"), plan.urls[0]);
-  assert.ok(plan.urls[0].endsWith("/msys2-x86_64-latest.sfx.exe"), plan.urls[0]);
-  assert.ok(plan.urls[1].endsWith("/msys2-base-x86_64-latest.sfx.exe"), plan.urls[1]);
-  assert.equal(
-    plan.urls.at(-1),
-    "https://github.com/msys2/msys2-installer/releases/latest/download/msys2-base-x86_64-latest.sfx.exe",
-  );
-  assert.match(plan.note, /GitHub/u);
-  // 国内四家都在 GitHub 前面：镜像是首选，GitHub 只是兜底。
-  assert.ok(plan.urls.findIndex((url) => url.includes("github.com")) > plan.urls.findIndex((url) => url.includes("mirrors.aliyun.com")));
+  assert.deepEqual(plan.urls, [
+    "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe",
+  ]);
+  assert.match(plan.sha256, /^[0-9a-f]{64}$/u);
+  assert.equal(plan.error, "");
+  assert.match(plan.note, /固定为官方 release 2026-09-27/u);
 
-  // MSYS2_INSTALLER_URL：只用一个源，一个都不多试。
-  const direct = resolveInstallerUrls({ MSYS2_INSTALLER_URL: "https://example.test/pkg.exe" });
+  const sha = "a".repeat(64);
+  // 覆盖地址却没有 hash：直接拒，不能退回默认源假装设置生效了。
+  const noHash = resolveInstallerUrls({ MSYS2_INSTALLER_URL: "https://example.test/pkg.exe" });
+  assert.deepEqual(noHash.urls, []);
+  assert.match(noHash.error, /MSYS2_INSTALLER_SHA256/u);
+
+  const badHash = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/msys2/", MSYS2_INSTALLER_SHA256: "xyz" });
+  assert.deepEqual(badHash.urls, []);
+  assert.match(badHash.error, /MSYS2_INSTALLER_SHA256/u);
+
+  // 给了合法 hash：direct 原样用，mirror 目录拼固定文件名。
+  const direct = resolveInstallerUrls({ MSYS2_INSTALLER_URL: "https://example.test/pkg.exe", MSYS2_INSTALLER_SHA256: sha });
   assert.deepEqual(direct.urls, ["https://example.test/pkg.exe"]);
+  assert.equal(direct.sha256, sha);
   assert.match(direct.note, /MSYS2_INSTALLER_URL/u);
 
-  // MSYS2_MIRROR：给目录就拼两个文件名（末尾斜杠要去掉），给全地址就原样用。
-  const mirror = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/msys2/" });
-  assert.deepEqual(mirror.urls, [
-    "https://mirror.example/msys2/msys2-x86_64-latest.sfx.exe",
-    "https://mirror.example/msys2/msys2-base-x86_64-latest.sfx.exe",
-  ]);
-  const full = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/one.7z" });
+  const mirror = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/msys2/", MSYS2_INSTALLER_SHA256: "sha256:" + sha });
+  assert.deepEqual(mirror.urls, ["https://mirror.example/msys2/msys2-base-x86_64-20260927.sfx.exe"]);
+  assert.equal(mirror.sha256, sha);
+  const full = resolveInstallerUrls({ MSYS2_MIRROR: "https://mirror.example/one.7z", MSYS2_INSTALLER_SHA256: sha });
   assert.deepEqual(full.urls, ["https://mirror.example/one.7z"]);
+
+  const notHttp = resolveInstallerUrls({ MSYS2_INSTALLER_URL: "file:///D:/pkg.exe", MSYS2_INSTALLER_SHA256: sha });
+  assert.deepEqual(notHttp.urls, []);
+  assert.match(notHttp.error, /http\(s\)/u);
+  const mirrorNotHttp = resolveInstallerUrls({ MSYS2_MIRROR: "file:///D:/msys2", MSYS2_INSTALLER_SHA256: sha });
+  assert.deepEqual(mirrorNotHttp.urls, []);
+  assert.match(mirrorNotHttp.error, /MSYS2_MIRROR 必须是 http\(s\)/u);
 });
 
 test("F3b preferMirrorServers：已有的不重复加，缺的排最前（幂等）", () => {
@@ -886,10 +906,10 @@ test("F3b preferChinaMirrors：只动两个 mirrorlist、幂等、缺文件就�
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("F3d 缓存只有 1 KB：不认这份缓存，真去按候选链下载，失败原因逐源列出", async () => {
+test("F3d 缓存只有 1 KB：不认这份缓存，真去下固定版本，失败原因逐源列出", async () => {
   const dir = tempDir("smallcache");
   mkdirSync(join(dir, "cfg"), { recursive: true });
-  writeFileSync(join(dir, "cfg", "msys2-latest.sfx.exe"), "MZ" + "0".repeat(1024));
+  writeFileSync(join(dir, "cfg", "msys2-2026-09-27.sfx.exe"), "MZ" + "0".repeat(1024));
   const subprocess = scriptedSubprocess((line) => {
     if (line.includes("curl")) return { exitCode: 22, stdout: "", stderr: "curl: (22) The requested URL returned error: 404" };
     return {};
@@ -901,13 +921,61 @@ test("F3d 缓存只有 1 KB：不认这份缓存，真去按候选链下载，�
   );
   const downloadStep = stepOf(report, "download");
   assert.equal(downloadStep.status, "failed", downloadStep.detail);
-  // 10 个候选一个不落地都试过了。
-  assert.equal(subprocess.calls.filter((line) => line.includes(".sfx.exe")).length, 10, subprocess.calls.join("\n"));
-  assert.match(report.message, /10 个候选源/u, report.message);
-  assert.match(report.nextStep, /MSYS2_MIRROR 或 MSYS2_INSTALLER_URL/u, report.nextStep);
+  assert.equal(subprocess.calls.filter((line) => line.includes(".sfx.exe")).length, 1, subprocess.calls.join("\n"));
+  assert.match(report.message, /固定版本 2026-09-27/u, report.message);
+  assert.match(report.nextStep, /MSYS2_INSTALLER_SHA256/u, report.nextStep);
   assert.equal(stepOf(report, "extract").status, "skipped", "没下下来就不该解压");
   // 小缓存没被删：用户手里那份文件不该被我们清掉。
-  assert.ok(existsSync(join(dir, "cfg", "msys2-latest.sfx.exe")));
+  assert.ok(existsSync(join(dir, "cfg", "msys2-2026-09-27.sfx.exe")));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("P0-1 下载回来的 exe 哈希不符：删 .part、不解压，报期望与实际哈希", async () => {
+  const dir = tempDir("badhash");
+  const fakeExe = Buffer.alloc(40_000_002);
+  fakeExe.write("MZ", 0, "latin1");
+  const subprocess = scriptedSubprocess((line) => {
+    if (line.includes("curl")) {
+      const match = /-o (\S+)/u.exec(line);
+      if (match !== null) writeFileSync(match[1], fakeExe);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    return {};
+  });
+  const report = await planOrInstallMsys2(
+    subprocess,
+    { mode: "install", targetDir: join(dir, "msys64"), writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  const downloadStep = stepOf(report, "download");
+  assert.equal(downloadStep.status, "failed", downloadStep.detail);
+  assert.match(downloadStep.detail, /sha256 不符/u, downloadStep.detail);
+  assert.match(downloadStep.detail, /期望 [0-9a-f]{64}/u, downloadStep.detail);
+  assert.match(downloadStep.detail, /实际 [0-9a-f]{64}/u, downloadStep.detail);
+  assert.equal(stepOf(report, "extract").status, "skipped", "哈希不符就不该执行 exe");
+  assert.ok(!existsSync(join(dir, "cfg", "msys2-2026-09-27.sfx.exe")), "校验失败的 .part 不该留下");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("P0-1 缓存体量够但哈希不符：不认它、保留原文件、重新下载", async () => {
+  const dir = tempDir("cachehash");
+  mkdirSync(join(dir, "cfg"), { recursive: true });
+  const fakeExe = Buffer.alloc(40_000_002);
+  fakeExe.write("MZ", 0, "latin1");
+  const cachePath = join(dir, "cfg", "msys2-2026-09-27.sfx.exe");
+  writeFileSync(cachePath, fakeExe);
+  const subprocess = scriptedSubprocess((line) => {
+    if (line.includes("curl")) return { exitCode: 22, stdout: "", stderr: "curl: (22) The requested URL returned error: 404" };
+    return {};
+  });
+  const report = await planOrInstallMsys2(
+    subprocess,
+    { mode: "install", targetDir: join(dir, "msys64"), writePath: false, timeoutMs: 5_000 },
+    process.env,
+  );
+  assert.match(report.notes.join("\n"), /不可用：sha256 不符/u, report.notes.join("\n"));
+  assert.equal(subprocess.calls.filter((line) => line.includes("curl")).length, 1, subprocess.calls.join("\n"));
+  assert.ok(existsSync(cachePath), "哈希不符的缓存不该被删（留给用户自己判断）");
   rmSync(dir, { recursive: true, force: true });
 });
 

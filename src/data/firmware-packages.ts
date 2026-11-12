@@ -16,6 +16,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import type { FetchTarget } from "../engine/fetch.js";
 import { sourceUrls } from "./cmsis-sources.js";
+import { FIRMWARE_ARCHIVE_PINS, FIRMWARE_CORE_PINS } from "./firmware-pins.js";
 
 export interface FirmwareArchiveSpec {
   /** 归档短名（日志与临时文件名）：hal / device。 */
@@ -27,6 +28,12 @@ export interface FirmwareArchiveSpec {
   dirs: { from: string; to: string }[];
   /** 多条候选下载地址，顺序 = 优先级。 */
   urls: string[];
+}
+
+/** 计划里的归档：清单字段 + 钉死的哈希（缺失时 firmwarePlanFor 直接失败，不会走到这里）。 */
+export interface FirmwareArchivePlan extends FirmwareArchiveSpec {
+  sha256: string;
+  bytes: number;
 }
 
 export interface FirmwareFamilySpec {
@@ -49,13 +56,15 @@ export interface FirmwareFamilySpec {
   archives: FirmwareArchiveSpec[];
 }
 
-/** codeload 直连是首选；GHProxy 走镜像；api.github.com 的 tarball 会 302 到 codeload，作最后兜底。 */
+/**
+ * 归档只有一条官方地址（P0-2）：codeload 直连。
+ *
+ * 为什么砍掉 ghproxy / api 兜底：同一个 commit 经不同入口打包，gzip 头与顶层目录名不同，
+ * 字节哈希对不上——一个 sha256 不能同时校验三条链路。留着它们要么是「校验形同虚设」，
+ * 要么是「第二条永远失败」。ghproxy 还是第三方中间人，没有理由让固件包依赖它。
+ */
 function archiveUrls(repo: string, ref: string): string[] {
-  return [
-    "https://codeload.github.com/STMicroelectronics/" + repo + "/tar.gz/refs/heads/" + ref,
-    "https://ghproxy.net/https://github.com/STMicroelectronics/" + repo + "/archive/refs/heads/" + ref + ".tar.gz",
-    "https://api.github.com/repos/STMicroelectronics/" + repo + "/tarball/refs/heads/" + ref,
-  ];
+  return ["https://codeload.github.com/STMicroelectronics/" + repo + "/tar.gz/refs/heads/" + ref];
 }
 
 export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
@@ -173,8 +182,9 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
     coreRepo: "STM32CubeF7",
     coreRef: "master",
     coreIncludeDir: "Drivers/CMSIS/Include",
-    // CM7 的 core_cm7.h 会 include cachel1_armv7.h（L1 cache 维护）：漏了它编译直接 fatal error。
-    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "cachel1_armv7.h", "core_cm7.h"],
+    // F7 这份 CMSIS 的 core_cm7.h 只 include cmsis_version/cmsis_compiler/mpu_armv7；
+    // 实测仓库里没有 cachel1_armv7.h（H7 才有），别照 H7 抄成六个头，否则安装必 404。
+    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "core_cm7.h"],
     archives: [
       {
         id: "hal",
@@ -705,7 +715,7 @@ export interface FirmwarePackagePlan {
   packageXml: string;
   halDir: string;
   deviceDir: string;
-  archives: FirmwareArchiveSpec[];
+  archives: FirmwareArchivePlan[];
   /** CMSIS 内核头（逐个下到 Drivers/CMSIS/Include）。 */
   coreTargets: FetchTarget[];
   /** 写进包的第三方声明。 */
@@ -748,11 +758,30 @@ export function firmwarePlanFor(request: { family?: string; mcu?: string; versio
   }
   const tags = firmwareVersionTags(family, version);
   const dirName = spec.packageBase + "_V" + version;
-  const coreTargets: FetchTarget[] = spec.coreHeaders.map((header) => ({
-    path: header,
-    urls: sourceUrls(spec.coreRepo, spec.coreRef, spec.coreIncludeDir + "/" + header),
-    minBytes: 500,
-  }));
+  const missingPins: string[] = [];
+  const archives = spec.archives.map((archive) => {
+    const pin = FIRMWARE_ARCHIVE_PINS[archive.repo + "@" + archive.ref];
+    if (pin === undefined) missingPins.push(archive.repo + "@" + archive.ref);
+    return { ...archive, sha256: pin?.sha256 ?? "", bytes: pin?.bytes ?? 0 };
+  });
+  const coreTargets: FetchTarget[] = spec.coreHeaders.map((header) => {
+    const key = spec.coreRepo + "@" + spec.coreRef + "/" + spec.coreIncludeDir + "/" + header;
+    const pin = FIRMWARE_CORE_PINS[key];
+    if (pin === undefined) missingPins.push(key);
+    return {
+      path: header,
+      urls: sourceUrls(spec.coreRepo, spec.coreRef, spec.coreIncludeDir + "/" + header),
+      minBytes: 500,
+      ...(pin === undefined ? {} : { sha256: pin.sha256 }),
+    };
+  });
+  if (missingPins.length > 0) {
+    return emptyPlan(
+      "固件包清单缺 sha256（" + missingPins.join("、") + "）。请先跑 scripts/firmware/pin-firmware.mjs 并提交 src/data/firmware-pins.ts。",
+      family,
+      version,
+    );
+  }
   const license = [
     "# 第三方声明",
     "",
@@ -778,7 +807,7 @@ export function firmwarePlanFor(request: { family?: string; mcu?: string; versio
     packageXml: packageXmlText(tags),
     halDir: spec.halDir,
     deviceDir: spec.deviceDir,
-    archives: spec.archives,
+    archives,
     coreTargets,
     license,
   };

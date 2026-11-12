@@ -276,7 +276,7 @@ export async function fetchOne(target: FetchTarget, destRoot: string, options: F
         if (actual !== target.sha256.toLowerCase()) {
           reject(
             "sha256 对不上（期望 " + target.sha256.toLowerCase().slice(0, 16) + "…，实际 " + actual.slice(0, 16) +
-              "…）。多半是上游 master 挪动了内容：用真实 URL 重新实测哈希并更新 cmsis-sources。",
+              "…）。多半是上游 master 挪动了内容：用真实 URL 重新实测哈希并更新 cmsis-sources（CMSIS 头）或 firmware-pins（固件归档/内核头）。",
           );
           continue;
         }

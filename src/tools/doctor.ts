@@ -76,11 +76,14 @@ export const outputSchema: JsonSchema = {
           additionalProperties: false,
           properties: {
             build: { type: "boolean", description: "gcc + cmake + ninja 齐全" },
-            flash: { type: "boolean", description: "openocd 可用（只烧录）" },
+            flash: { type: "boolean", description: "任一烧录后端可用（openocd 或 CubeProgrammer）" },
             debug: { type: "boolean", description: "openocd + gdb 可用（烧录并调试）" },
             generate: { type: "boolean", description: "CubeMX + 内置 JRE 可用（建工程/重新生成）" },
+            flashOpenocd: { type: "boolean", description: "openocd 可用（可烧录/调试，覆盖 ST-LINK/J-Link/DAPLink）" },
+            flashCubeProgrammer: { type: "boolean", description: "CubeProgrammer 可用（仅 ST-LINK 烧录兜底，不能调试）" },
+            debugOpenocd: { type: "boolean", description: "调试服务端 openocd 可用" },
           },
-          required: ["build", "flash", "debug", "generate"],
+          required: ["build", "flash", "debug", "generate", "flashOpenocd", "flashCubeProgrammer", "debugOpenocd"],
         },
         recommendations: { type: "array", items: { type: "string" }, description: "缺什么、按什么顺序装、装完怎么自检" },
         searched: { type: "array", items: { type: "string" }, description: "工具链 / CubeMX 的搜索范围（报「明明装了却找不到」时看这个）" },
@@ -216,7 +219,10 @@ export function registerDoctor(ctx: DshContext): void {
           report: {
             ok: false, projectDir: args.projectDir ?? "", message: "宿主缺少 subprocess 服务", durationMs: 0,
             missingRequired: ["subprocess"], tools: [],
-            capabilities: { build: false, flash: false, debug: false, generate: false },
+            capabilities: {
+              build: false, flash: false, debug: false, generate: false,
+              flashOpenocd: false, flashCubeProgrammer: false, debugOpenocd: false,
+            },
             recommendations: ["宿主缺少 subprocess 服务：插件没法跑任何外部程序，先确认 DSH 宿主正常启动。"],
             searched: [],
             processes: [], usb: { kind: "unknown", probes: [], detail: "宿主没有 subprocess 服务，无法诊断 USB/探针形态。" }, port: args.port ?? 3333, portBusy: false,

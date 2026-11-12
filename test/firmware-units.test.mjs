@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 
 import { extractTarGz } from "../lib/engine/tar.js";
@@ -21,6 +21,7 @@ import {
   packageXmlText,
   verifyFirmwarePackage,
 } from "../lib/data/firmware-packages.js";
+import { FIRMWARE_ARCHIVE_PINS, FIRMWARE_CORE_PINS } from "../lib/data/firmware-pins.js";
 import { buildGenerateScript, parseGenerateLog } from "../lib/engine/generate-script.js";
 import { resolveFirmwareRoot } from "../lib/engine/scaffold.js";
 import {
@@ -137,16 +138,42 @@ function deviceArchive() {
 }
 
 const CORE_BODY = "/* cmsis core */\n".padEnd(700, " ");
+const FAKE_HAL_ARCHIVE = halArchive();
+const FAKE_DEVICE_ARCHIVE = deviceArchive();
+
+function sha256Of(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+/**
+ * 假 fetch 的字节不可能等于真实上游哈希，所以把 F1 的 pin 临时改成假包的哈希。
+ * 计划类用例都在前面跑，这里只在第一个 install 用例之后生效；每个套件是独立进程。
+ */
+function pinFakeFirmware() {
+  const spec = FIRMWARE_FAMILIES.F1;
+  for (const archive of spec.archives) {
+    const body = archive.repo.includes("hal-driver") ? FAKE_HAL_ARCHIVE : FAKE_DEVICE_ARCHIVE;
+    FIRMWARE_ARCHIVE_PINS[archive.repo + "@" + archive.ref] = { sha256: sha256Of(body), bytes: body.length };
+  }
+  const core = Buffer.from(CORE_BODY, "utf8");
+  for (const header of spec.coreHeaders) {
+    FIRMWARE_CORE_PINS[spec.coreRepo + "@" + spec.coreRef + "/" + spec.coreIncludeDir + "/" + header] = {
+      sha256: sha256Of(core),
+      bytes: core.length,
+    };
+  }
+}
 
 /** 假 fetch：按 URL 里的仓库名给归档、按文件名给内核头，其它一律 404。 */
 function firmwareFetch(options = {}) {
+  pinFakeFirmware();
   const calls = [];
   const impl = async (url) => {
     calls.push(url);
     if (typeof options.handler === "function") return options.handler(url, calls);
     if (options.fail === true) return new Response("", { status: 404 });
-    if (url.includes("stm32f1xx-hal-driver")) return new Response(halArchive(), { status: 200 });
-    if (url.includes("cmsis-device-f1")) return new Response(deviceArchive(), { status: 200 });
+    if (url.includes("stm32f1xx-hal-driver")) return new Response(FAKE_HAL_ARCHIVE, { status: 200 });
+    if (url.includes("cmsis-device-f1")) return new Response(FAKE_DEVICE_ARCHIVE, { status: 200 });
     const name = url.split("/").pop();
     const headers = FIRMWARE_FAMILIES.F1.coreHeaders;
     if (headers.includes(name)) return new Response(CORE_BODY, { status: 200 });
@@ -263,9 +290,12 @@ test("firmwarePlanFor：F1 的目录名、版本串、归档与内核头都对�
   assert.match(plan.packageXml, /Patch="FW\.F1\.1\.8\.7"/u);
   assert.equal(plan.archives.length, 2);
   assert.deepEqual(plan.archives.map((item) => item.id), ["hal", "device"]);
-  assert.equal(plan.archives[0].urls.length >= 2, true);
+  assert.equal(plan.archives.every((item) => item.urls.length === 1), true, "归档只走 codeload 单源");
+  assert.match(plan.archives[0].urls[0], /^https:\/\/codeload\.github\.com\/STMicroelectronics\//u);
+  assert.equal(plan.archives.every((item) => /^[0-9a-f]{64}$/u.test(item.sha256)), true, "每个归档都有 sha256");
   assert.equal(plan.coreTargets.length, 5);
   assert.equal(plan.coreTargets.every((target) => target.urls.length >= 2), true);
+  assert.equal(plan.coreTargets.every((target) => /^[0-9a-f]{64}$/u.test(target.sha256)), true, "每个内核头都有 sha256");
   assert.equal(plan.halDir, "Drivers/STM32F1xx_HAL_Driver");
 
   const byMcu = firmwarePlanFor({ mcu: "STM32F103C8T6" });
@@ -315,14 +345,16 @@ test("verifyFirmwarePackage：空目录必须判不过，并把缺的条目标�
   }
 });
 
-test("CM7 族的 coreHeaders 带 cachel1_armv7.h：core_cm7.h 会 include 它", () => {
-  // 实测：H7 工程编译 stm32h7xx_it.c 时 core_cm7.h:2234 直接
-  // fatal error: cachel1_armv7.h: No such file or directory —— 装配清单漏了这个头。
-  for (const family of ["H7", "F7"]) {
-    const spec = FIRMWARE_FAMILIES[family];
-    assert.ok(spec.coreHeaders.includes("core_cm7.h"), family + " 用 CM7 的内核头");
-    assert.ok(spec.coreHeaders.includes("cachel1_armv7.h"), family + " 缺 cachel1_armv7.h");
-  }
+test("coreHeaders 按上游真实文件走：H7 要 cachel1_armv7.h，F7 没有这个文件", () => {
+  // H7 实测：core_cm7.h:2234 include cachel1_armv7.h，漏了编译直接 fatal error。
+  const h7 = FIRMWARE_FAMILIES.H7;
+  assert.ok(h7.coreHeaders.includes("core_cm7.h"));
+  assert.ok(h7.coreHeaders.includes("cachel1_armv7.h"));
+  // F7 的 core_cm7.h 不 include cachel1，仓库里也没有这个文件（raw/jsDelivr 均 404）；
+  // 照 H7 抄会多下一个 404，整个拼包装不上。
+  const f7 = FIRMWARE_FAMILIES.F7;
+  assert.ok(f7.coreHeaders.includes("core_cm7.h"));
+  assert.equal(f7.coreHeaders.includes("cachel1_armv7.h"), false);
   // 非 CM7 族不要顺手加（多下一个用不上的头）
   assert.equal(FIRMWARE_FAMILIES.F1.coreHeaders.includes("cachel1_armv7.h"), false);
 });
@@ -410,6 +442,76 @@ test("installFirmware：假 fetch 装出一个自检全过的包（只留要的�
     );
     assert.ok(progress.some((line) => line.includes("解包")), "进度里要看得到解包");
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：失败不动旧目录，暂存/备份/锁都不留", async () => {
+  const root = tempDir("atomic-fail");
+  const target = join(root, "pkg");
+  try {
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "old-marker.txt"), "keep me", "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: firmwareFetch({ fail: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(readFileSync(join(target, "old-marker.txt"), "utf8"), "keep me", "失败不能碰旧目录");
+    const names = readdirSync(root);
+    assert.equal(names.some((name) => name.startsWith(".dsh-download")), false, "暂存目录要清掉");
+    assert.equal(names.some((name) => name.startsWith(".dsh-replaced")), false, "备份目录要清掉");
+    assert.equal(existsSync(target + ".dsh-install.lock"), false, "安装锁要释放");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：成功时整目录原子替换，旧文件不会残留", async () => {
+  const root = tempDir("atomic-ok");
+  const target = join(root, "pkg");
+  try {
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "stale.txt"), "old", "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: firmwareFetch(),
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.equal(existsSync(join(target, "stale.txt")), false, "旧目录内容不该混进新包");
+    assert.match(readFileSync(join(target, "package.xml"), "utf8"), /FW\.F1\.1\.8\.7/u);
+    assert.equal(existsSync(target + ".dsh-install.lock"), false);
+    assert.equal(readdirSync(root).some((name) => name.startsWith(".dsh-replaced")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installFirmware：同一落点已有活进程持锁时直接拒绝，不联网", async () => {
+  const root = tempDir("install-lock");
+  const target = join(root, "pkg");
+  const lockFile = target + ".dsh-install.lock";
+  try {
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), "utf8");
+    const result = await installFirmware({
+      family: "F1",
+      targetDir: target,
+      cubeMxRoots: [root],
+      mode: "install",
+      fetchImpl: neverFetch,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /另一个进程正在装/u);
+    assert.match(result.nextStep, /dsh-install\.lock/u);
+    assert.equal(existsSync(target), false);
+  } finally {
+    rmSync(lockFile, { force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });
