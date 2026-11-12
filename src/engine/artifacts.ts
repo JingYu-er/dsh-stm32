@@ -5,7 +5,8 @@
  * `--print-memory-usage` 结果（面板从事件流里取），避免为了一个数字再起一个子进程。
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { findChipFact } from "../data/device-facts.js";
@@ -36,7 +37,9 @@ export interface ArtifactsReport {
   readonly otherElves: readonly ArtifactFile[];
   /** 芯片容量；.ioc 里没有型号或资源包没有这颗芯片时为 null。 */
   readonly chip: ChipBudget | null;
-  /** 需要人注意的地方（多个 elf、没有构建目录、型号未知）。 */
+  /** elf 的 SHA-256（十六进制小写）；没有 elf、或文件超过上限时为空串。 */
+  readonly sha256: string;
+  /** 需要人注意的地方（多个 elf、没有构建目录、型号未知、校验和跳过）。 */
   readonly notes: readonly string[];
 }
 
@@ -56,6 +59,18 @@ function sibling(elfPath: string, extension: string): ArtifactFile | null {
   const dot = elfPath.lastIndexOf(".");
   const base = dot === -1 ? elfPath : elfPath.slice(0, dot);
   return statFile(base + extension);
+}
+
+/** 超过这个大小的 elf 不算校验和：调试台每 10 秒轮询一次，不值得。 */
+export const ARTIFACT_HASH_MAX_BYTES = 8 * 1024 * 1024;
+
+function elfSha256(file: ArtifactFile): string {
+  if (file.size > ARTIFACT_HASH_MAX_BYTES) return "";
+  try {
+    return createHash("sha256").update(readFileSync(file.path)).digest("hex");
+  } catch {
+    return "";
+  }
 }
 
 function listElves(buildDir: string): ArtifactFile[] {
@@ -91,6 +106,11 @@ export function readArtifacts(projectDir: string, env: NodeJS.ProcessEnv = proce
   if (otherElves.length > 0) {
     notes.push("构建目录里有 " + String(otherElves.length + 1) + " 个 .elf，当前显示按工程名/修改时间挑出的那个。");
   }
+  let sha256 = "";
+  if (elf !== null) {
+    sha256 = elfSha256(elf);
+    if (sha256 === "") notes.push("elf 超过 " + String(Math.round(ARTIFACT_HASH_MAX_BYTES / 1024 / 1024)) + " MB，跳过校验和。");
+  }
   const cpn = readIocCpn(dir);
   let chip: ChipBudget | null = null;
   if (cpn !== "") {
@@ -110,6 +130,7 @@ export function readArtifacts(projectDir: string, env: NodeJS.ProcessEnv = proce
       bin,
       otherElves,
       chip,
+      sha256,
       notes,
     },
   };

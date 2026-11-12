@@ -134,6 +134,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("BuildCard") && source.includes("构建与烧录"), "面板要能直接构建与烧录");
     assert.ok(source.includes("pinMapRows") && source.includes("PinMap"), "引脚页要有按端口排布的图");
     assert.ok(source.includes("最近发送") && source.includes("resend"), "串口发送要有历史与重发");
+    assert.ok(source.includes("校验和"), "产物页要显示 elf 校验和");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;

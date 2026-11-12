@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { hasBuildDir, readArtifacts } from "../lib/engine/artifacts.js";
+import { ARTIFACT_HASH_MAX_BYTES, hasBuildDir, readArtifacts } from "../lib/engine/artifacts.js";
 
 const IOC_TEXT = [
   "#MicroXplorer Configuration settings - do not modify",
@@ -53,6 +53,7 @@ test("readArtifacts：elf 与同名 hex/bin、芯片容量、无提示", () => {
   assert.equal(report.chip.cpn, "STM32F103C8T6");
   assert.equal(report.chip.flashBytes, 65536, "F103C8 的 Flash 是 64 KB");
   assert.equal(report.chip.ramBytes, 20480, "F103C8 的 RAM 是 20 KB");
+  assert.match(report.sha256, /^[0-9a-f]{64}$/u, "elf 很小，应给完整 SHA-256");
   assert.deepEqual(report.notes, []);
 });
 
@@ -83,6 +84,16 @@ test("readArtifacts：没有构建目录时 notes 说明下一步，elf 为 null
   assert.equal(read.report.elf, null);
   assert.equal(hasBuildDir(dir), false);
   assert.equal(read.report.notes.some((note) => note.includes("stm32_build")), true);
+  assert.equal(read.report.sha256, "", "没有 elf 时校验和为空串");
+});
+
+test("readArtifacts：elf 超过上限时不算校验和，并在 notes 说明", () => {
+  const { dir, elf } = projectWithArtifacts();
+  fs.writeFileSync(elf, Buffer.alloc(ARTIFACT_HASH_MAX_BYTES + 1));
+  const read = readArtifacts(dir);
+  assert.equal(read.ok, true);
+  assert.equal(read.report.sha256, "");
+  assert.equal(read.report.notes.some((note) => note.includes("跳过校验和")), true, "要说清为什么没有校验和");
 });
 
 test("readArtifacts：没有 .ioc 时 chip 为 null 并说明原因；空目录名报错", () => {
