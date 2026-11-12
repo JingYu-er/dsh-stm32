@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 26);
-  assert.equal(new Set(WEB_API_PATHS).size, 26);
+test("WEB_API_PATHS：二十七条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 27);
+  assert.equal(new Set(WEB_API_PATHS).size, 27);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -263,6 +263,19 @@ test("WEB_API_PATHS：二十六条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/stop"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/send"), true, "面板发串口必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
+});
+
+test("POST /debug/touch：没有会话 409，touch() 返回 false", async () => {
+  resetDebugSessionsForTest();
+  const result = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/debug/touch",
+    body: "{}",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(result.status, 409);
+  assert.match(result.body.error, /没有调试会话/u);
 });
 
 test("POST /serial/send：没有会话 409，参数先校验再发", async () => {
