@@ -1743,6 +1743,13 @@ window.__ModuleLoader__.load({
     function ChannelBlock(props) {
       const state = props.state;
       const lines = props.lines;
+      const [draft, setDraft] = useState("");
+      const [sendMsg, setSendMsg] = useState("");
+      const send = async () => {
+        if (props.onSend === undefined) return;
+        setSendMsg("发送中…");
+        setSendMsg(await props.onSend(draft));
+      };
       const pauseAt = typeof state.pauseAt === "number" ? state.pauseAt : lines.length;
       const clearAt = typeof state.clearAt === "number" ? state.clearAt : 0;
       const shown = lines.slice(clearAt, Math.max(clearAt, pauseAt));
@@ -1780,6 +1787,23 @@ window.__ModuleLoader__.load({
           ),
           e("button", { style: debugStyles.button, onClick: props.onClear }, "清空"),
         ),
+        props.onSend === undefined
+          ? null
+          : e(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: "6px" } },
+              e("input", {
+                value: draft,
+                onChange: (event) => setDraft(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === "Enter") void send();
+                },
+                placeholder: "输入一行，回车发送（空串表示只发换行）",
+                style: { flex: "1 1 auto", fontSize: "12px", padding: "2px 6px" },
+              }),
+              e("button", { style: debugStyles.button, onClick: () => void send() }, "发送"),
+              sendMsg === "" ? null : e("span", { style: { opacity: 0.6, fontSize: "11px" } }, sendMsg),
+            ),
         shown.length === 0
           ? e("div", { style: { opacity: 0.5 } }, "暂无输出。")
           : e("pre", { style: Object.assign({}, debugStyles.pre, { padding: 0, maxHeight: "220px", overflow: "auto" }) }, shown.join("\n")),
@@ -1853,6 +1877,14 @@ window.__ModuleLoader__.load({
         setTick((value) => value + 1);
       };
       return { status, error, start: () => send("start"), stop: () => send("stop") };
+    }
+
+    /** 面板里发一行串口：走与 stm32_serial 相同的那条桥命令。 */
+    async function sendSerialLine(text) {
+      const result = await callApi("POST", "serial/send", { text });
+      if (!result.ok) return result.error;
+      const serial = result.value?.serial ?? {};
+      return serial.ok === true ? "已发送 " + String(serial.bytes) + " B（" + String(serial.ackMs) + " ms）" : String(serial.message ?? "发送失败");
     }
 
     /** 从事件流里算「谁还在跑」：start 未配对 ok/fail 即视为在途，progress 更新阶段。 */
@@ -2140,6 +2172,7 @@ window.__ModuleLoader__.load({
             lines: tails[def.key],
             state: view[def.key] ?? {},
             tap: tapOf(def.key),
+            onSend: def.key === "serial" ? sendSerialLine : undefined,
             onToggleTap: (on) => taps.toggle(def.key, on),
             onTogglePause: () =>
               setStateFor(def.key, { pauseAt: typeof (view[def.key] ?? {}).pauseAt === "number" ? undefined : tails[def.key].length }),

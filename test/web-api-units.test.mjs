@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十五条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 25);
-  assert.equal(new Set(WEB_API_PATHS).size, 25);
+test("WEB_API_PATHS：二十六条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 26);
+  assert.equal(new Set(WEB_API_PATHS).size, 26);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -262,6 +262,36 @@ test("WEB_API_PATHS：二十五条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording"), true, "监视录制状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/stop"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/send"), true, "面板发串口必须有独立路由");
+});
+
+test("POST /serial/send：没有会话 409，参数先校验再发", async () => {
+  const noSession = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/serial/send",
+    body: JSON.stringify({ text: "hello" }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(noSession.status, 409);
+  assert.match(noSession.body.error, /没有串口会话/u);
+
+  const notString = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/serial/send",
+    body: JSON.stringify({ text: 42 }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(notString.status, 400);
+  assert.match(notString.body.error, /text/u);
+
+  const badNewline = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/serial/send",
+    body: JSON.stringify({ text: "hello", newline: "cr" }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(badNewline.status, 400);
+  assert.match(badNewline.body.error, /newline/u);
 });
 
 test("监视录制接口：默认关、开始后可查、非法间隔 400、停止复位", async () => {
