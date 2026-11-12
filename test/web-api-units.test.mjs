@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十七条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 27);
-  assert.equal(new Set(WEB_API_PATHS).size, 27);
+test("WEB_API_PATHS：二十八条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 28);
+  assert.equal(new Set(WEB_API_PATHS).size, 28);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -264,6 +264,34 @@ test("WEB_API_PATHS：二十七条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/stop"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/send"), true, "面板发串口必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
+});
+
+test("GET /interrupts：读 .ioc 的 NVIC 表；缺 .ioc 时 409", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-irq-"));
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nNVIC.USART1_IRQn=true\\:2\\:0\\:false\n", "utf8");
+  const read = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/interrupts",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(read.status, 200);
+  assert.equal(read.body.interrupts.entries.length, 1);
+  assert.equal(read.body.interrupts.entries[0].name, "USART1");
+  assert.equal(read.body.interrupts.enabledCount, 1);
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-irq-none-"));
+  const missing = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/interrupts",
+    query: { projectDir: empty },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(missing.status, 409);
+  assert.match(missing.body.error, /没有 \.ioc/u);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(empty, { recursive: true, force: true });
 });
 
 test("POST /debug/touch：没有会话 409，touch() 返回 false", async () => {

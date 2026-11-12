@@ -36,6 +36,7 @@ import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
 import { sendSerial } from "./serial.js";
+import { readInterrupts } from "./interrupts.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
@@ -432,6 +433,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/watch-recording/stop",
   WEB_API_PREFIX + "/serial/send",
   WEB_API_PREFIX + "/debug/touch",
+  WEB_API_PREFIX + "/interrupts",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -568,7 +570,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/evidence" &&
     path !== WEB_API_PREFIX + "/replay" &&
     path !== WEB_API_PREFIX + "/ioc-diff" &&
-    path !== WEB_API_PREFIX + "/watch-recording";
+    path !== WEB_API_PREFIX + "/watch-recording" &&
+    path !== WEB_API_PREFIX + "/interrupts";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -628,6 +631,13 @@ export async function handleWebApi(input: {
         message: report.message,
       },
     });
+  }
+  if (path === WEB_API_PREFIX + "/interrupts") {
+    // 中断页：只读 .ioc 的 NVIC.*，不启动 CubeMX、不改配置。
+    const projectDir = typeof query["projectDir"] === "string" ? query["projectDir"] : process.cwd();
+    const read = readInterrupts(projectDir);
+    if (!read.ok) return fail(409, read.error);
+    return ok({ interrupts: read.report });
   }
   if (path === WEB_API_PREFIX + "/pinout") {
     // 引脚面板：读工程 .ioc，按外设分组。只读文件，不跑 CubeMX、不碰探针。

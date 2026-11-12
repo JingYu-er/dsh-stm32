@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S21）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S22）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -887,6 +887,7 @@ const fake = {
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
 - `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
+- `src/engine/interrupts.ts` 与 `/interrupts`：中断页。只读 `.ioc` 的 `NVIC.*`（值里的冒号是转义的），优先级排序按抢占→子→名字；段数不足给 -1，不冒充 0。
 - `src/engine/channel-tap.ts` 与 `/channels`、`/channels/start`、`/channels/stop`：常驻通道。串口 700 ms 读一次 `rx.ndjson` 的增量、RTT 2 000 ms `dump` 一次，都写回同一套 `channel:*` 事件；偏移靠「尾部指纹」而不是长度判断，桥重写文件也不会错位，`p: true` 的残行跨记录拼接。
 - `client/client.js`：`DebugConsole`（时间线 / 详情 / 通道 / 控制台 / 抽屉）、`SessionCard`、`WatchCurves`（按表达式画最近 120 点）、`BreakpointPanel`；`conversation.view` 的 `inject(sessionId)` 把宿主会话键交给面板，事件与状态都按它过滤；布局存 `dsh-stm32.debug.layout.v1`。
 - `test/event-bus-units.test.mjs`、`test/client-debug-units.test.mjs`：改事件层或客户端结构后先跑这两个。
@@ -902,7 +903,7 @@ const fake = {
 | 项 | 当前值 |
 | --- | --- |
 | 注册工具 | 25 个 |
-| 源码 | `src/**/*.ts` 115 个文件 |
-| 单测 | 73 个套件 / 1008 pass / 0 fail |
-| 客户端 | `client/client.js` 2628 行（手写，不经 tsc） |
-| 包体 | 1901.1 KB / 286 文件 / 解包 15445.6 KB（护栏上限 3906.3 KB） |
+| 源码 | `src/**/*.ts` 125 个文件 |
+| 单测 | 74 个套件 / 1013 pass / 0 fail |
+| 客户端 | `client/client.js` 2688 行（手写，不经 tsc） |
+| 包体 | 1903.4 KB / 287 文件 / 解包 15455.5 KB（护栏上限 3906.3 KB） |
