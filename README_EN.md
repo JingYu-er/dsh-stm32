@@ -8,7 +8,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.4-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.5-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **plugin** (host-side, no UI): it registers 25 tools, 7 slash commands and 1 SKILL shipped with the plugin, so the model can probe the toolchain, scaffold a CubeMX CMake project, edit the `.ioc`, run CubeMX, build, flash and debug on its own, then read the state back out of the registers — hardware programming that actually stays inside DSH.
 
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 All `dsh plugin` does is run `pnpm add` inside the profile directory. On success it also appends `dsh-stm32` to that profile's `dsh.profile.bundles`, so a restart of dsh is all that is left (use `web` instead of `desktop` to target the web profile).
 
-Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.4`); after a restart `/stm32-doctor` should respond.
+Verify with `dsh plugin --profile desktop why dsh-stm32` (should print `0.1.5`); after a restart `/stm32-doctor` should respond.
 
 > **Chip facts ship with the plugin**: device facts (part → startup file / device define / Flash·RAM size) come from `assets/device/<family>/chips.json` inside the package (75 files for `core`, 105 for `full`: chip tables + memory layout + `.ioc` templates + linker scripts + SVD). Everything works offline once installed — no asset-pack download. Run `stm32_assets verify` to check integrity; missing files usually mean an incomplete install.
 
@@ -502,9 +502,7 @@ docs/                      specification + development notes + reading guide + d
 - [Specification](docs/dsh-stm32-plugin-规格.md): tool contracts, state machine, acceptance criteria A1–A13
 - [Development notes](docs/development-notes.md): milestones, host-contract pitfalls, implementation details and measured numbers
 - [Source reading guide](docs/reading-guide.md): layered reading order, per-file responsibilities and exports, 14 flow diagrams, 23 invariants
-- [Release notes 0.1.7](docs/release-notes/v0.1.7.md): P1/P2 hardening (streamed verification, atomic firmware install, doctor capability split)
-- [Release notes 0.1.6](docs/release-notes/v0.1.6.md): installer downloads without installation (`stm32_download`)
-- [Release notes 0.1.5](docs/release-notes/v0.1.5.md): serial P1, the 21-family register route and acceptance records (0.1.4 and earlier live in git history)
+- [Release notes 0.1.5](docs/release-notes/v0.1.5.md): serial P1, the 21-family register route, installer downloads and P0/P1/P2 hardening (0.1.4 and earlier live in git history)
 - Visuals: [architecture](docs/diagrams/dsh-stm32-architecture.html) / [main journey](docs/diagrams/dsh-stm32-journey.html) — single-file HTML, opens offline, exports PNG/SVG
 
 ## License

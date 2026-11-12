@@ -223,7 +223,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 
 ## 5. engine 层：D 阶段的 45 个模块，十个域（现 65 个 .ts）
 
-下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。这里保留 D 阶段的 45 个模块表；`src/engine/` 现在有 65 个 `.ts`，0.1.5 的 `serial.ts`、0.1.6 的 `download.ts` 与 `assets.ts`（内置资源装配与完整性校验，flat 布局）等后续模块见 §12、§13 与目录本身；读内置资源链路时从 §5.7 与 `src/data/device-facts.ts` 一起看。
+下面按「读代码时会被一起找到」分组。每个模块给：行数、职责、关键导出、谁调用。这里保留 D 阶段的 45 个模块表；`src/engine/` 现在有 65 个 `.ts`，0.1.5 的 `serial.ts`、`download.ts` 与 `assets.ts`（内置资源装配与完整性校验，flat 布局）等后续模块见 §12、§13 与目录本身；读内置资源链路时从 §5.7 与 `src/data/device-facts.ts` 一起看。
 
 ### 5.1 进程与路径（3 个，413 行）
 
@@ -769,7 +769,7 @@ const fake = {
 - 阅读顺序：`tools/serial.ts` 的参数 schema 与 `ACTIONS` → `engine/serial.ts` 的 `openSerial` / `sendSerial` / `readSerial` / `transactSerial` / `closeSerial` / `serialStatus` → `templates/serial/bridge.ps1` 的 `Main` 循环（20 ms 轮询串口 / 100 ms 扫 cmd / 1 s 心跳 / 5 s 查父进程）。**契约不是 RPC，而是目录里的文件**：`cmd/<id>.json` 进、`done/<id>.json` 回，流水在 `rx.ndjson` / `tx.ndjson`，状态在 `status.json`。
 - 不要踩的：`spawn` 不能用 `detached`（Windows 上会翻成 `DETACHED_PROCESS`，powershell.exe 5.1 直接 exit 0）；`bridge.ps1` 必须保持 ASCII（PS 5.1 按 ANSI 解码无 BOM 脚本）；重复 `open` 由引擎的 `openChain` 串行化并返回 `already-open`；`read` 的 `cursor` 是 `rx.ndjson` 的字节偏移（`nextCursor`），跨轮不重贴历史靠它。
 - 边界：P1 只做 Windows；不含 UI 面板 / SSE / 自动重连 / 多会话。真机缺口见 development-notes §86（真桥只验过失败路径）。
-- 计数口径（0.1.6 起）：`src/tools/` 共 24 个文件（23 个工具文件 + `project-dir.ts`），注册工具 **25 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章已按这个口径更新。
+- 计数口径（0.1.5 起）：`src/tools/` 共 24 个文件（23 个工具文件 + `project-dir.ts`），注册工具 **25 个**（`debug-session.ts` 一个文件注册 `_session` / `_eval` / `_stop` 三个）。第 4 章已按这个口径更新。
 
 ### 12.2 寄存器路线：13 → 21 族
 
@@ -778,7 +778,7 @@ const fake = {
 - 链接脚本：`DeviceFactsChip` 新增可选 `linkerRam`（origin / sizeBytes / region），H7 的 138 颗都带 DTCM 128 KiB，U5 按 line 给 256 / 768 / 2496 KiB 窗口；`planRegisterLinker` 优先用它。L4+ 与 L5 是连续单块，不需要 `linkerRam`。
 - 8 族矩阵已跑完（t6）：`create→build` 8/8 通过、warning 0 / error 0，逐族 FLASH/RAM 与两处模板修复（按族 `-mcpu`、H7 的 `cachel1_armv7.h`）见 development-notes §87.5；别把「已下载 CMSIS + 生成 .ld」当成「已编译验收」。
 
-## 13. 0.1.6 增补：安装包下载（`stm32_download`）
+## 13. 0.1.5 增补：安装包下载（`stm32_download`）
 
 > 接续 §12。只做「拿到安装包」，不做「安装」：插件负责下载与 SHA256 校验，双击安装器、接受许可、过 UAC 都由用户完成。
 
@@ -810,7 +810,7 @@ const fake = {
 - 下载/校验/缓存/失败清理由本地 HTTP 服务覆盖；ST 的两个页面只验证了 URL 与计划输出，没有打开浏览器。
 - 真机安装、驱动加载、CubeMX/CubeProgrammer 的 myST 下载仍未验。
 
-### 13.5 计数口径（0.1.7 起）
+### 13.5 计数口径（0.1.5 起）
 
 | 项 | 当前值 |
 | --- | --- |

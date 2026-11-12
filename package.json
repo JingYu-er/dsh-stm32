@@ -1,6 +1,6 @@
 {
   "name": "dsh-stm32",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH 插件：STM32 全流程工具层（HAL 多族 + 寄存器 21 族）—— 环境探测、.ioc 事务、生成工程、编译、烧录、调试；芯片事实与模板随包内置",
   "type": "module",
   "main": "lib/index.js",

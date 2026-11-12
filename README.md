@@ -10,7 +10,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.4-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.5-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 这是一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) **插件**：注册 25 个工具、7 条斜杠命令和 1 个随插件下发的 SKILL，让模型能直接探测工具链、建cubemx cmake工程、改 `.ioc`、跑 CubeMX、编译、烧录和调试，烧完再把寄存器里的状态读回来确认——实现更彻底的面向DSH硬件编程。
 
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 `dsh plugin` 做的事就是在 profile 目录里跑 `pnpm add`。装完它会把 `dsh-stm32` 写进该 profile 的 `dsh.profile.bundles`，重启 dsh 即生效（把 `desktop` 换成 `web` 就装到 web profile）。
 
-装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.4`；重启后 `/stm32-doctor` 有输出。
+装完确认：`dsh plugin --profile desktop why dsh-stm32` 应显示 `0.1.5`；重启后 `/stm32-doctor` 有输出。
 
 > **芯片事实随插件内置**：设备事实（型号 → 启动文件 / 设备宏 / Flash·RAM 容量）来自包内的 `assets/device/<族>/chips.json`（core 75 个文件、full 105 个文件：芯片表 + 内存布局 + `.ioc` 模板 + 链接脚本 + SVD），装好即可离线使用，不需要联网拉资源包。`stm32_assets verify` 可校验完整性；缺文件通常意味着安装不完整。
 
@@ -509,9 +509,7 @@ docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/�
 - [规格书](docs/dsh-stm32-plugin-规格.md)：工具契约、状态机、验收 A1–A13 的判定标准
 - [开发笔记](docs/development-notes.md)：里程碑、宿主契约踩坑、每个工具的实现细节与实测数据
 - [源码精读指南](docs/reading-guide.md)：分层阅读顺序、每个文件的职责与关键导出、14 张流程图、23 条不变量
-- [发布说明 0.1.7](docs/release-notes/v0.1.7.md)：P1/P2 加固（流式校验、原子固件安装、doctor 能力拆分）
-- [发布说明 0.1.6](docs/release-notes/v0.1.6.md)：安装包只下载不安装（`stm32_download`）
-- [发布说明 0.1.5](docs/release-notes/v0.1.5.md)：串口 P1、寄存器 21 族与验收记录（0.1.4 及更早见 git 历史）
+- [发布说明 0.1.5](docs/release-notes/v0.1.5.md)：串口 P1、寄存器 21 族、安装包下载与 P0/P1/P2 加固（0.1.4 及更早见 git 历史）
 - 可视化：[架构总览](docs/diagrams/dsh-stm32-architecture.html) / [主线旅程](docs/diagrams/dsh-stm32-journey.html)（单文件 HTML，离线可开，可导出 PNG/SVG）
 
 ## 许可证
