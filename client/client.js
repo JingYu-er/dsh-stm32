@@ -1546,6 +1546,50 @@ window.__ModuleLoader__.load({
       return { pinout, error, reload: () => setTick((value) => value + 1) };
     }
 
+    /** 构建与烧录：人在面板上直接触发，结果按 stm32_build / stm32_flash 事件进时间线。 */
+    function BuildCard(props) {
+      const [busy, setBusy] = useState("");
+      const [note, setNote] = useState("");
+      const [errors, setErrors] = useState([]);
+      const run = async (path, body, label) => {
+        setBusy(label);
+        setNote(label + "中…这期间页面不要关。");
+        setErrors([]);
+        const result = await callApi("POST", path, body);
+        setBusy("");
+        if (!result.ok) {
+          setNote(result.error);
+          return;
+        }
+        const report = path === "build" ? result.value.build : result.value.flash;
+        setNote(report.message);
+        setErrors(Array.isArray(report.errors) ? report.errors.slice(0, 5) : []);
+      };
+      const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
+      const disabled = busy !== "" || projectDir === "";
+      const button = (key, label, onClick) =>
+        e(
+          "button",
+          { key: key, type: "button", disabled: disabled, onClick: onClick, style: Object.assign({}, debugStyles.button, disabled ? { opacity: 0.5 } : {}) },
+          label,
+        );
+      return e(
+        "div",
+        { style: { padding: "6px 10px", borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)", fontSize: "12px" } },
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "6px" } },
+          e("span", { style: { flex: "1 1 auto" } }, "构建与烧录"),
+          button("build", "构建", () => run("build", { projectDir: projectDir }, "构建")),
+          button("clean", "清理构建", () => run("build", { projectDir: projectDir, clean: true }, "清理构建")),
+          button("flash", "烧录", () => run("flash", { projectDir: projectDir }, "烧录")),
+        ),
+        note === "" ? null : e("div", { style: { padding: "3px 0 0", opacity: 0.75 } }, note),
+        errors.length === 0 ? null : e("div", { style: { padding: "2px 0 0", opacity: 0.85, fontFamily: "ui-monospace, monospace", whiteSpace: "pre-wrap" } }, errors.join("\n")),
+        e("div", { style: { padding: "3px 0 0", opacity: 0.5, fontSize: "11px" } }, "构建与烧录同时记进时间线；烧录会占用探针，调试会话开着时先关。"),
+      );
+    }
+
     /** .ioc 与生成代码是否同步：只读两个文件的修改时间，不跑 CubeMX。 */
     function useIocSync(projectDir, intervalMs) {
       const [sync, setSync] = useState(null);
@@ -2809,6 +2853,7 @@ window.__ModuleLoader__.load({
             : [
               e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error, onTouch: touchSession, touchMessage: touchMessage }),
               e(SerialCard, { key: "serial-card", serial: serialState.serial, error: serialState.error, onChanged: serialState.reload }),
+              e(BuildCard, { key: "build-card", projectDir: projectDir }),
               e(RunningTools, { key: "running", events: props.events }),
               e(BreakpointPanel, { key: "breakpoints", debug: debugInfo.debug, onChanged: debugInfo.reload }),
               e(WatchAdmin, { key: "watch-admin" }),

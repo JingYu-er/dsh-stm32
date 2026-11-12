@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S33）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S34）
 
 ### 一、目标与约束
 
@@ -6276,7 +6276,20 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 计数：77 套件 / **1031 pass / 0 fail**；包体 1919.4 KB / 290 文件 / 解包 15528.8 KB；`client/client.js` 3280 行。
 - 教训：同一份状态有两个写入口时，删除路径要交给「真正持有硬件那一侧」做，否则登记表与 gdb 会各说各话。
 
-### 三十七、教训
+### 三十七、面板直接构建与烧录（S34）
+
+- 问题：构建、烧录原来只有模型能触发；人在面板上看见「待重新生成」「没烧进去」，却要先回去打一句话让模型调工具。
+- 做法：新增 `src/engine/panel-actions.ts`，面板直接调引擎。
+  - `buildFromPanel(deps, {projectDir, clean?, target?, artifacts?})` → `runBuild(deps.subprocess, …)`；`flashFromPanel` → `runFlash`。
+  - 两个入口都发 `stm32_build` / `stm32_flash` 事件：`source: "user"`，start 一条、ok/fail 一条带 `result` 摘要（`buildDigest` / `flashDigest`，字段与工具埋点同形）。时间线、故障页、产物页因此不必区分「人点的」和「模型点的」。
+  - `stm32_build` 事件里的 `memoryUsage` 正是产物页 `MemoryBar` 读的那份，人点一次构建，概览与产物页立刻有数。
+- 接口：`POST /build`（`clean`、`target`、`artifacts` 可选）、`POST /flash`（`adapterSpeed`、`allowNoDebug` 可选），路径 36→38 条。失败仍是 200：报告里的 `ok:false` 与 `errors` 才是给面板看的结果，不是 HTTP 层错误。
+- 客户端：`BuildCard` 三个按钮「构建 / 清理构建 / 烧录」，下方显示 `message` 与前 5 条 `errors`；卡片里写清「构建与烧录同时记进时间线；烧录会占用探针，调试会话开着时先关」。
+- 测试：web-api 38 条断言与 `POST /build`、`/flash` 用例（空目录必然失败、要 200、`stm32_build:start|fail` 与 `stm32_flash:start|fail` 四类事件都在、GET 405）；client 源码断言 `BuildCard`；验收脚本 3 项（构建报告、烧录报告、事件数增加）。
+- 计数：78 套件 / **1032 pass / 0 fail**；包体 1921.6 KB / 291 文件 / 解包 15539.3 KB；`client/client.js` 3325 行。
+- 教训：人在面板上做的动作要落成和模型动作同一形状的事件，否则时间线会分裂成两套叙事。HTTP 200 + 业务失败，比 500 更好排障。
+
+### 三十八、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

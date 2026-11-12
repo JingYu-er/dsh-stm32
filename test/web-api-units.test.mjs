@@ -22,7 +22,7 @@ import {
 } from "../lib/engine/web-api.js";
 import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
 import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
-import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
+import { emitEvent, eventSnapshot, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 import { beginToolCall, resetRunning } from "../lib/engine/progress.js";
 import { removeAllWatches, watchState } from "../lib/engine/watch.js";
 import { resetChannelTaps } from "../lib/engine/channel-tap.js";
@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：三十六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 36);
-  assert.equal(new Set(WEB_API_PATHS).size, 36);
+test("WEB_API_PATHS：三十八条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 38);
+  assert.equal(new Set(WEB_API_PATHS).size, 38);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -269,6 +269,8 @@ test("WEB_API_PATHS：三十六条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-sync"), true, ".ioc 同步状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch"), true, "监视登记表必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/build"), true, "面板构建必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/flash"), true, "面板烧录必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial"), true, "串口卡片必须能读状态");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/ports"), true, "串口卡片必须能列端口");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/open"), true, "串口卡片必须能开会话");
@@ -331,6 +333,45 @@ test("GET /source：读工程内源码的上下文；越界路径 400", async ()
   });
   assert.equal(escape.status, 400);
   assert.match(escape.body.error, /工程目录内/u);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("POST /build 与 /flash：人从面板触发，失败也回 200 并把事件写进时间线", async () => {
+  resetEventBus();
+  setEventSessionKey("sess-build");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-build-"));
+  const deps = { subprocess: fakeSubprocess, env: {} };
+
+  const built = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/build",
+    query: {},
+    body: JSON.stringify({ projectDir: dir }),
+    deps,
+  });
+  assert.equal(built.status, 200);
+  assert.equal(built.body.build.ok, false, "空目录里没有工程，构建必然失败");
+  assert.equal(built.body.build.projectDir, dir);
+
+  const flash = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/flash",
+    query: {},
+    body: JSON.stringify({ projectDir: dir }),
+    deps,
+  });
+  assert.equal(flash.status, 200);
+  assert.equal(flash.body.flash.ok, false, "没有 .elf 时烧录不可能成功");
+
+  const events = eventSnapshot(0).filter((event) => event.source === "user" && event.kind.startsWith("stm32_"));
+  const kinds = events.map((event) => event.kind + ":" + event.status);
+  assert.equal(kinds.includes("stm32_build:start"), true, kinds.join(","));
+  assert.equal(kinds.includes("stm32_build:fail"), true, kinds.join(","));
+  assert.equal(kinds.includes("stm32_flash:start"), true, kinds.join(","));
+  assert.equal(kinds.includes("stm32_flash:fail"), true, kinds.join(","));
+
+  const get = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/build", query: {}, deps });
+  assert.equal(get.status, 405);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

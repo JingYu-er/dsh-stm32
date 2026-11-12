@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S33）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S34）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -893,6 +893,7 @@ const fake = {
 - `src/engine/tool-events.ts` 的 `resultDigest`：白名单决定面板能看见哪些结果字段（`errors` 截 20 条、`projectDir` 用于跳源码）。
 - `src/engine/source-slice.ts` 与 `/source`：停点与编译错误跳源码。
 - `src/engine/serial.ts` 的 `openSerial`/`closeSerial`/`serialStatus`/`listPorts` 与 `/serial*`：面板上的串口卡片，与工具同源。`resolveSourceFile` 要求目标落在工程目录内，`readSourceSlice` 把行号夹到文件范围、上下文封顶 20 行。
+- `src/engine/panel-actions.ts` 与 `/build`、`/flash`：人在面板点构建/烧录，直接调 `runBuild` / `runFlash`，结果以 `source: "user"` 的同形事件进时间线。
 - `src/engine/watch-admin.ts` 与 `/watch`：面板编辑监视登记表，与 `stm32_watch` 共用 `watchState`；删项交给 `debugSessions.removeWatchpoints`，顺带清 gdb 比较器。
 - `src/engine/ioc-sync.ts` 与 `/ioc-sync`：只比 `.ioc` 与 `Core/Src/main.c` 的修改时间，判断「配置改了还没重新生成」；没有 `main.c` 时不下结论。
 - `src/engine/interrupts.ts` 与 `/interrupts`：中断页。只读 `.ioc` 的 `NVIC.*`（值里的冒号是转义的），优先级排序按抢占→子→名字；段数不足给 -1，不冒充 0。
@@ -911,7 +912,7 @@ const fake = {
 | 项 | 当前值 |
 | --- | --- |
 | 注册工具 | 25 个 |
-| 源码 | `src/**/*.ts` 128 个文件 |
-| 单测 | 77 个套件 / 1031 pass / 0 fail |
-| 客户端 | `client/client.js` 3280 行（手写，不经 tsc） |
-| 包体 | 1919.4 KB / 290 文件 / 解包 15528.8 KB（护栏上限 3906.3 KB） |
+| 源码 | `src/**/*.ts` 129 个文件 |
+| 单测 | 78 个套件 / 1032 pass / 0 fail |
+| 客户端 | `client/client.js` 3325 行（手写，不经 tsc） |
+| 包体 | 1921.6 KB / 291 文件 / 解包 15539.3 KB（护栏上限 3906.3 KB） |
