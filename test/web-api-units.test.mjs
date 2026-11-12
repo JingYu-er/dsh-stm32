@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十四条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 14);
-  assert.equal(new Set(WEB_API_PATHS).size, 14);
+test("WEB_API_PATHS：十五条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 15);
+  assert.equal(new Set(WEB_API_PATHS).size, 15);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -250,6 +250,7 @@ test("WEB_API_PATHS：十四条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels"), true, "常驻通道状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/pinout"), true, "引脚面板必须有独立路由");
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -333,6 +334,45 @@ test("POST /abort：参数与在途调用校验，只中止登记过的调用", 
   assert.equal(handle.signal.aborted, true, "接口必须真的触发派生信号");
   handle.end();
   resetRunning();
+});
+
+test("GET /pinout：读工程 .ioc 分组，缺 .ioc 回 409", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-pinout-"));
+  fs.writeFileSync(
+    path.join(dir, "demo.ioc"),
+    [
+      "Mcu.CPN=STM32F103C8T6",
+      "Mcu.PinsNb=2",
+      "Mcu.Pin0=PA0",
+      "Mcu.Pin1=PA9",
+      "PA0.Signal=GPIO_Output",
+      "PA9.Signal=USART1_TX",
+    ].join("\n"),
+    "utf8",
+  );
+  const good = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/pinout",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(good.status, 200);
+  assert.equal(good.body.pinout.mcu.cpn, "STM32F103C8T6");
+  assert.equal(good.body.pinout.pins.length, 2);
+  assert.deepEqual(
+    good.body.pinout.groups.map((group) => group.name),
+    ["USART1", "GPIO"],
+  );
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-pinout-empty-"));
+  const missing = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/pinout",
+    query: { projectDir: empty },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(missing.status, 409);
+  assert.ok(String(missing.body.error).includes(".ioc"));
 });
 
 test("常驻通道接口：默认关、开关改状态、非法值 400", async () => {
