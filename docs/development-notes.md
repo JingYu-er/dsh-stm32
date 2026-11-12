@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S39）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S40）
 
 ### 一、目标与约束
 
@@ -6344,7 +6344,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node --check`、build 0、**1033 pass / 0 fail**、ACCEPTANCE OK、`test:size` 1926.4 KB / 291 文件 / 解包 15560.2 KB、client 3525 行；client 源码断言 `fault-chip-`。
 - 教训：有 early return 的组件，hook 一律写在最前；分类计数在客户端算，别为聚合再开接口。
 
-### 四十三、教训
+### 四十三、事件深链与 Esc 清筛选（S40）
+
+- 问题：想让人看「就是这条事件」时只能截图；刷新页面选中状态也没了。
+- 做法：纯客户端。
+  - `readDebugEventSeq()` 从 `location.hash` 里读 `#stm32-debug:event=<seq>`；`writeDebugEventSeq(seq)` 用 `history.replaceState` 写回（不新增历史条目，后退键不会被深链塞满）。
+  - 面板挂载时读一次 hash 设定选中项；`selectEvent` 里同时写 hash。回放态不写——回放的事件不在实时列表里，写进地址栏下次打开会指向不存在的 seq。
+  - `Esc` 清空文字筛选（只在有筛选时生效）；监听按 `filter` 重建，避免闭包读到旧值。
+- 为什么不走 query 参数：宿主前端会重写 query（会话、路由参数），hash 是这一层唯一稳定的位置。
+- 验证：`node --check`、build 0、**1033 pass / 0 fail**、ACCEPTANCE OK、`test:size` 1927.0 KB / 291 文件 / 解包 15563.1 KB、client 3560 行；client 源码断言 `readDebugEventSeq` / `writeDebugEventSeq`。
+- 教训：状态同步用 `replaceState` 不用 `pushState`；回放与实时是两套 seq，别把回放写进深链。
+
+### 四十四、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

@@ -137,6 +137,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("校验和"), "产物页要显示 elf 校验和");
     assert.ok(source.includes("clockFlowRows") && source.includes("ClockFlow"), "时钟页要有流向图");
     assert.ok(source.includes("fault-chip-"), "故障页要能按分类筛选");
+    assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
