@@ -278,4 +278,17 @@ test("通道事件：统一 kind 前缀、单行截断、总量超限只留前�
   assert.ok(String(bulk.payload.lines[0]).endsWith("…"), "超长行要被截断");
   assert.equal(bulk.payload.meta.action, "dump");
   assert.ok(bulk.summary.includes("面板保留前"), bulk.summary);
+
+  // 监视通道带结构化样本：面板据此画历史曲线，不必解析文本行。
+  resetEventBus();
+  const watch = emitChannel({
+    channel: "watch",
+    lines: ["g_tick_1k = 42（+1）"],
+    meta: { action: "sample", samples: [{ expression: "g_tick_1k", value: "42", delta: "+1", ok: true }] },
+  });
+  assert.equal(watch.kind, "channel:watch");
+  assert.equal(watch.payload.meta.samples.length, 1);
+  assert.equal(watch.payload.meta.samples[0].expression, "g_tick_1k");
+  assert.equal(watch.payload.meta.samples[0].value, "42");
+  assert.equal(watch.summary, "监视 1 行");
 });

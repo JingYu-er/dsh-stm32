@@ -398,6 +398,12 @@ export class DebugSessionManager {
     return Math.max(0, Math.min(idleDeadline, hardDeadline) - this.now());
   }
 
+  /** 单测用：丢掉内存里的会话记录（不关进程、不碰探针）。 */
+  resetForTest(): void {
+    this.current = null;
+    this.stopSweeper();
+  }
+
   /** 扫一次租约：过期的会话立刻关。定时器与单测共用这一条路径。 */
   async sweepExpired(): Promise<boolean> {
     const session = this.current;
@@ -1122,6 +1128,11 @@ export class DebugSessionManager {
 
 /** 进程内单例：工具、turn/end 监听、dispose 共用同一个会话。 */
 export const debugSessions = new DebugSessionManager();
+
+/** 单测用：清空当前会话摘要，避免用例之间互相影响。 */
+export function resetDebugSessionsForTest(): void {
+  debugSessions.resetForTest();
+}
 
 /** 通过 Tcl 口让 openocd 自行 shutdown（探针能收到正常的断开序列）。失败时交由 kill 回退处理。 */
 function requestOpenocdShutdown(port: number, timeoutMs: number): Promise<void> {

@@ -21,6 +21,7 @@ import {
   WEB_API_PREFIX,
 } from "../lib/engine/web-api.js";
 import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
+import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
 import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 
 /** 假的宿主 subprocess：本套件里没有任何路径会真的起进程。 */
@@ -231,9 +232,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：八条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 8);
-  assert.equal(new Set(WEB_API_PATHS).size, 8);
+test("WEB_API_PATHS：九条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 9);
+  assert.equal(new Set(WEB_API_PATHS).size, 9);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -241,6 +242,7 @@ test("WEB_API_PATHS：八条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/install/state"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/events"), true, "调试台的事件流必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/status"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug"), true, "调试会话摘要必须有独立路由");
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -264,4 +266,27 @@ test("GET /status：返回事件计数、会话键与证据目录", async () => 
   // 事件流路由不接受 JSON 分发
   const wrong = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/status", deps: { subprocess: fakeSubprocess, env: {} } });
   assert.equal(wrong.status, 200);
+});
+
+test("GET /debug：没有会话时返回空闲摘要，且不接受 POST", async () => {
+  resetDebugSessionsForTest();
+  const result = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/debug",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.ok, true);
+  const debug = result.body.debug;
+  assert.equal(debug.active, false, "没有会话时必须明确 active=false");
+  assert.equal(debug.sessionId, "");
+  assert.equal(typeof debug.message, "string");
+  assert.ok(debug.message.length > 0);
+  const wrong = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/debug",
+    body: "{}",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(wrong.status, 405, "只读接口不接受 POST");
 });

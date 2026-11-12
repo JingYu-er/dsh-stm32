@@ -259,7 +259,22 @@ export function registerWatchTool(ctx: DshContext): void {
             ? sample.expression + " = " + sample.value + (sample.delta === "" ? "" : "（" + sample.delta + "）")
             : sample.expression + "：" + sample.error,
         );
-        if (channelLines.length > 0) emitChannel({ channel: "watch", lines: channelLines });
+        if (channelLines.length > 0) {
+          // 结构化样本随通道事件一起发：面板据此画历史曲线，不必再解析文本行。
+          emitChannel({
+            channel: "watch",
+            lines: channelLines,
+            meta: {
+              action: "sample",
+              samples: sampled.samples.map((sample) => ({
+                expression: sample.expression,
+                value: sample.value,
+                delta: sample.delta,
+                ok: sample.ok,
+              })),
+            },
+          });
+        }
         const report = fromSampleReport(sampled);
         return { message: report.message, report };
       }

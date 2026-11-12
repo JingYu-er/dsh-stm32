@@ -32,6 +32,7 @@ import {
   type DebugEvent,
 } from "./event-bus.js";
 import { evidenceRoot } from "./event-log.js";
+import { debugSessions } from "./debug-session.js";
 import type { SubprocessService } from "../types.js";
 
 /** 面板能看到的四类能力（与 stm32_doctor 同一口径）。 */
@@ -401,6 +402,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/install/state",
   WEB_API_PREFIX + "/events",
   WEB_API_PREFIX + "/status",
+  WEB_API_PREFIX + "/debug",
 ];
 
 function ok(body: Record<string, unknown>): WebJson {
@@ -441,7 +443,8 @@ export async function handleWebApi(input: {
   const needsBody =
     path !== WEB_API_PREFIX + "/config" &&
     path !== WEB_API_PREFIX + "/install/state" &&
-    path !== WEB_API_PREFIX + "/status";
+    path !== WEB_API_PREFIX + "/status" &&
+    path !== WEB_API_PREFIX + "/debug";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -480,6 +483,26 @@ export async function handleWebApi(input: {
     const state = installTaskState(taskId);
     if (state === null) return fail(404, "没有这个安装任务：" + taskId);
     return ok({ state });
+  }
+  if (path === WEB_API_PREFIX + "/debug") {
+    // 调试面板用：当前调试会话、断点与观察点预算、剩余租约。只读，不碰探针。
+    const report = debugSessions.status();
+    return ok({
+      debug: {
+        active: report.active,
+        sessionId: report.sessionId,
+        port: report.port,
+        tclPort: report.tclPort,
+        projectDir: report.projectDir,
+        elfPath: report.elfPath,
+        remainingMs: report.remainingMs,
+        idleTtlMs: report.idleTtlMs,
+        hardTtlMs: report.hardTtlMs,
+        breakpoints: report.breakpoints,
+        watchpoints: report.watchpoints,
+        message: report.message,
+      },
+    });
   }
   if (path === WEB_API_PREFIX + "/status") {
     // 面板状态条用：事件计数、当前会话键、证据目录。都是只读的诊断信息。

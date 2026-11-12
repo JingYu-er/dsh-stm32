@@ -83,13 +83,17 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
       if (node === null || node === undefined || node === false || node === true) return "";
       if (typeof node === "string" || typeof node === "number") return String(node);
       if (Array.isArray(node)) return node.map(renderText).join(" ");
-      if (typeof node.type === "function") return renderText(node.type(node.props));
+      // 真 React 会把 children 塞进 props.children；桩把它留在 node.children，
+      // 展开组件时补回去，否则面板正文（DebugPanel 的 props.children）会被吞掉。
+      if (typeof node.type === "function") return renderText(node.type(Object.assign({}, node.props, { children: node.children })));
       return renderText(node.children);
     };
     const text = renderText(debug.component({}));
     assert.ok(text.includes("调试台"), text.slice(0, 200));
     assert.ok(text.includes("时间线"), text.slice(0, 200));
     assert.ok(text.includes("事件详情"), text.slice(0, 200));
+    assert.ok(text.includes("调试会话"), text.slice(0, 400));
+    assert.ok(text.includes("暂无数值型监视采样"), text.slice(0, 400));
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;
