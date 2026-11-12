@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十八条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 28);
-  assert.equal(new Set(WEB_API_PATHS).size, 28);
+test("WEB_API_PATHS：二十九条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 29);
+  assert.equal(new Set(WEB_API_PATHS).size, 29);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -265,6 +265,32 @@ test("WEB_API_PATHS：二十八条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/send"), true, "面板发串口必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
+});
+
+test("GET /source：读工程内源码的上下文；越界路径 400", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-src-"));
+  fs.mkdirSync(path.join(dir, "Core", "Src"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "Core", "Src", "main.c"), "int main(void)\n{\n  return 0;\n}\n", "utf8");
+  const read = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/source",
+    query: { projectDir: dir, file: "Core/Src/main.c", line: "3", context: "1" },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(read.status, 200);
+  assert.deepEqual([read.body.source.from, read.body.source.to], [2, 4]);
+  assert.equal(read.body.source.lines[1].text, "  return 0;");
+
+  const escape = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/source",
+    query: { projectDir: dir, file: "../outside.c", line: "1" },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(escape.status, 400);
+  assert.match(escape.body.error, /工程目录内/u);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("GET /interrupts：读 .ioc 的 NVIC 表；缺 .ioc 时 409", async () => {

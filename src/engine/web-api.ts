@@ -37,6 +37,7 @@ import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
 import { sendSerial } from "./serial.js";
 import { readInterrupts } from "./interrupts.js";
+import { readSourceSlice } from "./source-slice.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
@@ -434,6 +435,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/serial/send",
   WEB_API_PREFIX + "/debug/touch",
   WEB_API_PREFIX + "/interrupts",
+  WEB_API_PREFIX + "/source",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -571,7 +573,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/replay" &&
     path !== WEB_API_PREFIX + "/ioc-diff" &&
     path !== WEB_API_PREFIX + "/watch-recording" &&
-    path !== WEB_API_PREFIX + "/interrupts";
+    path !== WEB_API_PREFIX + "/interrupts" &&
+    path !== WEB_API_PREFIX + "/source";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -631,6 +634,16 @@ export async function handleWebApi(input: {
         message: report.message,
       },
     });
+  }
+  if (path === WEB_API_PREFIX + "/source") {
+    // 源码片段：只读工程目录内的文件，给「文件:行」补上下文。
+    const projectDir = typeof query["projectDir"] === "string" ? query["projectDir"] : process.cwd();
+    const file = typeof query["file"] === "string" ? query["file"] : "";
+    const line = Number.parseInt(typeof query["line"] === "string" ? query["line"] : "", 10);
+    const context = Number.parseInt(typeof query["context"] === "string" ? query["context"] : "3", 10);
+    const read = readSourceSlice(projectDir, file, Number.isFinite(line) ? line : Number.NaN, Number.isFinite(context) ? context : 3);
+    if (!read.ok) return fail(400, read.error);
+    return ok({ source: read.slice });
   }
   if (path === WEB_API_PREFIX + "/interrupts") {
     // 中断页：只读 .ioc 的 NVIC.*，不启动 CubeMX、不改配置。
