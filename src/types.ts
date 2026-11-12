@@ -6,19 +6,33 @@
  * 这里只声明本项目真正用到的那部分，保持零运行时依赖、离线可编译。
  */
 
-/** 工具参数的 JSON Schema 子集（注册表接受标准 JSON Schema）。 */
+/**
+ * 工具参数/输出的 JSON Schema 子集——**只允许宿主 0.2.2+ 放行的关键字**。
+ *
+ * 宿主（dsh-tools/lib/types/json-schema.js，assertSupportedJsonSchema）只认：
+ *   约束：type / oneOf / properties / required / additionalProperties / items / enum / const
+ *   注解：description / title / default / examples
+ * 其余关键字一律 UNSUPPORTED_SCHEMA；number 的 minimum/maximum 已不在集合里，
+ * 范围写进 description，并在执行期校验（见 engine/serial.ts 的 SERIAL_LIMITS）。
+ * additionalProperties 只能是 boolean（不能再带"值 schema"）；properties/required/
+ * additionalProperties 只能挂在 type:"object"，items 只能挂在 type:"array"。
+ */
 export interface JsonSchema {
   type?: string;
   description?: string;
+  title?: string;
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
   required?: string[];
-  enum?: string[];
-  /** true/false，或一个描述"任意键的值长什么样"的 schema（JSON Schema 允许两种写法）。 */
-  additionalProperties?: boolean | JsonSchema;
+  /** 标量枚举；元素类型必须与 type 一致。 */
+  enum?: (string | number | boolean)[];
+  /** 标量常量；等价于单元素 enum。 */
+  const?: string | number | boolean;
+  /** 只能是 boolean：true = 允许额外键，false = 拒绝。 */
+  additionalProperties?: boolean;
   default?: unknown;
-  minimum?: number;
-  maximum?: number;
+  examples?: unknown[];
+  oneOf?: JsonSchema[];
 }
 
 export interface TextPart {

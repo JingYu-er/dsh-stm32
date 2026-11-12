@@ -5761,3 +5761,40 @@ t8 由 impl 执行（不是寄存器路线的实现者）：只做只读复验�
 - **「自动安装」和「自动下载」要分开承诺**：下载可以校验、可以重试、可以缓存；安装要 UAC、许可与驱动绑定，插件不该替用户点。
 - **哈希要在写盘过程中算**：下完再读一遍 59 MB 会多一次全文件 IO；边写边算还能在中途失败时立刻停。
 - **临时文件必须带 pid + 时间戳**：并发或上次崩溃留下的 `.part` 不能互相覆盖，失败清理也不该误删别人的。
+
+## 90. DSH 0.2.2 收紧工具 schema：把 25 个工具压进子集（2026-11-12，随 0.1.6 发布）
+
+### 一、问题与取证
+
+DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**就抛 `JsonSchemaError`（错误码 `UNSUPPORTED_SCHEMA`），`ToolsService.register` 校验的是 `output.schema`——抛错即该工具从列表里消失，且没有明显提示。本轮开发会话里看不到任何 `stm32_*` 工具，先怀疑就是这个原因。
+
+取证方式（不起真机、不猜）：
+
+- 用 `asar` 头 JSON 从 `D:/app/DeepSeek Harness/resources/app.asar` 抽出 `node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.js`（25,604 字节），直接读白名单与逐条报错文本；
+- 另抽 `tools` 服务与沙箱 `defineTool` 的调用点，确认三条影响面：`output.schema` 注册期校验、PTC 类型渲染与 sandbox `parameters` 校验（后两者失败只降级成 `unknown`/`Any`，不抛）；
+- 自写探针按同一语义扫 25 个工具 → 5 个真违规、2 个假阳性（探针没做进入/退出栈，把复用同一子 schema 的节点误判成循环引用；真实校验器复核为合规）。
+
+关键事实：`minimum`/`maximum` 不在白名单；`additionalProperties` 必须是 boolean；`properties`/`required`/`additionalProperties` 只能用在 `object`，`items` 只能用在 `array`。
+
+### 二、实现
+
+- `src/types.ts`：`JsonSchema` 收窄成宿主子集（删 `minimum`/`maximum`，`additionalProperties?: boolean`，`enum` 允许标量，补 `title`/`const`/`examples`/`oneOf`），注释写明依据与「范围写 description、执行期校验」。
+- `stm32_ioc_plan`：`peripherals[].pins` / `parameters` 由 `type:"object" + additionalProperties:{type:"string"}` 改为 `type:"array"` + `items:{key,value}`（`required:["key","value"]`）；`pllMul` 由 `number + minimum + maximum` 改为 `integer + enum[2..16]`。账本侧 `src/engine/ioc-plan.ts` 新增 `KeyValuePair` 与 `keyValueMap()`（空 key / 重复 key 记 errors，重复时后值覆盖），类型改为 `KeyValuePair[]`。
+- `stm32_build`：删掉 `artifacts`（数组）上的 `additionalProperties: false`。
+- `stm32_assets`：`keep` 去掉 `minimum`，description 写「≥1 的整数」，`execute` 里运行期校验，非法值 `ok=false` 且不删任何文件。
+- `stm32_serial`：参数与 `report.settings` 共 24 处 `minimum`/`maximum` 全删，范围写进 description（`SERIAL_LIMITS` 拼接），`dataBits` 用 `enum:[5,6,7,8]`；越界校验仍在 `normalizeSerialSettings`（`src/data/serial-config.ts`），越界记 errors 并保持默认值。
+
+### 三、验证
+
+- `npm run typecheck` / `npm run build` exit 0。
+- 新增 `test/schema-subset-units.test.mjs`（2 条）：① 镜像校验器扫 `apply` 收集到的全部 25 个工具，0 违规；② 从 `app.asar` 抽出宿主**真校验器**（内部 import 用本地桩替换：`HarnessError`、`isJsonValue`/`assertNever`），逐 schema 与镜像比对结论一致。
+- `node test/run-units.mjs` **pass=923 fail=0**（61 个套件；同机改动前基线 stash 实测 921，+2 为新套件）。
+- `npm run test:pack` 全部通过；`npm run test:size` 1811.6 KB / 271 文件 / 解包 15132.3 KB。
+- 未验：真机重启后 25 个工具是否可见可调用——开发会话没挂载插件，留给用户侧确认。
+
+### 四、教训
+
+- **看着像「工具没注册」的问题，先查宿主校验器源码**：报错被吞掉时，唯一可靠的事实是宿主那 25 KB 的白名单代码，不是文档。
+- **探针要复刻宿主的栈语义**：不做 enter/leave 的循环引用检测会把复用子 schema 误报成环，假阳性会让你改本来没坏的地方。
+- **镜像测试必须与真值对齐**：只写镜像等于自己给自己出题；抽出 `app.asar` 里的真校验器跑一遍，镜像才不会随宿主升级悄悄漂移（找不到 asar 时自动跳过，不阻塞 CI）。
+- **`additionalProperties` 从 schema 退成 boolean 时，`pins` 这种「任意键 → 值」的映射只能换形状**：用户选了 `[{key,value}]` 数组，宿主能校验、模型有结构可依，代价是老写法要迁移。

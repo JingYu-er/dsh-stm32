@@ -818,9 +818,36 @@ const fake = {
 | `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
 | `src/engine/` | 65 个 `.ts` / 26,358 行 |
 | `src/data/` | 17 个 `.ts` / 7,625 行 |
-| 单测 | 59 个套件 / 937 pass / 0 fail（`node test/run-units.mjs`） |
+| 单测 | 61 个套件 / 923 pass / 0 fail（`node test/run-units.mjs`，本机实测） |
 
 第 1–11 章的目录表与模块计数保留 D 阶段原样（45 个 engine 模块、23 个 tools 文件），读旧章节时以本节为准。
+
+## 14. 0.1.6 增补：宿主 schema 子集与 `pins` / `parameters` 数组化
+
+> 接续 §13，同属 0.1.6。这一节不改业务行为，只让 25 个工具的 schema 落进 DSH 0.2.2-rc.1 允许的子集。
+
+### 14.1 先读哪里
+
+- `src/types.ts` 的 `JsonSchema`：现在就是宿主子集本身——`type` / `oneOf` / `properties` / `required` / `additionalProperties`（仅 boolean）/ `items` / `enum` / `const` + 注解 `description` / `title` / `default` / `examples`。`minimum` / `maximum` 已删除，看到需要范围时去 `description` 和执行期校验里找。
+- `src/tools/ioc-plan.ts` 的 `parameters`：`peripherals[].pins` / `parameters` 是 `type:"array"` + `items:{key,value}`，`pllMul` 是 `integer` + `enum[2..16]`。
+- `src/engine/ioc-plan.ts` 的 `KeyValuePair` 与 `keyValueMap()`：数组 → `Map` 的唯一入口，空 key / 重复 key 在这里记 `errors`。
+- `src/engine/serial.ts` 的 `SERIAL_SETTINGS_PROPERTIES`：参数 schema 与输出 `settings` schema 复用同一片段，范围只在 `description` 里；真正的越界判定在 `src/data/serial-config.ts` 的 `normalizeSerialSettings`。
+- `test/schema-subset-units.test.mjs`：镜像校验器 + 从 `app.asar` 抽真校验器做真值对齐。改任何工具的 schema 后先跑它。
+
+### 14.2 三条不变量
+
+1. 任何 schema 节点只出现子集关键字；`additionalProperties` 只能是 boolean，`items` 只在数组上，`properties`/`required` 只在对象上。
+2. 数值范围**不进 schema**：写 `description`，并在执行期校验（`keep`：非法即 `ok=false` 且不动文件；串口：`normalizeSerialSettings` 记 errors 并保持默认值）。
+3. 「任意键 → 值」的映射不允许再写成 `additionalProperties: {…}`；要么换成 `[{key,value}]` 数组，要么用 `additionalProperties: true` 兜底。
+
+### 14.3 计数口径（0.1.6 起）
+
+| 项 | 当前值 |
+| --- | --- |
+| 注册工具 | 25 个（25/25 schema 合规） |
+| 单测 | 61 个套件 / 923 pass / 0 fail |
+
+本机同基线实测为 921，加 2 条新用例后 923；§13.5 表里原有的 937 是另一台机器的发布记录。
 
 ---
 

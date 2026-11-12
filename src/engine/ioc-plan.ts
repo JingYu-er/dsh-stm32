@@ -84,14 +84,40 @@ export interface PinAddRequest {
   interrupt?: "rising" | "falling" | "both";
 }
 
+/** 通用键值对：工具参数用数组表达映射（宿主 0.2.2 的 schema 子集不允许 additionalProperties 带值 schema）。 */
+export interface KeyValuePair {
+  key: string;
+  value: string;
+}
+
 /** 启用一个外设：按预设一次写全"引脚 Mode/Signal + Mcu.IPn + IPParameters"。 */
 export interface PeripheralEnableRequest {
   /** 预设名（= 实例名）：USART1 / TIM2 / ADC1…。 */
   name: string;
-  /** 覆盖预设的默认引脚，key 是角色名（tx/rx/ch1/in1…），value 是逻辑引脚名（PA2）。 */
-  pins?: Record<string, string>;
-  /** 覆盖预设的默认参数，key 是 <ip>.IPParameters 里的参数名（BaudRate/Prescaler…）。 */
-  parameters?: Record<string, string>;
+  /** 覆盖预设的默认引脚：[{ key: "tx", value: "PA2" }]，key 是角色名（tx/rx/ch1/in1…）。 */
+  pins?: KeyValuePair[];
+  /** 覆盖预设的默认参数：[{ key: "Prescaler", value: "71" }]，key 是 <ip>.IPParameters 里的参数名。 */
+  parameters?: KeyValuePair[];
+}
+
+/** 把 [{key,value}] 折成查找表：空 key 与重复 key 记错误，重复时后值覆盖前值。 */
+function keyValueMap(pairs: readonly KeyValuePair[] | undefined, label: string, errors: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [index, pair] of (pairs ?? []).entries()) {
+    if (pair === null || typeof pair !== "object") {
+      errors.push(label + "[" + String(index) + "] 不是 {key,value} 对象");
+      continue;
+    }
+    const key = typeof pair.key === "string" ? pair.key.trim() : "";
+    const value = typeof pair.value === "string" ? pair.value : "";
+    if (key === "") {
+      errors.push(label + "[" + String(index) + "] 的 key 是空串");
+      continue;
+    }
+    if (map.has(key)) errors.push(label + " 里的 key " + JSON.stringify(key) + " 重复，后面的值覆盖前面的");
+    map.set(key, value);
+  }
+  return map;
 }
 
 /** 一条 NVIC 中断：irq 是中断名（USART1 / USART1_IRQn / EXTI9_5），preempt/sub 是优先级。 */
@@ -1157,9 +1183,11 @@ function enablePeripheral(
   table.entries.set(renderIocKey("mcu.ip_nb"), String(slots));
 
   // 引脚：Mode + Signal + Locked。
-  const overrodePins = request.pins !== undefined && Object.keys(request.pins).length > 0;
+  const pinOverrides = keyValueMap(request.pins, preset.name + ".pins", table.errors);
+  const paramOverrides = keyValueMap(request.parameters, preset.name + ".parameters", table.errors);
+  const overrodePins = pinOverrides.size > 0;
   for (const role of preset.pins) {
-    const logical = (request.pins?.[role.role] ?? role.defaultPin).trim().toUpperCase();
+    const logical = (pinOverrides.get(role.role) ?? role.defaultPin).trim().toUpperCase();
     if (logical === "") {
       table.errors.push(preset.name + " 的引脚 " + role.role + " 被指定成空串");
       continue;
@@ -1191,7 +1219,7 @@ function enablePeripheral(
 
   // 逐字键（DMA 这类键名不受 <ip>.<名字> 约束）：先写它们，再统一重算 Dma.RequestsNb。
   for (const raw of preset.rawEntries ?? []) {
-    table.entries.set(raw.key, request.parameters?.[raw.key.replace("Dma.", "").replace(/\.0\./u, ".")] ?? raw.value);
+    table.entries.set(raw.key, paramOverrides.get(raw.key.replace("Dma.", "").replace(/\.0\./u, ".")) ?? raw.value);
   }
   // G1/G2：DMA 三件套。CubeMX 自己写的是
   //   Dma.<IP>.<n>.RequestParameters=Instance,Direction,...,Priority（白名单，与 IPParameters 同机制：
@@ -1247,16 +1275,16 @@ function enablePeripheral(
   const paramsKey = renderIocKey("periph.ip_parameters", { ip: preset.ip });
   const names = (table.entries.get(paramsKey) ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
   for (const param of preset.parameters) {
-    table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name: param.name }), request.parameters?.[param.name] ?? param.value);
+    table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name: param.name }), paramOverrides.get(param.name) ?? param.value);
     if (!names.includes(param.name)) names.push(param.name);
-    if (overrodePins && request.parameters?.[param.name] === undefined && param.name.startsWith("Channel-")) {
+    if (overrodePins && !paramOverrides.has(param.name) && param.name.startsWith("Channel-")) {
       table.warnings.push(
         preset.name + " 换了引脚，但 " + param.name + " 仍是 " + param.value +
           "：通道号必须与引脚一致，请一并用 parameters 改",
       );
     }
   }
-  for (const [name, value] of Object.entries(request.parameters ?? {})) {
+  for (const [name, value] of paramOverrides) {
     if (names.includes(name)) continue;
     names.push(name);
     table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name }), value);

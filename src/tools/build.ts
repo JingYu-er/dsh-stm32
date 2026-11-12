@@ -142,12 +142,11 @@ export function registerBuild(ctx: DshContext): void {
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先含 Debug 的 preset 目录）。" },
         target: { type: "string", description: "只构建某个 CMake target（例如 demo.elf）。" },
         clean: { type: "boolean", description: "先 clean 再编译（全量，慢）。" },
-    artifacts: {
-      type: "array",
-      items: { type: "string", enum: ["elf", "hex", "bin"] },
-      description: "编译成功后额外转出的产物格式（默认只有 elf）：hex 给产线烧录器 / CubeProgrammer，bin 给串口 ISP 与 OTA 镜像。转换失败不判编译失败，只写 warning。",
-      additionalProperties: false,
-    },
+        artifacts: {
+          type: "array",
+          items: { type: "string", enum: ["elf", "hex", "bin"] },
+          description: "编译成功后额外转出的产物格式（默认只有 elf）：hex 给产线烧录器 / CubeProgrammer，bin 给串口 ISP 与 OTA 镜像。转换失败不判编译失败，只写 warning。",
+        },
         foreground: { type: "boolean", description: "同步返回完整报告（默认 false，走后台 job）。" },
         binDirs: { type: "array", items: { type: "string" }, description: "工具链目录候选，优先于默认值/环境变量。" },
         envCheck: ENV_CHECK_SCHEMA,

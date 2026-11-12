@@ -363,7 +363,7 @@ test("peripherals(USART1)：一次写全引脚 Mode+Signal、Mcu.IPn、IPParamet
 
 test("peripherals(TIM2)：PA0 换成 db 名 PA0-WKUP，带空格的子键要转义", () => {
   const { projectDir } = freshProject();
-  const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM2", parameters: { Prescaler: "71", Period: "999" } }] });
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "TIM2", parameters: [{ key: "Prescaler", value: "71" }, { key: "Period", value: "999" }] }] });
   assert.equal(report.ok, true, report.message);
   const entries = parseIocEntries(candidateText(projectDir, report.planId));
   const pinValues = [...entries.entries()].filter(([key]) => /^Mcu\.Pin[0-9]+$/u.test(key)).map(([, value]) => value);
@@ -449,7 +449,7 @@ test("peripherals：不认识的名字直接报错，并列出内置预设", () 
 
 test("peripherals：引脚已被别的功能占用时报错，不静默改信号", () => {
   const { projectDir } = freshProject();
-  const report = planIocChanges({ projectDir, peripherals: [{ name: "USART1", pins: { tx: "PA13" } }] });
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "USART1", pins: [{ key: "tx", value: "PA13" }] }] });
   assert.equal(report.ok, false);
   assert.match(report.errors.join(" "), /已经配成 SYS_JTMS-SWDIO/u);
 });
