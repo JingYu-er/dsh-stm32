@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S27）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S28）
 
 ### 一、目标与约束
 
@@ -6208,7 +6208,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 踩坑：用 python 字符串替换插函数时把 `function Detail(props) {` 写成了 `add + anchor`，`add` 结尾又带了一遍该行，产出 `function Detail(props) {    function Detail(props) {`，`node --check` 报 `Unexpected token ','` 在文件尾——报错行不在出错处，先看 `git diff` 的 `+` 行更快。
 - 计数：73 套件 / **1018 pass / 0 fail**；`client/client.js` 2986 行；包体 1911.0 KB / 288 文件 / 解包 15485.6 KB。
 
-### 三十、教训
+### 三十一、串口卡片（S28）
+
+- 问题：开串口一直是 AI 的活（`stm32_serial action=open`），人自己想在面板上发一行得先让模型调一次工具。
+- 做法：把「开会话 / 关会话 / 看状态 / 列端口」搬到面板，与 `stm32_serial` 共用同一套引擎函数。
+  - `GET /serial` 走 `serialStatus`，只回面板需要的字段（open / port / baudRate / bridgePid / bridgeAlive / message）；`GET /serial/ports` 走 `listPorts`，只留 port / description / vid / pid。
+  - `POST /serial/open` 只透传 `port` 与 `baudRate`，其余参数与参数记忆、缺省值仍由 `openSerial` 决定——面板不是第二套配置入口。
+  - `POST /serial/close` 没有会话时返回 200 + `closed:false`，不报 409：关一个本来就关着的口不是错误，面板不该因此弹红字。
+- 边界：`/serial/ports` 会起一次 PowerShell 查 PnP，只在点「刷新端口」时调；状态轮询 4 秒只读会话目录，不起进程。
+- 计数：74 套件 / **1019 pass / 0 fail**；`client/client.js` 3085 行；包体 1913.0 KB / 288 文件 / 解包 15497.2 KB；路由 33 条。
+- 教训：面板能做的事要和工具能做的事同源，否则两处对同一份 `serial.json` 的语义会慢慢分叉。
+
+### 三十二、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

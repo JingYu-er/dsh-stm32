@@ -35,7 +35,7 @@ import { evidenceRoot } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
-import { sendSerial } from "./serial.js";
+import { closeSerial, listPorts, openSerial, sendSerial, serialStatus } from "./serial.js";
 import { readInterrupts } from "./interrupts.js";
 import { readSourceSlice } from "./source-slice.js";
 import { debugSessions } from "./debug-session.js";
@@ -436,6 +436,10 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug/touch",
   WEB_API_PREFIX + "/interrupts",
   WEB_API_PREFIX + "/source",
+  WEB_API_PREFIX + "/serial",
+  WEB_API_PREFIX + "/serial/ports",
+  WEB_API_PREFIX + "/serial/open",
+  WEB_API_PREFIX + "/serial/close",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -574,7 +578,9 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ioc-diff" &&
     path !== WEB_API_PREFIX + "/watch-recording" &&
     path !== WEB_API_PREFIX + "/interrupts" &&
-    path !== WEB_API_PREFIX + "/source";
+    path !== WEB_API_PREFIX + "/source" &&
+    path !== WEB_API_PREFIX + "/serial" &&
+    path !== WEB_API_PREFIX + "/serial/ports";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -807,6 +813,69 @@ export async function handleWebApi(input: {
     // 续租：只重置空闲计时，总时长上限不变（面板轮询不该无限延长一次调试）。
     if (!debugSessions.touch()) return fail(409, "当前没有调试会话（先开 stm32_debug_session）");
     return ok({ debug: debugSessions.status() });
+  }
+  if (path === WEB_API_PREFIX + "/serial") {
+    // 面板上的串口卡片：人自己开会话，不必先让 AI 调 stm32_serial。
+    const status = await serialStatus({ env });
+    return ok({
+      serial: {
+        open: status.open,
+        sessionId: status.session?.sessionId ?? "",
+        port: status.session?.port ?? "",
+        baudRate: status.session?.settings.baudRate ?? 0,
+        bridgePid: status.bridge.pid,
+        bridgeAlive: status.bridge.alive,
+        message: status.message,
+        notes: status.notes,
+      },
+    });
+  }
+  if (path === WEB_API_PREFIX + "/serial/ports") {
+    const listed = await listPorts({ env });
+    return ok({
+      serialPorts: {
+        ok: listed.ok,
+        ports: listed.ports.map((port) => ({ port: port.port, description: port.description, vid: port.vid, pid: port.pid })),
+        message: listed.message,
+      },
+    });
+  }
+  if (path === WEB_API_PREFIX + "/serial/open") {
+    const port = parsed.value.port;
+    if (port !== undefined && typeof port !== "string") return fail(400, "port 必须是字符串（例如 COM3）");
+    const baudRate = parsed.value.baudRate;
+    if (baudRate !== undefined && (typeof baudRate !== "number" || !Number.isFinite(baudRate))) {
+      return fail(400, "baudRate 必须是数字（例如 115200）");
+    }
+    const opened = await openSerial({
+      ...(typeof port === "string" && port.trim() !== "" ? { port: port.trim() } : {}),
+      ...(typeof baudRate === "number" ? { baudRate } : {}),
+      env,
+    });
+    return ok({
+      serial: {
+        ok: opened.ok,
+        message: opened.message,
+        notes: opened.notes,
+        sessionId: opened.session?.sessionId ?? "",
+        port: opened.session?.port ?? "",
+        bridgePid: opened.bridge.pid,
+      },
+    });
+  }
+  if (path === WEB_API_PREFIX + "/serial/close") {
+    const force = parsed.value.force;
+    if (force !== undefined && typeof force !== "boolean") return fail(400, "force 必须是布尔值");
+    const closed = await closeSerial({ ...(force === true ? { force: true } : {}), env });
+    return ok({
+      serial: {
+        ok: closed.ok,
+        closed: closed.closed,
+        forced: closed.forced,
+        message: closed.message,
+        notes: closed.notes,
+      },
+    });
   }
   if (path === WEB_API_PREFIX + "/serial/send") {
     // 面板直接发一行：与 stm32_serial action=send 同一条桥命令，只是入口在人这边。

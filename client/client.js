@@ -2474,6 +2474,103 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function useSerialState(intervalMs) {
+      const [state, setState] = useState({ serial: null, error: "" });
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let alive = true;
+        const load = async () => {
+          const result = await callApi("GET", "serial");
+          if (!alive) return;
+          if (!result.ok) setState({ serial: null, error: result.error });
+          else setState({ serial: result.value?.serial ?? null, error: "" });
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          alive = false;
+          clearInterval(timer);
+        };
+      }, [intervalMs, tick]);
+      return { serial: state.serial, error: state.error, reload: () => setTick((n) => n + 1) };
+    }
+
+    function SerialCard(props) {
+      const [port, setPort] = useState("");
+      const [baudRate, setBaudRate] = useState("115200");
+      const [ports, setPorts] = useState([]);
+      const [note, setNote] = useState("");
+      const serial = props.serial ?? null;
+      const open = serial !== null && serial.open === true;
+      const statusText = open
+        ? serial.port + " · " + String(serial.baudRate) + " 8N1 · 桥 " + String(serial.bridgePid) + (serial.bridgeAlive ? "（活）" : "（已退）")
+        : "未打开";
+      const refreshPorts = async () => {
+        const result = await callApi("GET", "serial/ports");
+        if (!result.ok) {
+          setNote(result.error);
+          return;
+        }
+        setPorts(result.value?.serialPorts?.ports ?? []);
+        setNote("可用端口 " + String((result.value?.serialPorts?.ports ?? []).length) + " 个");
+      };
+      const doOpen = async () => {
+        const baud = Number(baudRate);
+        const body = {};
+        if (port.trim() !== "") body.port = port.trim();
+        if (Number.isFinite(baud) && baud > 0) body.baudRate = baud;
+        const result = await callApi("POST", "serial/open", body);
+        setNote(result.ok ? String(result.value?.serial?.message ?? "") : result.error);
+        if (result.ok) props.onChanged();
+      };
+      const doClose = async () => {
+        const result = await callApi("POST", "serial/close", {});
+        setNote(result.ok ? String(result.value?.serial?.message ?? "") : result.error);
+        if (result.ok) props.onChanged();
+      };
+      return e(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+            padding: "6px 10px",
+            border: "1px solid color-mix(in srgb, currentColor 14%, transparent)",
+            borderRadius: "8px",
+          },
+        },
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" } },
+          e("span", { style: { fontWeight: 600 } }, "串口"),
+          e("span", { style: { opacity: 0.75 } }, statusText),
+          e("span", { style: { flex: 1 } }),
+          e("button", { type: "button", style: debugStyles.button, onClick: refreshPorts }, "刷新端口"),
+          e("button", { type: "button", style: debugStyles.button, onClick: doOpen }, "打开"),
+          e("button", { type: "button", style: debugStyles.button, onClick: doClose, disabled: !open }, "关闭"),
+        ),
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginTop: "6px" } },
+          e("input", {
+            value: port,
+            placeholder: ports.length > 0 ? ports.map((item) => item.port).join(" / ") : "COM3",
+            onChange: (event) => setPort(event.target.value),
+            style: debugStyles.input,
+          }),
+          e("input", {
+            value: baudRate,
+            placeholder: "115200",
+            onChange: (event) => setBaudRate(event.target.value),
+            style: Object.assign({}, debugStyles.input, { minWidth: "92px", width: "92px" }),
+          }),
+        ),
+        props.error ? e("div", { style: { color: "#c0392b", marginTop: "4px" } }, String(props.error)) : null,
+        note === "" ? null : e("div", { style: { opacity: 0.75, marginTop: "4px" } }, note),
+      );
+    }
+
     function Channels(props) {
       const [view, setView] = useState({});
       const [tab, setTab] = useState("channels");
@@ -2488,6 +2585,7 @@ window.__ModuleLoader__.load({
         }
       };
       const taps = useChannelTaps(3000);
+      const serialState = useSerialState(4000);
       const recording = useWatchRecording(3000);
       const tapOf = (key) => taps.channels.find((item) => item.name === key);
       const tails = collectChannelTails(props.events);
@@ -2547,6 +2645,7 @@ window.__ModuleLoader__.load({
             ? [e(IocDiffPanel, { key: "changes", projectDir: projectDir })]
             : [
               e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error, onTouch: touchSession, touchMessage: touchMessage }),
+              e(SerialCard, { key: "serial-card", serial: serialState.serial, error: serialState.error, onChanged: serialState.reload }),
               e(RunningTools, { key: "running", events: props.events }),
               e(BreakpointPanel, { key: "breakpoints", debug: debugInfo.debug, onChanged: debugInfo.reload }),
               e(WatchCurves, { key: "curves", events: props.events, recording: recording.status, onStart: recording.start, onStop: recording.stop }),

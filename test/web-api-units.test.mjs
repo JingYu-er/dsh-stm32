@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十九条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 29);
-  assert.equal(new Set(WEB_API_PATHS).size, 29);
+test("WEB_API_PATHS：三十三条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 33);
+  assert.equal(new Set(WEB_API_PATHS).size, 33);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -266,6 +266,43 @@ test("WEB_API_PATHS：二十九条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial"), true, "串口卡片必须能读状态");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/ports"), true, "串口卡片必须能列端口");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/open"), true, "串口卡片必须能开会话");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/close"), true, "串口卡片必须能关会话");
+});
+
+test("串口面板：状态可读、开参数严格校验、关空会话不报错", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-serial-"));
+  const env = { DSH_STM32_SERIAL_HOME: home };
+  const deps = { subprocess: fakeSubprocess, env };
+  const status = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/serial", deps });
+  assert.equal(status.status, 200);
+  assert.equal(status.body.serial.open, false);
+  assert.equal(typeof status.body.serial.message, "string");
+
+  const badPort = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/serial/open",
+    body: JSON.stringify({ port: 3 }),
+    deps,
+  });
+  assert.equal(badPort.status, 400);
+  assert.match(badPort.body.error, /port/u);
+
+  const badBaud = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/serial/open",
+    body: JSON.stringify({ baudRate: "115200" }),
+    deps,
+  });
+  assert.equal(badBaud.status, 400);
+  assert.match(badBaud.body.error, /baudRate/u);
+
+  const closed = await handleWebApi({ method: "POST", path: WEB_API_PREFIX + "/serial/close", body: "{}", deps });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.serial.closed, false);
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("GET /source：读工程内源码的上下文；越界路径 400", async () => {
