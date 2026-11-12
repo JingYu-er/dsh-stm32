@@ -25,6 +25,7 @@ import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
 import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 import { beginToolCall, resetRunning } from "../lib/engine/progress.js";
 import { resetChannelTaps } from "../lib/engine/channel-tap.js";
+import { watchRecorder } from "../lib/engine/watch-record.js";
 
 /** 假的宿主 subprocess：本套件里没有任何路径会真的起进程。 */
 const fakeSubprocess = {
@@ -234,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十二条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 22);
-  assert.equal(new Set(WEB_API_PATHS).size, 22);
+test("WEB_API_PATHS：二十五条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 25);
+  assert.equal(new Set(WEB_API_PATHS).size, 25);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -258,6 +259,48 @@ test("WEB_API_PATHS：二十二条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff"), true, "变更页必须有对比路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff/save"), true, "变更页必须能记基线");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording"), true, "监视录制状态必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/start"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch-recording/stop"), true);
+});
+
+test("监视录制接口：默认关、开始后可查、非法间隔 400、停止复位", async () => {
+  watchRecorder.reset();
+  const idle = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/watch-recording",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(idle.status, 200);
+  assert.equal(idle.body.watchRecording.active, false);
+
+  const bad = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch-recording/start",
+    body: JSON.stringify({ intervalMs: 70000 }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /intervalMs/u);
+
+  const started = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch-recording/start",
+    body: JSON.stringify({ intervalMs: 1000 }),
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.watchRecording.active, true);
+  assert.equal(started.body.watchRecording.intervalMs, 1000);
+
+  const stopped = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch-recording/stop",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(stopped.status, 200);
+  assert.equal(stopped.body.watchRecording.active, false);
+  watchRecorder.reset();
 });
 
 test("GET /artifacts：返回 elf 与芯片容量；没有构建目录时 elf 为 null", async () => {

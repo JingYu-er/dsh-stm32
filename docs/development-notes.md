@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S16）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S17）
 
 ### 一、目标与约束
 
@@ -6093,7 +6093,19 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 边界：只记 gdb 输出里出现的停点，后台悄悄命中（目标在跑时）不会被记录；id 0 表示输出里没有编号。
 - 计数：72 套件 / **1000 pass / 0 fail**；`client/client.js` 2460 行；包体 1894.8 KB / 284 文件 / 解包 15422.0 KB。
 
-### 十九、教训
+### 十九、监视自动采样（S17）
+
+- 问题：曲线只有「人手点一次 stm32_watch sample」才有新点，想观察计数器怎么走就得一直点。
+- 做法：把「什么时候采」交给定时器，采样本身原样复用。
+  - `src/engine/watch-recorder.ts`：`createWatchRecorder({sample, emit, now, setTimer?, clearTimer?})`，抽成工厂是为了单测注入假时钟与假定时器，不碰 gdb。间隔夹在 500–60000 ms（默认 2000），一次录制最多 10 分钟；`busy` 保证上一拍没采完不重叠；采到样本才发事件，失败只记 `lastError`、不停表。
+  - `src/engine/watch-record.ts`：进程内唯一实例。`sample` 调 `debugSessions.sampleWatches({})`（目标在跑就先拦停、读完按原状态放回），`emit` 走 `emitChannel({channel:"watch", meta:{action:"record", samples}})`——形状与 `stm32_watch` 的 sample 一致，面板的 `collectWatchSeries` 不用改。
+  - `GET /watch-recording`、`POST /watch-recording/start`、`POST /watch-recording/stop`：开始只接受 500–60000 的整数毫秒，越界 400；状态含已录样本数、起止时间、剩余时长与最近错误。`src/index.ts` 在 `session/disposed` 与 `dispose` 时复位。
+  - 面板：`WatchCurves` 头部「自动采样 / 停止」按钮与状态文字（3 秒轮询），采样结果随事件流回来，不另拉数据。
+- 为什么默认关：自动采样会在目标运行时反复拦停它，联调多久就打断多久；这个代价必须由用户显式同意。
+- 边界：录制不跨调试会话（会话重建后采样直接失败并记 `lastError`）；10 分钟上限是防忘记关，不是配额。
+- 计数：73 套件 / **1006 pass / 0 fail**；`client/client.js` 2520 行；包体 1897.7 KB / 286 文件 / 解包 15433.8 KB。
+
+### 二十、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

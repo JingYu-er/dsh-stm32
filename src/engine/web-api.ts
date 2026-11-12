@@ -34,6 +34,7 @@ import {
 import { evidenceRoot } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
+import { watchRecorder } from "./watch-record.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
@@ -425,6 +426,9 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/channels",
   WEB_API_PREFIX + "/channels/start",
   WEB_API_PREFIX + "/channels/stop",
+  WEB_API_PREFIX + "/watch-recording",
+  WEB_API_PREFIX + "/watch-recording/start",
+  WEB_API_PREFIX + "/watch-recording/stop",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -560,7 +564,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/artifacts" &&
     path !== WEB_API_PREFIX + "/evidence" &&
     path !== WEB_API_PREFIX + "/replay" &&
-    path !== WEB_API_PREFIX + "/ioc-diff";
+    path !== WEB_API_PREFIX + "/ioc-diff" &&
+    path !== WEB_API_PREFIX + "/watch-recording";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -771,6 +776,24 @@ export async function handleWebApi(input: {
       picked.rtt = wantOn;
     }
     return ok({ channels: setChannelTaps(picked) });
+  }
+  if (path === WEB_API_PREFIX + "/watch-recording") {
+    return ok({ watchRecording: watchRecorder.status() });
+  }
+  if (path === WEB_API_PREFIX + "/watch-recording/start" || path === WEB_API_PREFIX + "/watch-recording/stop") {
+    if (path.endsWith("/stop")) return ok({ watchRecording: watchRecorder.stop() });
+    const raw = parsed.value.intervalMs;
+    if (raw !== undefined) {
+      // 夹紧放在录制器里，这里只拒掉明显不是「毫秒数」的输入。
+      if (typeof raw !== "number" || !Number.isFinite(raw) || Math.trunc(raw) !== raw) {
+        return fail(400, "intervalMs 必须是 500–60000 的整数（毫秒）");
+      }
+      if (raw < 500 || raw > 60_000) {
+        return fail(400, "intervalMs 必须是 500–60000 的整数（毫秒）");
+      }
+    }
+    const started = watchRecorder.start(raw === undefined ? {} : { intervalMs: raw });
+    return ok({ watchRecording: started });
   }
   if (path === WEB_API_PREFIX + "/abort") {
     // 面板「中止」：只中止登记过的在途调用，不碰调试会话与后台 job。

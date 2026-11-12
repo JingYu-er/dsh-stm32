@@ -1217,8 +1217,33 @@ window.__ModuleLoader__.load({
     function WatchCurves(props) {
       const series = collectWatchSeries(props.events);
       const keys = Object.keys(series).sort();
+      const recording = props.recording ?? null;
+      const header = e(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: "8px", padding: "6px 10px" } },
+        e("span", { style: { flex: "1 1 auto", fontSize: "12px" } }, "监视采样"),
+        e(
+          "span",
+          { style: { fontSize: "11px", opacity: 0.6 }, title: recording?.lastError ?? "" },
+          recording?.active === true ? "自动采样中 · 每 " + String(recording.intervalMs) + " ms" : "手动",
+        ),
+        e(
+          "button",
+          {
+            type: "button",
+            onClick: recording?.active === true ? props.onStop : props.onStart,
+            style: { fontSize: "11px", padding: "1px 8px" },
+          },
+          recording?.active === true ? "停止" : "自动采样",
+        ),
+      );
       if (keys.length === 0) {
-        return e("div", { style: { padding: "6px 10px", opacity: 0.55, fontSize: "12px" } }, "暂无数值型监视采样。");
+        return e(
+          "div",
+          { style: { padding: "0 0 6px 0" } },
+          header,
+          e("div", { style: { padding: "0 10px 6px 10px", opacity: 0.55, fontSize: "12px" } }, "暂无数值型监视采样。"),
+        );
       }
       return e(
         "div",
@@ -1227,11 +1252,12 @@ window.__ModuleLoader__.load({
             display: "flex",
             flexDirection: "column",
             gap: "4px",
-            padding: "6px 10px",
+            padding: "0 0 6px 0",
             borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)",
             fontSize: "12px",
           },
         },
+        header,
         keys.map((key) => {
           const values = series[key];
           const last = values[values.length - 1];
@@ -1796,6 +1822,39 @@ window.__ModuleLoader__.load({
       return { channels, error, toggle };
     }
 
+    /** 监视自动采样：状态与开关。采样结果由同一个事件流带回，面板不另拉数据。 */
+    function useWatchRecording(intervalMs) {
+      const [status, setStatus] = useState(null);
+      const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let closed = false;
+        const load = async () => {
+          const result = await callApi("GET", "watch-recording");
+          if (closed) return;
+          if (result.ok) {
+            setStatus(result.value?.watchRecording ?? null);
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [intervalMs, tick]);
+      const send = async (action) => {
+        const result = await callApi("POST", "watch-recording/" + action, {});
+        if (!result.ok) setError(result.error);
+        else setStatus(result.value?.watchRecording ?? null);
+        setTick((value) => value + 1);
+      };
+      return { status, error, start: () => send("start"), stop: () => send("stop") };
+    }
+
     /** 从事件流里算「谁还在跑」：start 未配对 ok/fail 即视为在途，progress 更新阶段。 */
     function collectRunning(events) {
       const order = [];
@@ -2014,6 +2073,7 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = useState("channels");
       const debugInfo = useDebugStatus(5000);
       const taps = useChannelTaps(3000);
+      const recording = useWatchRecording(3000);
       const tapOf = (key) => taps.channels.find((item) => item.name === key);
       const tails = collectChannelTails(props.events);
       const projectDir = debugInfo.debug?.projectDir ?? "";
@@ -2071,7 +2131,7 @@ window.__ModuleLoader__.load({
               e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error }),
               e(RunningTools, { key: "running", events: props.events }),
               e(BreakpointPanel, { key: "breakpoints", debug: debugInfo.debug, onChanged: debugInfo.reload }),
-              e(WatchCurves, { key: "curves", events: props.events }),
+              e(WatchCurves, { key: "curves", events: props.events, recording: recording.status, onStart: recording.start, onStop: recording.stop }),
             ];
       const channelBlocks = CHANNEL_DEFS.map((def) =>
           e(ChannelBlock, {

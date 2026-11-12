@@ -111,6 +111,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(text.includes("导出 JSONL"), "时间线工具栏要能导出当前视图：" + text.slice(0, 500));
     assert.ok(text.includes("全部事件"), "时间线工具栏要有状态筛选：" + text.slice(0, 500));
     assert.ok(text.includes("命中历史"), "断点面板要有命中历史：" + text.slice(0, 500));
+    assert.ok(text.includes("自动采样"), "监视曲线要有自动采样开关：" + text.slice(0, 500));
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
