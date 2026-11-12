@@ -8,7 +8,13 @@
  * 工具与斜杠命令照常可用。
  */
 
-import { handleWebApi, WEB_API_PATHS, type WebApiDeps } from "./web-api.js";
+import {
+  EVENT_STREAM_PATH,
+  handleWebApi,
+  openEventStream,
+  WEB_API_PATHS,
+  type WebApiDeps,
+} from "./web-api.js";
 import type { DshContext, SubprocessService, WebServerService } from "../types.js";
 
 /** 请求体上限：面板最大的请求是配置对象，1 MB 已经非常宽松。 */
@@ -74,6 +80,19 @@ export function registerWebRoutes(ctx: DshContext): void {
     if (subprocess === undefined || subprocess === null) return;
     const deps: WebApiDeps = { subprocess };
     for (const path of WEB_API_PATHS) {
+      if (path === EVENT_STREAM_PATH) {
+        // 事件流是长连接，直接写原始 response；响应头与心跳都在 openEventStream 里。
+        server.register({
+          kind: "exact",
+          path,
+          handler: (request: any, response: any) => {
+            const url = parseUrl(request?.url);
+            const since = Number(url.query.since ?? "0");
+            openEventStream(request, response, { since: Number.isFinite(since) ? since : 0 });
+          },
+        });
+        continue;
+      }
       server.register({
         kind: "exact",
         path,

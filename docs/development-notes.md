@@ -5902,3 +5902,52 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
+
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1/S2）
+
+### 一、目标与约束
+
+需求是给插件一个与「对话 / 上下文 / 编队」并列的主窗口标签，用于人机联调：模型做了什么、参数与结果是什么、串口与 RTT 输出长什么样，都能在同一屏看到，并且能贴回对话里引用。
+
+约束（用户拍板）：
+
+- 内存环形缓冲保留 5000 条；超出的每 30 秒落一批 log；证据目录每会话一个。
+- 先做停靠网格（拖分隔条、收起到抽屉），自由浮动留到后续阶段。
+- 版本号不变（仍 0.1.7），不新建 release notes。
+
+### 二、实现
+
+事件链路（服务端）：
+
+- `src/engine/event-bus.ts`：纯内存、无定时器。`EVENT_RING_LIMIT = 5000`、`EVENT_PAYLOAD_LIMIT = 8192`、`EVENT_PENDING_LIMIT = 2000`。`emitEvent()` 分配单调 `seq` 与 ISO 毫秒时间；payload 超限截成 `{preview}` 并置 `truncated`；环形挤出的事件进待落盘队列，队列再满则计入缺口计数。导出 `subscribeEvents` / `eventSnapshot(since)` / `drainEvicted` / `requeueEvicted` / `takeDroppedCount` / `setEventSessionKey` / `resetEventBus`。
+- `src/engine/event-log.ts`：`EVENT_LOG_INTERVAL_MS = 30_000`，`evidenceRoot()` 默认 `~/.dsh-stm32/evidence`（`DSH_STM32_EVIDENCE` 可覆盖），目录为 `<root>/<yyyy-mm-dd>/<会话键>/events-<HHmmss>.jsonl`；`safeSessionKey()` 把非 `[A-Za-z0-9._-]` 归一成 `-`。有缺口时先写一条 `kind:"log" status:"fail"` 的缺口事件，避免证据看起来连续；写失败把本批放回队列。
+- `src/engine/tool-events.ts`：装配期给 ctx 套 Proxy，只替换 `tools.register`，给 25 个 `stm32_*` 工具包一层 start / ok / fail；其余属性绑定到真实 ctx 转发，避免破坏 cordis 的 this 语义。名字不以 `stm32_` 开头的工具原样注册。
+- `src/engine/channels.ts`：串口 / RTT / 监视输出编成 `kind: "channel:<名字>"` 的事件，单行截 400 字符、单次最多 400 行（`CHANNEL_LINE_LIMIT`），摘要写「串口 12 行」，超限标注「面板保留前 N 行」。
+- `GET /dsh-stm32/api/events`：SSE。先补发 `?since=` 之后的存量，再推增量；15 秒心跳（`x-accel-buffering: no`），请求断开时清理订阅。路由在 `registerWebRoutes` 里特殊处理，不进 JSON 分发器。
+- `GET /dsh-stm32/api/status`：只读诊断，返回 `eventCount` / `latestSeq` / `sessionKey` / `evidenceRoot` / `ringLimit` / `evidenceOverride`。
+
+客户端（`client/client.js`，仍手写纯 JS，`scripts/copy-client.mjs` 原样复制）：
+
+- 注册 `conversation.view`：`id: "stm32-debug"`、`order: 40`、`label: () => "调试台"`。
+- 停靠网格：左时间线（按 seq 增量续播、断线 1.5 s 重连并从 lastSeq 续上）、中事件详情（payload 与 refs，带「复制引用」生成 `[调试台事件 #seq] kind status：summary`）、右实时通道（串口 / RTT / 监视各自尾部 400 行，可暂停、清空）、底部控制台（最近 400 行）。分隔条拖动改宽、双击复位，面板可收进抽屉，宽度与收起状态存 `localStorage["dsh-stm32.debug.layout.v1"]`。
+- 状态条：连接状态、事件数、最新 seq、证据目录（悬停显示完整路径与是否被环境变量覆盖）。
+
+### 三、验证
+
+- `npm run typecheck` / `npm run build` exit 0。
+- `node test/run-units.mjs` **951 pass / 0 fail**（64 个套件）。新增 `test/event-bus-units.test.mjs`（环形上限、payload 截断、待落盘队列与缺口、订阅与注销、证据目录布局、落盘内容与缺口首行、工具埋点 start/ok/fail、SSE 补发与断开、通道归一）与 `test/client-debug-units.test.mjs`（桩 React 下两个槽位注册、调试台可渲染）。
+- 真 HTTP 探针：用 `http.createServer` + `openEventStream` 起临时服务，curl 收到 `: connected`、两条存量事件（`id:` 与 data 对应）与 `: ping` 心跳。
+- `npm run test:pack` 全部通过；`npm run test:size` 1854.2 KB / 276 文件 / 解包 15261.3 KB（上限 3906.3 KB）。
+- 未验：真机窗口里的标签与硬件通道——需要重启 DSH，由用户侧完成。
+
+### 四、已知限制与后续
+
+- 通道输出是「一次工具调用一批」，不是后台常驻流；常驻 RTT / 串口流与断点面板、监视历史曲线留到后续阶段。
+- 证据目录的会话键取工具调用的 `agent.id`；面板自身 sessionId 的显式绑定尚未做，多会话时事件按到达顺序混在一起。
+- 仅「人 → AI」的复制引用已可用，「AI → 人」的进度与中止按钮未做。
+
+### 五、教训
+
+- **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
+- **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
+- **给工具批量埋点用代理，不要改 25 个 execute**：注册期包一层，零侵入；但 Proxy 必须把方法绑定到真实 ctx，否则 cordis 的 this 语义会被换掉。

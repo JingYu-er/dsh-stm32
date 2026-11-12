@@ -857,3 +857,34 @@ const fake = {
 ---
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
+
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1/S2）
+
+> 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
+
+### 15.1 先读哪里
+
+- `src/engine/event-bus.ts`：环形缓冲与序号。`EVENT_RING_LIMIT = 5000`、`EVENT_PAYLOAD_LIMIT = 8192`、`EVENT_PENDING_LIMIT = 2000`；`emitEvent` 是唯一写入入口。
+- `src/engine/event-log.ts`：被挤出的事件按 30 秒一批写到 `<证据根>/<日期>/<会话键>/events-<HHmmss>.jsonl`；缺口先写一条 `kind:"log"` 的事件。
+- `src/engine/tool-events.ts`：装配期 Proxy 只包 `tools.register`，给 `stm32_*` 工具加 start / ok / fail。
+- `src/engine/channels.ts`：串口 / RTT / 监视的输出编成 `channel:<名字>` 事件（单行 ≤400 字符、单次 ≤400 行）。
+- `src/engine/web-api.ts` 的 `openEventStream` 与 `EVENT_STREAM_PATH`（`/dsh-stm32/api/events`，SSE，`?since=` 续播）；`/status` 返回计数与证据目录。
+- `src/engine/web-routes.ts`：事件流单独分支，直接写原始 `response`，不进 JSON 分发器。
+- `client/client.js`：`DebugConsole`（时间线 / 详情 / 通道 / 控制台 / 抽屉），布局存 `dsh-stm32.debug.layout.v1`。
+- `test/event-bus-units.test.mjs`、`test/client-debug-units.test.mjs`：改事件层或客户端结构后先跑这两个。
+
+### 15.2 三条不变量
+
+1. **单一事实源**：面板不缓存第二份数据，只按 `seq` 增量续播；重连从 `lastSeq` 开始，不重放全量。
+2. **落盘可表达缺口**：缓冲区溢出或写入失败时，证据目录里必须有痕迹（缺口事件或整批回队），不能静默丢。
+3. **埋点与工具解耦**：工具实现不感知事件系统；`stm32_*` 前缀决定是否被包装，其它插件的工具原样注册。
+
+### 15.3 计数口径（0.1.7 起）
+
+| 项 | 当前值 |
+| --- | --- |
+| 注册工具 | 25 个 |
+| 源码 | `src/**/*.ts` 115 个文件 |
+| 单测 | 64 个套件 / 951 pass / 0 fail |
+| 客户端 | `client/client.js` 1335 行（手写，不经 tsc） |
+| 包体 | 1854.2 KB / 276 文件 / 解包 15261.3 KB（护栏上限 3906.3 KB） |

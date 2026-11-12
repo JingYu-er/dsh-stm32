@@ -40,6 +40,9 @@ import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
+import { emitEvent } from "./engine/event-bus.js";
+import { startEventLog } from "./engine/event-log.js";
+import { instrumentContext } from "./engine/tool-events.js";
 import type { DshContext } from "./types.js";
 
 export const name = "dsh-stm32";
@@ -70,31 +73,45 @@ export function callerIdOf(event: unknown, session: unknown): string {
 }
 
 export function apply(ctx: DshContext): void {
-  registerEnvInstall(ctx);
-  registerDownload(ctx);
-  registerFirmwareInstall(ctx);
-  registerProjectCreate(ctx);
-  registerProjectExport(ctx);
-  registerCodePatch(ctx);
-  registerGenerate(ctx);
-  registerIocInspect(ctx);
-  registerIocPlan(ctx);
-  registerIocApply(ctx);
-  registerIocVerify(ctx);
-  registerBuild(ctx);
-  registerFlash(ctx);
-  registerDebugRun(ctx);
-  registerDebugSession(ctx);
-  registerRegsRead(ctx);
-  registerRoutePlan(ctx);
-  registerRtt(ctx);
-  registerWatchTool(ctx);
-  registerAssets(ctx);
-  registerCache(ctx);
-  registerDoctor(ctx);
-  registerSerial(ctx);
+  // 工具注册走一层代理：每次调用记 start / ok / fail，调试台的事件流由此而来。
+  const toolsCtx = instrumentContext(ctx);
+  // 被环形缓冲挤出的事件按批落进证据目录（每会话一个目录）。
+  const stopEventLog = startEventLog();
+  const stopLog = (): void => {
+    emitEvent({
+      source: "system",
+      kind: "lifecycle",
+      status: "info",
+      summary: "插件卸载，事件日志停止",
+    });
+    void stopEventLog();
+  };
+
+  registerEnvInstall(toolsCtx);
+  registerDownload(toolsCtx);
+  registerFirmwareInstall(toolsCtx);
+  registerProjectCreate(toolsCtx);
+  registerProjectExport(toolsCtx);
+  registerCodePatch(toolsCtx);
+  registerGenerate(toolsCtx);
+  registerIocInspect(toolsCtx);
+  registerIocPlan(toolsCtx);
+  registerIocApply(toolsCtx);
+  registerIocVerify(toolsCtx);
+  registerBuild(toolsCtx);
+  registerFlash(toolsCtx);
+  registerDebugRun(toolsCtx);
+  registerDebugSession(toolsCtx);
+  registerRegsRead(toolsCtx);
+  registerRoutePlan(toolsCtx);
+  registerRtt(toolsCtx);
+  registerWatchTool(toolsCtx);
+  registerAssets(toolsCtx);
+  registerCache(toolsCtx);
+  registerDoctor(toolsCtx);
+  registerSerial(toolsCtx);
   // 设置面板的宿主 API（浏览器端 lib/client.js 用）。宿主没 webServer 服务时静默跳过。
-  registerWebRoutes(ctx);
+  registerWebRoutes(toolsCtx);
 
   // 斜杠命令与 SKILL 是"锦上添花"的层：宿主没组合 commands / skills 服务时静默跳过，
   // 工具本身照常可用（用 ctx.inject 而不是顶层 inject，避免整个插件因缺服务不加载）。
@@ -134,6 +151,7 @@ export function apply(ctx: DshContext): void {
       void closeSerial({}).catch(() => undefined);
     });
     ctx.on("dispose", () => {
+      stopLog();
       void debugSessions.stop("插件卸载");
       void closeSerial({}).catch(() => undefined);
     });

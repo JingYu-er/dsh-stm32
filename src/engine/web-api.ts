@@ -24,6 +24,14 @@ import {
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { buildTargets, probeAll, type ProbeResult } from "./probe.js";
 import { planOrInstallMsys2, type Msys2InstallResult } from "./msys2-install.js";
+import {
+  EVENT_RING_LIMIT,
+  eventSessionKey,
+  eventSnapshot,
+  subscribeEvents,
+  type DebugEvent,
+} from "./event-bus.js";
+import { evidenceRoot } from "./event-log.js";
 import type { SubprocessService } from "../types.js";
 
 /** 面板能看到的四类能力（与 stm32_doctor 同一口径）。 */
@@ -391,6 +399,8 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/install/plan",
   WEB_API_PREFIX + "/install/start",
   WEB_API_PREFIX + "/install/state",
+  WEB_API_PREFIX + "/events",
+  WEB_API_PREFIX + "/status",
 ];
 
 function ok(body: Record<string, unknown>): WebJson {
@@ -428,7 +438,10 @@ export async function handleWebApi(input: {
   const method = input.method.toUpperCase();
   const path = input.path.replace(/\/+$/u, "");
   const query = input.query ?? {};
-  const needsBody = path !== WEB_API_PREFIX + "/config" && path !== WEB_API_PREFIX + "/install/state";
+  const needsBody =
+    path !== WEB_API_PREFIX + "/config" &&
+    path !== WEB_API_PREFIX + "/install/state" &&
+    path !== WEB_API_PREFIX + "/status";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -468,10 +481,93 @@ export async function handleWebApi(input: {
     if (state === null) return fail(404, "没有这个安装任务：" + taskId);
     return ok({ state });
   }
+  if (path === WEB_API_PREFIX + "/status") {
+    // 面板状态条用：事件计数、当前会话键、证据目录。都是只读的诊断信息。
+    const ring = eventSnapshot(0);
+    return ok({
+      status: {
+        eventCount: ring.length,
+        latestSeq: ring.length === 0 ? 0 : (ring[ring.length - 1]?.seq ?? 0),
+        sessionKey: eventSessionKey(),
+        evidenceRoot: evidenceRoot(env),
+        ringLimit: EVENT_RING_LIMIT,
+        evidenceOverride:
+          typeof env.DSH_STM32_EVIDENCE === "string" && env.DSH_STM32_EVIDENCE.trim() !== "",
+      },
+    });
+  }
   return fail(404, "没有这个接口：" + path);
 }
 
 /** 单测用：清空安装任务表。 */
 export function resetInstallTasks(): void {
   installTasks.clear();
+}
+
+/* ------------------------------ 事件流 ------------------------------ */
+
+/** 事件流的路径（SSE，长连接，不用 JSON 分发器）。 */
+export const EVENT_STREAM_PATH = WEB_API_PREFIX + "/events";
+
+/** 心跳间隔：反代与浏览器都会掐掉长时间无数据的连接。 */
+const EVENT_HEARTBEAT_MS = 15_000;
+
+function writeEvent(response: any, event: DebugEvent): void {
+  if (typeof response.write !== "function") return;
+  response.write("id: " + String(event.seq) + "\n");
+  response.write("data: " + JSON.stringify(event) + "\n\n");
+}
+
+/**
+ * 打开一条事件流：先补发 since 之后的存量事件，再持续推送新事件。
+ *
+ * 返回停止函数；请求方断开时自动停止，调用方也可显式停止。
+ * 这里直接写原始 response，交给 registerWebRoutes 注册，不走 handleWebApi 的 JSON 分发。
+ */
+export function openEventStream(
+  request: any,
+  response: any,
+  options: { since?: number; heartbeatMs?: number } = {},
+): () => void {
+  let closed = false;
+  let unsubscribe: () => void = () => {};
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stop = (): void => {
+    if (closed) return;
+    closed = true;
+    unsubscribe();
+    if (heartbeat !== undefined) clearInterval(heartbeat);
+    if (typeof response.end === "function") {
+      try {
+        response.end();
+      } catch {
+        // 对端已断开，忽略。
+      }
+    }
+  };
+  if (typeof response.writeHead === "function") {
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+  }
+  if (typeof response.write === "function") response.write(": connected\n\n");
+  const since = typeof options.since === "number" && Number.isFinite(options.since) ? options.since : 0;
+  for (const event of eventSnapshot(since)) writeEvent(response, event);
+  unsubscribe = subscribeEvents((event) => {
+    if (closed) return;
+    writeEvent(response, event);
+  });
+  heartbeat = setInterval(() => {
+    if (closed) return;
+    if (typeof response.write === "function") response.write(": ping\n\n");
+  }, options.heartbeatMs ?? EVENT_HEARTBEAT_MS);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
+  if (typeof request?.on === "function") {
+    request.on("close", stop);
+    request.on("error", stop);
+  }
+  return stop;
 }

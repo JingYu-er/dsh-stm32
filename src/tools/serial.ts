@@ -51,6 +51,7 @@ import type {
 } from "../engine/serial.js";
 import type { SerialNewline, SerialSettings } from "../data/serial-config.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
+import { emitChannel } from "../engine/channels.js";
 
 export const SERIAL_TOOL = "stm32_serial";
 
@@ -617,6 +618,13 @@ async function runRead(args: Record<string, unknown>, exec: ToolExec): Promise<T
     report.message = read.message;
     sessionFields(report, read.session);
     if (!read.ok) applyError(report, read.serialError, "");
+    if (read.ok && read.records.length > 0) {
+      emitChannel({
+        channel: "serial",
+        lines: read.records.map((record) => record.d),
+        meta: { action: "read" },
+      });
+    }
     return { message: report.message, report };
   }
 
@@ -650,6 +658,13 @@ async function runRead(args: Record<string, unknown>, exec: ToolExec): Promise<T
       ? "cursor 之后没有新行（rx.ndjson " + String(window.fileBytes) + " 字节）"
       : "读到 " + String(window.records.length) + " 行新输出";
   sessionFields(report, session);
+  if (window.records.length > 0) {
+    emitChannel({
+      channel: "serial",
+      lines: window.records.map((record) => record.d),
+      meta: { action: "read", incremental: true },
+    });
+  }
   return { message: report.message, report };
 }
 
@@ -744,6 +759,13 @@ async function runTransact(args: Record<string, unknown>, exec: ToolExec): Promi
   report.message = result.message;
   sessionFields(report, result.session);
   if (!result.ok) applyError(report, result.serialError, "");
+  if (result.records.length > 0) {
+    emitChannel({
+      channel: "serial",
+      lines: result.records.map((record) => record.d),
+      meta: { action: "transact", ...(result.matchedLine === undefined ? {} : { matchedLine: result.matchedLine }) },
+    });
+  }
   if (result.timedOut) report.notes.push("等到 timeoutMs 也没有命中 until；如果只是要看输出，用 read 更省事");
   return { message: report.message, report };
 }

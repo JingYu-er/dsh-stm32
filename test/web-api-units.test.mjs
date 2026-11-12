@@ -21,6 +21,7 @@ import {
   WEB_API_PREFIX,
 } from "../lib/engine/web-api.js";
 import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
+import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 
 /** 假的宿主 subprocess：本套件里没有任何路径会真的起进程。 */
 const fakeSubprocess = {
@@ -230,12 +231,37 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 6);
-  assert.equal(new Set(WEB_API_PATHS).size, 6);
+test("WEB_API_PATHS：八条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 8);
+  assert.equal(new Set(WEB_API_PATHS).size, 8);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/config"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/install/state"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/events"), true, "调试台的事件流必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/status"), true);
+});
+
+test("GET /status：返回事件计数、会话键与证据目录", async () => {
+  resetEventBus();
+  setEventSessionKey("sess-status");
+  emitEvent({ source: "system", kind: "probe", summary: "一条事件" });
+  const result = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/status",
+    deps: { subprocess: fakeSubprocess, env: { DSH_STM32_EVIDENCE: "D:/evidence" } },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.ok, true);
+  const status = result.body.status;
+  assert.equal(status.sessionKey, "sess-status");
+  assert.equal(status.eventCount, 1);
+  assert.equal(status.latestSeq, 1);
+  assert.equal(status.ringLimit, 5000);
+  assert.equal(status.evidenceOverride, true);
+  assert.ok(String(status.evidenceRoot).replace(/\\/gu, "/").endsWith("D:/evidence"), String(status.evidenceRoot));
+  // 事件流路由不接受 JSON 分发
+  const wrong = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/status", deps: { subprocess: fakeSubprocess, env: {} } });
+  assert.equal(wrong.status, 200);
 });

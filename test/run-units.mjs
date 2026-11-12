@@ -39,6 +39,8 @@ import { fileURLToPath } from "node:url";
 const suites = [
   "build-units.test.mjs",
   "cache-units.test.mjs",
+  "event-bus-units.test.mjs",
+  "client-debug-units.test.mjs",
   "cache-gc-units.test.mjs",
   "assets-units.test.mjs",
   "probe-error-units.test.mjs",

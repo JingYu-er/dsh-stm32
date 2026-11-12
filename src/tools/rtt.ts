@@ -31,6 +31,7 @@ import { ensureSession, release, sessionInfo } from "../engine/probe-session.js"
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
+import { emitChannel } from "../engine/channels.js";
 
 export const RTT_TOOL = "stm32_rtt";
 
@@ -482,6 +483,13 @@ export function registerRtt(ctx: DshContext): void {
         snapshotInto(report, rttStatus());
         report.port = dumped.port;
         report.addr = dumped.addr === "" ? report.addr : dumped.addr;
+        if (dumped.ok && dumped.records.length > 0) {
+          emitChannel({
+            channel: "rtt",
+            lines: dumped.records.map((record) => "[" + String(record.level) + "] " + record.text),
+            meta: { action },
+          });
+        }
         if (dumped.probeError !== null) report.probeError = dumped.probeError;
         return { message: dumped.message, report };
       }
