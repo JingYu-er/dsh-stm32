@@ -36,6 +36,7 @@ import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
+import { decodeFault } from "./fault-hints.js";
 import { readPinout } from "./pinout.js";
 import type { SubprocessService } from "../types.js";
 
@@ -410,6 +411,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug/breakpoints",
   WEB_API_PREFIX + "/pinout",
   WEB_API_PREFIX + "/clocks",
+  WEB_API_PREFIX + "/faults",
   WEB_API_PREFIX + "/abort",
   WEB_API_PREFIX + "/channels",
   WEB_API_PREFIX + "/channels/start",
@@ -458,7 +460,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/debug" &&
     path !== WEB_API_PREFIX + "/channels" &&
     path !== WEB_API_PREFIX + "/pinout" &&
-    path !== WEB_API_PREFIX + "/clocks";
+    path !== WEB_API_PREFIX + "/clocks" &&
+    path !== WEB_API_PREFIX + "/faults";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -533,6 +536,27 @@ export async function handleWebApi(input: {
     const read = readClockTree(projectDir);
     if (!read.ok) return fail(409, read.error);
     return ok({ clocks: read.report });
+  }
+  if (path === WEB_API_PREFIX + "/faults") {
+    // 故障页：把本会话最近的失败事件按规则翻成「先看哪里」。只读事件流，不碰探针。
+    const wanted = (query["session"] ?? "").trim();
+    const since = Number(query["since"] ?? "0");
+    const limitRaw = Number(query["limit"] ?? "50");
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.trunc(limitRaw))) : 50;
+    const failures = eventSnapshot(Number.isFinite(since) ? since : 0, wanted).filter((item) => item.status === "fail");
+    const faults = failures.slice(-limit).map((item) => {
+      const decoded = decodeFault(item.summary);
+      return {
+        seq: item.seq,
+        time: item.time,
+        kind: item.kind,
+        summary: item.summary,
+        category: decoded.category,
+        hint: decoded.hint,
+        rule: decoded.rule,
+      };
+    });
+    return ok({ faults, total: failures.length });
   }
   if (path === WEB_API_PREFIX + "/debug/breakpoints") {
     // 断点面板：只放行三种动作，位置与编号在这里先校验，避免把任意 gdb 命令搬上 HTTP。

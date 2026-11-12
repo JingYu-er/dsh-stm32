@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 16);
-  assert.equal(new Set(WEB_API_PATHS).size, 16);
+test("WEB_API_PATHS：十七条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 17);
+  assert.equal(new Set(WEB_API_PATHS).size, 17);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -252,6 +252,7 @@ test("WEB_API_PATHS：十六条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/pinout"), true, "引脚面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/clocks"), true, "时钟面板必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/faults"), true, "故障面板必须有独立路由");
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -335,6 +336,38 @@ test("POST /abort：参数与在途调用校验，只中止登记过的调用", 
   assert.equal(handle.signal.aborted, true, "接口必须真的触发派生信号");
   handle.end();
   resetRunning();
+});
+
+test("GET /faults：只取失败事件并带上解码提示，limit 生效", async () => {
+  resetEventBus();
+  setEventSessionKey("fault-session");
+  emitEvent({ source: "model", kind: "stm32_flash", status: "fail", summary: "stm32_flash 失败：Error: unable to find a matching CMSIS-DAP device" });
+  emitEvent({ source: "model", kind: "stm32_build", status: "fail", summary: "stm32_build 失败：undefined reference to `HAL_Delay'" });
+  emitEvent({ source: "model", kind: "stm32_build", status: "ok", summary: "stm32_build 完成" });
+  emitEvent({ source: "model", kind: "stm32_build", status: "fail", summary: "stm32_build 失败：其它会话的事", session: "other" });
+
+  const all = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/faults",
+    query: { session: "fault-session" },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(all.status, 200);
+  assert.equal(all.body.total, 2, "只数本会话的失败事件");
+  assert.equal(all.body.faults.length, 2);
+  assert.equal(all.body.faults[0].category, "probe");
+  assert.equal(all.body.faults[1].rule, "build.undefined-reference");
+  assert.ok(all.body.faults[1].hint.includes("CMakeLists"));
+
+  const limited = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/faults",
+    query: { session: "fault-session", limit: "1" },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(limited.body.faults.length, 1, "limit 截取最近一条");
+  assert.equal(limited.body.total, 2, "total 仍是全部条数");
+  resetEventBus();
 });
 
 test("GET /clocks：读工程 .ioc 的 RCC 频率与分频，缺 .ioc 回 409", async () => {

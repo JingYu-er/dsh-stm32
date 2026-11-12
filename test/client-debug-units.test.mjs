@@ -103,6 +103,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(text.includes("在途调用"), text.slice(0, 800));
     assert.ok(text.includes("引脚"), "工作区标签要有引脚页：" + text.slice(0, 400));
     assert.ok(text.includes("时钟"), "工作区标签要有时钟页：" + text.slice(0, 400));
+    assert.ok(text.includes("故障"), "工作区标签要有故障页：" + text.slice(0, 500));
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
