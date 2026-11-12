@@ -24,6 +24,7 @@ import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
 import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
 import { emitEvent, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
 import { beginToolCall, resetRunning } from "../lib/engine/progress.js";
+import { removeAllWatches, watchState } from "../lib/engine/watch.js";
 import { resetChannelTaps } from "../lib/engine/channel-tap.js";
 import { watchRecorder } from "../lib/engine/watch-record.js";
 
@@ -235,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：三十五条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 35);
-  assert.equal(new Set(WEB_API_PATHS).size, 35);
+test("WEB_API_PATHS：三十六条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 36);
+  assert.equal(new Set(WEB_API_PATHS).size, 36);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -267,6 +268,7 @@ test("WEB_API_PATHS：三十五条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-sync"), true, ".ioc 同步状态必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch"), true, "监视登记表必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial"), true, "串口卡片必须能读状态");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/ports"), true, "串口卡片必须能列端口");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/open"), true, "串口卡片必须能开会话");
@@ -330,6 +332,80 @@ test("GET /source：读工程内源码的上下文；越界路径 400", async ()
   assert.equal(escape.status, 400);
   assert.match(escape.body.error, /工程目录内/u);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("GET/POST /watch：列清单、加值监视、移除、清空、非法动作 400", async () => {
+  removeAllWatches(watchState);
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const empty = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/watch", query: {}, deps });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.body.watch.entries.length, 0);
+
+  const added = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "add", kind: "value", expressions: ["uwTick"] }),
+    deps,
+  });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.watch.added.length, 1);
+  const id = added.body.watch.added[0].id;
+
+  const list = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/watch", query: {}, deps });
+  assert.equal(list.body.watch.entries.length, 1);
+  assert.equal(list.body.watch.entries[0].expression, "uwTick");
+
+  const badKind = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "add", kind: "nope", expressions: ["x"] }),
+    deps,
+  });
+  assert.equal(badKind.status, 409);
+  assert.match(badKind.body.error, /kind 不认识/u);
+
+  const removed = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "remove", ids: [id] }),
+    deps,
+  });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.watch.removed.length, 1);
+
+  await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "add", kind: "value", expressions: ["a", "b"] }),
+    deps,
+  });
+  const cleared = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "clear" }),
+    deps,
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.watch.removed.length, 2);
+
+  const unknownAction = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    query: {},
+    body: JSON.stringify({ action: "rename" }),
+    deps,
+  });
+  assert.equal(unknownAction.status, 400);
+  assert.match(unknownAction.body.error, /add \/ remove \/ clear/u);
+
+  const put = await handleWebApi({ method: "PUT", path: WEB_API_PREFIX + "/watch", query: {}, deps });
+  assert.equal(put.status, 405);
+  removeAllWatches(watchState);
 });
 
 test("GET /ioc-sync：.ioc 比 main.c 新算待生成，缺 .ioc 时 409", async () => {

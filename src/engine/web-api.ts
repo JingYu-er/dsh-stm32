@@ -38,6 +38,7 @@ import { watchRecorder } from "./watch-record.js";
 import { closeSerial, listPorts, openSerial, sendSerial, serialStatus } from "./serial.js";
 import { readInterrupts } from "./interrupts.js";
 import { readIocSync } from "./ioc-sync.js";
+import { addWatches, clearWatches, listWatches, removeWatches } from "./watch-admin.js";
 import { readSourceSlice } from "./source-slice.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
@@ -438,6 +439,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug/touch",
   WEB_API_PREFIX + "/interrupts",
   WEB_API_PREFIX + "/ioc-sync",
+  WEB_API_PREFIX + "/watch",
   WEB_API_PREFIX + "/source",
   WEB_API_PREFIX + "/serial",
   WEB_API_PREFIX + "/serial/ports",
@@ -585,9 +587,15 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/source" &&
     path !== WEB_API_PREFIX + "/serial" &&
     path !== WEB_API_PREFIX + "/serial/ports";
-  if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
-  if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
-  const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
+  // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
+  if (path === WEB_API_PREFIX + "/watch") {
+    if (method !== "GET" && method !== "POST") return fail(405, "这个接口只接受 GET 或 POST");
+  } else if (needsBody && method !== "POST") {
+    return fail(405, "这个接口只接受 POST");
+  } else if (!needsBody && method !== "GET") {
+    return fail(405, "这个接口只接受 GET");
+  }
+  const parsed = needsBody || (path === WEB_API_PREFIX + "/watch" && method === "POST") ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);
   if (path === WEB_API_PREFIX + "/config") {
@@ -654,6 +662,30 @@ export async function handleWebApi(input: {
     const read = readSourceSlice(projectDir, file, Number.isFinite(line) ? line : Number.NaN, Number.isFinite(context) ? context : 3);
     if (!read.ok) return fail(400, read.error);
     return ok({ source: read.slice });
+  }
+  if (path === WEB_API_PREFIX + "/watch") {
+    // 监视登记表：与 stm32_watch 共用同一份状态；硬件观察点要活动会话。
+    if (method === "GET") return ok({ watch: listWatches() });
+    const action = typeof parsed.value.action === "string" ? parsed.value.action : "";
+    if (action === "add") {
+      const kind = typeof parsed.value.kind === "string" ? parsed.value.kind : "value";
+      const expressions = Array.isArray(parsed.value.expressions)
+        ? parsed.value.expressions.filter((item): item is string => typeof item === "string")
+        : [];
+      const report = await addWatches({ kind, expressions });
+      if (!report.ok && report.added.length === 0) return fail(409, report.message);
+      return ok({ watch: report });
+    }
+    if (action === "remove") {
+      const ids = Array.isArray(parsed.value.ids)
+        ? parsed.value.ids.filter((item): item is number => typeof item === "number")
+        : [];
+      const report = await removeWatches(ids);
+      if (!report.ok && report.removed.length === 0) return fail(404, report.message);
+      return ok({ watch: report });
+    }
+    if (action === "clear") return ok({ watch: await clearWatches() });
+    return fail(400, "action 必须是 add / remove / clear 之一");
   }
   if (path === WEB_API_PREFIX + "/ioc-sync") {
     // .ioc 与生成代码是否同步：只比修改时间，不读内容、不跑 CubeMX。

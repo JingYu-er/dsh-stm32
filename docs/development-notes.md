@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S32）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S33）
 
 ### 一、目标与约束
 
@@ -6263,7 +6263,20 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 计数：76 套件 / **1026 pass / 0 fail**；包体 1916.1 KB / 289 文件 / 解包 15513.3 KB；`client/client.js` 3174 行。
 - 教训：时间戳判定要留容差、要有「文件不存在」的第三态——把不确定当确定，比不显示更糟。
 
-### 三十六、教训
+### 三十六、面板编辑监视登记表（S33）
+
+- 问题：监视项原来只能让模型调 `stm32_watch action=add` 才登记；人在面板上看到曲线，却没法自己加一项去掉一项。
+- 做法：新增 `src/engine/watch-admin.ts`，面板与工具共用同一份 `watchState`：
+  - `listWatches()` → `{entries, budget, canAddWatchpoint}`（`budget` 取 `debugSessions.status().watchpoints`，`canAddWatchpoint` = 有活动会话）。
+  - `addWatches({kind, expressions})`：`kind=value` 走 `registerWatch`（不碰目标）；`write/read/access` 走 `debugSessions.addWatchpoints`（要活动会话，装比较器时目标必须停）。`kind` 先用 `isWatchKind` 校验，不认识直接拒。
+  - `removeWatches(ids)` / `clearWatches()` 交给 `debugSessions.removeWatchpoints`：它同时清登记表、删 gdb 里的比较器、把目标放回去——自己再实现一遍就会漏掉 gdb 侧。
+- 接口：`/watch` 一个路径两种动词。GET 列清单；POST 按 `action` 分 add/remove/clear，未知动作 400。为此在动词校验处给这个路径开了两动词的例外，POST 时单独解析 body（`needsBody || (path === /watch && method === POST)`）。
+- 客户端：`useWatches(5000)` + `WatchAdmin`（标题栏显示观察点用量与「清空」；每行 `#id 表达式 类型 最近值 移除`；底部表达式输入 + 类型下拉 + 「添加」，回车即加）。插在断点卡片与曲线之间。
+- 测试：`test/watch-admin-units.test.mjs` 4 条（加一项与重复拒绝、非法表达式/空清单/未知 kind、无会话的硬件观察点被拒且不登记、移除/清空/非法 id）；web-api 36 条断言与 `/watch` 用例（GET 空、POST add、409 未知 kind、remove、clear、未知 action 400、PUT 405）；验收脚本 4 项。
+- 计数：77 套件 / **1031 pass / 0 fail**；包体 1919.4 KB / 290 文件 / 解包 15528.8 KB；`client/client.js` 3280 行。
+- 教训：同一份状态有两个写入口时，删除路径要交给「真正持有硬件那一侧」做，否则登记表与 gdb 会各说各话。
+
+### 三十七、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

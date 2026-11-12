@@ -50,6 +50,7 @@ const suites = [
     "ioc-apply-tool-units.test.mjs",
     "breakpoint-hits-units.test.mjs",
     "watch-recorder-units.test.mjs",
+    "watch-admin-units.test.mjs",
     "interrupts-units.test.mjs",
     "ioc-sync-units.test.mjs",
     "source-slice-units.test.mjs",
