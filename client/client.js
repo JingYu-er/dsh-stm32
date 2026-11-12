@@ -1725,6 +1725,8 @@ window.__ModuleLoader__.load({
       );
     }
 
+    const RTT_LEVEL_LABEL = { 1: "错误", 2: "警告", 3: "信息", 4: "调试" };
+
     const CHANNEL_DEFS = [
       { key: "serial", label: "串口" },
       { key: "rtt", label: "RTT" },
@@ -1765,8 +1767,17 @@ window.__ModuleLoader__.load({
       };
       const pauseAt = typeof state.pauseAt === "number" ? state.pauseAt : lines.length;
       const clearAt = typeof state.clearAt === "number" ? state.clearAt : 0;
-      const shown = lines.slice(clearAt, Math.max(clearAt, pauseAt));
+      const window_ = lines.slice(clearAt, Math.max(clearAt, pauseAt));
       const paused = typeof state.pauseAt === "number";
+      const [keyword, setKeyword] = useState("");
+      const [level, setLevel] = useState(0);
+      const needle = keyword.trim().toLowerCase();
+      const shown = window_.filter((line) => {
+        if (needle !== "" && !String(line).toLowerCase().includes(needle)) return false;
+        if (level === 0) return true;
+        const matched = /^\[(\d)\]/u.exec(String(line));
+        return matched !== null && Number(matched[1]) === level;
+      });
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "6px 10px", borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },
@@ -1774,7 +1785,7 @@ window.__ModuleLoader__.load({
           "div",
           { style: { display: "flex", alignItems: "center", gap: "6px" } },
           e("strong", null, props.label),
-          e("span", { style: { opacity: 0.55 } }, String(lines.length) + " 行"),
+          e("span", { style: { opacity: 0.55 } }, shown.length === window_.length ? String(lines.length) + " 行" : String(shown.length) + " / " + String(window_.length) + " 行"),
           props.tap === undefined
             ? null
             : e(
@@ -1799,6 +1810,29 @@ window.__ModuleLoader__.load({
             paused ? "继续" : "暂停",
           ),
           e("button", { style: debugStyles.button, onClick: props.onClear }, "清空"),
+        ),
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "6px", fontSize: "11px" } },
+          e("input", {
+            value: keyword,
+            onChange: (event) => setKeyword(event.target.value),
+            placeholder: "过滤关键字",
+            style: { flex: "0 0 40%", fontSize: "11px", padding: "1px 6px" },
+          }),
+          props.channelKey === "rtt"
+            ? [0, 1, 2, 3, 4].map((value) =>
+                e(
+                  "button",
+                  {
+                    key: "lv" + String(value),
+                    style: Object.assign({}, debugStyles.button, level === value ? { fontWeight: 600, opacity: 1 } : { opacity: 0.55 }),
+                    onClick: () => setLevel(value),
+                  },
+                  value === 0 ? "全部" : RTT_LEVEL_LABEL[value],
+                ),
+              )
+            : null,
         ),
         props.onSend === undefined
           ? null
@@ -2182,6 +2216,7 @@ window.__ModuleLoader__.load({
           e(ChannelBlock, {
             key: def.key,
             label: def.label,
+            channelKey: def.key,
             lines: tails[def.key],
             state: view[def.key] ?? {},
             tap: tapOf(def.key),

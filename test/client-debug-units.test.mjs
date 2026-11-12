@@ -114,6 +114,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(text.includes("自动采样"), "监视曲线要有自动采样开关：" + text.slice(0, 500));
     assert.ok(text.includes("发送"), "串口通道要有发送输入框：" + text.slice(0, 500));
     assert.ok(text.includes("引脚") || text.includes("点行复制引用"), "引脚页要有入口：" + text.slice(0, 500));
+    assert.ok(text.includes("错误") && text.includes("警告"), "RTT 通道要有级别过滤：" + text.slice(0, 600));
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
