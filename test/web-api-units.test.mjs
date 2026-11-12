@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：二十条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 20);
-  assert.equal(new Set(WEB_API_PATHS).size, 20);
+test("WEB_API_PATHS：二十二条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 22);
+  assert.equal(new Set(WEB_API_PATHS).size, 22);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -256,6 +256,8 @@ test("WEB_API_PATHS：二十条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/artifacts"), true, "产物面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence"), true, "回放选择器必须有证据列表路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff"), true, "变更页必须有对比路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff/save"), true, "变更页必须能记基线");
 });
 
 test("GET /artifacts：返回 elf 与芯片容量；没有构建目录时 elf 为 null", async () => {
@@ -442,6 +444,42 @@ test("GET /evidence 与 /replay：列出证据文件、逐行还原事件、拒�
   const post = await handleWebApi({ method: "POST", path: WEB_API_PREFIX + "/replay", query: {}, deps: deps });
   assert.equal(post.status, 405, "回放只读，只接受 GET");
   fs.rmSync(root, { recursive: true, force: true });
+});
+test("GET /ioc-diff 与 POST /ioc-diff/save：无基线先提示，记下基线后比出改动", async () => {
+  const env = { DSH_STM32_SNAPSHOTS: fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-ioc-snap-")) };
+  const deps = { subprocess: fakeSubprocess, env: env };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-ioc-"));
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.IP0=NVIC\n", "utf8");
+
+  const before = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-diff", query: { projectDir: dir }, deps: deps });
+  assert.equal(before.status, 200);
+  assert.equal(before.body.diff.hasSnapshot, false);
+  assert.ok(before.body.diff.notes[0].includes("还没有基线"));
+
+  const saved = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ioc-diff/save",
+    query: {},
+    body: JSON.stringify({ projectDir: dir }),
+    deps: deps,
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.snapshot.entries, 2);
+
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nUSART1.Mode=Asynchronous\n", "utf8");
+  const after = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-diff", query: { projectDir: dir }, deps: deps });
+  assert.equal(after.status, 200);
+  assert.equal(after.body.diff.counts.added, 1);
+  assert.equal(after.body.diff.counts.removed, 1);
+  assert.equal(after.body.diff.counts.changed, 0);
+
+  const missing = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-diff", query: { projectDir: fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-ioc-none-")) }, deps: deps });
+  assert.equal(missing.status, 409);
+
+  const wrongMethod = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-diff/save", query: {}, deps: deps });
+  assert.equal(wrongMethod.status, 405, "记基线只接受 POST");
+  fs.rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 test("GET /clocks：读工程 .ioc 的 RCC 频率与分频，缺 .ioc 回 409", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-clocks-"));
