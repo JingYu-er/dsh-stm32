@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十五条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 15);
-  assert.equal(new Set(WEB_API_PATHS).size, 15);
+test("WEB_API_PATHS：十六条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 16);
+  assert.equal(new Set(WEB_API_PATHS).size, 16);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -251,6 +251,7 @@ test("WEB_API_PATHS：十五条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/pinout"), true, "引脚面板必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/clocks"), true, "时钟面板必须有独立路由");
 });
 
 test("GET /status：返回事件计数、会话键与证据目录", async () => {
@@ -334,6 +335,44 @@ test("POST /abort：参数与在途调用校验，只中止登记过的调用", 
   assert.equal(handle.signal.aborted, true, "接口必须真的触发派生信号");
   handle.end();
   resetRunning();
+});
+
+test("GET /clocks：读工程 .ioc 的 RCC 频率与分频，缺 .ioc 回 409", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-clocks-"));
+  fs.writeFileSync(
+    path.join(dir, "demo.ioc"),
+    [
+      "Mcu.CPN=STM32F103C8T6",
+      "RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK",
+      "RCC.PLLSourceVirtual=RCC_PLLSOURCE_HSE",
+      "RCC.PLLMUL=RCC_PLL_MUL9",
+      "RCC.SYSCLKFreq_VALUE=72000000",
+      "RCC.APB1Freq_Value=36000000",
+      "RCC.APB1CLKDivider=RCC_HCLK_DIV2",
+    ].join("\n"),
+    "utf8",
+  );
+  const good = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/clocks",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(good.status, 200);
+  assert.equal(good.body.clocks.cpn, "STM32F103C8T6");
+  assert.equal(good.body.clocks.sysclkSourceLabel, "PLL");
+  const apb1 = good.body.clocks.nodes.find((node) => node.label === "PCLK1 / APB1");
+  assert.equal(apb1.hz, 36000000);
+  assert.equal(apb1.divider, "÷2");
+
+  const missing = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/clocks",
+    query: { projectDir: fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-clocks-empty-")) },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(missing.status, 409);
+  assert.ok(String(missing.body.error).includes(".ioc"));
 });
 
 test("GET /pinout：读工程 .ioc 分组，缺 .ioc 回 409", async () => {

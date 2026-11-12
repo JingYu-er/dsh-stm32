@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S8）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S9）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -874,6 +874,7 @@ const fake = {
 - `POST /dsh-stm32/api/debug/breakpoints`：断点面板的三个动作（list / add / remove），位置与编号白名单，不做任意 gdb 命令转发。
 - `src/engine/progress.ts` 与 `POST /dsh-stm32/api/abort`：在途调用登记表与中止；派生 AbortController 把宿主的 abort 转发进来，面板只掐自己这一支，工具仍把信号透传给子进程。`/status` 的 `running` 与事件流里的 `callId` 是同一份事实的两种读法。
 - `src/engine/pinout.ts` 与 `/pinout`：引脚面板。`readPinout(projectDir)` 复用 `summarizeIoc`，`groupOfPin` / `groupPins` 决定分组与顺序（外设自然序在前，GPIO/调试口/时钟/虚拟引脚在后）。
+- `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
 - `src/engine/channel-tap.ts` 与 `/channels`、`/channels/start`、`/channels/stop`：常驻通道。串口 700 ms 读一次 `rx.ndjson` 的增量、RTT 2 000 ms `dump` 一次，都写回同一套 `channel:*` 事件；偏移靠「尾部指纹」而不是长度判断，桥重写文件也不会错位，`p: true` 的残行跨记录拼接。
 - `client/client.js`：`DebugConsole`（时间线 / 详情 / 通道 / 控制台 / 抽屉）、`SessionCard`、`WatchCurves`（按表达式画最近 120 点）、`BreakpointPanel`；`conversation.view` 的 `inject(sessionId)` 把宿主会话键交给面板，事件与状态都按它过滤；布局存 `dsh-stm32.debug.layout.v1`。
 - `test/event-bus-units.test.mjs`、`test/client-debug-units.test.mjs`：改事件层或客户端结构后先跑这两个。
@@ -890,6 +891,6 @@ const fake = {
 | --- | --- |
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 115 个文件 |
-| 单测 | 67 个套件 / 973 pass / 0 fail |
-| 客户端 | `client/client.js` 1852 行（手写，不经 tsc） |
-| 包体 | 1873.9 KB / 279 文件 / 解包 15333.3 KB（护栏上限 3906.3 KB） |
+| 单测 | 68 个套件 / 979 pass / 0 fail |
+| 客户端 | `client/client.js` 1957 行（手写，不经 tsc） |
+| 包体 | 1877.1 KB / 280 文件 / 解包 15347.8 KB（护栏上限 3906.3 KB） |

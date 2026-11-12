@@ -35,6 +35,7 @@ import { evidenceRoot } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { debugSessions } from "./debug-session.js";
+import { readClockTree } from "./clocks.js";
 import { readPinout } from "./pinout.js";
 import type { SubprocessService } from "../types.js";
 
@@ -408,6 +409,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug",
   WEB_API_PREFIX + "/debug/breakpoints",
   WEB_API_PREFIX + "/pinout",
+  WEB_API_PREFIX + "/clocks",
   WEB_API_PREFIX + "/abort",
   WEB_API_PREFIX + "/channels",
   WEB_API_PREFIX + "/channels/start",
@@ -455,7 +457,8 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/status" &&
     path !== WEB_API_PREFIX + "/debug" &&
     path !== WEB_API_PREFIX + "/channels" &&
-    path !== WEB_API_PREFIX + "/pinout";
+    path !== WEB_API_PREFIX + "/pinout" &&
+    path !== WEB_API_PREFIX + "/clocks";
   if (needsBody && method !== "POST") return fail(405, "这个接口只接受 POST");
   if (!needsBody && method !== "GET") return fail(405, "这个接口只接受 GET");
   const parsed = needsBody ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
@@ -522,6 +525,14 @@ export async function handleWebApi(input: {
     const read = readPinout(projectDir);
     if (!read.ok) return fail(409, read.error);
     return ok({ pinout: read.report });
+  }
+  if (path === WEB_API_PREFIX + "/clocks") {
+    // 时钟页：读工程 .ioc 里 CubeMX 已经写下的各路频率，只读不改。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = requested !== "" ? requested : process.cwd();
+    const read = readClockTree(projectDir);
+    if (!read.ok) return fail(409, read.error);
+    return ok({ clocks: read.report });
   }
   if (path === WEB_API_PREFIX + "/debug/breakpoints") {
     // 断点面板：只放行三种动作，位置与编号在这里先校验，避免把任意 gdb 命令搬上 HTTP。
