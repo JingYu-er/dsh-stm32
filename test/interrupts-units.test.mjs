@@ -13,6 +13,7 @@ import {
   interruptName,
   parseNvicValue,
   readInterrupts,
+  setInterruptPriority,
 } from "../lib/engine/interrupts.js";
 
 /** 与 CubeMX 写进 .ioc 的格式一致：冒号转义成 \:，八段。 */
@@ -71,6 +72,53 @@ test("中断表：空目录与空参数给出可读错误", () => {
   assert.equal(none.ok, false);
   assert.match(none.error, /没有 \.ioc/u);
   const blank = readInterrupts("   ");
+  assert.equal(blank.ok, false);
+  assert.match(blank.error, /projectDir/u);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("改优先级：只动这一条的第二、三段，其余段与其它行不变", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-irq-edit-"));
+  const ioc = path.join(dir, "demo.ioc");
+  const other = "NVIC.BusFault_IRQn=false\\:0\\:0\\:false\\:false\\:true\\:false\\:false\\:false";
+  fs.writeFileSync(ioc, [NVIC_LINE("USART1", true, 2, 0), other].join("\n"), "utf8");
+
+  const written = setInterruptPriority(dir, "USART1", 5, 3);
+  assert.equal(written.ok, true);
+  assert.equal(written.report.before.preempt, 2);
+  assert.equal(written.report.before.sub, 0);
+  assert.equal(written.report.after.preempt, 5);
+  assert.equal(written.report.after.sub, 3);
+  assert.equal(written.report.changed, true);
+  const text = fs.readFileSync(ioc, "utf8");
+  assert.ok(text.includes("NVIC.USART1_IRQn=true\\:5\\:3\\:false\\:false\\:true\\:false\\:false\\:false"));
+  assert.ok(text.includes(other));
+  assert.ok(fs.existsSync(written.report.backupPath));
+
+  const reread = readInterrupts(dir);
+  assert.equal(reread.ok, true);
+  const entry = reread.report.entries.find((item) => item.name === "USART1");
+  assert.equal(entry.preempt, 5);
+  assert.equal(entry.sub, 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("改优先级：非法值、未知中断、空目录都被拒", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-irq-edit-bad-"));
+  fs.writeFileSync(path.join(dir, "demo.ioc"), NVIC_LINE("USART1", true, 0, 0), "utf8");
+  const badPreempt = setInterruptPriority(dir, "USART1", 16, 0);
+  assert.equal(badPreempt.ok, false);
+  assert.match(badPreempt.error, /抢占优先级/u);
+  const badSub = setInterruptPriority(dir, "USART1", 0, -1);
+  assert.equal(badSub.ok, false);
+  assert.match(badSub.error, /子优先级/u);
+  const badName = setInterruptPriority(dir, "USART 1", 0, 0);
+  assert.equal(badName.ok, false);
+  assert.match(badName.error, /中断名/u);
+  const unknown = setInterruptPriority(dir, "TIM9", 0, 0);
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.error, /没有这一路中断/u);
+  const blank = setInterruptPriority("   ", "USART1", 0, 0);
   assert.equal(blank.ok, false);
   assert.match(blank.error, /projectDir/u);
   fs.rmSync(dir, { recursive: true, force: true });

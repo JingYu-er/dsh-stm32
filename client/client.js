@@ -1925,15 +1925,53 @@ window.__ModuleLoader__.load({
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useInterrupts(projectDir, 10000);
       const report = state.report;
+      const [editing, setEditing] = useState("");
+      const [preemptText, setPreemptText] = useState("");
+      const [subText, setSubText] = useState("");
+      const [message, setMessage] = useState("");
+      const [saving, setSaving] = useState(false);
+      const beginEdit = (entry) => {
+        setEditing(entry.name);
+        setPreemptText(String(entry.preempt));
+        setSubText(String(entry.sub));
+        setMessage("");
+      };
+      const saveEdit = async (entry) => {
+        setSaving(true);
+        const result = await callApi("POST", "interrupts/priority", {
+          projectDir: projectDir,
+          name: entry.name,
+          preempt: Number(preemptText),
+          sub: Number(subText),
+        });
+        setSaving(false);
+        if (result.ok) {
+          const written = result.value.interruptPriority;
+          setMessage("已改 " + String(written.name) + "：抢 " + String(written.before.preempt) + " / 子 " + String(written.before.sub) + " → 抢 " + String(written.after.preempt) + " / 子 " + String(written.after.sub) + "（已备份）");
+          setEditing("");
+          state.reload();
+        } else {
+          setMessage("改优先级失败：" + result.error);
+        }
+      };
       const row = (entry) =>
-        e(
-          "div",
-          { key: entry.name, style: { display: "flex", gap: "8px", padding: "1px 0", fontSize: "12px" } },
-          e("span", { style: { flex: "0 0 46%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, entry.name),
-          e("span", { style: { flex: "0 0 auto", opacity: 0.75 }, title: "抢占优先级" }, "抢 " + String(entry.preempt)),
-          e("span", { style: { flex: "0 0 auto", opacity: 0.75 }, title: "子优先级" }, "子 " + String(entry.sub)),
-          e("span", { style: { flex: "0 0 auto", opacity: entry.enabled ? 0.85 : 0.45 } }, entry.enabled ? "开" : "关"),
-        );
+        editing === entry.name
+          ? e(
+            "div",
+            { key: entry.name, style: { display: "flex", gap: "4px", padding: "1px 0", fontSize: "12px", alignItems: "center" } },
+            e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, entry.name),
+            e("input", { style: { width: "38px" }, value: preemptText, onChange: (change) => setPreemptText(change.target.value), title: "抢占优先级 0–15" }),
+            e("input", { style: { width: "38px" }, value: subText, onChange: (change) => setSubText(change.target.value), title: "子优先级 0–15" }),
+            e("button", { style: { fontSize: "10px", padding: "1px 6px" }, disabled: saving === true, onClick: () => saveEdit(entry) }, saving === true ? "保存中…" : "保存"),
+            e("button", { style: { fontSize: "10px", padding: "1px 6px" }, disabled: saving === true, onClick: () => setEditing("") }, "取消"),
+          )
+          : e(
+            "div",
+            { key: entry.name, style: { display: "flex", gap: "8px", padding: "1px 0", fontSize: "12px", alignItems: "center" } },
+            e("span", { style: { flex: "0 0 46%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, entry.name),
+            e("button", { style: { fontSize: "10px", padding: "1px 6px", opacity: 0.8 }, title: "点这里改这一路的优先级", onClick: () => beginEdit(entry) }, "抢 " + String(entry.preempt) + " / 子 " + String(entry.sub)),
+            e("span", { style: { flex: "0 0 auto", opacity: entry.enabled ? 0.85 : 0.45 } }, entry.enabled ? "开" : "关"),
+          );
       if (projectDir === "") return e("div", { style: { padding: "6px 10px", opacity: 0.6, fontSize: "12px" } }, "当前没有可用的工程目录。");
       if (state.error !== "") return e("div", { style: { padding: "6px 10px", opacity: 0.75, fontSize: "12px" } }, state.error);
       if (report === null) return e("div", { style: { padding: "6px 10px", opacity: 0.6, fontSize: "12px" } }, "读取中断表…");
@@ -1946,6 +1984,7 @@ window.__ModuleLoader__.load({
           { style: { padding: "4px 0 6px", fontSize: "12px", opacity: 0.85 } },
           report.iocName + "：使能 " + String(report.enabledCount) + " / " + String(entries.length) + " 路",
         ),
+        message === "" ? null : e("div", { style: { fontSize: "11px", opacity: 0.8, padding: "0 0 4px" } }, message),
         entries.length === 0
           ? e("div", { style: { opacity: 0.6, fontSize: "12px" } }, "这个 .ioc 里没有 NVIC 中断配置。")
           : entries.map(row),

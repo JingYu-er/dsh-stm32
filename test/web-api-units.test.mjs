@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 40);
-  assert.equal(new Set(WEB_API_PATHS).size, 40);
+test("WEB_API_PATHS：四十一条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 41);
+  assert.equal(new Set(WEB_API_PATHS).size, 41);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -268,6 +268,7 @@ test("WEB_API_PATHS：四十条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/send"), true, "面板发串口必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts/priority"), true, "中断页必须能改优先级");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-sync"), true, ".ioc 同步状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/watch"), true, "监视登记表必须有独立路由");
@@ -1077,4 +1078,42 @@ test("GET /probe-info：读 pnputil 的 USB 枚举，认不出探针时不报错
   assert.equal(result.body.probeInfo.present, true);
   assert.equal(result.body.probeInfo.probe.kind, "daplink");
   assert.equal(result.body.probeInfo.interfaceCfg, "interface/cmsis-dap.cfg");
+});
+
+test("POST /interrupts/priority：改一路优先级、写前备份，非法值回 409", async () => {
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-irq-edit-"));
+  const ioc = path.join(dir, "demo.ioc");
+  fs.writeFileSync(ioc, "NVIC.USART1_IRQn=true\\:2\\:0\\:false\\:false\\:true\\:false\\:false\\:false\n", "utf8");
+
+  const saved = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/interrupts/priority",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, name: "USART1", preempt: 4, sub: 1 }),
+    deps: deps,
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.interruptPriority.after.preempt, 4);
+  assert.ok(fs.readFileSync(ioc, "utf8").includes("true\\:4\\:1\\:"));
+
+  const noName = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/interrupts/priority",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, preempt: 1, sub: 1 }),
+    deps: deps,
+  });
+  assert.equal(noName.status, 400);
+  assert.ok(String(noName.body.error).includes("name"));
+
+  const badRange = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/interrupts/priority",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, name: "USART1", preempt: 99, sub: 0 }),
+    deps: deps,
+  });
+  assert.equal(badRange.status, 409);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

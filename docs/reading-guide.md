@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S42）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S43）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -896,7 +896,7 @@ const fake = {
 - `src/engine/panel-actions.ts` 与 `/build`、`/flash`：人在面板点构建/烧录，直接调 `runBuild` / `runFlash`，结果以 `source: "user"` 的同形事件进时间线。
 - `src/engine/watch-admin.ts` 与 `/watch`：面板编辑监视登记表，与 `stm32_watch` 共用 `watchState`；删项交给 `debugSessions.removeWatchpoints`，顺带清 gdb 比较器。
 - `src/engine/ioc-sync.ts` 与 `/ioc-sync`：只比 `.ioc` 与 `Core/Src/main.c` 的修改时间，判断「配置改了还没重新生成」；没有 `main.c` 时不下结论。
-- `src/engine/interrupts.ts` 与 `/interrupts`：中断页。只读 `.ioc` 的 `NVIC.*`（值里的冒号是转义的），优先级排序按抢占→子→名字；段数不足给 -1，不冒充 0。
+- `src/engine/interrupts.ts` 与 `/interrupts`、`/interrupts/priority`：中断页。读 `.ioc` 的 `NVIC.*`（值里的冒号是转义的），优先级排序按抢占→子→名字；段数不足给 -1，不冒充 0；`setInterruptPriority` 只改第二、三段并先备份。
 - `src/engine/channel-tap.ts` 与 `/channels`、`/channels/start`、`/channels/stop`：常驻通道。串口 700 ms 读一次 `rx.ndjson` 的增量、RTT 2 000 ms `dump` 一次，都写回同一套 `channel:*` 事件；偏移靠「尾部指纹」而不是长度判断，桥重写文件也不会错位，`p: true` 的残行跨记录拼接。
 - `client/client.js`：`DebugConsole`（时间线 / 详情 / 通道 / 控制台 / 抽屉）、`SessionCard`、`WatchCurves`（按表达式画最近 120 点）、`BreakpointPanel`；`conversation.view` 的 `inject(sessionId)` 把宿主会话键交给面板，事件与状态都按它过滤；布局存 `dsh-stm32.debug.layout.v1`。
 - `test/event-bus-units.test.mjs`、`test/client-debug-units.test.mjs`：改事件层或客户端结构后先跑这两个。
@@ -913,6 +913,6 @@ const fake = {
 | --- | --- |
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
-| 单测 | 79 个套件 / 1046 pass / 0 fail |
-| 客户端 | `client/client.js` 3657 行（手写，不经 tsc） |
-| 包体 | 1931.3 KB / 292 文件 / 解包 15580.3 KB（护栏上限 3906.3 KB） |
+| 单测 | 79 个套件 / 1049 pass / 0 fail |
+| 客户端 | `client/client.js` 3696 行（手写，不经 tsc） |
+| 包体 | 1933.1 KB / 292 文件 / 解包 15589.4 KB（护栏上限 3906.3 KB） |

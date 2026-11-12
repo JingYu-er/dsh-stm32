@@ -6,10 +6,11 @@
  * 只读，不改 .ioc；排序按「抢占优先级 → 子优先级 → 名字」，与 CubeMX 的列表习惯一致。
  */
 
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { findIocPath } from "./pinout.js";
-import { parseIocEntries } from "./ioc-diff.js";
+import { iocBackupDir, parseIocEntries } from "./ioc-diff.js";
 
 export interface NvicEntry {
   /** 中断名，去掉 `NVIC.` 前缀与 `_IRQn` 后缀，例如 USART1。 */
@@ -98,6 +99,95 @@ export function readInterrupts(projectDir: string): InterruptsResult {
       iocName: iocPath.slice(iocPath.lastIndexOf("\\") + 1),
       entries,
       enabledCount: entries.filter((entry) => entry.enabled).length,
+    },
+  };
+}
+
+/** 改中断优先级的结果：写回前后的优先级与备份路径。 */
+export interface InterruptPriorityReport {
+  iocPath: string;
+  name: string;
+  key: string;
+  before: { preempt: number; sub: number };
+  after: { preempt: number; sub: number };
+  backupPath: string;
+  changed: boolean;
+}
+
+export type InterruptPriorityResult =
+  | { ok: true; report: InterruptPriorityReport }
+  | { ok: false; error: string };
+
+/**
+ * 改一路中断的抢占 / 子优先级（S43）。
+ *
+ * 只改 `NVIC.<name>_IRQn` 那一条的第二、三段，其余段与文件其余字节原样保留；
+ * 写之前备份到 `<工程>/.dsh-stm32/backups`。不跑 CubeMX，不改生成代码。
+ */
+export function setInterruptPriority(
+  projectDir: string,
+  name: string,
+  preempt: number,
+  sub: number,
+): InterruptPriorityResult {
+  const dir = projectDir.trim();
+  if (dir === "") return { ok: false, error: "projectDir 不能为空" };
+  const wanted = name.trim();
+  if (wanted === "" || !/^[A-Za-z0-9_]+$/u.test(wanted)) return { ok: false, error: "中断名只允许字母、数字与下划线：" + wanted };
+  const range = (value: number): boolean => Number.isInteger(value) && value >= 0 && value <= 15;
+  if (!range(preempt)) return { ok: false, error: "抢占优先级必须是 0–15 的整数（实际 " + String(preempt) + "）" };
+  if (!range(sub)) return { ok: false, error: "子优先级必须是 0–15 的整数（实际 " + String(sub) + "）" };
+  const iocPath = findIocPath(dir);
+  if (iocPath === "") return { ok: false, error: "工程目录里没有 .ioc：" + dir };
+  let text: string;
+  try {
+    text = readFileSync(iocPath, "utf8");
+  } catch (error) {
+    return { ok: false, error: "读取 .ioc 失败：" + (error instanceof Error ? error.message : String(error)) };
+  }
+  const key = "NVIC." + wanted + "_IRQn";
+  const lines = text.split(/\r?\n/u);
+  let before: { preempt: number; sub: number } = { preempt: -1, sub: -1 };
+  let hit = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    if (trimmed.slice(0, eq).trim() !== key) continue;
+    const raw = trimmed.slice(eq + 1).trim();
+    // `.ioc` 里冒号被转义成 `\:`，按转义分隔符切段再拼回去。
+    const parts = raw.split("\\:");
+    if (parts.length < 3) return { ok: false, error: "这一条 NVIC 值段数不足，无法安全改写：" + key };
+    before = parseNvicValue(raw);
+    parts[1] = String(preempt);
+    parts[2] = String(sub);
+    const indent = line.slice(0, line.indexOf(trimmed));
+    lines[index] = indent + key + "=" + parts.join("\\:");
+    hit = true;
+    break;
+  }
+  if (!hit) return { ok: false, error: "工程 .ioc 里没有这一路中断：" + key };
+  const nextText = lines.join("\n");
+  const backupPath = join(iocBackupDir(dir), "ioc-" + new Date().toISOString().replace(/[:.]/gu, "-") + ".ioc");
+  try {
+    mkdirSync(iocBackupDir(dir), { recursive: true });
+    copyFileSync(iocPath, backupPath);
+    writeFileSync(iocPath, nextText, "utf8");
+  } catch (error) {
+    return { ok: false, error: "写回 .ioc 失败：" + (error instanceof Error ? error.message : String(error)) };
+  }
+  return {
+    ok: true,
+    report: {
+      iocPath: iocPath,
+      name: wanted,
+      key: key,
+      before: before,
+      after: { preempt: preempt, sub: sub },
+      backupPath: backupPath,
+      changed: before.preempt !== preempt || before.sub !== sub,
     },
   };
 }
