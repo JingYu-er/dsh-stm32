@@ -825,6 +825,17 @@ window.__ModuleLoader__.load({
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
     const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", channels: "实时通道", overview: "概览", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
+    /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
+    function eventRefLine(event) {
+      return "- #" + String(event.seq) + " " + clockText(event.time) + " " + String(event.kind) + " " + String(event.status) + "：" + String(event.summary);
+    }
+
+    /** 多条事件的引用块：首行给条数，其余每行一条，顺序按传入顺序（时间线自上而下）。 */
+    function eventRefBlock(events) {
+      if (!Array.isArray(events) || events.length === 0) return "";
+      return ["调试台事件（" + String(events.length) + " 条）："].concat(events.map(eventRefLine)).join("\n");
+    }
+
     /** 事件流地址：带上会话键，多标签页同时开着时只收本会话的事件。 */
     function debugEventsPath(lastSeq, sessionId) {
       const since = "events?since=" + String(lastSeq);
@@ -960,10 +971,21 @@ window.__ModuleLoader__.load({
                 style: Object.assign(
                   {},
                   debugStyles.row,
-                  props.selectedSeq === event.seq ? { background: "color-mix(in srgb, currentColor 8%, transparent)" } : {},
+                  (props.selectedSeq === event.seq ? { background: "color-mix(in srgb, currentColor 8%, transparent)" } : {}),
+                  props.pickedSet && props.pickedSet.has(event.seq) ? { outline: "1px solid color-mix(in srgb, currentColor 35%, transparent)" } : {},
                 ),
                 onClick: () => props.onSelect(event),
               },
+              e("input", {
+                type: "checkbox",
+                checked: props.pickedSet ? props.pickedSet.has(event.seq) : false,
+                title: "勾选后可以批量复制引用",
+                style: { margin: "0 2px 0 0" },
+                onClick: (ev) => {
+                  if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+                },
+                onChange: () => props.onPick(event),
+              }),
               e("span", { style: debugStyles.rowTime }, clockText(event.time)),
               e("span", { style: debugStyles.rowKind }, (DEBUG_STATUS_SIGN[event.status] ?? "·") + " " + String(event.kind)),
               e("span", { style: debugStyles.rowText, title: String(event.summary) }, String(event.summary)),
@@ -2469,6 +2491,8 @@ window.__ModuleLoader__.load({
         };
       }, [sessionId]);
       const [selectedSeq, setSelectedSeq] = useState(null);
+      const [picked, setPicked] = useState([]);
+      const [pickNote, setPickNote] = useState("");
       const [pickerOpen, setPickerOpen] = useState(false);
       const [onlyFail, setOnlyFail] = useState(false);
       const replayState = useReplay();
@@ -2482,6 +2506,32 @@ window.__ModuleLoader__.load({
         ? matchedBase
         : matchedBase.filter((event) => (String(event.kind) + " " + String(event.summary)).toLowerCase().includes(filter.trim().toLowerCase()));
       const visible = replayState.replay === null ? matched : replayState.replay.events;
+      const pickedSet = new Set(picked);
+      const pickedEvents = picked
+        .map((seq) => visible.find((event) => event.seq === seq))
+        .filter((event) => event !== undefined);
+
+      const togglePick = (event) => {
+        setPickNote("");
+        setPicked((previous) => (previous.includes(event.seq) ? previous.filter((seq) => seq !== event.seq) : previous.concat([event.seq])));
+      };
+
+      const copyPicked = () => {
+        const text = eventRefBlock(pickedEvents);
+        if (text === "") {
+          setPickNote("先勾选几条事件。");
+          return;
+        }
+        const clipboard = typeof navigator === "object" && navigator !== null ? navigator.clipboard : null;
+        if (clipboard !== null && clipboard !== undefined && typeof clipboard.writeText === "function") {
+          clipboard
+            .writeText(text)
+            .then(() => setPickNote("已复制 " + String(pickedEvents.length) + " 条引用"))
+            .catch(() => setPickNote("复制失败：浏览器没有给剪贴板权限"));
+          return;
+        }
+        setPickNote("复制失败：当前环境没有剪贴板接口");
+      };
 
       const updateLayout = (patch) => {
         setLayout((previous) => {
@@ -2527,6 +2577,8 @@ window.__ModuleLoader__.load({
             events: visible,
             connection,
             selectedSeq,
+            pickedSet,
+            onPick: togglePick,
             onSelect: (event) => setSelectedSeq(event.seq),
             onCollapse: () => updateLayout({ collapsed: Object.assign({}, collapsed, { timeline: true }) }),
             flex: "0 0 " + String(layout.left) + "px",
@@ -2587,6 +2639,22 @@ window.__ModuleLoader__.load({
           ),
           e("span", { style: { opacity: 0.6 } }, "显示 " + String(visible.length) + " / " + String(events.length)),
           e("span", { style: debugStyles.spacer }),
+          e(
+            "button",
+            {
+              style: Object.assign({}, debugStyles.button, picked.length === 0 ? { opacity: 0.5 } : {}),
+              disabled: picked.length === 0,
+              title: "把勾选的事件按时间线顺序拼成一段引用，贴进对话即可",
+              onClick: copyPicked,
+            },
+            "复制已选（" + String(pickedEvents.length) + "）",
+          ),
+          picked.length === 0
+            ? null
+            : e("button", { style: debugStyles.button, onClick: () => { setPicked([]); setPickNote(""); } }, "清空勾选"),
+          pickNote === ""
+            ? null
+            : e("span", { style: { opacity: 0.75, fontSize: "12px" } }, pickNote),
           e("button", { style: debugStyles.button, onClick: () => setSelectedSeq(null) }, "清除选择"),
           e("button", { style: debugStyles.button, onClick: () => exportEvents(visible) }, "导出 JSONL"),
           e(
