@@ -1009,6 +1009,15 @@ window.__ModuleLoader__.load({
             ),
           )
         : null;
+      const payloadText =
+        event.payload === undefined || event.payload === null ? "" : JSON.stringify(event.payload, null, 2);
+      const copyPayload = () => {
+        if (payloadText === "") return;
+        const clipboard = typeof navigator === "object" && navigator !== null ? navigator.clipboard : null;
+        if (clipboard !== null && clipboard !== undefined && typeof clipboard.writeText === "function") {
+          clipboard.writeText(payloadText).catch(() => undefined);
+        }
+      };
       const copyRef = () => {
         const text = "[调试台事件 #" + String(event.seq) + "] " + String(event.kind) + " " + String(event.status) + "：" + String(event.summary);
         const clipboard = typeof navigator === "object" && navigator !== null ? navigator.clipboard : null;
@@ -1028,10 +1037,36 @@ window.__ModuleLoader__.load({
           event.truncated === true ? e("div", { style: { opacity: 0.65 } }, "payload 超过上限，仅保留预览。") : null,
         ),
         refs,
+        payloadText === ""
+          ? null
+          : e(
+              "div",
+              { style: { padding: "0 12px 8px" } },
+              e("div", { style: { opacity: 0.65, marginBottom: "4px" } }, "参数与结果"),
+              e(
+                "pre",
+                {
+                  style: {
+                    margin: 0,
+                    padding: "6px 8px",
+                    maxHeight: "200px",
+                    overflow: "auto",
+                    fontSize: "11px",
+                    lineHeight: "1.45",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+                    borderRadius: "4px",
+                  },
+                },
+                payloadText,
+              ),
+            ),
         e(
           "div",
-          { style: { padding: "0 12px 8px" } },
+          { style: { padding: "0 12px 8px", display: "flex", gap: "6px", flexWrap: "wrap" } },
           e("button", { style: debugStyles.button, onClick: copyRef }, "复制引用（贴到对话里）"),
+          payloadText === "" ? null : e("button", { style: debugStyles.button, onClick: copyPayload }, "复制 payload"),
         ),
         e("pre", { style: debugStyles.pre }, event.payload === undefined ? "（无 payload）" : JSON.stringify(event.payload, null, 2)),
       );

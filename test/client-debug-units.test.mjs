@@ -123,6 +123,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("useProbeSummary"), "概览页要用工具链探测摘要");
     assert.ok(source.includes("capabilitiesText"), "概览页要显示编译/烧录/调试/生成四项能力");
     assert.ok(source.includes('"工具链"'), "概览页要有工具链一行");
+    assert.ok(source.includes("复制 payload"), "事件详情要能复制 payload");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
