@@ -1096,6 +1096,7 @@ window.__ModuleLoader__.load({
       const [removeId, setRemoveId] = useState("");
       const [output, setOutput] = useState("");
       const [busy, setBusy] = useState(false);
+      const hits = Array.isArray(props.debug?.hits) ? props.debug.hits.slice().reverse() : [];
       const run = async (body) => {
         if (busy) return;
         setBusy(true);
@@ -1157,6 +1158,20 @@ window.__ModuleLoader__.load({
         output === ""
           ? null
           : e("pre", { style: Object.assign({}, debugStyles.pre, { padding: 0, maxHeight: "140px", overflow: "auto" }) }, output),
+        e("div", { style: { display: "flex", alignItems: "center", gap: "6px", opacity: 0.7 } }, "命中历史（" + String(hits.length) + "）"),
+        hits.length === 0
+          ? e("div", { style: { fontSize: "11px", opacity: 0.5 } }, "还没有停点记录：跑一次 continue / next 后这里会出现停在哪。")
+          : hits.map((hit) =>
+              e(
+                "div",
+                {
+                  key: String(hit.time) + ":" + String(hit.id) + ":" + hit.text,
+                  style: { fontFamily: "ui-monospace, monospace", fontSize: "11px", opacity: 0.8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+                  title: hit.text,
+                },
+                clockText(hit.time) + "  #" + String(hit.id) + "  " + hit.text,
+              ),
+            ),
       );
     }
 

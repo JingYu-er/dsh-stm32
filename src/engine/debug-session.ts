@@ -19,6 +19,7 @@ import type { SearchConfig } from "../data/search-roots.js";
 import type { ProcessHandle, SubprocessService } from "../types.js";
 import { F1_BREAKPOINT_BUDGET, collectBreakpointRequests, planBreakpoints, quotaOf, resolveBreakpointBudget } from "./breakpoints.js";
 import type { BreakpointQuota } from "./breakpoints.js";
+import { HitHistory, type BreakpointHit } from "./breakpoint-hits.js";
 import { isPortBusy, pickPort, resolveElfPath } from "./debug.js";
 import { MiSession, formatStopLocation, steppingCommandFor } from "./gdb-mi.js";
 import type { MiRecord } from "./gdb-mi.js";
@@ -342,6 +343,8 @@ export class DebugSessionManager {
   private aliveProbe: (port: number) => Promise<boolean> = (port) => isPortBusy(port, 500);
   private current: InternalSession | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** 断点与观察点的命中历史：跨 eval 保留，关会话时清空。 */
+  private readonly hits = new HitHistory();
   private readonly now: () => number;
 
   constructor(options: { now?: () => number } = {}) {
@@ -361,6 +364,11 @@ export class DebugSessionManager {
   /** 单测注入用：替换「会话还活着吗」的探测（见 configure 的 aliveProbe）。 */
   setAliveProbe(probe: (port: number) => Promise<boolean>): void {
     this.aliveProbe = probe;
+  }
+
+  /** 本次会话的命中历史，最新在后。 */
+  hitHistory(): BreakpointHit[] {
+    return this.hits.list();
   }
 
   isActive(): boolean {
@@ -402,6 +410,7 @@ export class DebugSessionManager {
   resetForTest(): void {
     this.current = null;
     this.stopSweeper();
+    this.hits.clear();
   }
 
   /** 扫一次租约：过期的会话立刻关。定时器与单测共用这一条路径。 */
@@ -695,6 +704,7 @@ export class DebugSessionManager {
       const miStillActive = this.current === session;
       if (!miStillActive) miErrors.push("会话在本次 eval 期间已关闭");
       const miOutput = lines.join("\n").trim();
+      this.hits.record(miOutput, this.now());
       return {
         ok: miErrors.length === 0,
         output: miOutput,
@@ -724,6 +734,7 @@ export class DebugSessionManager {
     });
     session.lastUsedAt = this.now();
     const output = (outcome.stdout + "\n" + outcome.stderr).trim();
+    this.hits.record(output, this.now());
     const errors: string[] = [];
     if (outcome.spawnError !== null) errors.push("gdb 启动失败：" + outcome.spawnError);
     if (outcome.timedOut) errors.push("gdb 超时（" + String(request.timeoutMs ?? 30_000) + " ms）");
@@ -1081,6 +1092,7 @@ export class DebugSessionManager {
     }
     this.current = null;
     this.stopSweeper();
+    this.hits.clear();
     // 观察点住在 gdb 进程里：会话一关就全没了，登记表必须跟着清，
     // 否则下次会话里 action=list 会报一堆已经不存在的观察点。
     resetWatchState();
