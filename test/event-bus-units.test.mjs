@@ -3,7 +3,7 @@
 // 表现都是"时间线看起来连续但中间缺段"，很难在真机上发现，所以这里逐条钉住。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,7 @@ import {
   dateFolder,
   evidenceRoot,
   flushEvicted,
+  pruneEvidence,
   safeSessionKey,
   sessionEvidenceDir,
 } from "../lib/engine/event-log.js";
@@ -148,6 +149,31 @@ test("挤出事件按批写入证据目录，一行一条 JSON", async () => {
     const empty = await flushEvicted({ root, now });
     assert.equal(empty.written, 0);
     assert.equal(empty.file, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("证据保留：超过 7 天的日期目录、超过 20 个的旧会话目录被清掉", async () => {
+  const root = tempDir("evidence-prune");
+  try {
+    const now = new Date(2026, 10, 12, 12, 0, 0);
+    // 一个过期日期目录，两个新日期目录；新日期里放 21 个会话目录。
+    mkdirSync(join(root, "2026-10-01", "sess-old"), { recursive: true });
+    writeFileSync(join(root, "2026-10-01", "sess-old", "a.jsonl"), "{}\n", "utf8");
+    for (let i = 0; i < 21; i += 1) {
+      const day = i < 11 ? "2026-11-11" : "2026-11-12";
+      mkdirSync(join(root, day, "sess-" + String(i).padStart(2, "0")), { recursive: true });
+      writeFileSync(join(root, day, "sess-" + String(i).padStart(2, "0"), "a.jsonl"), "{}\n", "utf8");
+    }
+    const result = await pruneEvidence({ root, now });
+    assert.equal(existsSync(join(root, "2026-10-01")), false, "过期日期目录应被删");
+    assert.ok(result.removedDirs.length >= 2, JSON.stringify(result.removedDirs));
+    assert.ok(result.removedFiles >= 2, String(result.removedFiles));
+    assert.ok(result.removedBytes > 0, String(result.removedBytes));
+    let left = 0;
+    for (const day of readdirSync(root)) left += readdirSync(join(root, day)).length;
+    assert.equal(left, 20, "只保留 20 个会话目录");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

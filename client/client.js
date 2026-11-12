@@ -2741,8 +2741,9 @@ window.__ModuleLoader__.load({
 
     /** 证据目录里的回放候选：打开选择器时才拉一次。 */
     function useEvidence(open) {
-      const [value, setValue] = useState({ root: "", files: [] });
+      const [value, setValue] = useState({ root: "", files: [], usage: null });
       const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
       useEffect(() => {
         if (!open) return undefined;
         let closed = false;
@@ -2750,7 +2751,11 @@ window.__ModuleLoader__.load({
           const result = await callApi("GET", "evidence");
           if (closed) return;
           if (result.ok) {
-            setValue({ root: String(result.value.evidence.root ?? ""), files: result.value.evidence.files ?? [] });
+            setValue({
+              root: String(result.value.evidence.root ?? ""),
+              files: result.value.evidence.files ?? [],
+              usage: result.value.evidence.usage ?? null,
+            });
             setError("");
           } else {
             setError(result.error);
@@ -2760,8 +2765,8 @@ window.__ModuleLoader__.load({
         return () => {
           closed = true;
         };
-      }, [open]);
-      return { root: value.root, files: value.files, error: error };
+      }, [open, tick]);
+      return { root: value.root, files: value.files, usage: value.usage, error: error, reload: () => setTick((previous) => previous + 1) };
     }
 
     /** 载入一份证据文件。回放期间面板只读这份数据，不混入实时事件。 */
@@ -2821,10 +2826,28 @@ window.__ModuleLoader__.load({
               file.path + "  " + bytesText(file.size),
             ),
           );
+      const usage = evidence.usage;
+      const usageText = usage === null ? "" : String(usage.count) + " 个文件 · " + bytesText(usage.bytes);
+      const prune = async () => {
+        const result = await callApi("POST", "evidence/prune", {});
+        if (result.ok) {
+          const pruned = result.value.pruned;
+          props.onMessage(
+            "清理 " + String((pruned.removedDirs ?? []).length) + " 个目录、删掉 " + String(pruned.removedFiles ?? 0) + " 个文件（" + bytesText(pruned.removedBytes ?? 0) + "）",
+          );
+          evidence.reload();
+        } else {
+          props.onMessage(result.error);
+        }
+      };
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "6px 0" } },
-        e("div", { style: { fontSize: "12px", opacity: 0.7 }, title: evidence.root }, "证据目录：" + (evidence.root === "" ? "—" : evidence.root)),
+        e("div", { style: { fontSize: "12px", opacity: 0.7, display: "flex", gap: "8px", flexWrap: "wrap" }, title: evidence.root },
+          e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "证据目录：" + (evidence.root === "" ? "—" : evidence.root)),
+          usageText === "" ? null : e("span", { style: { opacity: 0.75 } }, usageText),
+          e("button", { type: "button", style: debugStyles.button, onClick: prune, title: "删掉 7 天前、或超出 20 个会话的旧证据" }, "清理旧证据"),
+        ),
         rows,
       );
     }
@@ -2850,6 +2873,7 @@ window.__ModuleLoader__.load({
       const [picked, setPicked] = useState([]);
       const [pickNote, setPickNote] = useState("");
       const [pickerOpen, setPickerOpen] = useState(false);
+      const [pickerMessage, setPickerMessage] = useState("");
       const [onlyFail, setOnlyFail] = useState(false);
       const [focusFailures, setFocusFailures] = useState(0);
       const replayState = useReplay();
@@ -3028,7 +3052,8 @@ window.__ModuleLoader__.load({
             replayState.replay === null ? "回放…" : "退出回放",
           ),
         ),
-        pickerOpen === true && replayState.replay === null ? e(ReplayPicker, { busy: replayState.busy, onLoad: (path) => replayState.load(path) }) : null,
+        pickerMessage === "" ? null : e("div", { style: { padding: "2px 10px", opacity: 0.75, fontSize: "12px" } }, pickerMessage),
+        pickerOpen === true && replayState.replay === null ? e(ReplayPicker, { busy: replayState.busy, onLoad: (path) => replayState.load(path), onMessage: (text) => setPickerMessage(text) }) : null,
         replayState.error !== "" ? e("div", { style: { fontSize: "12px", opacity: 0.8, padding: "4px 0" } }, "回放失败：" + replayState.error) : null,
         replayState.replay === null
           ? null

@@ -128,6 +128,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("parseCompileError") && source.includes("CompileErrors"), "编译错误要能点击跳源码");
     assert.ok(source.includes("SerialCard") && source.includes("刷新端口"), "串口卡片要能开会话、列端口");
     assert.ok(source.includes("onShowFailures") && source.includes("只看失败"), "概览的失败数要能跳到失败视图");
+    assert.ok(source.includes("清理旧证据") && source.includes("evidence/prune"), "证据目录要能显示占用并清理旧证据");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;

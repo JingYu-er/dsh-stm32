@@ -31,7 +31,7 @@ import {
   subscribeEvents,
   type DebugEvent,
 } from "./event-bus.js";
-import { evidenceRoot } from "./event-log.js";
+import { evidenceRoot, pruneEvidence } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
@@ -423,6 +423,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/artifacts",
   WEB_API_PREFIX + "/evidence",
   WEB_API_PREFIX + "/replay",
+  WEB_API_PREFIX + "/evidence/prune",
   WEB_API_PREFIX + "/ioc-diff",
   WEB_API_PREFIX + "/ioc-diff/save",
   WEB_API_PREFIX + "/abort",
@@ -715,7 +716,13 @@ export async function handleWebApi(input: {
     // 回放：列出证据目录里可载入的 jsonl 文件。只读目录，不读内容。
     const root = evidenceRoot(env);
     const files = await listEvidenceFiles(root);
-    return ok({ evidence: { root, files } });
+    const bytes = files.reduce((sum, file) => sum + file.size, 0);
+    return ok({ evidence: { root, files, usage: { count: files.length, bytes } } });
+  }
+  if (path === WEB_API_PREFIX + "/evidence/prune") {
+    // 保留策略：日期目录超过 7 天、或会话目录超过 20 个时清掉最旧的；面板也给一个手动入口。
+    const pruned = await pruneEvidence({ env });
+    return ok({ pruned });
   }
   if (path === WEB_API_PREFIX + "/replay") {
     // 回放：把一份证据文件读成事件数组，面板把它铺到时间线上。路径必须落在证据目录内。

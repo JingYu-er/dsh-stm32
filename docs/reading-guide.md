@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S29）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S30）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -889,6 +889,7 @@ const fake = {
 - 客户端 `OverviewPanel` 的工具链一行：`useProbeSummary(60000)` 读 `GET /probe`，能力四项只认 `capabilities`，缺件直接列名。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
 - `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
+- `src/engine/event-log.ts` 的 `pruneEvidence`：证据保留（7 天 / 20 会话）与 `/evidence/prune`。
 - `src/engine/tool-events.ts` 的 `resultDigest`：白名单决定面板能看见哪些结果字段（`errors` 截 20 条、`projectDir` 用于跳源码）。
 - `src/engine/source-slice.ts` 与 `/source`：停点与编译错误跳源码。
 - `src/engine/serial.ts` 的 `openSerial`/`closeSerial`/`serialStatus`/`listPorts` 与 `/serial*`：面板上的串口卡片，与工具同源。`resolveSourceFile` 要求目标落在工程目录内，`readSourceSlice` 把行号夹到文件范围、上下文封顶 20 行。
@@ -910,5 +911,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 126 个文件 |
 | 单测 | 75 个套件 / 1018 pass / 0 fail |
-| 客户端 | `client/client.js` 3118 行（手写，不经 tsc） |
-| 包体 | 1913.4 KB / 288 文件 / 解包 15500.3 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 3143 行（手写，不经 tsc） |
+| 包体 | 1914.8 KB / 288 文件 / 解包 15507.8 KB（护栏上限 3906.3 KB） |
