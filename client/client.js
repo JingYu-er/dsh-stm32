@@ -1343,6 +1343,16 @@ window.__ModuleLoader__.load({
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = usePinout(projectDir, 10000);
       const pinout = state.pinout;
+      const [copiedPin, setCopiedPin] = useState("");
+      const copyPin = async (pin) => {
+        const text = pin.signal === "" ? pin.pin : pin.pin + " " + pin.signal;
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopiedPin(pin.pin);
+        } catch {
+          setCopiedPin("");
+        }
+      };
       const head = [];
       if (projectDir === "") {
         head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录；先打开调试会话或建工程。"));
@@ -1362,6 +1372,7 @@ window.__ModuleLoader__.load({
             e("span", null, "中断 " + String(pinout.nvicCount ?? 0)),
             e("span", null, "引脚 " + String((pinout.pins ?? []).length)),
             (pinout.debug?.serialWire ?? false) ? e("span", { title: "SWD 可用于烧录与调试" }, "SWD 开") : e("span", { style: { opacity: 0.9 } }, "SWD 关"),
+            e("span", { style: { opacity: 0.55 }, title: "复制形如 PA9 USART1_TX 的引用，可直接贴进对话" }, "点行复制引用"),
           ),
         );
         const warnings = pinout.warnings ?? [];
@@ -1387,7 +1398,9 @@ window.__ModuleLoader__.load({
               { style: { fontSize: "12px", opacity: 0.7, paddingBottom: "2px" } },
               group.name + "（" + String(group.pins.length) + "）",
             ),
-            group.pins.map((pin) => e(PinRow, { key: pin.pin + ":" + pin.signal, pin: pin })),
+            group.pins.map((pin) =>
+              e(PinRow, { key: pin.pin + ":" + pin.signal, pin: pin, copied: copiedPin === pin.pin, onCopy: copyPin }),
+            ),
           ),
         ),
       );

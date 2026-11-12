@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S18）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S19）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -880,6 +880,7 @@ const fake = {
 - `src/engine/breakpoint-hits.ts`：从 gdb 输出解析断点/观察点停点，`HitHistory` 环形 50 条；`/debug` 的 `hits` 给断点面板底部列表。
 - `src/engine/watch-recorder.ts` 与 `watch-record.ts`：监视自动采样。定时器夹在 500–60000 ms、一次最多 10 分钟，`sample` 复用 `debugSessions.sampleWatches`，结果仍走 `channel:watch`，面板不换数据源。
 - `POST /serial/send`：面板在串口通道里发一行，参数校验后调 `sendSerial`，与工具入口共用桥命令；无会话时 409。
+- 引脚行点击复制引用（`PA9 USART1_TX`），`PinRow` 里内联实现，没有服务端接口。
 - 时间线工具栏：状态筛选（全部 / 只看失败）与「导出 JSONL」，纯客户端，导出的是当前视图。
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
@@ -901,5 +902,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 115 个文件 |
 | 单测 | 73 个套件 / 1007 pass / 0 fail |
-| 客户端 | `client/client.js` 2553 行（手写，不经 tsc） |
-| 包体 | 1898.9 KB / 286 文件 / 解包 15438.4 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 2566 行（手写，不经 tsc） |
+| 包体 | 1899.4 KB / 286 文件 / 解包 15439.7 KB（护栏上限 3906.3 KB） |
