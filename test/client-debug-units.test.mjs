@@ -106,6 +106,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(text.includes("故障"), "工作区标签要有故障页：" + text.slice(0, 500));
     assert.ok(text.includes("产物"), "工作区标签要有产物页：" + text.slice(0, 500));
     assert.ok(text.includes("概览"), "工作区标签要有概览页：" + text.slice(0, 500));
+    assert.ok(text.includes("回放…"), "时间线工具栏要有回放入口：" + text.slice(0, 500));
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;

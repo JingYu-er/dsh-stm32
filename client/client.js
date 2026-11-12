@@ -2039,6 +2039,82 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 证据目录里的回放候选：打开选择器时才拉一次。 */
+    function useEvidence(open) {
+      const [value, setValue] = useState({ root: "", files: [] });
+      const [error, setError] = useState("");
+      useEffect(() => {
+        if (!open) return undefined;
+        let closed = false;
+        const load = async () => {
+          const result = await callApi("GET", "evidence");
+          if (closed) return;
+          if (result.ok) {
+            setValue({ root: String(result.value.evidence.root ?? ""), files: result.value.evidence.files ?? [] });
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        return () => {
+          closed = true;
+        };
+      }, [open]);
+      return { root: value.root, files: value.files, error: error };
+    }
+
+    /** 载入一份证据文件。回放期间面板只读这份数据，不混入实时事件。 */
+    function useReplay() {
+      const [replay, setReplay] = useState(null);
+      const [error, setError] = useState("");
+      const [busy, setBusy] = useState(false);
+      const load = async (path) => {
+        setBusy(true);
+        const result = await callApi("GET", "replay?path=" + encodeURIComponent(path));
+        setBusy(false);
+        if (result.ok) {
+          const value = result.value.replay;
+          setReplay({ file: String(value.file ?? path), events: value.events ?? [], skipped: Number(value.skipped ?? 0) });
+          setError("");
+        } else {
+          setError(result.error);
+        }
+      };
+      const clear = () => {
+        setReplay(null);
+        setError("");
+      };
+      return { replay: replay, error: error, busy: busy, load: load, clear: clear };
+    }
+
+    /** 回放选择器：列出证据目录里的 jsonl，点一个即载入。 */
+    function ReplayPicker(props) {
+      const evidence = useEvidence(true);
+      const rows = evidence.files.length === 0
+        ? [e("div", { key: "empty", style: debugStyles.empty }, evidence.error === "" ? "证据目录里还没有文件（环形缓冲溢出时才落盘）。" : evidence.error)]
+        : evidence.files.map((file) =>
+            e(
+              "button",
+              {
+                key: file.path,
+                type: "button",
+                style: Object.assign({}, debugStyles.button, { textAlign: "left", marginBottom: "2px", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }),
+                title: file.path,
+                disabled: props.busy === true,
+                onClick: () => props.onLoad(file.path),
+              },
+              file.path + "  " + bytesText(file.size),
+            ),
+          );
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "6px 0" } },
+        e("div", { style: { fontSize: "12px", opacity: 0.7 }, title: evidence.root }, "证据目录：" + (evidence.root === "" ? "—" : evidence.root)),
+        rows,
+      );
+    }
+
     function DebugConsole(props) {
       const sessionId = props !== null && typeof props === "object" && typeof props.sessionId === "string" ? props.sessionId : "";
       const { events, connection } = useDebugEvents(sessionId);
@@ -2057,14 +2133,17 @@ window.__ModuleLoader__.load({
         };
       }, [sessionId]);
       const [selectedSeq, setSelectedSeq] = useState(null);
+      const [pickerOpen, setPickerOpen] = useState(false);
+      const replayState = useReplay();
       const [filter, setFilter] = useState("");
       const [layout, setLayout] = useState(readDebugLayout);
       const dragRef = React.useRef(null);
-      const selected = events.find((event) => event.seq === selectedSeq) ?? null;
+      const selected = (replayState.replay === null ? events : replayState.replay.events).find((event) => event.seq === selectedSeq) ?? null;
 
-      const visible = filter.trim() === ""
+      const matched = filter.trim() === ""
         ? events
         : events.filter((event) => (String(event.kind) + " " + String(event.summary)).toLowerCase().includes(filter.trim().toLowerCase()));
+      const visible = replayState.replay === null ? matched : replayState.replay.events;
 
       const updateLayout = (patch) => {
         setLayout((previous) => {
@@ -2163,7 +2242,25 @@ window.__ModuleLoader__.load({
           e("span", { style: { opacity: 0.6 } }, "显示 " + String(visible.length) + " / " + String(events.length)),
           e("span", { style: debugStyles.spacer }),
           e("button", { style: debugStyles.button, onClick: () => setSelectedSeq(null) }, "清除选择"),
+          e(
+            "button",
+            {
+              style: debugStyles.button,
+              onClick: () => (replayState.replay === null ? setPickerOpen((open) => !open) : replayState.clear()),
+            },
+            replayState.replay === null ? "回放…" : "退出回放",
+          ),
         ),
+        pickerOpen === true && replayState.replay === null ? e(ReplayPicker, { busy: replayState.busy, onLoad: (path) => replayState.load(path) }) : null,
+        replayState.error !== "" ? e("div", { style: { fontSize: "12px", opacity: 0.8, padding: "4px 0" } }, "回放失败：" + replayState.error) : null,
+        replayState.replay === null
+          ? null
+          : e(
+              "div",
+              { style: { display: "flex", gap: "8px", alignItems: "center", fontSize: "12px", padding: "4px 0", opacity: 0.85 } },
+              e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: replayState.replay.file }, "回放：" + replayState.replay.file + "（" + String(replayState.replay.events.length) + " 条" + (replayState.replay.skipped > 0 ? "，跳过 " + String(replayState.replay.skipped) : "") + "）"),
+              e("span", { style: { opacity: 0.7 } }, "实时事件已暂停显示"),
+            ),
         e("div", { style: debugStyles.grid }, panels),
         e(ConsolePanel, {
           events: visible,

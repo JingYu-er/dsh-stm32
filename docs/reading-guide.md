@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S12）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S13）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -875,6 +875,7 @@ const fake = {
 - `src/engine/progress.ts` 与 `POST /dsh-stm32/api/abort`：在途调用登记表与中止；派生 AbortController 把宿主的 abort 转发进来，面板只掐自己这一支，工具仍把信号透传给子进程。`/status` 的 `running` 与事件流里的 `callId` 是同一份事实的两种读法。
 - `src/engine/pinout.ts` 与 `/pinout`：引脚面板。`readPinout(projectDir)` 复用 `summarizeIoc`，`groupOfPin` / `groupPins` 决定分组与顺序（外设自然序在前，GPIO/调试口/时钟/虚拟引脚在后）。
 - `src/engine/fault-hints.ts` 与 `/faults`：故障页。`decodeFault` 是纯函数规则表，按最具体优先；没命中就返回空提示，不猜原因。
+- `/evidence` 与 `/replay`：列证据文件、按路径还原事件；回放入口在时间线工具栏，不与实时事件混流。
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
 - `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
@@ -895,5 +896,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 115 个文件 |
 | 单测 | 70 个套件 / 991 pass / 0 fail |
-| 客户端 | `client/client.js` 2244 行（手写，不经 tsc） |
-| 包体 | 1885.5 KB / 282 文件 / 解包 15383.9 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 2341 行（手写，不经 tsc） |
+| 包体 | 1888.5 KB / 282 文件 / 解包 15397.9 KB（护栏上限 3906.3 KB） |

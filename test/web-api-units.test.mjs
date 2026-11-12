@@ -234,9 +234,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：十八条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 18);
-  assert.equal(new Set(WEB_API_PATHS).size, 18);
+test("WEB_API_PATHS：二十条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 20);
+  assert.equal(new Set(WEB_API_PATHS).size, 20);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -254,6 +254,8 @@ test("WEB_API_PATHS：十八条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/clocks"), true, "时钟面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/faults"), true, "故障面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/artifacts"), true, "产物面板必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence"), true, "回放选择器必须有证据列表路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
 });
 
 test("GET /artifacts：返回 elf 与芯片容量；没有构建目录时 elf 为 null", async () => {
@@ -399,6 +401,48 @@ test("GET /faults：只取失败事件并带上解码提示，limit 生效", asy
   resetEventBus();
 });
 
+test("GET /evidence 与 /replay：列出证据文件、逐行还原事件、拒绝越界路径", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-replay-"));
+  const day = path.join(root, "2026-11-12", "sess-a");
+  fs.mkdirSync(day, { recursive: true });
+  const file = path.join(day, "events-120000.jsonl");
+  const lines = [
+    JSON.stringify({ seq: 2, time: "2026-11-12T04:00:01.000Z", source: "model", kind: "stm32_build", status: "ok", summary: "构建完成" }),
+    JSON.stringify({ seq: 1, time: "2026-11-12T04:00:00.000Z", source: "model", kind: "stm32_build", status: "start", summary: "开始构建" }),
+    "{坏行",
+  ];
+  fs.writeFileSync(file, lines.join("\n") + "\n", "utf8");
+  const deps = { subprocess: fakeSubprocess, env: { DSH_STM32_EVIDENCE: root } };
+
+  const listed = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/evidence", query: {}, deps: deps });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.evidence.root, root);
+  assert.equal(listed.body.evidence.files.length, 1);
+  assert.equal(listed.body.evidence.files[0].path, "2026-11-12/sess-a/events-120000.jsonl");
+
+  const replayed = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/replay",
+    query: { path: "2026-11-12/sess-a/events-120000.jsonl" },
+    deps: deps,
+  });
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.replay.events.length, 2, "只收形状完整的事件");
+  assert.equal(replayed.body.replay.skipped, 1, "坏行计入 skipped");
+  assert.equal(replayed.body.replay.events[0].seq, 1, "按 seq 升序，与时间线同序");
+
+  const escape = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/replay", query: { path: "../outside.jsonl" }, deps: deps });
+  assert.equal(escape.status, 400);
+  assert.ok(escape.body.error.includes("证据目录"));
+
+  const missing = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/replay", query: { path: "2026-11-12/none.jsonl" }, deps: deps });
+  assert.equal(missing.status, 409);
+  assert.ok(missing.body.error.includes("读取证据失败"));
+
+  const post = await handleWebApi({ method: "POST", path: WEB_API_PREFIX + "/replay", query: {}, deps: deps });
+  assert.equal(post.status, 405, "回放只读，只接受 GET");
+  fs.rmSync(root, { recursive: true, force: true });
+});
 test("GET /clocks：读工程 .ioc 的 RCC 频率与分频，缺 .ioc 回 409", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-clocks-"));
   fs.writeFileSync(
