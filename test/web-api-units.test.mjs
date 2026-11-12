@@ -235,9 +235,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：三十四条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 34);
-  assert.equal(new Set(WEB_API_PATHS).size, 34);
+test("WEB_API_PATHS：三十五条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 35);
+  assert.equal(new Set(WEB_API_PATHS).size, 35);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -266,6 +266,7 @@ test("WEB_API_PATHS：三十四条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/touch"), true, "会话续期必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts"), true, "中断页必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/source"), true, "源码片段必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-sync"), true, ".ioc 同步状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial"), true, "串口卡片必须能读状态");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/ports"), true, "串口卡片必须能列端口");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/open"), true, "串口卡片必须能开会话");
@@ -329,6 +330,60 @@ test("GET /source：读工程内源码的上下文；越界路径 400", async ()
   assert.equal(escape.status, 400);
   assert.match(escape.body.error, /工程目录内/u);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("GET /ioc-sync：.ioc 比 main.c 新算待生成，缺 .ioc 时 409", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-sync-"));
+  const ioc = path.join(dir, "demo.ioc");
+  fs.writeFileSync(ioc, "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  fs.mkdirSync(path.join(dir, "Core", "Src"), { recursive: true });
+  const main = path.join(dir, "Core", "Src", "main.c");
+  fs.writeFileSync(main, "int main(void) { return 0; }\n", "utf8");
+
+  const iocTime = 1_700_000_000;
+  const codeTime = 1_700_000_100;
+  fs.utimesSync(ioc, iocTime, iocTime);
+  fs.utimesSync(main, codeTime, codeTime);
+  const fresh = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/ioc-sync",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.body.iocSync.stale, false);
+  assert.match(fresh.body.iocSync.message, /一致/u);
+
+  fs.utimesSync(ioc, codeTime + 60, codeTime + 60);
+  const stale = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/ioc-sync",
+    query: { projectDir: dir },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(stale.status, 200);
+  assert.equal(stale.body.iocSync.stale, true);
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-sync-none-"));
+  const missing = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/ioc-sync",
+    query: { projectDir: empty },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(missing.status, 409);
+  assert.match(missing.body.error, /没有 \.ioc/u);
+
+  const post = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ioc-sync",
+    query: {},
+    body: "{}",
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(post.status, 405);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(empty, { recursive: true, force: true });
 });
 
 test("GET /interrupts：读 .ioc 的 NVIC 表；缺 .ioc 时 409", async () => {

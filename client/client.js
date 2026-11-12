@@ -1546,6 +1546,32 @@ window.__ModuleLoader__.load({
       return { pinout, error, reload: () => setTick((value) => value + 1) };
     }
 
+    /** .ioc 与生成代码是否同步：只读两个文件的修改时间，不跑 CubeMX。 */
+    function useIocSync(projectDir, intervalMs) {
+      const [sync, setSync] = useState(null);
+      useEffect(() => {
+        let closed = false;
+        if (typeof projectDir !== "string" || projectDir === "") {
+          setSync(null);
+          return () => {
+            closed = true;
+          };
+        }
+        const load = async () => {
+          const result = await callApi("GET", "ioc-sync?projectDir=" + encodeURIComponent(projectDir));
+          if (closed) return;
+          setSync(result.ok ? result.value.iocSync : null);
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [projectDir]);
+      return sync;
+    }
+
     const PIN_KIND_LABEL = { gpio: "GPIO", debug: "调试", clock: "时钟", virtual: "虚拟", other: "其它" };
 
     function PinRow(props) {
@@ -1572,6 +1598,7 @@ window.__ModuleLoader__.load({
     function PinoutPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = usePinout(projectDir, 10000);
+      const sync = useIocSync(projectDir, 10000);
       const pinout = state.pinout;
       const [copiedPin, setCopiedPin] = useState("");
       const copyPin = async (pin) => {
@@ -1603,6 +1630,10 @@ window.__ModuleLoader__.load({
             e("span", null, "引脚 " + String((pinout.pins ?? []).length)),
             (pinout.debug?.serialWire ?? false) ? e("span", { title: "SWD 可用于烧录与调试" }, "SWD 开") : e("span", { style: { opacity: 0.9 } }, "SWD 关"),
             e("span", { style: { opacity: 0.55 }, title: "复制形如 PA9 USART1_TX 的引用，可直接贴进对话" }, "点行复制引用"),
+            sync === null
+              ? null
+              : e("span", { title: sync.message, style: sync.stale === true ? { color: "#e8b339" } : { opacity: 0.7 } },
+                  sync.stale === true ? "待重新生成" : "已同步"),
           ),
         );
         const warnings = pinout.warnings ?? [];

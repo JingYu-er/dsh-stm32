@@ -37,6 +37,7 @@ import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
 import { closeSerial, listPorts, openSerial, sendSerial, serialStatus } from "./serial.js";
 import { readInterrupts } from "./interrupts.js";
+import { readIocSync } from "./ioc-sync.js";
 import { readSourceSlice } from "./source-slice.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
@@ -436,6 +437,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/serial/send",
   WEB_API_PREFIX + "/debug/touch",
   WEB_API_PREFIX + "/interrupts",
+  WEB_API_PREFIX + "/ioc-sync",
   WEB_API_PREFIX + "/source",
   WEB_API_PREFIX + "/serial",
   WEB_API_PREFIX + "/serial/ports",
@@ -579,6 +581,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ioc-diff" &&
     path !== WEB_API_PREFIX + "/watch-recording" &&
     path !== WEB_API_PREFIX + "/interrupts" &&
+    path !== WEB_API_PREFIX + "/ioc-sync" &&
     path !== WEB_API_PREFIX + "/source" &&
     path !== WEB_API_PREFIX + "/serial" &&
     path !== WEB_API_PREFIX + "/serial/ports";
@@ -651,6 +654,14 @@ export async function handleWebApi(input: {
     const read = readSourceSlice(projectDir, file, Number.isFinite(line) ? line : Number.NaN, Number.isFinite(context) ? context : 3);
     if (!read.ok) return fail(400, read.error);
     return ok({ source: read.slice });
+  }
+  if (path === WEB_API_PREFIX + "/ioc-sync") {
+    // .ioc 与生成代码是否同步：只比修改时间，不读内容、不跑 CubeMX。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = requested !== "" ? requested : process.cwd();
+    const read = readIocSync(projectDir);
+    if (!read.ok) return fail(409, read.error);
+    return ok({ iocSync: read.report });
   }
   if (path === WEB_API_PREFIX + "/interrupts") {
     // 中断页：只读 .ioc 的 NVIC.*，不启动 CubeMX、不改配置。
