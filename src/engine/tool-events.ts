@@ -9,6 +9,7 @@
  */
 
 import { emitEvent, setEventSessionKey } from "./event-bus.js";
+import { beginToolCall } from "./progress.js";
 import type { DshContext, ToolDefinition, ToolExec, ToolsService } from "../types.js";
 
 function firstLine(text: string, limit = 160): string {
@@ -46,24 +47,27 @@ export function withToolEvents(definition: ToolDefinition): ToolDefinition {
       const startedAt = Date.now();
       const owner = exec?.agent?.id;
       if (typeof owner === "string" && owner !== "") setEventSessionKey(owner);
+      // 登记在途调用：面板能列出「谁在跑」，也能中止（abort 会透传到子进程）。
+      const running = beginToolCall({ name: definition.name, session: owner, outer: exec?.signal });
       emitEvent({
         source: "model",
         kind: definition.name,
         status: "start",
         summary: definition.name + " 开始",
-        payload: { args: args as Record<string, unknown> },
+        payload: { args: args as Record<string, unknown>, callId: running.info.id },
         session: owner,
       });
       try {
-        const value = await original(args, exec);
+        const value = await original(args, exec === undefined ? exec : { ...exec, signal: running.signal });
         emitEvent({
           source: "model",
           kind: definition.name,
           status: "ok",
           summary: definition.name + " 完成（" + formatDuration(Date.now() - startedAt) + "）",
-          payload: { durationMs: Date.now() - startedAt, result: resultDigest(value) },
+          payload: { durationMs: Date.now() - startedAt, callId: running.info.id, result: resultDigest(value) },
           session: owner,
         });
+        running.end();
         return value;
       } catch (error) {
         emitEvent({
@@ -71,9 +75,10 @@ export function withToolEvents(definition: ToolDefinition): ToolDefinition {
           kind: definition.name,
           status: "fail",
           summary: definition.name + " 失败：" + describeError(error),
-          payload: { durationMs: Date.now() - startedAt, error: describeError(error) },
+          payload: { durationMs: Date.now() - startedAt, callId: running.info.id, error: describeError(error) },
           session: owner,
         });
+        running.end();
         throw error;
       }
     },

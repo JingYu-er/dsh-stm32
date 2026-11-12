@@ -1301,6 +1301,83 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 从事件流里算「谁还在跑」：start 未配对 ok/fail 即视为在途，progress 更新阶段。 */
+    function collectRunning(events) {
+      const order = [];
+      const map = new Map();
+      for (const event of events) {
+        const payload = event.payload ?? {};
+        const callId = typeof payload.callId === "string" ? payload.callId : "";
+        if (callId === "") continue;
+        if (event.kind === "progress") {
+          const item = map.get(callId);
+          if (item !== undefined) item.phase = String(payload.phase ?? "");
+          continue;
+        }
+        if (event.status === "start") {
+          if (!map.has(callId)) {
+            map.set(callId, { callId, name: String(event.kind), startedAt: event.time, phase: "" });
+            order.push(callId);
+          }
+        } else if (event.status === "ok" || event.status === "fail") {
+          map.delete(callId);
+        }
+      }
+      return order.filter((callId) => map.has(callId)).map((callId) => map.get(callId));
+    }
+
+    /** 在途调用列表：显示已跑时长与阶段，可逐条请求中止。 */
+    function RunningTools(props) {
+      const [now, setNow] = useState(Date.now());
+      const [message, setMessage] = useState("");
+      const [busy, setBusy] = useState("");
+      useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+      }, []);
+      const running = collectRunning(props.events ?? []);
+      const abortOne = async (callId) => {
+        setBusy(callId);
+        const result = await callApi("POST", "abort", { callId });
+        setBusy("");
+        if (result.ok) {
+          const count = result.value?.abort?.count ?? 0;
+          setMessage("已请求中止 " + callId + "（" + String(count) + " 条）");
+        } else {
+          setMessage(result.error);
+        }
+      };
+      const elapsed = (startedAt) => {
+        const start = Date.parse(String(startedAt));
+        if (!Number.isFinite(start)) return "";
+        const ms = Math.max(0, now - start);
+        return (ms / 1000).toFixed(1) + " s";
+      };
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "4px" } },
+        e("div", { style: { opacity: 0.7, fontWeight: 600 } }, "在途调用"),
+        running.length === 0
+          ? e("div", { style: { opacity: 0.5 } }, "当前没有在途的工具调用。")
+          : running.map((item) =>
+              e(
+                "div",
+                { key: item.callId, style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" } },
+                e("span", { style: { fontFamily: "monospace" } }, item.callId),
+                e("span", null, item.name),
+                e("span", { style: { opacity: 0.7 } }, elapsed(item.startedAt)),
+                item.phase === "" ? null : e("span", { style: { opacity: 0.7 } }, item.phase),
+                e(
+                  "button",
+                  { style: debugStyles.button, disabled: busy === item.callId, onClick: () => abortOne(item.callId) },
+                  busy === item.callId ? "中止中…" : "中止",
+                ),
+              ),
+            ),
+        message === "" ? null : e("div", { style: { opacity: 0.7 } }, message),
+      );
+    }
+
     function Channels(props) {
       const [view, setView] = useState({});
       const debugInfo = useDebugStatus(5000);
@@ -1316,6 +1393,7 @@ window.__ModuleLoader__.load({
         DebugPanel,
         { title: DEBUG_LABELS.channels, onCollapse: props.onCollapse },
         e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error }),
+        e(RunningTools, { key: "running", events: props.events }),
         e(BreakpointPanel, { key: "breakpoints", debug: debugInfo.debug, onChanged: debugInfo.reload }),
         e(WatchCurves, { key: "curves", events: props.events }),
         CHANNEL_DEFS.map((def) =>

@@ -100,6 +100,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     // 输入框的 placeholder 是属性，不在文本树里；这里断言按钮文案与状态。
     assert.ok(text.includes("无会话"), text.slice(0, 600));
     assert.ok(text.includes("移除"), text.slice(0, 600));
+    assert.ok(text.includes("在途调用"), text.slice(0, 800));
+    assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;

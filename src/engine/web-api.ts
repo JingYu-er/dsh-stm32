@@ -32,6 +32,7 @@ import {
   type DebugEvent,
 } from "./event-bus.js";
 import { evidenceRoot } from "./event-log.js";
+import { abortAll, abortCall, listRunning } from "./progress.js";
 import { debugSessions } from "./debug-session.js";
 import type { SubprocessService } from "../types.js";
 
@@ -404,6 +405,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/status",
   WEB_API_PREFIX + "/debug",
   WEB_API_PREFIX + "/debug/breakpoints",
+  WEB_API_PREFIX + "/abort",
 ];
 
 function ok(body: Record<string, unknown>): WebJson {
@@ -548,8 +550,23 @@ export async function handleWebApi(input: {
         ringLimit: EVENT_RING_LIMIT,
         evidenceOverride:
           typeof env.DSH_STM32_EVIDENCE === "string" && env.DSH_STM32_EVIDENCE.trim() !== "",
+        running: listRunning(wanted),
       },
     });
+  }
+  if (path === WEB_API_PREFIX + "/abort") {
+    // 面板「中止」：只中止登记过的在途调用，不碰调试会话与后台 job。
+    const callId = typeof parsed.value.callId === "string" ? parsed.value.callId.trim() : "";
+    const all = parsed.value.all === true;
+    const session = typeof parsed.value.session === "string" ? parsed.value.session.trim() : "";
+    if (callId === "" && !all) return fail(400, "callId 不能为空（全部中止请传 all: true）");
+    if (callId !== "") {
+      const aborted = abortCall(callId);
+      if (aborted === null) return fail(404, "没有这条在途调用：" + callId);
+      return ok({ abort: { count: 1, calls: [aborted] } });
+    }
+    const count = abortAll(session);
+    return ok({ abort: { count, calls: [] } });
   }
   return fail(404, "没有这个接口：" + path);
 }

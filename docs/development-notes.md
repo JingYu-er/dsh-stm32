@@ -5942,9 +5942,9 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 
 ### 四、已知限制与后续
 
-- 通道输出是「一次工具调用一批」，不是后台常驻流；常驻 RTT / 串口流与「AI → 人」的进度/中止留到后续阶段。
+- 通道输出是「一次工具调用一批」，不是后台常驻流；常驻 RTT / 串口流留到后续阶段（在途进度与中止已在 S6 补上，见「八、在途调用与中止」）。
 - 证据目录的会话键取工具调用的 `agent.id`；面板自身 sessionId 的按会话过滤已在 S5 补上（见「七、会话绑定」），两者是同一个串时行为一致。
-- 仅「人 → AI」的复制引用已可用，「AI → 人」的进度与中止按钮未做。
+- 「人 → AI」的复制引用与「AI → 人」的进度/中止均已可用（S6）；中止只覆盖 `stm32_*` 工具调用，不碰后台 job。
 
 ### 五、调试会话卡与监视历史曲线（S3）
 
@@ -5972,7 +5972,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 为什么不改协议头：面板走同源 fetch/EventSource，query 是最小改动面，也方便用 curl 复现与验收。
 - 计数：64 套件 / **956 pass / 0 fail**；`client/client.js` 1574 行；包体 1861.9 KB / 276 文件 / 解包 15290.4 KB。
 
-### 八、教训
+### 八、在途调用与中止（S6）
+
+- 登记表 `src/engine/progress.ts`：`beginToolCall({ name, session, outer })` 生成 `call-<n>` 与一个**派生** AbortController，`listRunning(session?)` / `abortCall(id)` / `abortAll(session?)` / `resetRunning()`。
+- 为什么不直接 abort 宿主的 `exec.signal`：那个 signal 归调用方所有，插件从内部掐它会污染宿主的超时与取消语义。派生一支、把宿主的 abort 转发进来，面板只掐自己这一支；工具本来就把 `exec.signal` 透传给子进程，所以中止会一路到 cmake / openocd / gdb。
+- 进度：`handle.update(phase)` 发 `kind:"progress"` 事件（同一阶段连报只发一条），摘要 `工具名：阶段`，payload 带 `callId` / `tool` / `phase`。
+- 配对：start / ok / fail 的 payload 都带 `callId`；面板因此**不需要轮询**就能从事件流算出「谁还在跑」——start 出现过而 ok/fail 未出现即在途，progress 只更新阶段。
+- 接口：`POST /dsh-stm32/api/abort`，只认登记过的调用（缺 `callId` 又没 `all:true` 返回 400，找不到返回 404），返回 `{ abort: { count, calls } }`；`GET /status` 增 `running`，同样按 `?session=` 过滤。
+- 面板：右侧通道顶部「在途调用」块，显示 callId、工具名、已跑秒数、阶段与「中止」按钮；没有在途时写明「当前没有在途的工具调用。」。
+- 边界：只覆盖走本插件 `instrumentContext` 的 `stm32_*` 工具；后台 job 与调试会话另有自己的租约与关闭路径，不在这里中止。
+- 计数：65 套件 / **963 pass / 0 fail**；`client/client.js` 1652 行；包体 1865.3 KB / 277 文件 / 解包 15301.9 KB。
+
+### 九、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
