@@ -52,6 +52,7 @@ const suites = [
     "watch-recorder-units.test.mjs",
     "watch-admin-units.test.mjs",
     "interrupts-units.test.mjs",
+    "probe-info-units.test.mjs",
     "ioc-sync-units.test.mjs",
     "source-slice-units.test.mjs",
   "client-debug-units.test.mjs",

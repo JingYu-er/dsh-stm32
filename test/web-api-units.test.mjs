@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：三十八条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 38);
-  assert.equal(new Set(WEB_API_PATHS).size, 38);
+test("WEB_API_PATHS：三十九条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 39);
+  assert.equal(new Set(WEB_API_PATHS).size, 39);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -256,6 +256,7 @@ test("WEB_API_PATHS：三十八条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/clocks"), true, "时钟面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/faults"), true, "故障面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/artifacts"), true, "产物面板必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/probe-info"), true, "探针信息卡必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence"), true, "回放选择器必须有证据列表路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff"), true, "变更页必须有对比路由");
@@ -1028,4 +1029,28 @@ test("POST /debug/breakpoints：白名单动作、位置与编号先校验，没
   const noSession = await post({ action: "list" });
   assert.equal(noSession.status, 409);
   assert.match(String(noSession.body.error), /没有调试会话/u);
+});
+
+test("GET /probe-info：读 pnputil 的 USB 枚举，认不出探针时不报错", async () => {
+  const text = "Instance ID:                USB\\VID_C251&PID_F001\\0000000001A8";
+  const subprocess = {
+    resolveExecutable: (name) => name,
+    spawn() {
+      const collected = {
+        stdout: { readFrom: () => ({ text: text, nextOffset: text.length }) },
+        stderr: { readFrom: () => ({ text: "", nextOffset: 0 }) },
+      };
+      return {
+        collected: collected,
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        terminate() {},
+        waitForExit: () => Promise.resolve({ exitCode: 0, signal: null }),
+      };
+    },
+  };
+  const result = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/probe-info", query: {}, deps: { subprocess: subprocess, env: {} } });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.probeInfo.present, true);
+  assert.equal(result.body.probeInfo.probe.kind, "daplink");
+  assert.equal(result.body.probeInfo.interfaceCfg, "interface/cmsis-dap.cfg");
 });

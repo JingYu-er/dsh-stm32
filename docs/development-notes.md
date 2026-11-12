@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S40）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S41）
 
 ### 一、目标与约束
 
@@ -6355,7 +6355,19 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node --check`、build 0、**1033 pass / 0 fail**、ACCEPTANCE OK、`test:size` 1927.0 KB / 291 文件 / 解包 15563.1 KB、client 3560 行；client 源码断言 `readDebugEventSeq` / `writeDebugEventSeq`。
 - 教训：状态同步用 `replaceState` 不用 `pushState`；回放与实时是两套 seq，别把回放写进深链。
 
-### 四十四、教训
+### 四十四、探针信息卡（S41）
+
+- 问题：面板只显示「有/没有探针」，不显示是什么探针、序列号、该走哪份 interface 配置；换板子排查时只能去设备管理器看。
+- 做法：新增 `src/engine/probe-info.ts`，只读 `pnputil /enum-devices /connected` 的 ASCII 段。
+  - `parseProbeInstances` 把 `USB\VID_C251&PID_F001\0001A0000000` 拆成 vid/pid/序列号；带 `&MI_xx` 的是设备里的接口（HID / COM），标 `isInterface`。
+  - **序列号只认父设备那一条**：本机实况是父设备 + `&MI_00`（COM4）+ `&MI_02`（HID）三条，接口条目的最后一段是总线路径（`6&30b5aae7&0&0000`），换 USB 口就变，不能当身份。
+  - `probeInfoFromText` 复用 doctor 的 `parseProbeVidPid` 分类与 `preferredInterfaceConfig` 选配置；没有 SWD 探针时把其它 USB 设备列进 `others`，接口配置留空。
+  - `readProbeInfo` 跑不动 pnputil 时返回 `error`，不抛。
+- 接口与面板：`GET /probe-info`（39 条路由，GET 专用）；客户端 `useProbeInfo(30000)` + `ProbeCard`（类型 / 序列号 / 位置 / 接口，取不到的显示 `—`），插在实时通道的串口卡之前。
+- 验证：`tsc` 0、build 0、**1043 pass / 0 fail**（`probe-info-units` 9 条）、ACCEPTANCE OK（75 项，含「认出 DAPLink 与序列号」「给出 interface 配置」）、`test:pack` 0、`test:size` 1929.9 KB / 292 文件 / 解包 15574.2 KB、client 3633 行；client 源码断言 `ProbeCard` / `probe-info`。
+- 教训：先拿真机 pnputil 输出对一遍再写正则——第一版正则要求 `PID_xxxx` 后直接跟 `\`，真实设备名带 `&MI_00`，会一条都匹配不上；序列号与总线路径必须分开。
+
+### 四十五、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
