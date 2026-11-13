@@ -18,16 +18,35 @@ const agents = new Map<string, unknown>();
 /** 没有会话 id 时记在空键上，仅供工具侧解析（Web API 不读它，避免跨会话串用）。 */
 let lastAgent: unknown = undefined;
 
-/** 记一条会话的 agent；会话 id 为空时只更新兜底引用。 */
+/** 取 agent 自带的 id（宿主会话 id 与工具的 `exec.agent.id` 未必同形，两者都记）。 */
+function agentIdOf(agent: unknown): string {
+  if (agent === null || typeof agent !== "object") return "";
+  const id = (agent as Record<string, unknown>)["id"];
+  return typeof id === "string" ? id.trim() : "";
+}
+
+function remember(key: string, agent: unknown): void {
+  if (key === "") return;
+  agents.set(key, agent);
+  while (agents.size > SESSION_LIMIT) {
+    const oldest = agents.keys().next();
+    if (oldest.done === true) return;
+    agents.delete(oldest.value);
+  }
+}
+
+/**
+ * 记一条会话的 agent；会话 id 为空时只更新兜底引用。
+ *
+ * 同时按 agent 自己的 id 记一份：调试台的 `conversation.view` 注入的会话 id 与工具层
+ * 的 `exec.agent.id` 是同一个值，但 session/event 的 session 上不一定带 header.id。
+ * 只记 sessionId 会让 Web API 永远查不到，面板只能显示「没有可用的会话工作目录」。
+ */
 export function noteSessionAgent(sessionId: string, agent: unknown): void {
   if (agent === undefined || agent === null) return;
   lastAgent = agent;
-  const key = sessionId.trim();
-  if (key === "") return;
-  agents.set(key, agent);
-  if (agents.size <= SESSION_LIMIT) return;
-  const oldest = agents.keys().next();
-  if (oldest.done !== true) agents.delete(oldest.value);
+  remember(sessionId.trim(), agent);
+  remember(agentIdOf(agent), agent);
 }
 
 /** 按会话 id 取 agent；没有记录返回 undefined。 */

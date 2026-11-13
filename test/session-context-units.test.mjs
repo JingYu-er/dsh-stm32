@@ -19,6 +19,19 @@ test("会话 agent 对照表：按会话 id 取回，互不串用（S91）", () 
   assert.equal(lastSessionAgent(), undefined);
 });
 
+test("会话 agent 对照表：同时按 agent.id 记一份，工具层登记的会话 id 也查得到（S91）", () => {
+  resetSessionAgents();
+  const agent = { id: "session-6c6c19e8-a30b-435e-ab7c-6168d8f03803" };
+  // 工具层只有 agent，没有宿主的会话对象；调试台请求带的正是 agent.id。
+  noteSessionAgent(agent.id, agent);
+  assert.equal(agentOfSession("session-6c6c19e8-a30b-435e-ab7c-6168d8f03803"), agent);
+  resetSessionAgents();
+  noteSessionAgent("s1", agent);
+  assert.equal(agentOfSession(agent.id), agent, "会话 id 与 agent.id 不同形时两把钥匙都能开");
+  assert.equal(agentOfSession("s1"), agent);
+  resetSessionAgents();
+});
+
 test("会话 agent 对照表：超过容量时丢最早的一条", () => {
   resetSessionAgents();
   for (let index = 0; index < 65; index += 1) noteSessionAgent("k" + String(index), { index });

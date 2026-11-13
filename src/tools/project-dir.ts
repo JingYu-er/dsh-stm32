@@ -40,7 +40,9 @@ export async function resolveProjectDir(
   explicit: string | undefined,
   exec?: ToolExec,
 ): Promise<ProjectDirResolution> {
-  noteSessionAgent("", exec?.agent);
+  // 工具层是唯一稳定带着 agent 的地方：按 agent.id 记一份，Web API 才能按会话查到工作目录（S91）。
+  const agentId = typeof exec?.agent?.id === "string" ? exec.agent.id : "";
+  noteSessionAgent(agentId, exec?.agent);
   const given = usableDir(explicit);
   if (given !== null) {
     rememberWorkspace(given);
