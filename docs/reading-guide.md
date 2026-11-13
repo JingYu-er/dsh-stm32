@@ -858,11 +858,13 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S65）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S66）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
 ### 15.1 先读哪里
+
+（`src/engine/clocks.ts` 的 `familyOfCpn` / `limitForNode` 给出总线上限与超限判断。）
 
 - `src/engine/event-bus.ts`：环形缓冲与序号。`EVENT_RING_LIMIT = 5000`、`EVENT_PAYLOAD_LIMIT = 8192`、`EVENT_PENDING_LIMIT = 2000`；`emitEvent` 是唯一写入入口。
 - `src/engine/event-log.ts`：被挤出的事件按 30 秒一批写到 `<证据根>/<日期>/<会话键>/events-<HHmmss>.jsonl`；缺口先写一条 `kind:"log"` 的事件。
@@ -917,5 +919,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
 | 单测 | 79 个套件 / 1050 pass / 0 fail |
-| 客户端 | `client/client.js` 4276 行（手写，不经 tsc） |
-| 包体 | 1948.6 KB / 292 文件 / 解包 15656.6 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 4303 行（手写，不经 tsc） |
+| 包体 | 1949.7 KB / 292 文件 / 解包 15660.7 KB（护栏上限 3906.3 KB） |
