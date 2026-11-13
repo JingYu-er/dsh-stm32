@@ -95,3 +95,15 @@ test("scanWorkspaceProjects：深度 ≤2 内认 .ioc 与 CMakeLists.txt", () =>
   assert.deepEqual(names.sort(), ["alpha", "inner"]);
   assert.equal(names.includes("gamma"), false, "没有标记文件的目录不算工程");
 });
+
+test("scanWorkspaceProjects：工作区根自己就是工程时不再往下扫（S84 真机噪音）", () => {
+  const root = tempDir("scan-root-project-");
+  fs.writeFileSync(path.join(root, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  // 工程内部那些带 CMakeLists.txt 的子目录不该被当成独立工程。
+  const inner = path.join(root, "cmake", "stm32cubemx");
+  fs.mkdirSync(inner, { recursive: true });
+  fs.writeFileSync(path.join(inner, "CMakeLists.txt"), "project(x)\n", "utf8");
+
+  const found = scanWorkspaceProjects(root);
+  assert.deepEqual(found.map((item) => item.dir), [root], "只有根工程，没有内部假工程");
+});
