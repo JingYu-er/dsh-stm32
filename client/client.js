@@ -3136,6 +3136,7 @@ window.__ModuleLoader__.load({
       const clocks = useClockTree(projectDir, 10000);
       const artifacts = useArtifacts(projectDir, 10000);
       const probe = useProbeSummary(60000);
+      const evidence = useEvidence(true);
       const memory = collectMemoryUsage(props.events ?? []);
       const build = lastEventOf(props.events ?? [], "stm32_build");
       const flash = lastEventOf(props.events ?? [], "stm32_flash");
@@ -3169,6 +3170,15 @@ window.__ModuleLoader__.load({
             " · " + String((probe.tools ?? []).filter((tool) => tool.found === true).length) + "/" + String((probe.tools ?? []).length) +
             " 项 · " + capabilitiesText(probe.capabilities),
       ]);
+      const evidenceUsage = evidence.usage ?? null;
+      chips.push([
+        "证据",
+        evidenceUsage === null
+          ? "—"
+          : String(evidenceUsage.count) + " 个 · " + bytesText(evidenceUsage.bytes),
+      ]);
+      const lastEvent = (props.events ?? [])[(props.events ?? []).length - 1] ?? null;
+      chips.push(["最近事件", lastEvent === null ? "—" : clockText(lastEvent.time) + " · #" + String(lastEvent.seq)]);
       chips.push(["上次构建", build === null ? "—" : clockText(build.time)]);
       chips.push(["上次烧录", flash === null ? "—" : clockText(flash.time)]);
       const seen = chips.some((pair) => pair[0] === "失败事件");
