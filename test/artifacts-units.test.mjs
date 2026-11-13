@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { ARTIFACT_HASH_MAX_BYTES, hasBuildDir, readArtifacts } from "../lib/engine/artifacts.js";
+import { ARTIFACT_HASH_MAX_BYTES, hasBuildDir, readArtifacts, sha256OfPath } from "../lib/engine/artifacts.js";
 
 const IOC_TEXT = [
   "#MicroXplorer Configuration settings - do not modify",
@@ -57,6 +57,8 @@ test("readArtifacts：elf 与同名 hex/bin、芯片容量、无提示", () => {
   assert.match(report.hex.sha256, /^[0-9a-f]{64}$/u, "hex 也要有校验和（S62）");
   assert.match(report.bin.sha256, /^[0-9a-f]{64}$/u, "bin 也要有校验和（S62）");
   assert.notEqual(report.hex.sha256, report.elf.sha256, "不同文件的校验和不应相同");
+  assert.equal(sha256OfPath(report.elf.path), report.elf.sha256, "单文件校验和要与产物报告一致（S68）");
+  assert.equal(sha256OfPath(path.join(dir, "missing.elf")), "", "文件不存在时给空串");
   assert.deepEqual(report.notes, []);
 });
 

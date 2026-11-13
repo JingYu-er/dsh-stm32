@@ -2770,6 +2770,17 @@ window.__ModuleLoader__.load({
     }
 
     /** 产物页：文件清单 + 最近一次构建的 Flash/RAM 占用。 */
+    /** 最近两次成功构建的 elf 校验和（S68）：用来回答「这次和上次是不是同一个文件」。 */
+    function collectBuildShas(events) {
+      const out = [];
+      for (const event of events) {
+        if (event.kind !== "stm32_build" || event.status !== "ok") continue;
+        const sha = event.payload?.result?.elfSha256;
+        if (typeof sha === "string" && sha !== "") out.push({ seq: event.seq, time: event.time, sha: sha });
+      }
+      return out.slice(-2);
+    }
+
     function ArtifactPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useArtifacts(projectDir, 10000);
@@ -2838,6 +2849,20 @@ window.__ModuleLoader__.load({
                 "复制",
               ),
         ),
+        (() => {
+          const shas = collectBuildShas(props.events ?? []);
+          if (shas.length < 2) {
+            return e("div", { key: "build-diff", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.6 } }, "构建对比：至少要有两次成功构建记录。");
+          }
+          const latest = shas[shas.length - 1];
+          const previous = shas[shas.length - 2];
+          const same = latest.sha === previous.sha;
+          return e(
+            "div",
+            { key: "build-diff", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.85, color: same ? "inherit" : "#e8b339" } },
+            (same ? "与上次构建相同（#" : "与上次构建不同（#") + String(previous.seq) + " " + clockText(previous.time) + "）",
+          );
+        })(),
         memory === null
           ? e("div", { key: "no-memory", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.6 } }, "还没有构建记录：跑一次 stm32_build 后这里显示 Flash / RAM 占用。")
           : e(

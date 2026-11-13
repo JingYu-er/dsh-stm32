@@ -7,6 +7,7 @@
  */
 
 import { emitEvent } from "./event-bus.js";
+import { sha256OfPath } from "./artifacts.js";
 import { runBuild, type BuildReport } from "./build.js";
 import { runFlash, type FlashReport, type FlashRequest } from "./flash.js";
 import type { SubprocessService } from "../types.js";
@@ -43,7 +44,11 @@ export function buildDigest(report: BuildReport): Record<string, unknown> {
   };
   if (report.exitCode !== undefined) digest["exitCode"] = report.exitCode;
   if (report.memoryUsage.length > 0) digest["memoryUsage"] = report.memoryUsage;
-  if (report.elf !== undefined) digest["elf"] = report.elf.path;
+  if (report.elf !== undefined) {
+    digest["elf"] = report.elf.path;
+    const sha = sha256OfPath(report.elf.path);
+    if (sha !== "") digest["elfSha256"] = sha;
+  }
   if (report.errors.length > 0) digest["errors"] = report.errors.slice(0, 20);
   return digest;
 }

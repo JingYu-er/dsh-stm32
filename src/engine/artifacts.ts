@@ -72,6 +72,12 @@ function sibling(elfPath: string, extension: string): ArtifactFile | null {
 /** 超过这个大小的 elf 不算校验和：调试台每 10 秒轮询一次，不值得。 */
 export const ARTIFACT_HASH_MAX_BYTES = 8 * 1024 * 1024;
 
+/** 单个文件的 SHA-256（S68）：构建摘要用它标出「这次 elf 和上次是不是同一个」。 */
+export function sha256OfPath(filePath: string): string {
+  const file = statFile(filePath);
+  return file === null ? "" : hashFile(file);
+}
+
 function hashFile(file: ArtifactFile): string {
   if (file.size > ARTIFACT_HASH_MAX_BYTES) return "";
   try {
