@@ -6438,7 +6438,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：build 0、**1050 pass / 0 fail**（`/evidence` 用例改为断言两个会话两组）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1939.3 KB / 292 文件 / 解包 15610.1 KB、client 3868 行。
 - 教训：**目录已是分组就不要再造一份索引**。证据路径自带会话信息，服务端聚合时只需读路径，不必额外维护清单。
 
-### 五十二、教训
+### 五十二、会话卡显示最近 gdb 输出（S49）
+
+- 问题：调试时 gdb 的原始输出只有工具回包里有；面板上只看到「已停下在 main.c:67」，想看 `info registers` 的整段输出得再问一次模型。
+- 做法：
+  - `DebugSessionManager` 增 `EvalTrace { at, command, ok, output }` 与 `traces` 环形表（`TRACE_LIMIT = 20`，单条输出留尾部 `TRACE_TEXT_LIMIT = 2000` 字符），MI 与 `-batch` 两条路径都在 `hits.record` 之后调 `rememberTrace`；`stop()`/`resetForTest()` 一并清空。
+  - `/debug` 响应加 `outputs: debugSessions.recentTraces()`（默认最近 5 条）。
+  - 会话卡在断点配额之后渲染「最近 gdb 输出」：最多 3 条 `时间 + 命令` 与 `pre` 里 120px 高的输出，最上面一条给「复制」。
+  - 只留尾部而不是整段：一次 `info all-registers` 能到几万字符，面板要的是最后几行结论；完整输出仍在工具回包里。
+- 验证：`tsc` 0、build 0、**79 套件 / 1050 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1940.4 KB / 292 文件 / 解包 15615.6 KB、client 3918 行。
+- 教训：**面板要的是「刚才那段输出」，不是「所有输出」**。留尾部 + 条数上限，比把 gdb log 全量塞进事件流便宜得多，也不至于把界面拖死。
+
+### 五十三、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

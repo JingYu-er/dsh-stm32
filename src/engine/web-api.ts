@@ -716,6 +716,7 @@ export async function handleWebApi(input: {
         breakpoints: report.breakpoints,
         watchpoints: report.watchpoints,
         hits: debugSessions.hitHistory(),
+        outputs: debugSessions.recentTraces(),
         message: report.message,
       },
     });

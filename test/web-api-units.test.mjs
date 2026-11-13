@@ -1033,6 +1033,7 @@ test("GET /debug：没有会话时返回空闲摘要，且不接受 POST", async
   assert.equal(debug.active, false, "没有会话时必须明确 active=false");
   assert.equal(debug.sessionId, "");
   assert.deepEqual(debug.hits, [], "没有会话时命中历史为空数组");
+  assert.deepEqual(debug.outputs, [], "没有会话时最近输出为空数组");
   assert.equal(typeof debug.message, "string");
   assert.ok(debug.message.length > 0);
   const wrong = await handleWebApi({

@@ -1223,6 +1223,7 @@ window.__ModuleLoader__.load({
 
     /** 调试会话摘要：只读呈现 /debug 的结果，不触发探针动作。 */
     function SessionCard(props) {
+      const [copyNote, setCopyNote] = useState("");
       const debug = props.debug ?? null;
       const error = props.error ?? "";
       const quota = (value) => (value !== null && typeof value === "object" && value.used !== undefined ? String(value.used) + "/" + String(value.budget) : "—");
@@ -1241,6 +1242,55 @@ window.__ModuleLoader__.load({
         body.push(metaRow("符号", String(debug.elfPath)));
         body.push(metaRow("断点", quota(debug.breakpoints)));
         body.push(metaRow("观察点", quota(debug.watchpoints)));
+        const traces = Array.isArray(debug.outputs) ? debug.outputs.slice(-3).reverse() : [];
+        if (traces.length > 0) {
+          body.push(
+            e(
+              "div",
+              { key: "outputs", style: { display: "flex", flexDirection: "column", gap: "2px" } },
+              e(
+                "div",
+                { style: { display: "flex", alignItems: "baseline", gap: "8px", opacity: 0.7 } },
+                e("span", {}, "最近 gdb 输出"),
+                e(
+                  "button",
+                  {
+                    style: Object.assign({}, debugStyles.button, { fontSize: "11px", padding: "1px 6px" }),
+                    title: "复制最近一次 eval 的完整输出",
+                    onClick: () => {
+                      void navigator.clipboard.writeText(String(traces[0].output ?? ""));
+                      setCopyNote("已复制最近一次 gdb 输出");
+                    },
+                  },
+                  "复制",
+                ),
+                copyNote === "" ? null : e("span", { style: { fontSize: "11px", opacity: 0.6 } }, copyNote),
+              ),
+              traces.map((trace) =>
+                e(
+                  "pre",
+                  {
+                    key: "trace-" + String(trace.at),
+                    title: String(trace.command),
+                    style: {
+                      margin: 0,
+                      maxHeight: "120px",
+                      overflow: "auto",
+                      fontSize: "11px",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      padding: "4px 6px",
+                      border: "1px solid color-mix(in srgb, currentColor 12%, transparent)",
+                      borderRadius: "4px",
+                      opacity: trace.ok === true ? 0.85 : 1,
+                    },
+                  },
+                  clockText(trace.at) + (trace.ok === true ? "" : "（失败）") + "\n" + String(trace.output ?? ""),
+                ),
+              ),
+            ),
+          );
+        }
         body.push(
           e(
             "div",

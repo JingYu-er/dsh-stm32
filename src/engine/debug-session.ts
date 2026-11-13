@@ -105,6 +105,19 @@ export interface EvalRequest {
   signal?: AbortSignal;
 }
 
+/** 一次 eval 的轨迹：面板「最近 gdb 输出」用。 */
+export interface EvalTrace {
+  at: number;
+  command: string;
+  ok: boolean;
+  output: string;
+}
+
+/** 轨迹保留条数；面板只要最近几次。 */
+const TRACE_LIMIT = 20;
+/** 单条轨迹保留的输出字符数（从尾部截）。 */
+const TRACE_TEXT_LIMIT = 2000;
+
 export interface EvalReport {
   ok: boolean;
   output: string;
@@ -345,6 +358,8 @@ export class DebugSessionManager {
   private timer: ReturnType<typeof setInterval> | null = null;
   /** 断点与观察点的命中历史：跨 eval 保留，关会话时清空。 */
   private readonly hits = new HitHistory();
+  /** 最近几次 eval 的命令与输出尾部：面板展示原始 gdb 输出用，关会话时清空。 */
+  private readonly traces: EvalTrace[] = [];
   private readonly now: () => number;
 
   constructor(options: { now?: () => number } = {}) {
@@ -369,6 +384,19 @@ export class DebugSessionManager {
   /** 本次会话的命中历史，最新在后。 */
   hitHistory(): BreakpointHit[] {
     return this.hits.list();
+  }
+
+  /** 最近几次 eval 的命令与输出，最新在后。 */
+  recentTraces(limit = 5): EvalTrace[] {
+    const count = Math.max(1, Math.min(Math.floor(limit), TRACE_LIMIT));
+    return this.traces.slice(-count);
+  }
+
+  /** 记一条 eval 轨迹：输出只留尾部，避免面板被长 log 拖住。 */
+  private rememberTrace(command: string, ok: boolean, output: string): void {
+    const text = output.length > TRACE_TEXT_LIMIT ? output.slice(output.length - TRACE_TEXT_LIMIT) : output;
+    this.traces.push({ at: this.now(), command: command, ok: ok, output: text });
+    while (this.traces.length > TRACE_LIMIT) this.traces.shift();
   }
 
   isActive(): boolean {
@@ -414,6 +442,7 @@ export class DebugSessionManager {
     this.current = null;
     this.stopSweeper();
     this.hits.clear();
+    this.traces.length = 0;
   }
 
   /** 扫一次租约：过期的会话立刻关。定时器与单测共用这一条路径。 */
@@ -708,6 +737,7 @@ export class DebugSessionManager {
       if (!miStillActive) miErrors.push("会话在本次 eval 期间已关闭");
       const miOutput = lines.join("\n").trim();
       this.hits.record(miOutput, this.now());
+      this.rememberTrace(commandLine, miErrors.length === 0, miOutput);
       return {
         ok: miErrors.length === 0,
         output: miOutput,
@@ -738,6 +768,7 @@ export class DebugSessionManager {
     session.lastUsedAt = this.now();
     const output = (outcome.stdout + "\n" + outcome.stderr).trim();
     this.hits.record(output, this.now());
+    this.rememberTrace(commands.join(" ;; "), outcome.exitCode === 0 && !outcome.timedOut, output);
     const errors: string[] = [];
     if (outcome.spawnError !== null) errors.push("gdb 启动失败：" + outcome.spawnError);
     if (outcome.timedOut) errors.push("gdb 超时（" + String(request.timeoutMs ?? 30_000) + " ms）");
@@ -1096,6 +1127,7 @@ export class DebugSessionManager {
     this.current = null;
     this.stopSweeper();
     this.hits.clear();
+    this.traces.length = 0;
     // 观察点住在 gdb 进程里：会话一关就全没了，登记表必须跟着清，
     // 否则下次会话里 action=list 会报一堆已经不存在的观察点。
     resetWatchState();
