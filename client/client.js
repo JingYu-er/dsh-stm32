@@ -2919,6 +2919,15 @@ window.__ModuleLoader__.load({
             "导出 CSV",
           ),
         ),
+        category !== "" && rule !== ""
+          ? e(
+              "div",
+              { style: { padding: "0 0 6px", fontSize: "11px", opacity: 0.7 } },
+              "分类「" + (FAULT_CATEGORY_LABEL[category] ?? category) + "」与规则「" + rule + "」同时生效；",
+              e("button", { type: "button", style: Object.assign({}, debugStyles.button, { fontSize: "11px", padding: "0 6px" }), onClick: () => setRule("") }, "只看分类"),
+              e("button", { type: "button", style: Object.assign({}, debugStyles.button, { fontSize: "11px", padding: "0 6px" }), onClick: () => setCategory("") }, "只看规则"),
+            )
+          : null,
         shown.length === 0
           ? e("div", { style: { padding: "6px 0", opacity: 0.6, fontSize: "12px" } }, "这个分类下没有失败事件。")
           : null,
@@ -4694,7 +4703,15 @@ window.__ModuleLoader__.load({
             ? null
             : e("span", { style: { opacity: 0.75, fontSize: "12px" } }, pickNote),
           e("button", { style: debugStyles.button, onClick: () => setSelectedSeq(null) }, "清除选择"),
-          e("button", { style: debugStyles.button, onClick: () => exportEvents(visible) }, "导出 JSONL"),
+          e(
+            "button",
+            {
+              style: debugStyles.button,
+              title: "导出当前显示的事件（含文字筛选与「只看失败」；勾选不影响导出范围）",
+              onClick: () => exportEvents(visible),
+            },
+            "导出 JSONL",
+          ),
           e(
             "button",
             {

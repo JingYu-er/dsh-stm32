@@ -162,6 +162,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("onShowChannels"), "在途行要能跳到实时通道");
     assert.ok(source.includes("按优先级"), "中断页要能切换排序");
     assert.ok(source.includes("function pinBoxSides("), "方框视图按封装脚位排布（S77）");
+    assert.ok(source.includes("只看分类") && source.includes("只看规则"), "分类与规则同时生效时要能一键退回单条件");
     assert.ok(source.includes("function PinBox("), "方框视图组件要在（S77）");
     assert.ok(source.includes("批量应用"), "中断页要能批量改优先级");
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
