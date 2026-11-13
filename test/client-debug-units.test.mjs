@@ -161,6 +161,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("runningNow"), "概览要显示在途调用");
     assert.ok(source.includes("onShowChannels"), "在途行要能跳到实时通道");
     assert.ok(source.includes("按优先级"), "中断页要能切换排序");
+    assert.ok(source.includes("function pinBoxSides("), "方框视图按封装脚位排布（S77）");
+    assert.ok(source.includes("function PinBox("), "方框视图组件要在（S77）");
     assert.ok(source.includes("批量应用"), "中断页要能批量改优先级");
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
     assert.ok(source.includes("CompileWarnings"), "编译警告要能在详情里列出");

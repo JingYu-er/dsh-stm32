@@ -122,3 +122,75 @@ test("findIocPath：有多个 .ioc 时按文件名排序取第一个", () => {
   fs.writeFileSync(path.join(dir, "a.ioc"), IOC_TEXT, "utf8");
   assert.equal(path.basename(findIocPath(dir)), "a.ioc");
 });
+
+// ---- 物理引脚布局（S77）----
+
+const DB_IOC = [
+  "Mcu.CPN=STM32F103C8T6",
+  "Mcu.Family=STM32F1",
+  "Mcu.Name=STM32F103C(8-B)Tx",
+  "Mcu.Package=LQFP48",
+  "Mcu.PinsNb=3",
+  "Mcu.Pin0=PA0-WKUP",
+  "Mcu.Pin1=PA9",
+  "Mcu.Pin2=VBAT",
+  "PA0-WKUP.Signal=GPIO_Output",
+  "PA9.Signal=USART1_TX",
+  "VBAT.Mode=VBAT",
+].join("\n");
+
+const DB_XML = [
+  '<Mcu RefName="STM32F103C(8-B)Tx" Package="LQFP48" Family="STM32F1" Line="STM32F103">',
+  "<Frequency>72</Frequency>",
+  '<Core>Arm Cortex-M3</Core>',
+  '<Pin Name="VBAT" Position="1" Type="Power"/>',
+  '<Pin Name="PA0-WKUP" Position="10" Type="I/O"/>',
+  '<Pin Name="PA9" Position="30" Type="I/O"/>',
+  '<Pin Name="VDD" Position="48" Type="Power"/>',
+  "</Mcu>",
+].join("\n");
+
+function projectWithIoc(text) {
+  const dir = tempDir("pinout-db-");
+  fs.writeFileSync(path.join(dir, "demo.ioc"), text, "utf8");
+  return dir;
+}
+
+function fakeCubeMxRoot() {
+  const root = tempDir("cubemx-root-");
+  const dbDir = path.join(root, "db");
+  fs.mkdirSync(path.join(dbDir, "mcu"), { recursive: true });
+  fs.writeFileSync(path.join(dbDir, "package.xml"), '<Package DBVersion="2.0"><PackDescription Release="DB.test"/></Package>', "utf8");
+  fs.writeFileSync(path.join(dbDir, "mcu", "STM32F103C(8-B)Tx.xml"), DB_XML, "utf8");
+  return root;
+}
+
+function isolatedEnv(root) {
+  return { STM32_CUBEMX_ROOT: root, STM32_NO_DISCOVER: "1", DSH_STM32_NO_CONFIG: "1" };
+}
+
+test("readPinout：有 CubeMX db 时给出封装与物理脚号（S77）", () => {
+  const dir = projectWithIoc(DB_IOC);
+  const read = readPinout(dir, isolatedEnv(fakeCubeMxRoot()));
+  assert.equal(read.ok, true);
+  const physical = read.report.physical;
+  assert.equal(physical.available, true, "db 在时应给出物理布局");
+  assert.equal(physical.packageName, "LQFP48");
+  assert.equal(physical.pinCount, 48, "脚数取最大 Position，而不是去重后的名字数");
+  assert.equal(physical.reason, "");
+  const at = new Map(physical.positions.map((item) => [item.pin, item.position]));
+  assert.equal(at.get("PA0-WKUP"), 10);
+  assert.equal(at.get("PA9"), 30);
+  assert.equal(at.get("VBAT"), 1);
+});
+
+test("readPinout：没有 CubeMX db 时降级为提示，不猜脚号（S77）", () => {
+  const dir = projectWithIoc(DB_IOC);
+  const emptyRoot = tempDir("cubemx-empty-");
+  const read = readPinout(dir, isolatedEnv(emptyRoot));
+  assert.equal(read.ok, true);
+  const physical = read.report.physical;
+  assert.equal(physical.available, false);
+  assert.match(physical.reason, /CubeMX/u);
+  assert.ok(physical.positions.every((item) => item.position === null), "缺事实时不编脚号");
+});

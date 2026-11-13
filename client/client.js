@@ -2016,6 +2016,109 @@ window.__ModuleLoader__.load({
         .map((port) => ({ port: port, cells: ports.get(port).sort((a, b) => a.order - b.order) }));
     }
 
+    /**
+     * 按 LQFP 封装把脚位摊到方框四边（S77）。
+     *
+     * 规则：1 脚在左上角，逆时针走——左侧自上而下 1..quarter，下边自左向右，
+     * 右边自下而上，上边自右向左。只依赖 CubeMX db 里的 Position，不猜。
+     */
+    function pinBoxSides(physical) {
+      const count = physical !== null && typeof physical.pinCount === "number" ? physical.pinCount : 0;
+      const quarter = Math.max(1, Math.ceil(count / 4));
+      const byPosition = new Map();
+      for (const item of physical === null || !Array.isArray(physical.positions) ? [] : physical.positions) {
+        if (item !== null && typeof item.position === "number") byPosition.set(item.position, item.pin);
+      }
+      const cell = (position) => ({ position: position, pin: byPosition.get(position) ?? null });
+      const sides = { left: [], bottom: [], right: [], top: [] };
+      for (let position = 1; position <= quarter; position += 1) sides.left.push(cell(position));
+      for (let position = quarter + 1; position <= quarter * 2; position += 1) sides.bottom.push(cell(position));
+      for (let position = quarter * 2 + 1; position <= quarter * 3; position += 1) sides.right.unshift(cell(position));
+      for (let position = quarter * 3 + 1; position <= count; position += 1) sides.top.unshift(cell(position));
+      return sides;
+    }
+
+    /** 物理引脚方框：四边是脚号，格子里是该脚在 .ioc 里的名字；点格子复制引用。 */
+    function PinBox(props) {
+      const physical = props.physical;
+      if (physical === null || physical === undefined || physical.available !== true) {
+        const reason = physical === null || physical === undefined ? "" : physical.reason;
+        return e(
+          "div",
+          { style: { padding: "6px 0", opacity: 0.7, fontSize: "12px" } },
+          reason === "" ? "缺少封装引脚事实：装 CubeMX 后这里按方框显示物理脚位。" : reason,
+        );
+      }
+      const sides = pinBoxSides(physical);
+      const cellView = (item) =>
+        e(
+          "button",
+          {
+            key: String(item.position),
+            type: "button",
+            title: item.pin === null ? "第 " + String(item.position) + " 脚：.ioc 里没有用这个脚" : "第 " + String(item.position) + " 脚 " + item.pin + "（点击复制引用）",
+            style: {
+              minWidth: "46px",
+              padding: "1px 3px",
+              fontSize: "9px",
+              lineHeight: "1.2",
+              textAlign: "center",
+              border: "1px solid color-mix(in srgb, currentColor " + (item.pin === null ? "8%" : "22%") + ", transparent)",
+              borderRadius: "3px",
+              background: item.pin === null ? "transparent" : "color-mix(in srgb, currentColor 6%, transparent)",
+              opacity: item.pin === null ? 0.45 : 1,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            },
+            disabled: item.pin === null,
+            onClick: item.pin === null ? undefined : () => props.onCopy(item.pin),
+          },
+          e("div", { style: { opacity: 0.55, fontSize: "8px" } }, String(item.position)),
+          e("div", {}, item.pin === null ? "—" : item.pin),
+        );
+      const sideRow = (items, key, vertical) =>
+        e(
+          "div",
+          { key: key, style: { display: "flex", flexDirection: vertical ? "column" : "row", gap: "2px", flex: vertical ? "0 0 auto" : "1 1 auto", justifyContent: "center" } },
+          items.map(cellView),
+        );
+      return e(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "4px 0 8px", fontSize: "11px" } },
+        e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+          e("span", { style: { opacity: 0.6, flex: "0 0 auto" } }, physical.packageName || "封装未知"),
+          sideRow(sides.top, "top", false),
+        ),
+        e("div", { style: { display: "flex", alignItems: "stretch", gap: "6px" } },
+          sideRow(sides.left, "left", true),
+          e(
+            "div",
+            {
+              style: {
+                flex: "1 1 auto",
+                minHeight: "90px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid color-mix(in srgb, currentColor 22%, transparent)",
+                borderRadius: "4px",
+                fontSize: "10px",
+                opacity: 0.7,
+                textAlign: "center",
+              },
+            },
+            physical.packageName + " · " + String(physical.pinCount) + " 脚",
+          ),
+          sideRow(sides.right, "right", true),
+        ),
+        e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+          e("span", { style: { opacity: 0.6, flex: "0 0 auto" } }, "1 脚在左上，逆时针"),
+          sideRow(sides.bottom, "bottom", false),
+        ),
+      );
+    }
+
     function PinMap(props) {
       const rows = pinMapRows(props.pins);
       if (rows.length === 0) {
@@ -2128,6 +2231,7 @@ window.__ModuleLoader__.load({
           e("div", { key: "mode", style: { display: "flex", gap: "6px", padding: "0 0 4px" } },
             e("button", { type: "button", onClick: () => setMode("table"), style: Object.assign({}, debugStyles.button, mode === "table" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "表"),
             e("button", { type: "button", onClick: () => setMode("map"), style: Object.assign({}, debugStyles.button, mode === "map" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "图"),
+            e("button", { type: "button", onClick: () => setMode("box"), style: Object.assign({}, debugStyles.button, mode === "box" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "方框"),
             e("input", {
               value: needle,
               onChange: (event) => setNeedle(event.target.value),
@@ -2147,7 +2251,7 @@ window.__ModuleLoader__.load({
             ),
             e("span", { style: { fontSize: "11px", opacity: 0.5, alignSelf: "center" } },
               needle.trim() === ""
-                ? (mode === "map" ? "按端口排布；点格子复制引用" : "按外设分组")
+                ? (mode === "map" ? "按端口排布；点格子复制引用" : mode === "box" ? "按封装脚位排布；点格子复制引用" : "按外设分组")
                 : "命中 " + String(hitPins) + " / " + String(totalPins)),
           ),
         );
@@ -2173,7 +2277,8 @@ window.__ModuleLoader__.load({
         mode === "map"
           ? e(PinMap, { key: "map", pins: (pinout === null ? [] : (pinout.pins ?? [])).filter(pinMatches), onCopy: copyPin })
           : null,
-        mode === "map"
+        mode === "box" ? e(PinBox, { key: "box", physical: pinout === null ? null : pinout.physical, onCopy: copyPin }) : null,
+        mode === "map" || mode === "box"
           ? null
           : groups.length === 0 && needle.trim() !== ""
             ? e("div", { style: { padding: "6px 0", opacity: 0.6 } }, "没有匹配的引脚。")

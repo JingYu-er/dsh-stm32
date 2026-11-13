@@ -9,7 +9,28 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { resolveSearchConfig } from "../data/search-roots.js";
+import { locateCubemxDb, readMcuFacts, resolveDbPinName } from "./cubemx-db.js";
 import { summarizeIoc, type IocPin } from "./ioc.js";
+
+/** 一个 .ioc 引脚在封装里的物理位置（1 起）；查不到为 null。 */
+export interface PinPosition {
+  readonly pin: string;
+  readonly position: number | null;
+}
+
+/**
+ * 物理引脚布局（S77）：来自本机 CubeMX db 的 `db/mcu/<Mcu.Name>.xml` 的 `Position`。
+ *
+ * 没有 CubeMX 时不做猜测：`available=false` 并给出可执行的提示，面板降级为端口视图。
+ */
+export interface PhysicalLayout {
+  readonly available: boolean;
+  readonly packageName: string;
+  readonly pinCount: number;
+  readonly positions: readonly PinPosition[];
+  readonly reason: string;
+}
 
 export interface PinoutGroup {
   /** 分组名：外设实例（USART1 / TIM2）或用途（GPIO / 调试口 / 时钟）。 */
@@ -39,6 +60,8 @@ export interface PinoutReport {
   readonly groups: readonly PinoutGroup[];
   /** 已使能外设实例。 */
   readonly peripherals: readonly string[];
+  /** 物理引脚布局；没有 CubeMX db 时 available=false。 */
+  readonly physical: PhysicalLayout;
 }
 
 export interface PinoutFailure {
@@ -109,7 +132,39 @@ export function groupPins(pins: readonly IocPin[]): PinoutGroup[] {
 }
 
 /** 读工程引脚表。工程没有 .ioc、读失败、解析为空都返回 ok:false 并说明原因。 */
-export function readPinout(projectDir: string): PinoutResult {
+/** 读本机 CubeMX db，把 .ioc 引脚对上物理脚号（S77）。 */
+export function readPhysicalLayout(
+  mcuName: string,
+  pins: readonly IocPin[],
+  env: NodeJS.ProcessEnv = process.env,
+): PhysicalLayout {
+  const empty = (reason: string): PhysicalLayout => ({
+    available: false,
+    packageName: "",
+    pinCount: 0,
+    positions: pins.map((pin) => ({ pin: pin.pin, position: null })),
+    reason,
+  });
+  const db = locateCubemxDb(resolveSearchConfig(env).cubeMxRoots);
+  if (db === null) return empty("没找到 CubeMX 的 db：装 CubeMX，或用 STM32_CUBEMX_ROOT 指定安装根");
+  const name = mcuName.trim();
+  if (name === "") return empty("工程 .ioc 里没有 Mcu.Name：CubeMX 保存一次再看");
+  const facts = readMcuFacts(db, name);
+  if (facts === null) return empty("CubeMX db 里没有这个型号（Mcu.Name=" + name + "）：升级 CubeMX 后再看");
+  return {
+    available: true,
+    packageName: facts.packageName,
+    pinCount: Math.max(0, ...[...facts.pins.values()].map((fact) => fact.position)),
+    positions: pins.map((pin) => {
+      const dbName = resolveDbPinName(facts, pin.pin);
+      const position = dbName === null ? null : (facts.pins.get(dbName)?.position ?? null);
+      return { pin: pin.pin, position: position };
+    }),
+    reason: "",
+  };
+}
+
+export function readPinout(projectDir: string, env: NodeJS.ProcessEnv = process.env): PinoutResult {
   const dir = projectDir.trim();
   if (dir === "") return { ok: false, error: "projectDir 不能为空" };
   const iocPath = findIocPath(dir);
@@ -135,6 +190,7 @@ export function readPinout(projectDir: string): PinoutResult {
       pins: summary.pins,
       groups: groupPins(summary.pins),
       peripherals: summary.peripherals,
+      physical: readPhysicalLayout(summary.mcu.name, summary.pins, env),
     },
   };
 }

@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S76）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S77）
 
 ### 一、目标与约束
 
@@ -6680,7 +6680,16 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node --check` 与 build 0、**79 套件 / 1062 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1960.8 KB / 292 文件 / 解包 15709.2 KB、client 4677 行。
 - 教训：**断言要钉在定义侧**。检查「用了这个名字」会漏掉「名字没定义」；写成 `function X(` 才真的验证存在。
 
-### 八十、教训
+### 八十、LQFP 物理引脚图（S77）
+
+- 问题：S35/S53 的引脚图按端口排（PA/PB/PC…），回答的是「哪一路占了哪些脚」；插线、查原理图时要的是「第 23 脚是哪个信号」，需要封装脚位。
+- 事实来源：CubeMX 安装目录的 `db/mcu/<Mcu.Name>.xml`，每封装一个 `<Pin Name="PA0" Position="29" Type="I/O"/>`。插件已有解析器 `src/engine/cubemx-db.ts` 的 `parseMcuXml`，`CubemxMcuFacts.pins` 就是 `名字 → { name, position, signals }`。**所有 CubeMX 收录的型号都有这份事实**，不需要另找数据源，也不内置第三方转存。
+- 做法：`src/engine/pinout.ts` 新增 `readPhysicalLayout(mcuName, pins, env)`，用 `resolveSearchConfig(env).cubeMxRoots` 找 db、`readMcuFacts` 读型号、`resolveDbPinName` 把 `.ioc` 里的别名（`PA13` 对 `SYS_JTMS-SWDIO` 等）对回 db 名；`PinoutReport.physical` 给 `{ available, packageName, pinCount, positions, reason }`。客户端加第三种视图「方框」：`pinBoxSides(physical)` 按 LQFP 逆时针规则把脚位摊到四边（1 脚左上，左侧 1..quarter 自上而下、下边自左向右、右边自下而上、上边自右向左），`PinBox` 每格显示脚号与 `.ioc` 引脚名，点击复制引用。
+- 两个边界写进代码：`pinCount` 取 **最大 Position** 而不是 `facts.pins.size`——db 按名字去重，48 脚封装只有 44 个不同名字，用 size 会少 4 脚；没有 CubeMX db 时不画空方框，直接显示 `reason`（「装 CubeMX，或用 STM32_CUBEMX_ROOT 指定安装根」）。
+- 验证：tsc 0、build 0、**79 套件 / 1064 pass / 0 fail**（pinout-units 加「有 db 给封装与脚号」「无 db 降级提示」两条）、ACCEPTANCE OK（新增「物理引脚布局字段齐全（S77）」）、`test:pack` 0、`test:size` 1964.0 KB / 292 文件 / 解包 15721.4 KB、client 4782 行。
+- 教训：**同一个「引脚」，按端口看与按封装看是两个问题**。前者查功能冲突，后者查接线；两种视图都要有，且事实只能来自器件库。
+
+### 八十一、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
