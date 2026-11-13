@@ -93,8 +93,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     };
     const text = renderText(debug.component({}));
     assert.ok(text.includes("调试台"), text.slice(0, 200));
-    assert.ok(text.includes("时间线"), text.slice(0, 200));
-    assert.ok(text.includes("事件详情"), text.slice(0, 200));
+    // 时间线与详情合并进「事件」页签（S86）：默认标签是实时通道，用页签名钉住入口。
+    assert.ok(text.includes("事件"), text.slice(0, 200));
     assert.ok(text.includes("调试会话"), text.slice(0, 400));
     assert.ok(text.includes("暂无数值型监视采样"), text.slice(0, 400));
     assert.ok(text.includes("断点"), text.slice(0, 600));
@@ -170,6 +170,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("function ClockFlow("), "时钟图模式必须真有组件实现（S76）");
     assert.ok(source.includes("d32-page"), "面板根节点要挂样式类（S85）");
     assert.ok(source.includes("ensureDebugStyleTag"), "样式表只注入一次（S85）");
+    assert.ok(source.includes("d32-events"), "时间线与详情合并成一个「事件」页签（S86）");
+    assert.ok(source.includes("DEBUG_LABELS.detail") && source.includes("事件详情"), "事件详情仍是独立组件（S86）");
     assert.ok(source.includes("exportFaultsCsv"), "失败事件要能导出 CSV");
     assert.ok(source.includes("unseenFails"), "失败未读角标要能看见");
     assert.ok(source.includes("overLimit"), "时钟页要标出超限频率");

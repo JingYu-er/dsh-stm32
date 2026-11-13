@@ -866,7 +866,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", channels: "实时通道", overview: "概览", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
     /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
     function eventRefLine(event) {
@@ -4089,6 +4089,7 @@ window.__ModuleLoader__.load({
         "div",
         { key: "tabs", className: "d32-tabs", style: { display: "flex", gap: "6px", padding: "7px 12px", borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },
         tabButton("overview", DEBUG_LABELS.overview),
+        tabButton("events", DEBUG_LABELS.events),
         tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
         tabButton("clocks", DEBUG_LABELS.clocks),
@@ -4100,6 +4101,30 @@ window.__ModuleLoader__.load({
       const body =
         tab === "overview"
           ? [e(OverviewPanel, { key: "overview", projectDir: projectDir, debug: debugInfo.debug, events: props.events, onShowFailures: props.onShowFailures, onShowChannels: () => setTab("channels") })]
+          : tab === "events"
+          ? [
+              e(
+                "div",
+                {
+                  key: "events",
+                  className: "d32-events",
+                  style: { display: "flex", alignItems: "stretch", gap: "0", minHeight: "480px", height: "100%" },
+                },
+                e(Timeline, {
+                  key: "timeline",
+                  events: props.events,
+                  durations: props.durations,
+                  connection: props.connection,
+                  selectedSeq: props.selectedSeq,
+                  pickedSet: props.pickedSet,
+                  onPick: props.onPick,
+                  onSelect: props.onSelect,
+                  flex: "1 1 55%",
+                }),
+                e("div", { key: "events-split", style: { flex: "0 0 8px" } }),
+                e(Detail, { key: "detail", event: props.selected, flex: "0 0 380px" }),
+              ),
+            ]
           : tab === "pinout"
           ? [e(PinoutPanel, { key: "pinout", projectDir: projectDir })]
           : tab === "clocks"
@@ -4667,30 +4692,6 @@ window.__ModuleLoader__.load({
 
       const collapsed = layout.collapsed ?? {};
       const panels = [];
-      if (collapsed.timeline !== true) {
-        panels.push(
-          e(Timeline, {
-            key: "timeline",
-            events: ordered,
-            durations,
-            connection,
-            selectedSeq,
-            pickedSet,
-            onPick: togglePick,
-            onSelect: selectEvent,
-            onCollapse: () => updateLayout({ collapsed: Object.assign({}, collapsed, { timeline: true }) }),
-            flex: "0 0 " + String(layout.left) + "px",
-          }),
-          e("div", {
-            key: "divider-left",
-            style: debugStyles.divider,
-            onPointerDown: startDrag("left"),
-            title: "拖动改宽；双击恢复默认",
-            onDoubleClick: () => updateLayout({ left: 300 }),
-          }),
-        );
-      }
-      panels.push(e(Detail, { key: "detail", event: selected }));
       if (collapsed.channels !== true) {
         panels.push(
           e("div", {
@@ -4707,6 +4708,14 @@ window.__ModuleLoader__.load({
             projectDir: projectOverride,
             fallbackProjectDir: (projects.value?.entries ?? []).length > 0 ? projects.value.entries[0].dir : "",
             focusFailures: focusFailures,
+            selected: selected,
+            selectedSeq: selectedSeq,
+            pickedSet: pickedSet,
+            picked: picked,
+            onPick: togglePick,
+            onSelect: selectEvent,
+            durations: durations,
+            connection: connection,
             onShowFailures: () => {
               setOnlyFail(true);
               setFocusFailures((previous) => previous + 1);
@@ -4718,7 +4727,6 @@ window.__ModuleLoader__.load({
       }
 
       const drawerItems = [];
-      if (collapsed.timeline === true) drawerItems.push({ key: "timeline", label: DEBUG_LABELS.timeline });
       if (collapsed.channels === true) drawerItems.push({ key: "channels", label: DEBUG_LABELS.channels });
 
       return e(
