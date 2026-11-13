@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S84c）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S84d）
 
 ### 一、目标与约束
 
@@ -6777,7 +6777,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`project-conf-units` 加「根是工程时不把内部 `cmake/stm32cubemx` 当独立工程」一条；全量 **80 套件 / 1081 pass / 0 fail**（`serial-units` 偶发 1 条失败，重跑全绿，仍是 PowerShell 桥时序）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1973.6 KB / 295 文件 / 解包 15757.0 KB。
 - 教训：**「向下扫描」要先确认上级不是目标**。层级扫描的第一条规则应该是「当前目录是不是就在找的东西」，否则一定把工程内部当邻居。
 
-### 九十、教训
+### 九十、引脚面板空白：head 里用了后声明的 const（S84d）
+
+- 现象：S84b 修好工程目录后，点「引脚」整块面板变空白——没有报错文字，也没有加载提示。
+- 定位：写了一个临时渲染探针（把 `client/client.js` 里的 `PinoutPanel` 挂到 `globalThis`，用桩 React + 脚本化的 `useState` 队列喂一份 `/pinout` 数据真跑一次），立刻复现 `ReferenceError: Cannot access 'totalPins' before initialization`（`client/client.js:2249`）。
+- 根因：S59 给 head 加了「导出 CSV」按钮，按钮里读 `totalPins` / `hitPins`，而这两个 `const` 声明在 head 之后。数据没回来时走「读取引脚表…」分支不碰它们；等 `/pinout` 真返回、进入正常分支，就撞上 TDZ ——首屏正常、数据到达即白屏。
+- 修：把 `allGroups` / `groups` / `totalPins` / `hitPins` 的计算整体提到 `const head = []` 之前，并写明「head 里要用，必须先算」。
+- 回归：新增 `test/pinout-render-units.test.mjs`——桩 React + `useState` 队列，分别以 `table` / `map` / `box` 三种视图渲染 `PinoutPanel`，断言不抛错且内容正确；再加一条「没有工程目录时给提示而不是空白」。`test/run-units.mjs` 登记；**80 套件 / 1085 pass / 0 fail**。
+- 验证：`npm run build` 0、ACCEPTANCE OK、`test:pack` 0、`test:size` 1973.9 KB / 295 文件 / 解包 15757.4 KB、`client/client.js` 4903 行。
+- 教训：**`const` 的「先声明后使用」在渲染函数里会被分支掩盖**。加载分支不碰它，数据到达那一刻才炸，所以只测「能打开」不够，必须用真实数据渲染一遍。
+
+### 九十一、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

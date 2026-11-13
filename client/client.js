@@ -2203,6 +2203,14 @@ window.__ModuleLoader__.load({
         const text = [pin.pin, pin.signal, pin.label ?? ""].join(" ").toLowerCase();
         return text.includes(wanted);
       };
+      /* 下面这几项 head 里就要用（导出按钮的可用态、命中计数、分组行），必须先算：
+         放到 return 前面会触发「Cannot access 'x' before initialization」（S84d）。 */
+      const allGroups = pinout === null || state.error !== "" ? [] : (pinout.groups ?? []);
+      const groups = allGroups
+        .map((group) => Object.assign({}, group, { pins: group.pins.filter(pinMatches) }))
+        .filter((group) => group.pins.length > 0);
+      const totalPins = (pinout === null ? [] : (pinout.pins ?? [])).length;
+      const hitPins = groups.reduce((sum, group) => sum + group.pins.length, 0);
       const head = [];
       if (projectDir === "") {
         head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录：在工具栏「工程」里选一个，或先打开调试会话。"));
@@ -2266,12 +2274,6 @@ window.__ModuleLoader__.load({
           );
         }
       }
-      const allGroups = pinout === null || state.error !== "" ? [] : (pinout.groups ?? []);
-      const groups = allGroups
-        .map((group) => Object.assign({}, group, { pins: group.pins.filter(pinMatches) }))
-        .filter((group) => group.pins.length > 0);
-      const totalPins = (pinout === null ? [] : (pinout.pins ?? [])).length;
-      const hitPins = groups.reduce((sum, group) => sum + group.pins.length, 0);
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", padding: "0 10px 8px" } },
