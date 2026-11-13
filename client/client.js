@@ -3428,20 +3428,21 @@ window.__ModuleLoader__.load({
       ]);
       const lastEvent = (props.events ?? [])[(props.events ?? []).length - 1] ?? null;
       chips.push(["最近事件", lastEvent === null ? "—" : clockText(lastEvent.time) + " · #" + String(lastEvent.seq)]);
-      const runningText =
-        runningNow.length === 0
-          ? "无"
-          : String(runningNow.length) + " 个 · " + runningNow.slice(0, 2).map((item) => item.name).join("、") +
-            (runningNow.length > 2 ? " 等" : "");
-      if (runningNow.length > 0 && typeof props.onShowChannels === "function") {
-        chips.push(["在途", runningText + "（点这里看实时通道）", props.onShowChannels]);
-      } else {
-        chips.push(["在途", runningText]);
-      }
+      /* 告警摘要（S69）：在途与失败合成一行，先说「现在有没有事要处理」。 */
+      const warnParts = [];
+      if (runningNow.length > 0) warnParts.push("在途 " + String(runningNow.length) + " 个 · " + runningNow.slice(0, 2).map((item) => item.name).join("、") + (runningNow.length > 2 ? " 等" : ""));
+      if (failed > 0) warnParts.push("失败 " + String(failed) + " 条");
+      const warnText = warnParts.length === 0 ? "无：没有在途调用，也没有失败事件" : warnParts.join(" · ");
+      const warnClick =
+        failed > 0 && typeof props.onShowFailures === "function"
+          ? props.onShowFailures
+          : runningNow.length > 0 && typeof props.onShowChannels === "function"
+            ? props.onShowChannels
+            : undefined;
+      if (warnClick === undefined) chips.unshift(["告警", warnText]);
+      else chips.unshift(["告警", warnText + (failed > 0 ? "（点这里只看失败）" : "（点这里看实时通道）"), warnClick]);
       chips.push(["上次构建", build === null ? "—" : clockText(build.time)]);
       chips.push(["上次烧录", flash === null ? "—" : clockText(flash.time)]);
-      const seen = chips.some((pair) => pair[0] === "失败事件");
-      if (!seen) chips.push(["失败事件", String(failed)]);
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "2px", padding: "8px 10px" } },
@@ -3452,7 +3453,7 @@ window.__ModuleLoader__.load({
                 {
                   key: pair[0],
                   type: "button",
-                  title: pair[0] === "在途" ? "跳到实时通道看正在跑的调用" : "跳到实时通道，只看失败事件",
+                  title: pair[0] === "告警" ? "跳到实时通道处理告警" : pair[0] === "在途" ? "跳到实时通道看正在跑的调用" : "跳到实时通道，只看失败事件",
                   onClick: () => (typeof pair[2] === "function" ? pair[2]() : props.onShowFailures()),
                   style: {
                     display: "flex",
@@ -3470,7 +3471,7 @@ window.__ModuleLoader__.load({
                 e(
                   "span",
                   { style: { flex: "1 1 auto", textDecoration: "underline" } },
-                  pair[0] === "在途" ? pair[1] : pair[1] + "（点这里只看失败）",
+                  pair[0] === "告警" || pair[0] === "在途" ? pair[1] : pair[1] + "（点这里只看失败）",
                 ),
               )
             : e(
