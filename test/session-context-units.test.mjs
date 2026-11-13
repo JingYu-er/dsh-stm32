@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentOfSession, lastSessionAgent, noteSessionAgent, resetSessionAgents } from "../lib/engine/session-context.js";
+import { agentIdOf, agentOfSession, lastSessionAgent, noteSessionAgent, noteSessionDir, resetSessionAgents, sessionDirOf } from "../lib/engine/session-context.js";
 import { debugSessionForeign } from "../lib/engine/web-api.js";
 
 test("会话 agent 对照表：按会话 id 取回，互不串用（S91）", () => {
@@ -49,4 +49,23 @@ test("调试会话归属：别的会话的调试会话不可见，查不到时�
   assert.equal(debugSessionForeign("s1", "agent-2"), true, "另一条会话启动的会话不可见");
   assert.equal(debugSessionForeign("s-unknown", "agent-2"), false, "查不到会话的 agent 时不拦");
   resetSessionAgents();
+});
+
+test("会话工作目录快照：三种写法都能查到，别的工作目录不受影响（S94）", () => {
+  resetSessionAgents();
+  const dir = "D:\\work\\demo";
+  noteSessionDir("session-6c6c19e8-a30b-435e-ab7c-6168d8f03803", dir);
+  assert.equal(sessionDirOf("session-6c6c19e8-a30b-435e-ab7c-6168d8f03803"), dir);
+  assert.equal(sessionDirOf("6c6c19e8-a30b-435e-ab7c-6168d8f03803"), dir, "裸 UUID 也命中");
+  assert.equal(sessionDirOf("s-other"), "", "没记过的会话不给别的工作目录");
+  assert.equal(sessionDirOf(""), "", "空会话 id 不查表");
+  resetSessionAgents();
+  assert.equal(sessionDirOf("session-6c6c19e8-a30b-435e-ab7c-6168d8f03803"), "", "重置后清空");
+});
+
+test("agentIdOf：取 agent 自带 id，形状不对时给空串（S94）", () => {
+  assert.equal(agentIdOf({ id: " session-abc " }), "session-abc");
+  assert.equal(agentIdOf({}), "");
+  assert.equal(agentIdOf(undefined), "");
+  assert.equal(agentIdOf("session-abc"), "");
 });

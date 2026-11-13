@@ -42,7 +42,7 @@ import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
 import { setSessionWorkspaceResolver } from "./engine/web-api.js";
-import { agentOfSession, noteSessionAgent } from "./engine/session-context.js";
+import { agentIdOf, agentOfSession, noteSessionAgent, noteSessionDir, sessionDirOf } from "./engine/session-context.js";
 import { emitEvent } from "./engine/event-bus.js";
 import { startEventLog } from "./engine/event-log.js";
 import { instrumentContext } from "./engine/tool-events.js";
@@ -136,6 +136,9 @@ export function apply(ctx: DshContext): void {
     // 按请求里的会话 id 解析工作目录（S91）：只认这条会话自己的 agent，
     // 查不到就返回空串，绝不退到「最近一个 agent」——那会把别的工作区的工程串过来。
     setSessionWorkspaceResolver(async (sessionId: string) => {
+      // 先看 agent/created 时已经问过宿主的那份快照：面板刚打开、这条会话还没调过工具时也能拿到工程。
+      const known = sessionDirOf(sessionId);
+      if (known !== "") return known;
       const service = ctx.get<WorkingDirectoryService>("workingDirectory");
       if (service === undefined || typeof service.ensure !== "function") return "";
       const agent = sessionId === "" ? undefined : agentOfSession(sessionId);
@@ -146,6 +149,23 @@ export function apply(ctx: DshContext): void {
         return "";
       }
     });
+
+    // agent 一创建就把「会话 id → 工作目录」问出来并记下：调试台不必先调用一次工具才有默认工程。
+    if (typeof ctx.on === "function") {
+      ctx.on("agent/created", (payload: { agent?: unknown } | undefined) => {
+        const agent = payload?.agent;
+        const id = agentIdOf(agent);
+        if (agent === undefined || agent === null || id === "") return;
+        noteSessionAgent(id, agent);
+        const service = ctx.get<WorkingDirectoryService>("workingDirectory");
+        if (service === undefined || typeof service.ensure !== "function") return;
+        void service.ensure(agent as never)
+          .then((dir) => {
+            if (typeof dir === "string" && dir !== "") noteSessionDir(id, dir);
+          })
+          .catch(() => undefined);
+      });
+    }
   }
 
   // 斜杠命令与 SKILL 是"锦上添花"的层：宿主没组合 commands / skills 服务时静默跳过，

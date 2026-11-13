@@ -15,11 +15,14 @@ const SESSION_LIMIT = 64;
 /** 会话 id → 该会话最近一次带来的 agent。 */
 const agents = new Map<string, unknown>();
 
+/** 会话 id → 该会话的工作目录。agent 一创建就向宿主换一次，面板首次打开即可用。 */
+const dirs = new Map<string, string>();
+
 /** 没有会话 id 时记在空键上，仅供工具侧解析（Web API 不读它，避免跨会话串用）。 */
 let lastAgent: unknown = undefined;
 
 /** 取 agent 自带的 id（宿主会话 id 与工具的 `exec.agent.id` 未必同形，两者都记）。 */
-function agentIdOf(agent: unknown): string {
+export function agentIdOf(agent: unknown): string {
   if (agent === null || typeof agent !== "object") return "";
   const id = (agent as Record<string, unknown>)["id"];
   return typeof id === "string" ? id.trim() : "";
@@ -70,7 +73,36 @@ export function lastSessionAgent(): unknown {
 }
 
 /** 清空对照表（测试用）。 */
+/**
+ * 记一条会话的工作目录。
+ *
+ * 与 `noteSessionAgent` 用同一套写法归一：宿主给的是 `session-<uuid>` 还是裸 UUID 都登记。
+ * 目的：面板第一次打开时不必先调用一次 STM32 工具，`/projects` 就能给出默认工程。
+ */
+export function noteSessionDir(sessionId: string, dir: string): void {
+  const trimmed = sessionId.trim();
+  if (trimmed === "" || dir.trim() === "") return;
+  const bare = trimmed.startsWith("session-") ? trimmed.slice("session-".length) : trimmed;
+  for (const name of new Set([trimmed, bare, "session-" + bare])) {
+    if (name === "") continue;
+    dirs.set(name, dir);
+  }
+  while (dirs.size > SESSION_LIMIT) {
+    const oldest = dirs.keys().next();
+    if (oldest.done === true) return;
+    dirs.delete(oldest.value);
+  }
+}
+
+/** 按会话 id 取已记下的工作目录；没有记录返回空串。 */
+export function sessionDirOf(sessionId: string): string {
+  const trimmed = sessionId.trim();
+  if (trimmed === "") return "";
+  return dirs.get(trimmed) ?? "";
+}
+
 export function resetSessionAgents(): void {
   agents.clear();
+  dirs.clear();
   lastAgent = undefined;
 }
