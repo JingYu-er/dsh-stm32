@@ -148,6 +148,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("按耗时"), "时间线要能按耗时排序");
     assert.ok(source.includes("evidence-group-"), "证据列表要按会话分组");
     assert.ok(source.includes("最近 gdb 输出"), "会话卡要显示最近的 gdb 原始输出");
+    assert.ok(source.includes("ioc-keys?"), "引脚页要能查该脚在 .ioc 里的键");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));

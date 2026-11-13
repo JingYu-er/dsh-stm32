@@ -9,6 +9,7 @@ import {
   iocBackupDir,
   parseIocEntries,
   readIocDiff,
+  readIocKeysForPin,
   restoreIocKey,
   saveIocSnapshot,
   snapshotPath,
@@ -159,5 +160,19 @@ test("恢复某个键：当前文件里被删掉的键追加回末尾", () => {
   assert.ok(text.includes("RCC.SYSCLKSource=RCC_SYSCLKSOURCE_HSI"));
   assert.equal(text.endsWith("\n"), false);
   rmSync(env.DSH_STM32_SNAPSHOTS, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("readIocKeysForPin：带功能后缀的引脚取第一段，只读不改文件", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-ioc-keys-"));
+  const iocPath = join(dir, "demo.ioc");
+  writeFileSync(iocPath, ["PC13-TAMPER-RTC.Signal=GPIO_Output", "PC13-TAMPER-RTC.GPIOParameters=GPIO_Label", "PA0.Signal=GPIO_Input"].join("\n") + "\n", "utf8");
+  const before = readFileSync(iocPath, "utf8");
+  const result = readIocKeysForPin(dir, "PC13-TAMPER-RTC");
+  assert.equal(result.ok, true);
+  assert.equal(result.report.base, "PC13-TAMPER-RTC");
+  assert.equal(result.report.entries.length, 2);
+  assert.equal(readFileSync(iocPath, "utf8"), before, "只读，不改 .ioc");
+  assert.equal(readIocKeysForPin("  ", "PA0").ok, false);
   rmSync(dir, { recursive: true, force: true });
 });

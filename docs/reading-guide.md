@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S49）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S50）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -877,6 +877,7 @@ const fake = {
 - `src/engine/fault-hints.ts` 与 `/faults`：故障页。`decodeFault` 是纯函数规则表，按最具体优先；没命中就返回空提示，不猜原因。`groupFaults` 按规则合并计数给面板显示，不改事件本身。
 - `/evidence` 与 `/replay`：列证据文件（`groupEvidenceFiles` 按会话分组，路径仍是唯一标识）、按路径还原事件；回放入口在时间线工具栏，不与实时事件混流。
 - `src/engine/ioc-diff.ts` 与 `/ioc-diff`、`/ioc-diff/save`、`/ioc-diff/restore`：当前 .ioc 与用户目录里基线的逐键差异；基线覆盖式保存，不依赖 git；`restoreIocKey` 把某个键写回基线值，写前备份到 `<工程>/.dsh-stm32/backups`。
+- `readIocKeysForPin` 与 `/ioc-keys`：引脚页「ioc」按钮查看该脚在 `.ioc` 里占的键（前缀匹配，退一步取第一段）。
 - `src/engine/breakpoint-hits.ts`：从 gdb 输出解析断点/观察点停点，`HitHistory` 环形 50 条；`/debug` 的 `hits` 给断点面板底部列表。
 - `DebugSessionManager` 的 `EvalTrace` 与 `recentTraces()`：`/debug` 的 `outputs` 给会话卡显示最近几次 gdb 原始输出（环形 20 条、每条留尾部 2000 字符）。
 - `src/engine/watch-recorder.ts` 与 `watch-record.ts`：监视自动采样。定时器夹在 500–60000 ms、一次最多 10 分钟，`sample` 复用 `debugSessions.sampleWatches`，结果仍走 `channel:watch`，面板不换数据源。
@@ -916,5 +917,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
 | 单测 | 79 个套件 / 1050 pass / 0 fail |
-| 客户端 | `client/client.js` 3918 行（手写，不经 tsc） |
-| 包体 | 1940.4 KB / 292 文件 / 解包 15615.6 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 3969 行（手写，不经 tsc） |
+| 包体 | 1941.6 KB / 292 文件 / 解包 15622.8 KB（护栏上限 3906.3 KB） |

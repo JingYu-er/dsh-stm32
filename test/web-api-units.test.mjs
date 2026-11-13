@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十一条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 41);
-  assert.equal(new Set(WEB_API_PATHS).size, 41);
+test("WEB_API_PATHS：四十二条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 42);
+  assert.equal(new Set(WEB_API_PATHS).size, 42);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -279,6 +279,32 @@ test("WEB_API_PATHS：四十一条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/open"), true, "串口卡片必须能开会话");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/serial/close"), true, "串口卡片必须能关会话");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence/prune"), true, "证据保留策略必须能手动触发");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-keys"), true, "引脚页必须能看该脚在 .ioc 里的键");
+});
+
+test("GET /ioc-keys：读引脚的 .ioc 键，缺参数与缺 .ioc 各自报错", async () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-iockeys-"));
+  fs.writeFileSync(
+    path.join(project, "demo.ioc"),
+    ["Mcu.CPN=STM32F103C8T6", "PA0.Signal=GPIO_Input", "PA0.GPIOParameters=GPIO_Label", "PB1.Signal=S_TIM3_CH4"].join("\n") + "\n",
+    "utf8",
+  );
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const found = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-keys", query: { projectDir: project, pin: "PA0" }, deps });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.iocKeys.base, "PA0");
+  assert.deepEqual(found.body.iocKeys.entries.map((entry) => entry.key), ["PA0.Signal", "PA0.GPIOParameters"]);
+
+  const missingPin = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-keys", query: { projectDir: project }, deps });
+  assert.equal(missingPin.status, 400);
+  assert.match(missingPin.body.error, /pin/u);
+
+  const noIoc = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-iockeys-empty-"));
+  const noIocResult = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ioc-keys", query: { projectDir: noIoc, pin: "PA0" }, deps });
+  assert.equal(noIocResult.status, 409);
+  assert.match(noIocResult.body.error, /没有 \.ioc/u);
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.rmSync(noIoc, { recursive: true, force: true });
 });
 
 test("串口面板：状态可读、开参数严格校验、关空会话不报错", async () => {

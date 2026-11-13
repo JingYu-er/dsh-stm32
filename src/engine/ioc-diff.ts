@@ -132,6 +132,54 @@ export function saveIocSnapshot(projectDir: string, env: NodeJS.ProcessEnv = pro
   }
 }
 
+/** 某个引脚在 .ioc 里的键值：引脚页点「ioc」用。 */
+export interface IocPinKeysReport {
+  iocPath: string;
+  pin: string;
+  base: string;
+  entries: IocEntry[];
+}
+
+export type IocPinKeysResult = { ok: true; report: IocPinKeysReport } | { ok: false; error: string };
+
+/**
+ * 读某个引脚在 .ioc 里占的键（S50）。
+ *
+ * 引脚名在 .ioc 里是键前缀：`PA13.Signal`、`PA13.GPIOParameters`；
+ * 带功能的引脚（`PC13-TAMPER-RTC`）取第一段。只读，不改文件。
+ */
+export function readIocKeysForPin(
+  projectDir: string,
+  pin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): IocPinKeysResult {
+  const dir = projectDir.trim();
+  if (dir === "") return { ok: false, error: "projectDir 不能为空" };
+  const wanted = pin.trim();
+  if (wanted === "") return { ok: false, error: "pin 不能为空" };
+  const iocPath = findIocPath(dir);
+  if (iocPath === "") return { ok: false, error: "工程目录里没有 .ioc：" + dir };
+  let text: string;
+  try {
+    text = readFileSync(iocPath, "utf8");
+  } catch (error) {
+    return { ok: false, error: "读取 .ioc 失败：" + (error instanceof Error ? error.message : String(error)) };
+  }
+  const all = parseIocEntries(text);
+  // 键前缀就是 .ioc 里的引脚名（`PC13-TAMPER-RTC.Signal`）；个别 .ioc 只写端口段，退一步再试。
+  const matches = (prefix: string): IocEntry[] => all.filter((entry) => entry.key === prefix || entry.key.startsWith(prefix + "."));
+  let base = wanted;
+  let entries = matches(wanted);
+  if (entries.length === 0) {
+    const shortened = wanted.split("-")[0]?.trim() ?? "";
+    if (shortened !== "" && shortened !== wanted) {
+      base = shortened;
+      entries = matches(shortened);
+    }
+  }
+  return { ok: true, report: { iocPath: iocPath, pin: wanted, base: base, entries: entries } };
+}
+
 /** 恢复单个键的结果：写回前的值、写回后的值、备份路径。 */
 export interface IocRestoreReport {
   iocPath: string;
