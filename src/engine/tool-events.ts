@@ -33,6 +33,9 @@ function resultDigest(value: unknown): Record<string, unknown> | undefined {
   // 编译错误最多带 20 条：面板用它跳源码，再多也只是刷屏。
   const errors = record["errors"];
   if (Array.isArray(errors) && errors.length > 0) digest["errors"] = errors.slice(0, 20);
+  // 编译警告同样截断：多数警告不影响烧录，但「有几条、是什么」要看得见（S75）。
+  const warnings = record["warnings"];
+  if (Array.isArray(warnings) && warnings.length > 0) digest["warnings"] = warnings.slice(0, 20);
   return Object.keys(digest).length === 0 ? undefined : digest;
 }
 

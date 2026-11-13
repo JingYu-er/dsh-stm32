@@ -163,6 +163,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("按优先级"), "中断页要能切换排序");
     assert.ok(source.includes("批量应用"), "中断页要能批量改优先级");
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
+    assert.ok(source.includes("CompileWarnings"), "编译警告要能在详情里列出");
     assert.ok(source.includes("exportFaultsCsv"), "失败事件要能导出 CSV");
     assert.ok(source.includes("unseenFails"), "失败未读角标要能看见");
     assert.ok(source.includes("overLimit"), "时钟页要标出超限频率");

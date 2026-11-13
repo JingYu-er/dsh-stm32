@@ -271,13 +271,15 @@ test("工具埋点：start / ok 成对，失败时记 fail 并重新抛出", asy
     description: "构建",
     parameters: { type: "object" },
     output: { schema: { type: "object" }, render: () => [] },
-    execute: async () => ({ ok: false, projectDir: "D:/demo", errors: Array.from({ length: 25 }, (_, i) => "Core/Src/main.c:" + String(i + 1) + ":3: error: boom") }),
+    execute: async () => ({ ok: false, projectDir: "D:/demo", errors: Array.from({ length: 25 }, (_, i) => "Core/Src/main.c:" + String(i + 1) + ":3: error: boom"), warnings: Array.from({ length: 25 }, (_, i) => "Core/Src/main.c:" + String(i + 1) + ":9: warning: wobble") }),
   });
   await withErrors.execute({}, { signal: new AbortController().signal, agent: { id: "agent-7" } });
   const digest = eventSnapshot(0).at(-1).payload.result;
   assert.equal(digest.projectDir, "D:/demo");
   assert.equal(digest.errors.length, 20, "编译错误最多带 20 条");
   assert.match(digest.errors[0], /main\.c:1:3/u);
+  assert.equal(digest.warnings.length, 20, "编译警告也最多带 20 条（S75）");
+  assert.match(digest.warnings[0], /main\.c:1:9/u);
 
   const failing = withToolEvents({
     ...tool,

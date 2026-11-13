@@ -1116,6 +1116,53 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 编译警告清单（S75）：与错误同一套跳源码，标题与配色区分开。 */
+    function CompileWarnings(props) {
+      const warnings = Array.isArray(props.warnings) ? props.warnings : [];
+      const [picked, setPicked] = useState(null);
+      const [slice, setSlice] = useState(null);
+      const [error, setError] = useState("");
+      if (warnings.length === 0) return null;
+      const open = async (index, parsed) => {
+        if (parsed === null) return;
+        setPicked(index);
+        setError("");
+        const result = await fetchSource(props.projectDir, parsed.file, parsed.line, 2);
+        if (result.ok) setSlice(result.value.source);
+        else {
+          setSlice(null);
+          setError(String(result.error ?? "读取源码失败"));
+        }
+      };
+      return e(
+        "div",
+        { style: { padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: "2px" } },
+        e("div", { style: { opacity: 0.65, color: "#e8b339" } }, "编译警告（" + String(warnings.length) + "）"),
+        warnings.map((line, index) => {
+          const parsed = parseCompileError(line);
+          return e(
+            "div",
+            {
+              key: String(index),
+              style: {
+                fontFamily: "ui-monospace, monospace",
+                fontSize: "11px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                cursor: parsed === null ? "default" : "pointer",
+                opacity: picked === index ? 0.95 : 0.8,
+              },
+              title: parsed === null ? String(line) : "点击看源码：" + parsed.file + ":" + String(parsed.line),
+              onClick: () => open(index, parsed),
+            },
+            String(line),
+          );
+        }),
+        error === "" ? null : e("div", { style: { fontSize: "11px", opacity: 0.7 } }, error),
+        e(SourceBlock, { slice: slice }),
+      );
+    }
+
     function Detail(props) {
       const event = props.event;
       if (event === null) {
@@ -1161,6 +1208,10 @@ window.__ModuleLoader__.load({
         refs,
         e(CompileErrors, {
           errors: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" ? event.payload.result.errors : undefined,
+          projectDir: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" && typeof event.payload.result.projectDir === "string" ? event.payload.result.projectDir : (typeof props.projectDir === "string" ? props.projectDir : ""),
+        }),
+        e(CompileWarnings, {
+          warnings: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" ? event.payload.result.warnings : undefined,
           projectDir: event.payload !== null && typeof event.payload === "object" && event.payload.result !== null && typeof event.payload.result === "object" && typeof event.payload.result.projectDir === "string" ? event.payload.result.projectDir : (typeof props.projectDir === "string" ? props.projectDir : ""),
         }),
         payloadText === ""
