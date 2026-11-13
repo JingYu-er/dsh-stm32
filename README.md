@@ -152,7 +152,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
 | 变量监视 / 观察点 | `stm32_watch`：`action=add` 登记表达式（`kind=value` 只是采样，不用开会话）；`action=sample` 停下→逐项求值→算 delta→原本在跑就放回；`kind=write/read/access` 装成硬件观察点（gdb `watch`/`rwatch`/`awatch`），受 F1 的 4 个数据比较器预算约束 |
 | 串口交互（Windows P1） | `stm32_serial`：`list` / `open` / `read` / `send` / `transact` / `status` / `close` 七个动作；零 npm 依赖（PowerShell 5.1 + `System.IO.Ports` 常驻桥持有 COM 口），默认 115200 8N1、DTR/RTS 不拉高、`persist=false`、单会话；**不含 GUI 面板、SSE、Linux/macOS 与自动重连**（见[串口](#串口windows-p1)） |
-| 调试台面板 | 会话页签里的「调试台」：时间线 / 事件详情 / 实时通道 / 引脚 / 时钟 / 中断 / 故障 / 产物 / 变更 / 概览，44 条 `/dsh-stm32/api/*` 路由 + SSE 事件流，详见[调试台](#调试台面板) |
+| 调试台面板 | 会话页签里的「调试台」：时间线 / 事件详情 / 实时通道 / 引脚 / 时钟 / 中断 / 故障 / 产物 / 变更 / 概览，45 条 `/dsh-stm32/api/*` 路由 + SSE 事件流，详见[调试台](#调试台面板) |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
 ## 工具参考
@@ -293,7 +293,7 @@ stm32_serial action=close
 | 产物 | elf / hex / bin、大小、逐文件 SHA-256、Flash/RAM 占用 | 与上一次构建对比、复制校验和 |
 | 变更 | 当前 `.ioc` 与基线的差异（新增 / 删除 / 改动） | 记基线、恢复单键或全部差异 |
 
-数据面：`/dsh-stm32/api/*` 共 44 条路由，事件走 SSE（`/events?since=&session=`），面板按会话过滤；每条工具调用都带 `callId`，在途调用可以在面板里直接中止。事件在内存里保留 5000 条，溢出的部分每 30 秒写成 `~/.dsh-stm32/evidence/<日期>/<会话>/events-<时分秒>.jsonl`，超过 7 天或 20 个会话自动清理。
+数据面：`/dsh-stm32/api/*` 共 45 条路由，事件走 SSE（`/events?since=&session=`），面板按会话过滤；每条工具调用都带 `callId`，在途调用可以在面板里直接中止。事件在内存里保留 5000 条，溢出的部分每 30 秒写成 `~/.dsh-stm32/evidence/<日期>/<会话>/events-<时分秒>.jsonl`，超过 7 天或 20 个会话自动清理。
 
 生效方式：改 `client/client.js` 后跑 `node scripts/copy-client.mjs` 并刷新页面即可；改 `src/` 里的服务端代码要**完全退出 DSH 再启动**（窗口关掉不算，后台进程要退）。
 
