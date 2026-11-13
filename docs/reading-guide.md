@@ -26,7 +26,7 @@
 | 层 | 目录 | 干什么 | 绝对不能干的事 |
 | --- | --- | --- | --- |
 | L4 装配 | src/index.ts、src/commands、src/skill | 把服务接上、把工具/命令/skill 注册进宿主 | 写业务逻辑 |
-| L3 契约层 | src/tools（24 个文件：25 个工具 + 1 个基础设施；一个文件可注册多个工具） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
+| L3 契约层 | src/tools（25 个文件：28 个工具 + 1 个基础设施；一个文件可注册多个工具） | 参数 schema、输出 schema、渲染成中文行、门禁 | 直接 spawn 进程、直接拼 openocd 参数 |
 | L2 逻辑层 | src/engine（46 个 .ts，其中 45 个在下表逐条列） | 全部业务流程、每个流程都可单测 | 读 process.env 里的宿主状态（除配置目录外）、直接 console.log |
 | L1 事实表 | src/data（10 个数据模块） | 设备事实（`device-facts.ts` 读包内 `assets/device/f1/chips.json`）、由本机 CubeMX db 派生的引脚表、镜像 URL、固件族、F1 时钟树、安装指引、搜索路径、配置读写、SVD 寄存器表（`svd.ts`，来自内置 `assets/device/f1/svd/`，full 逻辑层） | 起进程、写工程文件 |
 
@@ -44,7 +44,7 @@
 ```mermaid
 flowchart TD
   HOST["DSH 宿主 ctx<br/>tools / subprocess / jobs / webServer / commands / skills"] --> IDX["src/index.ts<br/>apply(ctx) 装配"]
-  IDX --> TOOLS["src/tools/*<br/>25 个工具"]
+  IDX --> TOOLS["src/tools/*<br/>28 个工具"]
   IDX --> CMDS["src/commands/register.ts<br/>7 条斜杠命令"]
   IDX --> SKILL["src/skill/stm32-workflow.ts<br/>红线 skill"]
   IDX --> WEB["src/engine/web-routes.ts<br/>6 条 HTTP 路由"]
@@ -67,7 +67,7 @@ flowchart TD
 | 目录 | 文件数 | 行数 | 说明 |
 | --- | --- | --- | --- |
 | src/ | 4 | 803 | index.ts 127、types.ts 196、commands/register.ts 445、skill/stm32-workflow.ts 35 |
-| src/tools/ | 24 | 7583 | 25 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 serial.ts 829 行，其次是 regs.ts 735 行、route-plan.ts 576 行、rtt.ts 408 行 |
+| src/tools/ | 25 | 9027 | 28 个工具 + project-dir.ts（共同的工程目录/参数校验基础设施）；最大的是 serial.ts 868 行，其次是 regs.ts 735 行、schematic.ts 630 行、route-plan.ts 576 行 |
 | src/engine/ | 51 | 21712 | 见第 5 章（第 5 章表格化了 45 个模块，另有 assets.ts 1162 行没单列）；最大的是 msys2-install.ts 2313 行，其次是 assets.ts 1162 行、clock-plan.ts 801 行 |
 | src/data/ | 10 | 3599 | 10 个 .ts 数据模块（device-facts.ts 读包内 assets/、svd.ts 读 full 层的寄存器表），见第 6 章 |
 | templates/ | 20 | — | 工程脚手架与寄存器版模板（CMake、链接脚本、launch/settings、openocd.cfg、demo.ioc；C 阶段加了寄存器版的 `Core/Src/rtt.c` + `Core/Inc/rtt.h` 与 HAL 脚手架 `scaffold/RTT.md`） |
@@ -100,7 +100,7 @@ flowchart TD
 三件事，只有三件：
 
 1. **声明身份与依赖**：`export const name = "dsh-stm32"`、`export const inject = ["tools", "subprocess", "jobs"]`。这三个是硬依赖，缺了插件不加载。
-2. **apply(ctx) 里按「先探测、再操作」的顺序注册 25 个工具**：env_install → download → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → ioc_verify → build → flash → debug_run → debug_session → regs_read → route_plan → rtt → watch → assets → cache → doctor → serial → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
+2. **apply(ctx) 里按「先探测、再操作」的顺序注册 28 个工具**：env_install → download → firmware_install → project_create → project_export → code_patch → generate → ioc_inspect → ioc_plan → ioc_apply → ioc_verify → build → flash → debug_run → debug_session → regs_read → route_plan → schematic → rtt → watch → assets → cache → doctor → serial → web_routes。顺序本身不影响功能（工具注册是平铺的），但排列是「用户上手顺序」。
 3. **注册可选层并挂三个事件**：commands / skills 走 `ctx.inject([...], scope => ...)`，宿主没组合这些服务时静默跳过，工具照常工作；webServer 路由在`registerWebRoutes` 里自己判断。
 
 三个事件是本插件唯一的「状态清理入口」，也是很容易读漏的地方：
@@ -154,7 +154,7 @@ ctx.on("dispose", () => { void debugSessions.stop("插件卸载"); });
 
 7 条命令里有 6 条最终调用 engine 的同一个函数（build → runBuild，flash → runFlash …），所以它们和工具的唯一差别是：输入来自文本而不是 JSON、输出是一段中文。
 
-## 4. tools 层：25 个工具 + 1 个基础设施
+## 4. tools 层：28 个工具 + 1 个基础设施
 
 ### 4.1 一个工具文件的固定骨架
 
@@ -190,7 +190,7 @@ export function formatFlashReport(report: FlashReport): string[] { ... }  // 5. 
 2. **门禁在工具层，不在 engine。** engine 假设工具链就位；`blockedReport` / `emptyReport` 是门禁拦截与早退时造「同形报告」的工厂，保证失败也是合法输出。
 3. **`resolveProjectDir` + `validateToolArgs`（tools/project-dir.ts，120 行）是所有工具的共同入口**：前者把 `projectDir` 参数 / 会话工作目录落成绝对路径，后者按 `RequiredArgSpec` 校验必填参数类型，报错文案统一。
 
-### 4.2 25 个工具一览
+### 4.2 28 个工具一览
 
 | 工具 | 文件（行） | engine 入口 | 门禁能力 |
 | --- | --- | --- | --- |
@@ -815,12 +815,12 @@ const fake = {
 | 项 | 当前值 |
 | --- | --- |
 | TypeScript | 111 个文件、43,057 行（`src/`，不含 client） |
-| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,616 行 |
+| `src/tools/` | 25 个文件 / 28 个注册工具 / 9,027 行 |
 | `src/engine/` | 65 个 `.ts` / 26,961 行 |
 | `src/data/` | 18 个 `.ts` / 7,785 行 |
 | 单测 | 60 个套件 / 947 pass / 0 fail（`node test/run-units.mjs`） |
 | TypeScript | 110 个文件、42,261 行（`src/`，不含 client） |
-| `src/tools/` | 24 个文件 / 25 个注册工具 / 7,583 行 |
+| `src/tools/` | 25 个文件 / 28 个注册工具 / 9,027 行 |
 | `src/engine/` | 65 个 `.ts` / 26,358 行 |
 | `src/data/` | 17 个 `.ts` / 7,625 行 |
 | 单测 | 61 个套件 / 923 pass / 0 fail（`node test/run-units.mjs`，本机实测） |
@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S89）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S90）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -916,6 +916,6 @@ const fake = {
 | --- | --- |
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
-| 单测 | 80 个套件 / 1088 pass / 0 fail |
-| 客户端 | `client/client.js` 5021 行（手写，不经 tsc） |
-| 包体 | 1979.8 KB / 295 文件 / 解包 15772.0 KB（护栏上限 3906.3 KB） |
+| 单测 | 81 个套件 / 1101 pass / 0 fail（含原理图 13 条） |
+| 客户端 | `client/client.js` 5220 行（手写，不经 tsc） |
+| 包体 | 1970.6 KB / 303 文件 / 解包 15792.9 KB（护栏上限 3906.3 KB） |

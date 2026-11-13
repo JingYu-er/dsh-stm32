@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：25 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：28 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -165,6 +165,16 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ioc_apply` | 写入计划：源文件校验 → 备份 → 原子替换；支持按备份回滚 |
 | `stm32_ioc_verify` | 由 CubeMX 自己重读 `.ioc`，指出被静默丢弃的外设与缺失的初始化 |
 
+### 原理图（KiCad 10）
+
+| 工具 | 用途 |
+| --- | --- |
+| `stm32_sch_read` | 只读解析 KiCad 工程：图纸树、元件、网络、电源网络，以及模块框图（哪两块电路相连、走什么总线） |
+| `stm32_sch_pins` | 主控引脚矩阵：每个脚的网络名、类型、是否悬空，并按 CubeMX 数据库给出可复用信号候选 |
+| `stm32_sch_check` | 检查原理图本身，并与 `.ioc`、`.kicad_pcb` 对账：缺值、缺封装、SWD / BOOT0 / 电源缺失、网络被拆开 |
+
+版本范围是 KiCad 10（`version 20260306`）。元件库内嵌在图纸里，不要求安装 KiCad，也不读 `sym-lib-table`；只跟随根图纸引用到的子图，`.history/` 与其他历史版本不参与解析。对账判据是连通性：同一 PCB 网络上的焊盘，在原理图里必须属于同一网络；名字不一致只作提示。工具只读，不改原理图，也不改工程配置。
+
 ### 代码与构建
 
 | 工具 | 用途 |
@@ -222,6 +232,7 @@ static void rtt_init(void) {
 | 事件 | 调用起止、耗时、慢调用标记、参数摘要 | 只看失败、按工具筛选、按耗时排序、批量引用、导出 JSONL、事件深链 |
 | 实时通道 | 串口 / RTT / 监视输出 | 暂停、清空、关键字过滤、RTT 级别过滤、发送串口行、常驻采集、导出 |
 | 引脚 | 按外设分组、按端口排布、按封装方框 | 筛选、复制引用、查看 `.ioc` 键、导出 CSV |
+| 原理图 | 模块框图：主控与各芯片、连接器按网络与总线（I2C / SPI / UART）连线，附检查结论 | 只读；电源网络单独列出 |
 | 时钟 | 树与流向两种视图、各节点频率与分频 | 超限标记与「改为 ÷N」建议（按父时钟计算） |
 | 中断 | NVIC 使能、抢占与子优先级 | 筛选、排序、就地修改、批量修改 |
 | 故障 | 失败事件原文、规则解码、按规则合并 | 分类筛选、复制组提示、导出 CSV |
@@ -369,7 +380,7 @@ source [find target/stm32f1x.cfg]
 | 命令 | 作用 |
 | --- | --- |
 | `npm run build` | `tsc` 编译到 `lib/`，并复制客户端与数据资源 |
-| `node test/run-units.mjs` | 离线单测：80 个套件 / 1088 个用例，不需要板子 |
+| `node test/run-units.mjs` | 离线单测：81 个套件 / 1101 个用例，不需要板子 |
 | `node .dsh-stm32/acceptance.mjs` | 本机验收脚本：面板 API、事件流、证据、产物、故障、中断、串口与探针 |
 | `npm run test:pack` | 打包 tarball、解包、用解包产物实际建一次寄存器工程 |
 | `npm run test:size` | 包体与资产护栏 |
@@ -383,7 +394,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            25 个工具的注册与参数校验
+  tools/            28 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

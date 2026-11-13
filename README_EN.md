@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 25 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 28 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -165,6 +165,16 @@ Boundaries are listed under [Known limitations](#known-limitations): HAL scaffol
 | `stm32_ioc_apply` | Applies a plan: source checks → backup → atomic replace; rollback from backup |
 | `stm32_ioc_verify` | Has CubeMX re-read the `.ioc` and points out silently dropped peripherals and missing init calls |
 
+### Schematic (KiCad 10)
+
+| Tool | Purpose |
+| --- | --- |
+| `stm32_sch_read` | Read a KiCad project: sheet tree, components, nets, power nets and a block diagram (which circuits connect, over which bus) |
+| `stm32_sch_pins` | MCU pin matrix: net name, pin type, whether the pin is left open, plus reusable signal candidates from the CubeMX database |
+| `stm32_sch_check` | Check the schematic itself and reconcile it with `.ioc` and `.kicad_pcb`: missing values, missing footprints, missing SWD / BOOT0 / power, split nets |
+
+Scope is KiCad 10 (`version 20260306`). Symbol libraries are embedded in the sheets, so KiCad does not need to be installed and `sym-lib-table` is not read; only sheets referenced from the root sheet are parsed, and `.history/` plus other historical versions are ignored. Reconciliation is based on connectivity: pads on one PCB net must belong to one schematic net, and name differences are reported as hints only. The tools are read-only: the schematic and the project configuration are never modified.
+
 ### Code and build
 
 | Tool | Purpose |
@@ -222,6 +232,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Events | Call start and end, duration, slow-call marker, argument summary | Failures only, filter by tool, sort by duration, bulk quoting, JSONL export, event deep links |
 | Live channels | Serial / RTT / watch output | Pause, clear, keyword filter, RTT level filter, send a serial line, persistent capture, export |
 | Pins | Grouped by peripheral, by port, or as a package outline | Filter, copy references, inspect `.ioc` keys, CSV export |
+| Schematic | Block diagram: MCU, chips and connectors linked by net and bus (I2C / SPI / UART), with check results | Read-only; power nets are listed separately |
 | Clocks | Tree and flow views, per-node frequency and divider | Over-limit markers and "change to ÷N" advice computed from the parent clock |
 | Interrupts | NVIC enablement, preemption and sub-priority | Filter, sort, edit in place, bulk edit |
 | Faults | Raw failure events, rule decoding, grouping by rule | Category filter, copy group hint, CSV export |
@@ -369,7 +380,7 @@ Without `openocd.cfg`, the debug script follows the chip family in the `.ioc` (F
 | Command | Purpose |
 | --- | --- |
 | `npm run build` | `tsc` into `lib/`, copying client and data assets |
-| `node test/run-units.mjs` | Offline unit tests: 80 suites / 1088 cases, no board required |
+| `node test/run-units.mjs` | Offline unit tests: 81 suites / 1101 cases, no board required |
 | `node .dsh-stm32/acceptance.mjs` | Local acceptance script: panel API, event stream, evidence, artifacts, faults, interrupts, serial, probe |
 | `npm run test:pack` | Pack, unpack and scaffold a register project with the unpacked build |
 | `npm run test:size` | Package and asset guards |
@@ -383,7 +394,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 25 tools
+  tools/            registration and argument validation for 28 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

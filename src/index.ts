@@ -36,6 +36,7 @@ import { registerProjectCreate } from "./tools/project-create.js";
 import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
+import { registerSchematicTools } from "./tools/schematic.js";
 import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
@@ -108,6 +109,7 @@ export function apply(ctx: DshContext): void {
   registerDebugSession(toolsCtx);
   registerRegsRead(toolsCtx);
   registerRoutePlan(toolsCtx);
+  registerSchematicTools(toolsCtx);
   registerRtt(toolsCtx);
   registerWatchTool(toolsCtx);
   registerAssets(toolsCtx);

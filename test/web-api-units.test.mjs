@@ -225,9 +225,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 46);
-  assert.equal(new Set(WEB_API_PATHS).size, 46);
+test("WEB_API_PATHS：四十七条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 47);
+  assert.equal(new Set(WEB_API_PATHS).size, 47);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -238,6 +238,7 @@ test("WEB_API_PATHS：四十六条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug"), true, "调试会话摘要必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/breakpoints"), true, "断点面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/abort"), true, "在途调用中止必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/schematic"), true, "原理图页必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels"), true, "常驻通道状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);

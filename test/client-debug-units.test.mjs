@@ -191,6 +191,11 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("已载入最近一份历史记录"), "打开面板时应自动载入最近证据");
     assert.ok(source.includes("fallbackProjectDir"), "没有会话时要退到工作区里的第一个工程");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
+    assert.ok(source.includes("function useSchematic("), "原理图页签要读 /schematic（S90）");
+    assert.ok(source.includes("function layoutSchematic(") && source.includes("function SchematicPanel("), "原理图页要能画模块框图（S90）");
+    assert.ok(source.includes('tabButton("schematic"'), "原理图要有独立页签（S90）");
+    assert.ok(source.includes('tab === "schematic"') && source.includes("schematic?projectDir="), "页签要带工程目录请求（S90）");
+    assert.ok(source.includes("powerNets") && source.includes("d32-sch-grid"), "框图要有网格底与电源网络（S90）");
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;

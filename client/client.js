@@ -919,7 +919,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "原理图", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
     /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
     function eventRefLine(event) {
@@ -1889,6 +1889,40 @@ window.__ModuleLoader__.load({
       return { pinout, error, reload: () => setTick((value) => value + 1) };
     }
 
+    /** 原理图：只读 KiCad 工程，取模块框图与检查结论，供面板渲染。 */
+    function useSchematic(projectDir, intervalMs) {
+      const [schematic, setSchematic] = useState(null);
+      const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let closed = false;
+        if (typeof projectDir !== "string" || projectDir === "") {
+          setSchematic(null);
+          setError("");
+          return () => {
+            closed = true;
+          };
+        }
+        const load = async () => {
+          const result = await callApi("GET", "schematic?projectDir=" + encodeURIComponent(projectDir));
+          if (closed) return;
+          if (result.ok) {
+            setSchematic(result.value.schematic);
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [projectDir, tick]);
+      return { schematic, error, reload: () => setTick((value) => value + 1) };
+    }
+
     /** 构建与烧录：人在面板上直接触发，结果按 stm32_build / stm32_flash 事件进时间线。 */
     function BuildCard(props) {
       const [busy, setBusy] = useState("");
@@ -2273,6 +2307,168 @@ window.__ModuleLoader__.load({
     }
 
     /** 引脚面板：芯片、时钟与按外设分组的引脚表。只读 .ioc，不触发 CubeMX。 */
+    /** 框图配色：按元件类型给左侧色条，强调色跟随宿主主题。 */
+    const D32_BLOCK_ACCENT = {
+      mcu: "var(--d32-accent)",
+      ic: "var(--dsw-alias-state-success-primary)",
+      connector: "var(--dsw-alias-state-warn-primary)",
+      passive: "var(--dsw-alias-label-tertiary)",
+      other: "var(--dsw-alias-border-l3)",
+    };
+
+    /** 把 diagram 排成两列：主控在左、其余在右；返回画布尺寸与坐标。 */
+    function layoutSchematic(diagram) {
+      const blocks = diagram !== null && Array.isArray(diagram.blocks) ? diagram.blocks : [];
+      const links = diagram !== null && Array.isArray(diagram.links) ? diagram.links : [];
+      const left = blocks.filter((block) => block.kind === "mcu");
+      const right = blocks.filter((block) => block.kind !== "mcu");
+      const boxW = 212;
+      const boxH = 54;
+      const gapY = 20;
+      const xLeft = 18;
+      const xRight = 330;
+      const top = 22;
+      const pos = new Map();
+      left.forEach((block, index) => pos.set(block.id, { x: xLeft, y: top + index * (boxH + gapY) }));
+      right.forEach((block, index) => pos.set(block.id, { x: xRight, y: top + index * (boxH + gapY) }));
+      const rows = Math.max(left.length, right.length, 1);
+      const width = xRight + boxW + 18;
+      const height = top + rows * (boxH + gapY) + 18;
+      const boxes = blocks
+        .filter((block) => pos.has(block.id))
+        .map((block) => Object.assign({}, pos.get(block.id), { block: block }));
+      const paths = [];
+      for (const link of links) {
+        const a = pos.get(link.from);
+        const b = pos.get(link.to);
+        if (a === undefined || b === undefined) continue;
+        const ay = a.y + boxH / 2;
+        const by = b.y + boxH / 2;
+        if (a.x === b.x) {
+          const x = a.x + boxW;
+          paths.push({ key: link.from + "|" + link.to, d: "M " + String(x) + " " + String(ay) + " H " + String(x + 12) + " V " + String(by) + " H " + String(b.x + boxW), label: link.label, lx: x + 16, ly: (ay + by) / 2 + 3, anchor: "start" });
+          continue;
+        }
+        const ax = a.x < b.x ? a.x + boxW : a.x;
+        const bx = a.x < b.x ? b.x : b.x + boxW;
+        const midX = (ax + bx) / 2;
+        paths.push({ key: link.from + "|" + link.to, d: "M " + String(ax) + " " + String(ay) + " H " + String(midX) + " V " + String(by) + " H " + String(bx), label: link.label, lx: midX, ly: (ay + by) / 2 - 6, anchor: "middle" });
+      }
+      return { width: width, height: height, boxW: boxW, boxH: boxH, boxes: boxes, paths: paths };
+    }
+
+    /** 原理图页签（S90）：只读 KiCad 工程，画模块框图并列出检查结论。 */
+    function SchematicPanel(props) {
+      const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
+      const state = useSchematic(projectDir, 15000);
+      const schematic = state.schematic;
+      const countOf = (value) => (typeof value === "number" ? value : Array.isArray(value) ? value.length : 0);
+      const layout = layoutSchematic(schematic === null ? null : schematic.diagram);
+      const findings = schematic === null || !Array.isArray(schematic.findings) ? [] : schematic.findings;
+      const errors = findings.filter((item) => item.severity === "error");
+      const warnings = findings.filter((item) => item.severity === "warning");
+      const shown = findings.slice(0, 12);
+      const powerNets = schematic === null || schematic.diagram === undefined || !Array.isArray(schematic.diagram.powerNets) ? [] : schematic.diagram.powerNets;
+      const head = [];
+      if (projectDir === "") {
+        head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录：在工具栏「工程」里选一个，或先打开调试会话。"));
+      } else if (state.error !== "") {
+        head.push(e("div", { key: "error", style: { padding: "6px 0", opacity: 0.75 } }, state.error));
+      } else if (schematic === null) {
+        head.push(e("div", { key: "loading", style: { padding: "6px 0", opacity: 0.6 } }, "读取原理图…"));
+      } else {
+        head.push(
+          e(
+            "div",
+            { key: "head", style: { padding: "4px 0 6px", display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", opacity: 0.85 } },
+            e("span", null, schematic.mcu === null || schematic.mcu === undefined ? "未识别主控" : schematic.mcu.value + "（" + schematic.mcu.ref + "）"),
+            e("span", null, "元件 " + String(countOf(schematic.components))),
+            e("span", null, "网络 " + String(countOf(schematic.nets))),
+            e("span", null, schematic.generator === "" ? "KiCad" : schematic.generator),
+            e("span", { style: errors.length > 0 ? { color: "var(--dsw-alias-state-error-primary)" } : {} }, "错误 " + String(errors.length)),
+            e("span", { style: warnings.length > 0 ? { color: D32_WARN } : {} }, "提示 " + String(warnings.length)),
+            e("span", { style: { opacity: 0.55 }, title: "只读：本页不改原理图，也不改工程配置" }, "只读"),
+          ),
+        );
+      }
+      const diagram =
+        schematic === null
+          ? null
+          : e(
+              "div",
+              { key: "diagram", className: "d32-sch-figure", style: { padding: "0 0 8px", overflowX: "auto" } },
+              e(
+                "svg",
+                { width: "100%", viewBox: "0 0 " + String(layout.width) + " " + String(layout.height), style: { display: "block", maxWidth: String(layout.width) + "px" } },
+                e(
+                  "defs",
+                  { key: "defs" },
+                  e(
+                    "pattern",
+                    { id: "d32-sch-grid", width: "16", height: "16", patternUnits: "userSpaceOnUse" },
+                    e("circle", { cx: "1", cy: "1", r: "1", fill: "var(--dsw-alias-border-l3)" }),
+                  ),
+                ),
+                e("rect", { key: "bg", x: 0, y: 0, width: layout.width, height: layout.height, fill: "url(#d32-sch-grid)", opacity: 0.55 }),
+                ...layout.paths.map((path) =>
+                  e(
+                    "g",
+                    { key: "link-" + path.key },
+                    e("path", { d: path.d, fill: "none", stroke: "var(--dsw-alias-label-tertiary)", strokeWidth: 1 }),
+                    e("text", { x: path.lx, y: path.ly, fill: "var(--dsw-alias-label-secondary)", fontFamily: D32_FONT_CODE, fontSize: "10.5px", letterSpacing: "0.06em", textAnchor: path.anchor, title: path.label }, path.label),
+                  ),
+                ),
+                ...layout.boxes.map((box) =>
+                  e(
+                    "g",
+                    { key: "box-" + box.block.id },
+                    e("rect", { x: box.x, y: box.y, width: layout.boxW, height: layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: "var(--dsw-alias-border-l2)", strokeWidth: 1 }),
+                    e("rect", { x: box.x, y: box.y, width: 3, height: layout.boxH, fill: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other }),
+                    e("text", { x: box.x + 12, y: box.y + 20, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, box.block.kind === "passive" ? "PASSIVE" : box.block.id.toUpperCase()),
+                    e("text", { x: box.x + 12, y: box.y + 40, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 24 ? box.block.label.slice(0, 23) + "…" : box.block.label),
+                  ),
+                ),
+              ),
+            );
+      const notes = [];
+      if (schematic !== null) {
+        if (powerNets.length > 0) {
+          notes.push(
+            e(
+              "div",
+              { key: "power", style: { padding: "2px 0 6px", fontSize: "12px", opacity: 0.8 } },
+              e("span", { style: Object.assign({}, D32_LABEL_MONO, { marginRight: "8px" }) }, "电源网络"),
+              powerNets.slice(0, 24).join(" · "),
+            ),
+          );
+        }
+        if (shown.length > 0) {
+          notes.push(
+            e(
+              "div",
+              { key: "findings", style: { borderTop: "1px solid var(--dsw-alias-border-l3)", paddingTop: "6px" } },
+              shown.map((item) =>
+                e(
+                  "div",
+                  { key: item.rule + "|" + item.message, className: "d32-sch-finding", style: { display: "flex", gap: "10px", fontSize: "12px", padding: "3px 0" } },
+                  e("span", { style: { width: "190px", flex: "0 0 auto", fontFamily: D32_FONT_CODE, fontSize: "10.5px", letterSpacing: "0.06em", color: item.severity === "error" ? "var(--dsw-alias-state-error-primary)" : item.severity === "warning" ? D32_WARN : "var(--dsw-alias-label-tertiary)" } }, item.rule),
+                  e("span", { style: { opacity: item.severity === "info" ? 0.7 : 0.95 } }, item.message),
+                ),
+              ),
+              findings.length > shown.length
+                ? e("div", { key: "more", style: { fontSize: "11px", opacity: 0.6, paddingTop: "4px" } }, "另有 " + String(findings.length - shown.length) + " 条，用 stm32_sch_check 查看全部")
+                : null,
+            ),
+          );
+        }
+        const warnList = Array.isArray(schematic.warnings) ? schematic.warnings : [];
+        if (warnList.length > 0) {
+          notes.push(e("div", { key: "warn", style: { paddingTop: "6px", fontSize: "11.5px", opacity: 0.65 } }, warnList.join("；")));
+        }
+      }
+      return e("div", { className: "d32-page", style: { display: "flex", flexDirection: "column", gap: "4px" } }, head, diagram, ...notes);
+    }
+
     function PinoutPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = usePinout(projectDir, 10000);
@@ -4151,6 +4347,7 @@ window.__ModuleLoader__.load({
         tabButton("events", DEBUG_LABELS.events),
         tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
+        tabButton("schematic", DEBUG_LABELS.schematic),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("interrupts", DEBUG_LABELS.interrupts),
         tabButton("faults", DEBUG_LABELS.faults, unseenFails),
@@ -4184,6 +4381,8 @@ window.__ModuleLoader__.load({
                 e(Detail, { key: "detail", event: props.selected, flex: "0 0 380px" }),
               ),
             ]
+          : tab === "schematic"
+          ? [e(SchematicPanel, { key: "schematic", projectDir: projectDir })]
           : tab === "pinout"
           ? [e(PinoutPanel, { key: "pinout", projectDir: projectDir })]
           : tab === "clocks"

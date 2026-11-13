@@ -55,6 +55,9 @@ import { readIocDiff, readIocKeysForPin, restoreAllIocKeys, restoreIocKey, saveI
 import { readFile, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
+import { findRootSchematic, readSchematic } from "./schematic/model.js";
+import { checkSchematic } from "./schematic/checks.js";
+import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
 
 /** 面板能看到的四类能力（与 stm32_doctor 同一口径）。 */
@@ -500,6 +503,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/serial/ports",
   WEB_API_PREFIX + "/serial/open",
   WEB_API_PREFIX + "/serial/close",
+  WEB_API_PREFIX + "/schematic",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -690,6 +694,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/probe-info" &&
     path !== WEB_API_PREFIX + "/serial" &&
     path !== WEB_API_PREFIX + "/serial/ports" &&
+    path !== WEB_API_PREFIX + "/schematic" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
   if (path === WEB_API_PREFIX + "/watch") {
@@ -919,6 +924,44 @@ export async function handleWebApi(input: {
     const read = readPinout(projectDir, env);
     if (!read.ok) return fail(409, read.error);
     return ok({ pinout: read.report });
+  }
+  if (path === WEB_API_PREFIX + "/schematic") {
+    // 原理图页：读 KiCad 工程，给模块框图与检查结果；只读文件，不碰探针。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const rootFile = findRootSchematic(projectDir);
+    if (rootFile === null || rootFile === "") return fail(404, "工程里没有 .kicad_sch：先选择包含 KiCad 工程的目录");
+    let schematic: ReturnType<typeof readSchematic>;
+    try {
+      schematic = readSchematic(rootFile);
+    } catch (error) {
+      return fail(409, `原理图解析失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const report = schematic.report;
+    // PCB 对账跟着工程走：目录里有 .kicad_pcb 就一起对，没有就只查原理图本身。
+    const pcbName = (await readdir(projectDir)).find((name) => name.endsWith(".kicad_pcb")) ?? "";
+    const iocFile = findIocFile(projectDir);
+    const check = checkSchematic(report, {
+      ...(pcbName === "" ? {} : { pcbFile: join(projectDir, pcbName) }),
+      ...(iocFile === null ? {} : { iocFile }),
+    });
+    return ok({
+      schematic: {
+        rootFile: report.rootFile,
+        version: report.version,
+        generator: report.generator,
+        sheets: report.sheets,
+        components: report.components.length,
+        nets: report.nets.length,
+        mcu: report.mcu === null ? null : { ref: report.mcu.ref, value: report.mcu.value, pins: report.mcu.pins },
+        diagram: report.diagram,
+        warnings: report.warnings,
+        findings: check.findings,
+        summary: check.summary,
+        pcb: check.pcb,
+      },
+    });
   }
   if (path === WEB_API_PREFIX + "/clocks") {
     // 时钟页：读工程 .ioc 里 CubeMX 已经写下的各路频率，只读不改。
