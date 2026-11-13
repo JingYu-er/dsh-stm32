@@ -54,6 +54,9 @@ test("readArtifacts：elf 与同名 hex/bin、芯片容量、无提示", () => {
   assert.equal(report.chip.flashBytes, 65536, "F103C8 的 Flash 是 64 KB");
   assert.equal(report.chip.ramBytes, 20480, "F103C8 的 RAM 是 20 KB");
   assert.match(report.sha256, /^[0-9a-f]{64}$/u, "elf 很小，应给完整 SHA-256");
+  assert.match(report.hex.sha256, /^[0-9a-f]{64}$/u, "hex 也要有校验和（S62）");
+  assert.match(report.bin.sha256, /^[0-9a-f]{64}$/u, "bin 也要有校验和（S62）");
+  assert.notEqual(report.hex.sha256, report.elf.sha256, "不同文件的校验和不应相同");
   assert.deepEqual(report.notes, []);
 });
 

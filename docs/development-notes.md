@@ -6550,7 +6550,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node --check` 与 build 0、**79 套件 / 1055 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1946.8 KB / 292 文件 / 解包 15649.5 KB、client 4198 行。
 - 教训：**跳转优于复制**。同一份数据在第二个位置渲染，迟早会和原位置的交互状态对不上。
 
-### 六十五、教训
+### 六十五、产物逐文件校验和（S62）
+
+- 问题：S37 只给 elf 算了 SHA-256；实际烧进芯片的常是 hex 或 bin，核对「板子里跑的是不是这次构建」时缺的就是这两个文件的校验和。
+- 做法：`ArtifactFile` 增 `readonly sha256: string`，`statFile` 先给空串，`withHash(file)` 统一补算（`hashFile` 仍受 `ARTIFACT_HASH_MAX_BYTES = 8 MB` 约束，超限留空串）；`readArtifacts` 依次对 elf / hex / bin 走 `withHash`，报告级 `sha256` 仍取 elf 那份以保持兼容；面板每行文件名后显示前 12 位，`title` 里是完整 64 位。
+- 为什么保留报告级字段：既有面板与验收脚本按 `artifacts.sha256` 读 elf 校验和，换成嵌套结构会牵动两处消费者。
+- 验证：build 0、**79 套件 / 1055 pass / 0 fail**（`artifacts-units` 增 hex/bin 校验和格式与「不同文件不同值」断言）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1947.0 KB / 292 文件 / 解包 15650.0 KB、client 4199 行。
+- 教训：**「哪个文件被烧进去」是产物页的核心问题**。只给 elf 算哈希，在 hex/bin 烧录场景里等于没给。
+
+### 六十六、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

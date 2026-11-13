@@ -18,6 +18,8 @@ export interface ArtifactFile {
   readonly path: string;
   readonly size: number;
   readonly mtimeMs: number;
+  /** 文件的 SHA-256（十六进制小写）；超过上限或读不出时为空串（S62）。 */
+  readonly sha256: string;
 }
 
 export interface ChipBudget {
@@ -48,10 +50,16 @@ export type ArtifactsResult = { readonly ok: true; readonly report: ArtifactsRep
 function statFile(file: string): ArtifactFile | null {
   try {
     const info = statSync(file);
-    return { name: basename(file), path: file, size: info.size, mtimeMs: info.mtimeMs };
+    return { name: basename(file), path: file, size: info.size, mtimeMs: info.mtimeMs, sha256: "" };
   } catch {
     return null;
   }
+}
+
+/** 给一个产物补上校验和；超过上限的文件保持空串，调用方据此提示（S62）。 */
+function withHash(file: ArtifactFile | null): ArtifactFile | null {
+  if (file === null) return null;
+  return { ...file, sha256: hashFile(file) };
 }
 
 /** 与 elf 同名、扩展名不同的兄弟产物。 */
@@ -64,7 +72,7 @@ function sibling(elfPath: string, extension: string): ArtifactFile | null {
 /** 超过这个大小的 elf 不算校验和：调试台每 10 秒轮询一次，不值得。 */
 export const ARTIFACT_HASH_MAX_BYTES = 8 * 1024 * 1024;
 
-function elfSha256(file: ArtifactFile): string {
+function hashFile(file: ArtifactFile): string {
   if (file.size > ARTIFACT_HASH_MAX_BYTES) return "";
   try {
     return createHash("sha256").update(readFileSync(file.path)).digest("hex");
@@ -99,17 +107,16 @@ export function readArtifacts(projectDir: string, env: NodeJS.ProcessEnv = proce
   }
   let elfInfo: ElfInfo | null = null;
   if (buildDir !== "") elfInfo = findElf(buildDir);
-  const elf = elfInfo === null ? null : statFile(elfInfo.path);
-  const hex = elf === null ? null : sibling(elf.path, ".hex");
-  const bin = elf === null ? null : sibling(elf.path, ".bin");
+  const elf = withHash(elfInfo === null ? null : statFile(elfInfo.path));
+  const hex = withHash(elf === null ? null : sibling(elf.path, ".hex"));
+  const bin = withHash(elf === null ? null : sibling(elf.path, ".bin"));
   const otherElves = buildDir === "" ? [] : listElves(buildDir).filter((file) => file.path !== elf?.path);
   if (otherElves.length > 0) {
     notes.push("构建目录里有 " + String(otherElves.length + 1) + " 个 .elf，当前显示按工程名/修改时间挑出的那个。");
   }
-  let sha256 = "";
-  if (elf !== null) {
-    sha256 = elfSha256(elf);
-    if (sha256 === "") notes.push("elf 超过 " + String(Math.round(ARTIFACT_HASH_MAX_BYTES / 1024 / 1024)) + " MB，跳过校验和。");
+  const sha256 = elf?.sha256 ?? "";
+  if (elf !== null && sha256 === "") {
+    notes.push("elf 超过 " + String(Math.round(ARTIFACT_HASH_MAX_BYTES / 1024 / 1024)) + " MB，跳过校验和。");
   }
   const cpn = readIocCpn(dir);
   let chip: ChipBudget | null = null;
