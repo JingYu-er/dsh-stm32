@@ -156,6 +156,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("筛选中断名"), "中断页要能按名字筛选");
     assert.ok(source.includes("关闭会话"), "会话卡要能关闭会话");
     assert.ok(source.includes("kindCounts"), "时间线要能按工具名快速筛选");
+    assert.ok(source.includes("copyGroup"), "故障组要能复制规则与提示");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
