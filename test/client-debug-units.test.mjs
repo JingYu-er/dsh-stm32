@@ -168,6 +168,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
     assert.ok(source.includes("CompileWarnings"), "编译警告要能在详情里列出");
     assert.ok(source.includes("function ClockFlow("), "时钟图模式必须真有组件实现（S76）");
+    assert.ok(source.includes("d32-page"), "面板根节点要挂样式类（S85）");
+    assert.ok(source.includes("ensureDebugStyleTag"), "样式表只注入一次（S85）");
     assert.ok(source.includes("exportFaultsCsv"), "失败事件要能导出 CSV");
     assert.ok(source.includes("unseenFails"), "失败未读角标要能看见");
     assert.ok(source.includes("overLimit"), "时钟页要标出超限频率");
