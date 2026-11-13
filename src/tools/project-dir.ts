@@ -40,7 +40,7 @@ export async function resolveProjectDir(
   explicit: string | undefined,
   exec?: ToolExec,
 ): Promise<ProjectDirResolution> {
-  noteSessionAgent(exec?.agent);
+  noteSessionAgent("", exec?.agent);
   const given = usableDir(explicit);
   if (given !== null) {
     rememberWorkspace(given);

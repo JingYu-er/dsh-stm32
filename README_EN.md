@@ -239,7 +239,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Artifacts | elf / hex / bin, size, checksum, capacity, build-to-build comparison | Copy checksums |
 | Changes | `.ioc` differences against a baseline | Record a baseline, restore one key, restore all |
 
-Opening the panel first loads the most recent records for the session, then appends live. Events are written every 30 seconds to `~/.dsh-stm32/evidence/<date>/<session>/` for replay and export, retained for 7 days and the last 20 sessions by default, all configurable. The panel shows only this plugin's own tool calls.
+Opening the panel first loads the most recent records for the session, then appends live. Events are written every 30 seconds to `~/.dsh-stm32/evidence/<date>/<session>/` for replay and export, retained for 7 days and the last 20 sessions by default, all configurable. The panel shows only this plugin's own tool calls. The panel shows only this session's project and debug session: in a session from another workspace, the panel stays empty instead of borrowing another session's project or debug output.
 
 ## Serial (Windows)
 

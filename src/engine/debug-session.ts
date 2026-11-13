@@ -91,6 +91,8 @@ export interface SessionReport {
   breakpoints: BreakpointQuota;
   /** B4：数据观察点预算。 */
   watchpoints: BreakpointQuota;
+  /** 启动这条会话的 agent id（S91）：Web 面板据此判断这条会话能不能看到它。空串表示未知。 */
+  owner: string;
   errors: string[];
   message: string;
 }
@@ -345,6 +347,7 @@ function emptyReport(errors: string[], message: string): SessionReport {
     startedAt: 0, idleTtlMs: DEFAULT_IDLE_TTL_MS, hardTtlMs: DEFAULT_HARD_TTL_MS, remainingMs: 0,
     breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
     watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
+    owner: "",
     errors, message,
   };
 }
@@ -426,7 +429,7 @@ export class DebugSessionManager {
       configFile: session.configFile,
       elfPath: session.elfPath, startedAt: session.startedAt, idleTtlMs: session.idleTtlMs,
       hardTtlMs: session.hardTtlMs, remainingMs: this.remainingMs(session),
-      breakpoints: session.breakpoints, watchpoints: session.watchpoints, errors: [],
+      breakpoints: session.breakpoints, watchpoints: session.watchpoints, owner: session.owner, errors: [],
       message: "调试会话进行中（端口 " + String(session.port) + "，剩余 " + String(Math.ceil(this.remainingMs(session) / 1000)) + " s）",
     };
   }

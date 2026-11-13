@@ -159,8 +159,20 @@ function blockedSession(projectDir: string, gate: GateResult): SessionReport {
     startedAt: 0, idleTtlMs: 0, hardTtlMs: 0, remainingMs: 0,
     breakpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.code),
     watchpoints: quotaOf(0, F1_BREAKPOINT_BUDGET.data),
+    owner: "",
     errors: gateReportNotes(gate).slice(1), message: gate.message,
   };
+}
+
+/**
+ * 会话报告的对外副本（S91）：owner 是内部归属标记，只给 Web 面板判归属用，
+ * 不进工具输出——sessionSchema 关了额外属性。
+ */
+type PublicSession = Omit<SessionReport, "owner">;
+
+function publicSession(report: SessionReport): PublicSession {
+  const { owner: _owner, ...rest } = report;
+  return rest;
 }
 
 /** eval 没跑起来（多半是起会话失败）时的干净报告：字段一个不少，宿主 schema 才吃。 */
@@ -212,7 +224,7 @@ export function registerDebugSession(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (!gate.ok && gate.mode === "block") {
-        return { message: gate.message, session: blockedSession(resolution.projectDir, gate) };
+        return { message: gate.message, session: publicSession(blockedSession(resolution.projectDir, gate)) };
       }
       debugSessions.configure(ctx.subprocess, args.binDirs ?? []);
       const session = await debugSessions.start({
@@ -234,7 +246,7 @@ export function registerDebugSession(ctx: DshContext): void {
       // 会话报告的 schema 关了额外属性、又没有 notes 字段，warn 档只能把警告并回 message；
       // 而且 render 只打 session.message（不看外层 message），所以警告必须写进 session 里才看得见。
       session.message = gate.ok ? base : gate.message + "\n" + base;
-      return { message: session.message, session };
+      return { message: session.message, session: publicSession(session) };
     },
   });
 

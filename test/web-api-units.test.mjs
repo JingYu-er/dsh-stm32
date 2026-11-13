@@ -471,17 +471,52 @@ test("GET/POST /watch：列清单、加值监视、移除、清空、非法动�
   removeAllWatches(watchState);
 });
 
-test("没有显式 projectDir 时按会话工作目录兜底（S84）", async () => {
+test("没有显式 projectDir 时按会话工作目录兜底（S84/S91）", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "s84-proj-"));
   fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.PinsNb=1\nMcu.Pin0=PC13-TAMPER-RTC\n", "utf8");
-  setSessionWorkspaceResolver(async () => dir);
+  setSessionWorkspaceResolver(async (sessionId) => (sessionId === "s1" ? dir : ""));
   try {
-    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/pinout", query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
+    const response = await handleWebApi({
+      method: "GET",
+      path: WEB_API_PREFIX + "/pinout",
+      query: { session: "s1" },
+      deps: { subprocess: fakeSubprocess, env: {} },
+    });
     assert.equal(response.status, 200, "有会话工作目录时应成功");
     assert.equal(response.body.pinout.mcu.cpn, "STM32F103C8T6");
+
+    const other = await handleWebApi({
+      method: "GET",
+      path: WEB_API_PREFIX + "/pinout",
+      query: { session: "s2" },
+      deps: { subprocess: fakeSubprocess, env: {} },
+    });
+    assert.equal(other.status, 400, "别的会话不能借用这条会话的工作目录");
+
+    const anonymous = await handleWebApi({
+      method: "GET",
+      path: WEB_API_PREFIX + "/pinout",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: {} },
+    });
+    assert.equal(anonymous.status, 400, "没带会话 id 时同样回 400");
   } finally {
     setSessionWorkspaceResolver(null);
   }
+});
+
+test("GET /projects：没有会话工作目录时返回空列表，不猜别的工作区（S91）", async () => {
+  setSessionWorkspaceResolver(null);
+  const response = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/projects",
+    query: {},
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.projects.entries, [], "没有工作目录时不能列出任何工程");
+  assert.equal(response.body.projects.workspaceRoot, "");
+  assert.match(String(response.body.projects.note), /没有可用的会话工作目录/u);
 });
 
 test("工程类接口缺 projectDir 时回 400，不再回落到进程工作目录（S84）", async () => {
@@ -1269,7 +1304,7 @@ test("POST /debug/stop：没有会话时幂等返回 200，有会话时关掉并
   assert.match(String(idle.body.debug.message), /本来就没有会话/u);
 });
 
-test("没有显式 projectDir、也没有会话目录时退到最近一次用过的工程（S84）", async () => {
+test("没有会话目录时不再退到「最近用过的工程」（S91 撤掉跨工作区兜底）", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memo-proj-"));
   fs.writeFileSync(path.join(root, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Name=STM32F103C(8-B)Tx\n", "utf8");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memo-home-"));
@@ -1277,6 +1312,6 @@ test("没有显式 projectDir、也没有会话目录时退到最近一次用过
 
   setSessionWorkspaceResolver(null);
   const res = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/pinout", query: {}, deps: { subprocess: fakeSubprocess, env: { DSH_STM32_HOME: home } } });
-  assert.equal(res.status, 200, "有备忘时应能解析到工程");
-  assert.equal(res.body.pinout.mcu.cpn, "STM32F103C8T6");
+  assert.equal(res.status, 400, "备忘文件属于上一轮工作区，不能当成本会话的工程");
+  assert.match(String(res.body.error), /projectDir 不能为空/u);
 });

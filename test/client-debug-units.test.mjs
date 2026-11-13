@@ -196,6 +196,8 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes('tabButton("schematic"'), "原理图要有独立页签（S90）");
     assert.ok(source.includes('tab === "schematic"') && source.includes("schematic?projectDir="), "页签要带工程目录请求（S90）");
     assert.ok(source.includes("powerNets") && source.includes("d32-sch-grid"), "框图要有网格底与电源网络（S90）");
+    assert.ok(source.includes("function setApiSessionId(") && source.includes("function withSessionParam("), "请求要带会话 id（S91）");
+    assert.ok(source.includes("setApiSessionId(sessionId)"), "面板挂载时写入当前会话 id（S91）");
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;

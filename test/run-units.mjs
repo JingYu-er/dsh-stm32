@@ -45,6 +45,7 @@ const suites = [
   "channel-tap-units.test.mjs",
     "pinout-units.test.mjs",
     "schematic-units.test.mjs",
+    "session-context-units.test.mjs",
     "pinout-render-units.test.mjs",
     "workspace-memo-units.test.mjs",
     "project-conf-units.test.mjs",

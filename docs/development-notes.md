@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S90）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S91）
 
 ### 一、目标与约束
 
@@ -6861,7 +6861,23 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/schematic-units.test.mjs` 13 条（含夹具回归）、全量 **1101 pass / 0 fail**、ACCEPTANCE OK（新增夹具解析、I2C 连线、PCB 对账、空目录 404 四项）、`test:size` 1970.6 KB / 303 文件 / 解包 15792.9 KB。
 - 教训：**解析器的正确性要用外部数据反证**。自己写的 S-expression 遍历器能把任何输入「解析成功」，只有拿 PCB 的焊盘网络对一遍，才知道坐标变换与并查集是不是真的对。另一个教训是词法与数值：`Number(node[1])` 在传入字符串时取的是第二个字符（`"-12.7"` → `1`），这类错误不会抛异常，只会让所有坐标悄悄变形。
 
-### 九十八、教训
+### 九十八、调试台按会话隔离工程与调试会话（S91）
+
+- 用户反馈：在另一个工作区打开调试台，明明那里没有工程，却显示本工作区的工程与调试信息。
+- 三个跨会话兜底叠在一起，才造成这个现象：
+  - Web API 没有 agent，`withProject()` 缺 `projectDir` 时用「最近一次工具调用带来的 agent」向宿主换会话工作目录，而这个 agent 是进程级的最后一个，与当前请求无关。
+  - 再退一步读 `~/.dsh-stm32/last-workspace.txt`，那是上一轮工作区的备忘，同样与请求无关。
+  - `/projects` 缺根目录时按上面两条算，于是把别的工作区的工程索引整个列了出来；面板的 `fallbackProjectDir` 取列表第一个，后续所有页签都按它请求。
+- 改法是把「当前会话」从请求一路带到解析：
+  - `src/engine/session-context.ts` 由「只记最后一个 agent」改为「按会话 id 记 agent」（上限 64 条，满了丢最早）。
+  - `src/index.ts` 的 `session/event` 用 `sessionIdOf(session)` 取 `session.header.id`，连同 agent 一起登记；`setSessionWorkspaceResolver` 的签名改为 `(sessionId) => Promise<string>`，只解析登记过的会话。
+  - `src/engine/web-api.ts`：`handleWebApi` 读请求里的 `session` 参数，缺省或查不到就解析为空串；`withProject()` 只走「显式 → 本会话 → 空」，删掉备忘与最后一个 agent 两条兜底；`/projects` 在没有根目录时直接返回空列表并说明原因，不再退到 `process.cwd()`。
+  - `client/client.js`：`callApi()` 统一附带 `session=<当前会话 id>`（`withSessionParam`），面板挂载时 `setApiSessionId(props.sessionId)`；`/status` 原先手写的 `session=` 也被这条统一逻辑覆盖。
+- 调试会话本身同样要判归属：`SessionReport` 增 `owner`（启动它的 agent id，工具层早已记录），新增 `debugSessionForeign(sessionId, owner)`。别的会话在调试时，`/debug` 返回 `active:false, foreign:true` 并清空工程目录、断点、命中与 gdb 输出，`/debug/breakpoints` 直接 409 提示去启动它的会话里操作。owner 在工具输出里是内部标记，`publicSession()` 会剥掉，避免 `sessionSchema` 的 `additionalProperties:false` 校验失败。
+- 验证：`test/session-context-units.test.mjs` 3 条（对照表、容量淘汰、归属判定）；`test/web-api-units.test.mjs` 改为「按会话 id 兜底，别的会话与无会话 id 都回 400」，并新增「没有会话工作目录时 `/projects` 返回空列表」。全量 **82 个套件 / 1105 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1972.8 KB / 303 文件 / 解包 15799.5 KB。
+- 教训：**兜底链里任何一环只要是进程级的，就会把别的会话的状态借过来**。「最近一个」这类变量在单会话脚本里很方便，在多会话界面里等于数据泄漏；要么把身份一路带下去，要么宁可返回空并说明原因。
+
+### 九十九、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

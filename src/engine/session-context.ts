@@ -1,21 +1,49 @@
 /**
- * 最近一次工具调用带来的会话 agent（S84 补第二波）。
+ * 会话身份与 agent 的对照表（S84 引入，S91 改为按会话索引）。
  *
  * Web API 没有 agent 对象，宿主的 `workingDirectory.ensure()` 因此给不出会话目录。
- * 工具调用里一定有 agent，这里记下最近一个，Web API 的 resolver 就能拿它去问宿主。
+ * 工具调用与会话事件里一定有 agent，这里按会话 id 记下来，Web API 拿请求里的
+ * `session` 去查，只解析这一条会话自己的工作目录。
  *
- * 只持有一个引用，不做生命周期管理；会话结束时不清理（下一轮会被覆盖）。
+ * 只记最近的若干条，不做生命周期管理：会话结束后条目留在表里也无害，
+ * 缺省容量足够覆盖同时打开的几个会话。
  */
 
+/** 最多记住多少条会话；超出时丢掉最早的一条。 */
+const SESSION_LIMIT = 64;
+
+/** 会话 id → 该会话最近一次带来的 agent。 */
+const agents = new Map<string, unknown>();
+
+/** 没有会话 id 时记在空键上，仅供工具侧解析（Web API 不读它，避免跨会话串用）。 */
 let lastAgent: unknown = undefined;
 
-/** 工具调用入口每轮记一次；只留最新的。 */
-export function noteSessionAgent(agent: unknown): void {
+/** 记一条会话的 agent；会话 id 为空时只更新兜底引用。 */
+export function noteSessionAgent(sessionId: string, agent: unknown): void {
   if (agent === undefined || agent === null) return;
   lastAgent = agent;
+  const key = sessionId.trim();
+  if (key === "") return;
+  agents.set(key, agent);
+  if (agents.size <= SESSION_LIMIT) return;
+  const oldest = agents.keys().next();
+  if (oldest.done !== true) agents.delete(oldest.value);
 }
 
-/** 供 Web API 的 workspace resolver 使用；没记录过返回 undefined。 */
+/** 按会话 id 取 agent；没有记录返回 undefined。 */
+export function agentOfSession(sessionId: string): unknown {
+  const key = sessionId.trim();
+  if (key === "") return undefined;
+  return agents.get(key);
+}
+
+/** 最近一次工具调用带来的 agent；工具侧解析工程目录时使用。 */
 export function lastSessionAgent(): unknown {
   return lastAgent;
+}
+
+/** 清空对照表（测试用）。 */
+export function resetSessionAgents(): void {
+  agents.clear();
+  lastAgent = undefined;
 }
