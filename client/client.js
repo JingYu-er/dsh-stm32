@@ -3619,7 +3619,14 @@ window.__ModuleLoader__.load({
           return next;
         });
       };
-      const tabButton = (key, label) =>
+      /* 未读失败角标（S65）：停在别的标签时也能看见又有几条失败。 */
+      const failCount = props.events.filter((item) => item.status === "fail").length;
+      const [failSeen, setFailSeen] = useState(0);
+      useEffect(() => {
+        if (tab === "channels" || tab === "faults") setFailSeen(failCount);
+      }, [tab, failCount]);
+      const unseenFails = Math.max(0, failCount - failSeen);
+      const tabButton = (key, label, badge) =>
         e(
           "button",
           {
@@ -3637,16 +3644,23 @@ window.__ModuleLoader__.load({
             },
           },
           label,
+          badge === undefined || badge === 0
+            ? null
+            : e(
+                "span",
+                { key: "badge", style: { marginLeft: "5px", padding: "0 5px", borderRadius: "999px", background: "#e8b339", color: "#1a1a1a", fontSize: "10px" } },
+                String(badge),
+              ),
         );
       const header = e(
         "div",
         { key: "tabs", style: { display: "flex", gap: "6px", padding: "6px 10px", borderBottom: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },
         tabButton("overview", DEBUG_LABELS.overview),
-        tabButton("channels", DEBUG_LABELS.channels),
+        tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("interrupts", DEBUG_LABELS.interrupts),
-        tabButton("faults", DEBUG_LABELS.faults),
+        tabButton("faults", DEBUG_LABELS.faults, unseenFails),
         tabButton("artifacts", DEBUG_LABELS.artifacts),
         tabButton("changes", DEBUG_LABELS.changes),
       );
