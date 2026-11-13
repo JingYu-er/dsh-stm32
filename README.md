@@ -531,8 +531,7 @@ docs/                      规格书 + 开发笔记 + 精读指南 + diagrams/�
 - [规格书](docs/dsh-stm32-plugin-规格.md)：工具契约、状态机、验收 A1–A13 的判定标准
 - [开发笔记](docs/development-notes.md)：里程碑、宿主契约踩坑、每个工具的实现细节与实测数据
 - [源码精读指南](docs/reading-guide.md)：分层阅读顺序、每个文件的职责与关键导出、14 张流程图、23 条不变量
-- [发布说明 0.1.5](docs/release-notes/v0.1.5.md)：串口 P1、寄存器 21 族、安装包下载与 P0/P1/P2 加固（0.1.4 及更早见 git 历史）
-- [调试台](docs/release-notes/v0.1.8.md)：主窗口面板的标签、数据面与验证口径（v0.1.8 发布）
+- 发布说明：按版本随发布页/对话提供，仓库不再保留 `docs/release-notes/`（历史版本见 git 历史与开发笔记）
 - 可视化：[架构总览](docs/diagrams/dsh-stm32-architecture.html) / [主线旅程](docs/diagrams/dsh-stm32-journey.html)（单文件 HTML，离线可开，可导出 PNG/SVG）
 
 ## 许可证

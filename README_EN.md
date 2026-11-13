@@ -502,7 +502,7 @@ docs/                      specification + development notes + reading guide + d
 - [Specification](docs/dsh-stm32-plugin-规格.md): tool contracts, state machine, acceptance criteria A1–A13
 - [Development notes](docs/development-notes.md): milestones, host-contract pitfalls, implementation details and measured numbers
 - [Source reading guide](docs/reading-guide.md): layered reading order, per-file responsibilities and exports, 14 flow diagrams, 23 invariants
-- [Release notes 0.1.5](docs/release-notes/v0.1.5.md): serial P1, the 21-family register route, installer downloads and P0/P1/P2 hardening (0.1.4 and earlier live in git history)
+- Release notes: provided per release (release page / conversation); the repo no longer keeps `docs/release-notes/` (history lives in git and the development notes)
 - Visuals: [architecture](docs/diagrams/dsh-stm32-architecture.html) / [main journey](docs/diagrams/dsh-stm32-journey.html) — single-file HTML, opens offline, exports PNG/SVG
 
 ## License
