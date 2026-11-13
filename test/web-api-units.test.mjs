@@ -484,16 +484,10 @@ test("没有显式 projectDir 时按会话工作目录兜底（S84）", async ()
 });
 
 test("工程类接口缺 projectDir 时回 400，不再回落到进程工作目录（S84）", async () => {
+  // 隔离备忘文件：否则同一台机器上「最近用过的工程」会让这里变成 200。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "s84-nomemo-"));
   for (const path of ["pinout", "clocks", "interrupts", "ioc-diff", "ioc-sync"]) {
-    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/" + path, query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
-    assert.equal(response.status, 400, path + " 缺 projectDir 应回 400");
-    assert.match(String(response.body.error), /projectDir 不能为空/u, path + " 的提示要说清缺什么");
-  }
-});
-
-test("工程类接口缺 projectDir 时回 400，不再回落到进程工作目录（S84）", async () => {
-  for (const path of ["pinout", "clocks", "interrupts", "ioc-diff", "ioc-sync"]) {
-    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/" + path, query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
+    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/" + path, query: {}, deps: { subprocess: fakeSubprocess, env: { DSH_STM32_HOME: home } } });
     assert.equal(response.status, 400, path + " 缺 projectDir 应回 400");
     assert.match(String(response.body.error), /projectDir 不能为空/u, path + " 的提示要说清缺什么");
   }
@@ -1271,4 +1265,16 @@ test("POST /debug/stop：没有会话时幂等返回 200，有会话时关掉并
   assert.equal(idle.body.debug.active, false);
   assert.equal(idle.body.debug.stopped, false);
   assert.match(String(idle.body.debug.message), /本来就没有会话/u);
+});
+
+test("没有显式 projectDir、也没有会话目录时退到最近一次用过的工程（S84）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memo-proj-"));
+  fs.writeFileSync(path.join(root, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Name=STM32F103C(8-B)Tx\n", "utf8");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "memo-home-"));
+  fs.writeFileSync(path.join(home, "last-workspace.txt"), root + "\n", "utf8");
+
+  setSessionWorkspaceResolver(null);
+  const res = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/pinout", query: {}, deps: { subprocess: fakeSubprocess, env: { DSH_STM32_HOME: home } } });
+  assert.equal(res.status, 200, "有备忘时应能解析到工程");
+  assert.equal(res.body.pinout.mcu.cpn, "STM32F103C8T6");
 });

@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S84）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S84b）
 
 ### 一、目标与约束
 
@@ -6759,7 +6759,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：tsc 0、build 0、**79 套件 / 1077 pass / 0 fail**（新增两条：缺 `projectDir` 回 400 且提示含「projectDir 不能为空」；注入 resolver 后 `/pinout` 回 200 并读出 `STM32F103C8T6`）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1972.2 KB / 293 文件 / 解包 15753.4 KB、`client/client.js` 4901 行。
 - 教训：**「省略参数」与「参数为空」是两件事**。前者该去问宿主要上下文，后者该被明确拒绝；用 `process.cwd()` 同时兜这两件事，等于把错误变成一个看起来合理的路径。
 
-### 八十八、教训
+### 八十八、工程目录的第三档：最近一次用过的工程（S84b）
+
+- 问题：S84 让工程类接口在缺 `projectDir` 时先问会话工作目录，实测 `/projects` 仍把 profile 目录当工作区——`workingDirectory.ensure(undefined)` 在没有 agent 时给不出目录，resolver 只能返回空串。
+- 做法：
+  - 新增 `src/engine/session-context.ts`：`noteSessionAgent(agent)` / `lastSessionAgent()`，只存最近一个 agent；`src/index.ts` 的 `session/event` 处理器每轮记一次（`session.agent`），`src/tools/project-dir.ts` 在工具入口也记一次。
+  - 新增 `src/engine/workspace-memo.ts`：`workspaceMemoPath`（默认 `~/.dsh-stm32/last-workspace.txt`，`DSH_STM32_HOME` 覆盖根）、`rememberWorkspace`（写失败静默）、`recallWorkspace`（读不到空串）。`resolveProjectDir` 定下目录后记一笔。
+  - `web-api` 的兜底链变成「显式 → 会话工作目录 → 最近一次用过的工程 → 空（400）」；`/projects` 的工作区根同样多一档 `memoDir`。
+- 验证：79→**80 套件 / 1080 pass / 0 fail**（新增 `workspace-memo-units` 3 条与 `/pinout` 走备忘的用例；两条重复的 S84 用例合并，并用临时 `DSH_STM32_HOME` 隔离，否则本机备忘会把 400 用例变成 200）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1973.4 KB / 295 文件 / 解包 15756.7 KB。
+- 教训：**兜底链要一档一档可验证**。加了「会话目录」这一档不等于拿得到它——resolver 拿不到的输入（agent）要显式补上，否则新档位永远命中不了。
+
+### 八十九、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

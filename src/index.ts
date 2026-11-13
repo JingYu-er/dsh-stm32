@@ -41,6 +41,7 @@ import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
 import { setSessionWorkspaceResolver } from "./engine/web-api.js";
+import { lastSessionAgent, noteSessionAgent } from "./engine/session-context.js";
 import { emitEvent } from "./engine/event-bus.js";
 import { startEventLog } from "./engine/event-log.js";
 import { instrumentContext } from "./engine/tool-events.js";
@@ -121,7 +122,8 @@ export function apply(ctx: DshContext): void {
       const service = ctx.get<WorkingDirectoryService>("workingDirectory");
       if (service === undefined || typeof service.ensure !== "function") return "";
       try {
-        return await service.ensure(undefined);
+        // Web API 没有 agent：用最近一次工具调用带来的 agent 去问宿主（S84）。
+        return await service.ensure(lastSessionAgent() as never);
       } catch {
         return "";
       }
@@ -144,6 +146,9 @@ export function apply(ctx: DshContext): void {
 
   if (typeof ctx.on === "function") {
     ctx.on("session/event", (session: unknown, event: { type?: string } | undefined) => {
+      // 记住这条会话的 agent：Web API 没有 agent，靠它向宿主换会话工作目录（S84）。
+      const sessionAgent = (session as { agent?: unknown } | undefined)?.agent;
+      noteSessionAgent(sessionAgent);
       if (event?.type !== "turn/end") return;
       // RTT 的 rtt server 依附同一个 openocd：会话关闭后该通道随之终止，本地状态不能继续
       // 报 running。先收 RTT 再收会话，顺序只影响日志好不好看。

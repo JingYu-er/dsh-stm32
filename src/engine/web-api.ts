@@ -35,6 +35,7 @@ import {
   type DebugEvent,
 } from "./event-bus.js";
 import { evidencePolicy, evidenceRoot, pruneEvidence } from "./event-log.js";
+import { recallWorkspace } from "./workspace-memo.js";
 import { readProjectConf, readWorkspaceIndex, scanWorkspaceProjects } from "./project-conf.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
@@ -659,10 +660,13 @@ export async function handleWebApi(input: {
       sessionDir = "";
     }
   }
-  /** 显式给了就用显式的，否则退到会话工作目录（S84）。 */
+  // 兜底顺序（S84）：显式 projectDir → 会话工作目录 → 最近一次工具用过的工程 → 空（由路由回 400）。
+  const memoDir = recallWorkspace(envOf(input.deps));
   const withProject = (raw: string): string => {
     const trimmed = raw.trim();
-    return trimmed !== "" ? trimmed : sessionDir;
+    if (trimmed !== "") return trimmed;
+    if (sessionDir !== "") return sessionDir;
+    return memoDir;
   };
   const query = input.query ?? {};
   const needsBody =
@@ -835,7 +839,7 @@ export async function handleWebApi(input: {
     const projectParam = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
     const workspaceRoot = rootParam !== ""
       ? rootParam
-      : (projectParam !== "" ? dirname(resolve(projectParam)) : (sessionDir !== "" ? sessionDir : process.cwd()));
+      : (projectParam !== "" ? dirname(resolve(projectParam)) : (sessionDir !== "" ? sessionDir : (memoDir !== "" ? memoDir : process.cwd())));
     const index = readWorkspaceIndex(workspaceRoot);
     const scanned = scanWorkspaceProjects(workspaceRoot);
     const seen = new Set(index.projects.map((item) => item.dir));

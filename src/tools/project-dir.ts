@@ -13,6 +13,8 @@
  */
 
 import type { DshContext, ToolExec, WorkingDirectoryService } from "../types.js";
+import { noteSessionAgent } from "../engine/session-context.js";
+import { rememberWorkspace } from "../engine/workspace-memo.js";
 
 export interface ProjectDirResolution {
   projectDir: string;
@@ -38,8 +40,12 @@ export async function resolveProjectDir(
   explicit: string | undefined,
   exec?: ToolExec,
 ): Promise<ProjectDirResolution> {
+  noteSessionAgent(exec?.agent);
   const given = usableDir(explicit);
-  if (given !== null) return { projectDir: given, note: null, fallbackToProcessCwd: false };
+  if (given !== null) {
+    rememberWorkspace(given);
+    return { projectDir: given, note: null, fallbackToProcessCwd: false };
+  }
 
   let failure: string | null = null;
   const service = typeof ctx.get === "function" ? ctx.get<WorkingDirectoryService>("workingDirectory") : undefined;
@@ -47,6 +53,7 @@ export async function resolveProjectDir(
     try {
       const sessionDir = usableDir(await service.ensure(exec?.agent, exec?.signal));
       if (sessionDir !== null) {
+        rememberWorkspace(sessionDir);
         return {
           projectDir: sessionDir,
           note: "工程目录缺省取会话工作目录：" + sessionDir,
