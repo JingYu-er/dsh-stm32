@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S79）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S80）
 
 ### 一、目标与约束
 
@@ -6705,7 +6705,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node --check` 与 build 0、**79 套件 / 1065 pass / 0 fail**（client-debug-units 断言两个按钮文案同时存在）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1966.2 KB / 292 文件 / 解包 15728.3 KB、client 4812 行。
 - 教训：**叠加筛选要说出口**。筛选器自己不会让数据消失，但用户看到的条目变少时，第一反应是「是不是坏了」。
 
-### 八十三、教训
+### 八十三、增量构建的占用兜底（S80）
+
+- 问题：`cmake --build` 报「ninja: no work to do」时没有链接动作，链接器不打印 FLASH/RAM，面板的内存条是空的。界面看起来像坏了，实际只是「这次没量」。
+- 做法：`src/engine/build.ts` 在「构建成功 + 有 elf + 日志里没有占用」时，用同一套 binDirs 找 `arm-none-eabi-size`，对现成 elf 量一次（`--format=berkeley` 的 `text data bss`），把 `text + data` 记作 FLASH、`data + bss` 记作 RAM；总量取器件事实 `findChipFact(readIocCpn(projectDir))` 的 `flashBytes` / `ramBytes`，没有事实就不硬编总量、退回原来的提示。`parseBerkeleySize` 单独导出可单测。
+- 两个边界：只在构建成功时量（失败构建的 elf 可能是旧的）；`size` 找不到或输出认不出就静默退回原提示，不把构建判失败——占用是附加信息，不是构建结论。
+- 验证：tsc 0、build 0、**79 套件 / 1066 pass / 0 fail**（build-units 加 `parseBerkeleySize` 一条）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1967.1 KB / 292 文件 / 解包 15731.2 KB。真机「无改动构建」的占用仍需重启 DSH 后点一次构建确认。
+- 教训：**「没有数据」要区分「没发生」与「没采集」**。增量构建属于后者，用现成产物补一次采集，比让用户去点「清理构建」便宜得多。
+
+### 八十四、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

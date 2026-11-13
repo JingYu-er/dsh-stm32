@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 
-import { countWarnings, detectBuildDir, findElf, parseBuildErrors, parseMemoryUsage } from "../lib/engine/build.js";
+import { countWarnings, detectBuildDir, findElf, parseBerkeleySize, parseBuildErrors, parseMemoryUsage } from "../lib/engine/build.js";
 
 import { FIXTURE_PROJECT as DEMO } from "./fixtures.mjs";
 
@@ -61,6 +61,16 @@ test("findElf 找到与构建目录同名的 .elf", () => {
 test("不存在的目录：detectBuildDir/findElf 返回 null", () => {
   assert.equal(detectBuildDir("D:/definitely-not-here"), null);
   assert.equal(findElf("D:/definitely-not-here"), null);
+});
+
+test("parseBerkeleySize：增量构建时量 elf 的 text/data/bss（S80）", () => {
+  const text = [
+    "   text\t   data\t    bss\t    dec\t    hex\tfilename",
+    "   3852\t    984\t   1584\t   6420\t   1914\tdemo.elf",
+  ].join("\n");
+  assert.deepEqual(parseBerkeleySize(text), { text: 3852, data: 984, bss: 1584 });
+  assert.equal(parseBerkeleySize("no numbers here"), null, "认不出就给 null");
+  assert.equal(parseBerkeleySize(""), null);
 });
 
 let failed = 0;
