@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十三条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 43);
-  assert.equal(new Set(WEB_API_PATHS).size, 43);
+test("WEB_API_PATHS：四十四条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 44);
+  assert.equal(new Set(WEB_API_PATHS).size, 44);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -281,6 +281,7 @@ test("WEB_API_PATHS：四十三条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence/prune"), true, "证据保留策略必须能手动触发");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-keys"), true, "引脚页必须能看该脚在 .ioc 里的键");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff/restore-all"), true, "变更页必须能一次恢复全部差异");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/stop"), true, "面板必须能关闭调试会话");
 });
 
 test("GET /ioc-keys：读引脚的 .ioc 键，缺参数与缺 .ioc 各自报错", async () => {
@@ -1185,4 +1186,14 @@ test("POST /ioc-diff/restore-all：没有差异时回空清单，有差异时写
   const noBaseline = await handleWebApi({ method: "POST", path: WEB_API_PREFIX + "/ioc-diff/restore-all", query: {}, body: JSON.stringify({ projectDir: fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-restoreall-empty-")) }), deps });
   assert.equal(noBaseline.status, 409);
   assert.match(noBaseline.body.error, /基线|没有 \.ioc/u);
+});
+
+test("POST /debug/stop：没有会话时幂等返回 200，有会话时关掉并释放", async () => {
+  resetDebugSessionsForTest();
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const idle = await handleWebApi({ method: "POST", path: WEB_API_PREFIX + "/debug/stop", query: {}, body: "{}", deps });
+  assert.equal(idle.status, 200);
+  assert.equal(idle.body.debug.active, false);
+  assert.equal(idle.body.debug.stopped, false);
+  assert.match(String(idle.body.debug.message), /本来就没有会话/u);
 });

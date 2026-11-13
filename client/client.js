@@ -1224,6 +1224,7 @@ window.__ModuleLoader__.load({
     /** 调试会话摘要：只读呈现 /debug 的结果，不触发探针动作。 */
     function SessionCard(props) {
       const [copyNote, setCopyNote] = useState("");
+      const [closing, setClosing] = useState(false);
       const debug = props.debug ?? null;
       const error = props.error ?? "";
       const quota = (value) => (value !== null && typeof value === "object" && value.used !== undefined ? String(value.used) + "/" + String(value.budget) : "—");
@@ -1291,6 +1292,12 @@ window.__ModuleLoader__.load({
             ),
           );
         }
+        const closeSession = async () => {
+          setClosing(true);
+          const result = await props.onClose?.();
+          setClosing(false);
+          if (result !== undefined) setCopyNote(result);
+        };
         body.push(
           e(
             "div",
@@ -1303,6 +1310,16 @@ window.__ModuleLoader__.load({
                 onClick: () => props.onTouch?.(),
               },
               "续期",
+            ),
+            e(
+              "button",
+              {
+                style: Object.assign({}, debugStyles.button, { color: "#e8b339" }),
+                title: "关闭调试会话，释放 gdb、openocd 与探针；观察点会一起清空",
+                disabled: closing === true,
+                onClick: () => void closeSession(),
+              },
+              closing === true ? "关闭中…" : "关闭会话",
             ),
             props.touchMessage === ""
               ? null
@@ -3445,6 +3462,18 @@ window.__ModuleLoader__.load({
           debugInfo.reload();
         }
       };
+      const closeSession = async () => {
+        const result = await callApi("POST", "debug/stop", {});
+        if (!result.ok) {
+          setTouchMessage("关闭失败：" + result.error);
+          return "关闭失败：" + result.error;
+        }
+        const debug = result.value?.debug ?? {};
+        const note = debug.stopped === true ? "已关闭会话，探针已释放" : String(debug.message ?? "本来就没有会话");
+        setTouchMessage(note);
+        debugInfo.reload();
+        return note;
+      };
       const taps = useChannelTaps(3000);
       const serialState = useSerialState(4000);
       const recording = useWatchRecording(3000);
@@ -3505,7 +3534,7 @@ window.__ModuleLoader__.load({
             : tab === "changes"
             ? [e(IocDiffPanel, { key: "changes", projectDir: projectDir })]
             : [
-              e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error, onTouch: touchSession, touchMessage: touchMessage }),
+              e(SessionCard, { key: "session", debug: debugInfo.debug, error: debugInfo.error, onTouch: touchSession, touchMessage: touchMessage, onClose: closeSession }),
               e(ProbeCard, { key: "probe-card" }),
               e(SerialCard, { key: "serial-card", serial: serialState.serial, error: serialState.error, onChanged: serialState.reload }),
               e(BuildCard, { key: "build-card", projectDir: projectDir }),

@@ -471,6 +471,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/watch-recording/stop",
   WEB_API_PREFIX + "/serial/send",
   WEB_API_PREFIX + "/debug/touch",
+  WEB_API_PREFIX + "/debug/stop",
   WEB_API_PREFIX + "/interrupts",
   WEB_API_PREFIX + "/interrupts/priority",
   WEB_API_PREFIX + "/ioc-sync",
@@ -1017,6 +1018,11 @@ export async function handleWebApi(input: {
     // 续租：只重置空闲计时，总时长上限不变（面板轮询不该无限延长一次调试）。
     if (!debugSessions.touch()) return fail(409, "当前没有调试会话（先开 stm32_debug_session）");
     return ok({ debug: debugSessions.status() });
+  }
+  if (path === WEB_API_PREFIX + "/debug/stop") {
+    // 人在面板上关会话：释放 gdb/openocd 与探针；没有会话时也返回 200（关闭是幂等的）。
+    const stopped = await debugSessions.stop("面板关闭");
+    return ok({ debug: { ...debugSessions.status(), stopped: stopped.stopped, message: stopped.message } });
   }
   if (path === WEB_API_PREFIX + "/serial") {
     // 面板上的串口卡片：人自己开会话，不必先让 AI 调 stm32_serial。
