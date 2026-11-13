@@ -164,6 +164,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("exportFaultsCsv"), "失败事件要能导出 CSV");
     assert.ok(source.includes("unseenFails"), "失败未读角标要能看见");
     assert.ok(source.includes("overLimit"), "时钟页要标出超限频率");
+    assert.ok(source.includes("exportWatchCsv"), "监视采样明细要能导出 CSV");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
