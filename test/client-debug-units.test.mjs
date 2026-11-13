@@ -170,8 +170,11 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("function ClockFlow("), "时钟图模式必须真有组件实现（S76）");
     assert.ok(source.includes("d32-page"), "面板根节点要挂样式类（S85）");
     assert.ok(source.includes("ensureDebugStyleTag"), "样式表只注入一次（S85）");
-    assert.ok(source.includes("--dsw-alias-button-primary-fill"), "面板配色改用宿主设计令牌（S88）");
-    assert.ok(source.includes("D32_WARN"), "强调色不再写死 #e8b339（S88）");
+    assert.ok(source.includes("--d32-accent") && source.includes("--dsw-alias-state-business-primary"), "强调色取宿主令牌并落到 --d32-accent（S89）");
+    assert.ok(source.includes("D32_WARN"), "警告色不再写死 #e8b339（S88）");
+    assert.ok(source.includes("D32_LABEL_MONO") && source.includes("textTransform: \"uppercase\""), "小标走等宽大写（S89）");
+    assert.ok(source.includes("data-active=") && source.includes("border-bottom-color: var(--d32-accent)"), "选中页签用下划线而不是填充（S89）");
+    assert.ok(!source.includes("boxShadow: \"var(--dsw-shadow-lv1)\""), "面板不再套卡片阴影（S89）");
     assert.ok(source.includes("d32-events"), "时间线与详情合并成一个「事件」页签（S86）");
     assert.ok(source.includes("DEBUG_LABELS.detail") && source.includes("事件详情"), "事件详情仍是独立组件（S86）");
     assert.ok(source.includes("exportFaultsCsv"), "失败事件要能导出 CSV");
