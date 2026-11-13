@@ -118,6 +118,8 @@ test("readClockTree：F1 @72 MHz 不超限，ADC 36 MHz 超过 14 MHz 受限（S
   assert.equal(byLabel.get("PCLK1 / APB1").overLimit, false, "36 MHz 正好是上限，不算超");
   assert.equal(byLabel.get("PCLK2 / APB2").overLimit, false);
   assert.equal(byLabel.get("ADC").overLimit, true, "ADC 36 MHz 超过 14 MHz 上限");
+  assert.match(String(byLabel.get("ADC").suggest), /÷\d/u, "ADC 超限要给分频建议");
+  assert.equal(byLabel.get("PCLK1 / APB1").suggest, "", "未超限不给建议");
   assert.equal(byLabel.get("ADC").limitHz, 14_000_000);
   assert.equal(byLabel.get("SYSCLK").limitHz, null, "SYSCLK 上限不在总线上限表里，不给判断");
 });
