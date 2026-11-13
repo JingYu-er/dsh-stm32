@@ -668,50 +668,61 @@ window.__ModuleLoader__.load({
     const DEBUG_EVENT_CAP = 2000;
     const DEBUG_RECONNECT_MS = 1500;
 
+    /**
+     * 视觉令牌对齐宿主「编队」页（S88）：一律取 `--dsw-alias-*` 设计变量，
+     * 深浅色由宿主切换，面板不再自己写死 #e8b339 这类颜色。
+     */
+    const D32_FONT_CODE = "var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)";
+    /** 强调/警告色：宿主 light/dark 各自有对应值（S88）。 */
+    const D32_WARN = "var(--dsw-alias-state-warn-primary)";
     const debugStyles = {
       page: {
         display: "flex",
         flexDirection: "column",
         height: "100%",
         minHeight: "420px",
-        gap: "10px",
-        padding: "12px 14px 14px",
-        color: "inherit",
-        fontSize: "12px",
-        lineHeight: "1.55",
+        gap: "8px",
+        padding: "8px 10px 10px",
+        color: "var(--dsw-alias-label-primary)",
+        fontSize: "13px",
+        lineHeight: "1.5",
         boxSizing: "border-box",
       },
       statusBar: {
         display: "flex",
         alignItems: "center",
         gap: "10px",
-        padding: "8px 12px",
-        border: "1px solid color-mix(in srgb, currentColor 14%, transparent)",
+        padding: "7px 12px",
+        border: "1px solid var(--dsw-alias-border-l2)",
         borderRadius: "10px",
-        background: "color-mix(in srgb, currentColor 3%, transparent)",
+        background: "var(--dsw-alias-bg-layer-1)",
+        boxShadow: "var(--dsw-shadow-lv1)",
         flexWrap: "wrap",
       },
       chip: {
         display: "inline-flex",
         alignItems: "center",
-        gap: "6px",
-        padding: "2px 9px",
-        borderRadius: "999px",
-        border: "1px solid color-mix(in srgb, currentColor 16%, transparent)",
-        background: "color-mix(in srgb, currentColor 4%, transparent)",
-        opacity: 0.95,
+        gap: "5px",
+        padding: "1px 8px",
+        borderRadius: "6px",
+        border: "1px solid var(--dsw-alias-border-l2)",
+        background: "var(--dsw-alias-bg-layer-2)",
+        color: "var(--dsw-alias-label-secondary)",
+        fontSize: "11px",
+        lineHeight: "18px",
       },
-      dot: { width: "7px", height: "7px", borderRadius: "999px", background: "currentColor" },
+      dot: { width: "6px", height: "6px", borderRadius: "999px", background: "currentColor" },
       spacer: { flex: "1 1 auto" },
-      grid: { display: "flex", flex: "1 1 auto", gap: "0", minHeight: "0" },
+      grid: { display: "flex", flex: "1 1 auto", gap: "8px", minHeight: "0" },
       panel: {
         display: "flex",
         flexDirection: "column",
         minWidth: "0",
         minHeight: "0",
-        border: "1px solid color-mix(in srgb, currentColor 14%, transparent)",
+        border: "1px solid var(--dsw-alias-border-l2)",
         borderRadius: "10px",
-        background: "color-mix(in srgb, currentColor 2%, transparent)",
+        background: "var(--dsw-alias-bg-layer-1)",
+        boxShadow: "var(--dsw-shadow-lv1)",
         overflow: "hidden",
       },
       panelHead: {
@@ -719,58 +730,74 @@ window.__ModuleLoader__.load({
         alignItems: "center",
         gap: "8px",
         padding: "7px 12px",
-        borderBottom: "1px solid color-mix(in srgb, currentColor 10%, transparent)",
-        background: "color-mix(in srgb, currentColor 3%, transparent)",
+        borderBottom: "1px solid var(--dsw-alias-border-l2)",
+        background: "var(--dsw-alias-bg-layer-2)",
+        color: "var(--dsw-alias-label-primary)",
+        fontSize: "12px",
         fontWeight: 600,
         cursor: "default",
         userSelect: "none",
       },
       panelBody: { flex: "1 1 auto", overflow: "auto", minHeight: "0" },
-      divider: {
-        flex: "0 0 6px",
-        cursor: "col-resize",
-        background: "transparent",
-        position: "relative",
-      },
+      divider: { flex: "0 0 6px", cursor: "col-resize", background: "transparent", position: "relative" },
       row: {
         display: "flex",
         gap: "8px",
-        padding: "5px 12px",
+        padding: "6px 12px",
         cursor: "pointer",
-        borderBottom: "1px solid color-mix(in srgb, currentColor 6%, transparent)",
+        borderBottom: "0.5px solid var(--dsw-alias-border-l3)",
         alignItems: "baseline",
       },
-      rowTime: { opacity: 0.55, fontVariantNumeric: "tabular-nums", flex: "0 0 auto", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "11px" },
-      rowKind: { fontWeight: 600, flex: "0 0 auto", maxWidth: "132px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+      rowTime: {
+        color: "var(--dsw-alias-label-tertiary)",
+        fontVariantNumeric: "tabular-nums",
+        flex: "0 0 auto",
+        fontFamily: D32_FONT_CODE,
+        fontSize: "11px",
+      },
+      rowKind: {
+        color: "var(--dsw-alias-label-secondary)",
+        fontWeight: 600,
+        flex: "0 0 auto",
+        maxWidth: "132px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      },
       rowText: { flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-      empty: { padding: "20px 14px", opacity: 0.55, textAlign: "center" },
-      mono: { fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "11px" },
+      empty: { padding: "18px 14px", color: "var(--dsw-alias-label-tertiary)", textAlign: "center", fontSize: "12px" },
+      mono: { fontFamily: D32_FONT_CODE, fontSize: "11px" },
       pre: {
         margin: 0,
-        padding: "10px 12px",
+        padding: "9px 11px",
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
-        fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+        fontFamily: D32_FONT_CODE,
         fontSize: "11px",
         lineHeight: "1.6",
-        opacity: 0.92,
+        color: "var(--dsw-alias-label-secondary)",
+        background: "var(--dsw-alias-bg-layer-2)",
+        borderRadius: "6px",
       },
       input: {
-        padding: "4px 9px",
+        padding: "3px 8px",
         font: "inherit",
-        color: "inherit",
-        background: "color-mix(in srgb, currentColor 3%, transparent)",
-        border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
-        borderRadius: "8px",
+        fontSize: "12px",
+        color: "var(--dsw-alias-label-primary)",
+        background: "var(--dsw-alias-bg-layer-2)",
+        border: "1px solid var(--dsw-alias-border-l2)",
+        borderRadius: "6px",
         minWidth: "120px",
+        outline: "none",
       },
       button: {
         padding: "3px 10px",
         font: "inherit",
-        color: "inherit",
-        background: "color-mix(in srgb, currentColor 3%, transparent)",
-        border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
-        borderRadius: "8px",
+        fontSize: "12px",
+        color: "var(--dsw-alias-label-primary)",
+        background: "var(--dsw-alias-bg-layer-2)",
+        border: "1px solid var(--dsw-alias-border-l2)",
+        borderRadius: "6px",
         cursor: "pointer",
       },
       drawer: {
@@ -778,35 +805,36 @@ window.__ModuleLoader__.load({
         alignItems: "center",
         gap: "8px",
         padding: "7px 12px",
-        border: "1px dashed color-mix(in srgb, currentColor 16%, transparent)",
+        border: "1px dashed var(--dsw-alias-border-l3)",
         borderRadius: "10px",
+        background: "var(--dsw-alias-bg-layer-1)",
         flexWrap: "wrap",
       },
     };
 
     /**
-     * 面板的少量样式表（S85）：内联样式做不了 hover、焦点环与滚动条，
-     * 这些恰恰是「看起来像工具」的关键。全部挂在 .d32-page 下，不污染宿主页面。
+     * 面板样式表（S85 建、S88 对齐编队页）：内联样式做不了 hover、焦点环、
+     * 标签分段控件与滚动条，这些恰恰决定「看起来像不像宿主自己的页面」。
      */
     const DEBUG_CSS = [
       ".d32-page button, .d32-page input, .d32-page select { transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease; }",
-      ".d32-page button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 8%, transparent) !important; border-color: color-mix(in srgb, currentColor 26%, transparent) !important; }",
-      ".d32-page button:active:not(:disabled) { transform: translateY(1px); }",
-      ".d32-page button:focus-visible, .d32-page input:focus-visible, .d32-page select:focus-visible { outline: 2px solid color-mix(in srgb, #e8b339 70%, transparent); outline-offset: 1px; }",
+      ".d32-page button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover) !important; border-color: var(--dsw-alias-border-l3) !important; }",
+      ".d32-page button:active:not(:disabled) { background: var(--dsw-alias-interactive-bg-active) !important; }",
+      ".d32-page button:focus-visible, .d32-page input:focus-visible, .d32-page select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }",
       ".d32-page button:disabled { opacity: .45; cursor: default; }",
-      ".d32-page input:hover, .d32-page select:hover { border-color: color-mix(in srgb, currentColor 28%, transparent) !important; }",
-      ".d32-page input:focus, .d32-page select:focus { background: color-mix(in srgb, currentColor 6%, transparent) !important; }",
-      ".d32-tabs { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, canvas 70%, transparent); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: thin; }",
-      ".d32-tab { border-color: transparent !important; opacity: .72; }",
-      ".d32-tab:hover:not(:disabled) { opacity: 1; }",
-      ".d32-tab[data-active=\"1\"] { opacity: 1; font-weight: 600; background: color-mix(in srgb, currentColor 8%, transparent) !important; border-color: color-mix(in srgb, currentColor 16%, transparent) !important; box-shadow: inset 0 -2px 0 #e8b339; }",
-      ".d32-row:hover { background: color-mix(in srgb, currentColor 5%, transparent) !important; }",
-      ".d32-row[data-status=\"fail\"] { box-shadow: inset 2px 0 0 #e5484d; }",
-      ".d32-row[data-status=\"ok\"] { box-shadow: inset 2px 0 0 color-mix(in srgb, #3fb950 75%, transparent); }",
-      ".d32-row[data-status=\"start\"] { box-shadow: inset 2px 0 0 color-mix(in srgb, #4a9eff 75%, transparent); }",
+      ".d32-page input:hover, .d32-page select:hover { border-color: var(--dsw-alias-border-l3) !important; }",
+      ".d32-page input:focus, .d32-page select:focus { border-color: var(--dsw-alias-state-business-primary) !important; }",
+      ".d32-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: thin; }",
+      ".d32-tab { border-color: transparent !important; background: transparent !important; color: var(--dsw-alias-label-secondary); border-radius: 6px !important; }",
+      ".d32-tab:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover) !important; color: var(--dsw-alias-label-primary); }",
+      ".d32-tab[data-active=\"1\"] { background: var(--dsw-alias-button-primary-fill) !important; color: var(--dsw-alias-label-primary-foreground) !important; font-weight: 500; }",
+      ".d32-row:hover { background: var(--dsw-alias-interactive-bg-hover) !important; }",
+      ".d32-row[data-status=\"fail\"] { box-shadow: inset 2px 0 0 var(--dsw-alias-state-error-primary); }",
+      ".d32-row[data-status=\"ok\"] { box-shadow: inset 2px 0 0 var(--dsw-alias-state-success-primary); }",
+      ".d32-row[data-status=\"start\"] { box-shadow: inset 2px 0 0 var(--dsw-alias-state-business-primary); }",
       ".d32-page ::-webkit-scrollbar { width: 9px; height: 9px; }",
-      ".d32-page ::-webkit-scrollbar-thumb { background: color-mix(in srgb, currentColor 20%, transparent); border-radius: 5px; }",
-      ".d32-page ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, currentColor 32%, transparent); }",
+      ".d32-page ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 50%, transparent); border-radius: 5px; }",
+      ".d32-page ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--dsw-alias-label-secondary) 60%, transparent); }",
       ".d32-page ::-webkit-scrollbar-track { background: transparent; }",
     ].join("\n");
 
@@ -1006,7 +1034,7 @@ window.__ModuleLoader__.load({
           : e(
             "span",
             {
-              style: Object.assign({}, debugStyles.chip, staleLib ? { color: "#e8b339" } : {}),
+              style: Object.assign({}, debugStyles.chip, staleLib ? { color: D32_WARN } : {}),
               title:
                 "插件 v" + self.version + " · " + String(self.routeCount) + " 条路由\nlib 构建 " + clockText(self.libMtimeMs) +
                 "\n进程启动 " + clockText(self.startedAt) +
@@ -1103,7 +1131,7 @@ window.__ModuleLoader__.load({
                 return e(
                   "span",
                   {
-                    style: Object.assign({}, debugStyles.rowTime, timing.slow ? { color: "#e8b339", opacity: 1 } : { opacity: 0.55 }),
+                    style: Object.assign({}, debugStyles.rowTime, timing.slow ? { color: D32_WARN, opacity: 1 } : { opacity: 0.55 }),
                     title: timing.slow ? "超过 " + String(TOOL_SLOW_MS / 1000) + " 秒的调用" : "本次调用耗时",
                   },
                   (timing.slow ? "慢 " : "") + durationText(timing.ms),
@@ -1182,7 +1210,7 @@ window.__ModuleLoader__.load({
       return e(
         "div",
         { style: { padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: "2px" } },
-        e("div", { style: { opacity: 0.65, color: "#e8b339" } }, "编译警告（" + String(warnings.length) + "）"),
+        e("div", { style: { opacity: 0.65, color: D32_WARN } }, "编译警告（" + String(warnings.length) + "）"),
         warnings.map((line, index) => {
           const parsed = parseCompileError(line);
           return e(
@@ -1424,7 +1452,7 @@ window.__ModuleLoader__.load({
             e(
               "button",
               {
-                style: Object.assign({}, debugStyles.button, { color: "#e8b339" }),
+                style: Object.assign({}, debugStyles.button, { color: D32_WARN }),
                 title: "关闭调试会话，释放 gdb、openocd 与探针；观察点会一起清空",
                 disabled: closing === true,
                 onClick: () => void closeSession(),
@@ -2276,7 +2304,7 @@ window.__ModuleLoader__.load({
             e("span", { style: { opacity: 0.55 }, title: "复制形如 PA9 USART1_TX 的引用，可直接贴进对话" }, "点行复制引用"),
             sync === null
               ? null
-              : e("span", { title: sync.message, style: sync.stale === true ? { color: "#e8b339" } : { opacity: 0.7 } },
+              : e("span", { title: sync.message, style: sync.stale === true ? { color: D32_WARN } : { opacity: 0.7 } },
                   sync.stale === true ? "待重新生成" : "已同步"),
           ),
         );
@@ -2674,11 +2702,11 @@ window.__ModuleLoader__.load({
             ),
             e(
               "span",
-              { style: { flex: "0 0 84px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: node.overLimit === true ? "#e8b339" : "inherit", fontWeight: node.overLimit === true ? 600 : 400 } },
+              { style: { flex: "0 0 84px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: node.overLimit === true ? D32_WARN : "inherit", fontWeight: node.overLimit === true ? 600 : 400 } },
               mhzText(node.hz) + (node.overLimit === true ? " 超" : ""),
             ),
             node.overLimit === true && typeof node.suggest === "string" && node.suggest !== ""
-              ? e("span", { style: { flex: "1 1 auto", fontSize: "11px", color: "#e8b339", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: "按手册上限给出的分频建议；改配置仍走 stm32_ioc_plan" }, node.suggest)
+              ? e("span", { style: { flex: "1 1 auto", fontSize: "11px", color: D32_WARN, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: "按手册上限给出的分频建议；改配置仍走 stm32_ioc_plan" }, node.suggest)
               : null,
           );
         }),
@@ -2728,7 +2756,7 @@ window.__ModuleLoader__.load({
                 flex: "0 0 84px",
                 textAlign: "right",
                 fontVariantNumeric: "tabular-nums",
-                color: node.overLimit === true ? "#e8b339" : "inherit",
+                color: node.overLimit === true ? D32_WARN : "inherit",
                 fontWeight: node.overLimit === true ? 600 : 400,
               },
               title: node.overLimit === true ? "超过手册上限 " + mhzText(node.limitHz) : "",
@@ -2744,7 +2772,7 @@ window.__ModuleLoader__.load({
             ? e(
                 "span",
                 {
-                  style: { flex: "1 1 auto", fontSize: "11px", color: "#e8b339", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+                  style: { flex: "1 1 auto", fontSize: "11px", color: D32_WARN, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
                   title: "按手册上限给出的分频建议；改配置仍走 stm32_ioc_plan",
                 },
                 node.suggest,
@@ -2768,7 +2796,7 @@ window.__ModuleLoader__.load({
                 clocks.limits.family + " 上限 APB1 " + mhzText(clocks.limits.apb1Hz) + " · APB2 " + mhzText(clocks.limits.apb2Hz) + " · ADC " + mhzText(clocks.limits.adcHz),
               ),
           (nodes.some((node) => node.overLimit === true)
-            ? e("span", { style: { color: "#e8b339", fontWeight: 600 } }, "有 " + String(nodes.filter((node) => node.overLimit === true).length) + " 路超限")
+            ? e("span", { style: { color: D32_WARN, fontWeight: 600 } }, "有 " + String(nodes.filter((node) => node.overLimit === true).length) + " 路超限")
             : null),
           e("span", { style: { flex: "1 1 auto" } }),
           e("button", { type: "button", onClick: () => setMode("table"), style: Object.assign({}, debugStyles.button, mode === "table" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "表"),
@@ -3179,7 +3207,7 @@ window.__ModuleLoader__.load({
           const same = latest.sha === previous.sha;
           return e(
             "div",
-            { key: "build-diff", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.85, color: same ? "inherit" : "#e8b339" } },
+            { key: "build-diff", style: { paddingTop: "4px", fontSize: "12px", opacity: 0.85, color: same ? "inherit" : D32_WARN } },
             (same ? "与上次构建相同（#" : "与上次构建不同（#") + String(previous.seq) + " " + clockText(previous.time) + "）",
           );
         })(),
@@ -4081,7 +4109,7 @@ window.__ModuleLoader__.load({
             ? null
             : e(
                 "span",
-                { key: "badge", style: { marginLeft: "5px", padding: "0 5px", borderRadius: "999px", background: "#e8b339", color: "#1a1a1a", fontSize: "10px" } },
+                { key: "badge", style: { marginLeft: "5px", padding: "0 5px", borderRadius: "999px", background: D32_WARN, color: "var(--dsw-alias-label-primary-foreground)", fontSize: "10px" } },
                 String(badge),
               ),
         );
@@ -4746,8 +4774,8 @@ window.__ModuleLoader__.load({
                   padding: "4px 8px",
                   fontSize: "12px",
                   borderRadius: "6px",
-                  background: "color-mix(in srgb, #e8b339 14%, transparent)",
-                  border: "1px solid color-mix(in srgb, #e8b339 45%, transparent)",
+                  background: "color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent)",
                 },
               },
               e(

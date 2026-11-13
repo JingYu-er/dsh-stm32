@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S87）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S88）
 
 ### 一、目标与约束
 
@@ -6826,7 +6826,16 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`tsc` 0、build 0、**80 套件 / 1088 pass / 0 fail**（clocks-units 9 pass，含 `suggestFix` 三条直接断言）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1977.4 KB / 295 文件 / 解包 15767.1 KB；真机工程 `readClockTree` 输出即「工程没有启用 ADC，这条不影响运行；启用时把 ADC 预分频改成 ÷6（12 MHz）」。
 - 教训：**建议的准确性取决于基准选对没有**。给「除以几」时，先问这个分频器除的是哪一路时钟；拿结果频率再去除，只会得出看着合理、实际配不出来的档位。
 
-### 九十五、教训
+### 九十五、面板视觉对齐「编队」页（S88）
+
+- 问题：S85 的视觉优化仍是「自成一套」——警告色写死 `#e8b339`、边框用 `currentColor` 混色、没有卡片阴影。放在宿主页面里像外挂面板。
+- 取证：编队页由 `dsh-context/lib/client.js` 提供（`conversation.view` 的 `id:"fleet"`），样式全部取宿主设计令牌：卡片 `--dsw-alias-bg-layer-1` + `--dsw-alias-border-l2` + `border-radius:10px`，根字号 13px，分段控件 `--dsw-alias-bg-layer-2`，选中项 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-foreground`，hover `--dsw-alias-interactive-bg-hover`，细线用 `.5px`。
+- 做法：`debugStyles` 全量换令牌（背景分层、边框 l1–l4、文字 primary/secondary/tertiary、等宽字体 `--ds-font-family-code`、卡片阴影 `--dsw-shadow-lv1`）；`DEBUG_CSS` 里标签条做成分段控件（`bg-layer-2` + padding 2 + gap 2），选中标签用主按钮填充色，行状态色改用 `--dsw-alias-state-error/success/business-primary`；`#e8b339` 收敛成一个常量 `D32_WARN = var(--dsw-alias-state-warn-primary)`，徽标文字色改用 `label-primary-foreground`。
+- 为什么保留 `d32-*` 类名：57 处 `debugStyles.button` 的调用点不动，类名只承载 hover/焦点/分段这些内联做不到的部分。
+- 验证：`node --check` 与 build 0、**80 套件 / 1088 pass / 0 fail**（`serial-units` 偶发 1 条失败、重跑全绿，判为 PowerShell 桥时序）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1978.3 KB / 295 文件 / 解包 15769.2 KB。
+- 教训：**「像宿主自己的页面」比「有设计感」重要**。抄令牌而不是抄色值，主题切换时才不会掉链子。
+
+### 九十六、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
