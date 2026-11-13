@@ -182,6 +182,14 @@ export function writeProjectConf(
 export function scanWorkspaceProjects(workspaceRoot: string, maxDepth = 2): WorkspaceProject[] {
   const root = resolveWorkspaceRoot(workspaceRoot);
   const found: WorkspaceProject[] = [];
+  // 工作区根自己就是工程时也要列出来（S84）：宿主把会话工作目录当工作区根，通常正是工程目录。
+  try {
+    if (readdirSync(root, { withFileTypes: true }).some((item) => item.isFile() && (item.name.endsWith(".ioc") || item.name === "CMakeLists.txt"))) {
+      found.push({ name: basename(root), dir: root, exists: true });
+    }
+  } catch {
+    /* 根不存在就只报扫描结果 */
+  }
   const walk = (dir: string, depth: number): void => {
     if (depth > maxDepth) return;
     let entries: string[];

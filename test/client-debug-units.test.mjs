@@ -180,6 +180,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("DEBUG_PROJECT_KEY"), "工程选择要按会话记住");
     assert.ok(source.includes("function useProjects("), "面板要读工程索引");
     assert.ok(source.includes("已载入最近一份历史记录"), "打开面板时应自动载入最近证据");
+    assert.ok(source.includes("fallbackProjectDir"), "没有会话时要退到工作区里的第一个工程");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;

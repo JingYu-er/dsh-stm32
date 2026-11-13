@@ -40,12 +40,13 @@ import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
 import { registerWebRoutes } from "./engine/web-routes.js";
+import { setSessionWorkspaceResolver } from "./engine/web-api.js";
 import { emitEvent } from "./engine/event-bus.js";
 import { startEventLog } from "./engine/event-log.js";
 import { instrumentContext } from "./engine/tool-events.js";
 import { stopChannelTaps } from "./engine/channel-tap.js";
 import { watchRecorder } from "./engine/watch-record.js";
-import type { DshContext } from "./types.js";
+import type { DshContext, WorkingDirectoryService } from "./types.js";
 
 export const name = "dsh-stm32";
 export const inject = ["tools", "subprocess", "jobs"];
@@ -114,6 +115,18 @@ export function apply(ctx: DshContext): void {
   registerSerial(toolsCtx);
   // 设置面板的宿主 API（浏览器端 lib/client.js 用）。宿主没 webServer 服务时静默跳过。
   registerWebRoutes(toolsCtx);
+  // 面板没传 projectDir 时按会话工作目录兜底（S84）：宿主没这个服务就留空，接口回 400 说明原因。
+  if (typeof ctx.get === "function") {
+    setSessionWorkspaceResolver(async () => {
+      const service = ctx.get<WorkingDirectoryService>("workingDirectory");
+      if (service === undefined || typeof service.ensure !== "function") return "";
+      try {
+        return await service.ensure(undefined);
+      } catch {
+        return "";
+      }
+    });
+  }
 
   // 斜杠命令与 SKILL 是"锦上添花"的层：宿主没组合 commands / skills 服务时静默跳过，
   // 工具本身照常可用（用 ctx.inject 而不是顶层 inject，避免整个插件因缺服务不加载）。

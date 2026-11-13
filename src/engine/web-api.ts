@@ -52,7 +52,7 @@ import { readArtifacts } from "./artifacts.js";
 import { decodeFault, groupFaults } from "./fault-hints.js";
 import { readIocDiff, readIocKeysForPin, restoreAllIocKeys, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
 import type { SubprocessService } from "../types.js";
 
@@ -413,6 +413,18 @@ export function installStart(payload: Record<string, unknown>, deps: WebApiDeps)
 /* ---------------------------- 分发 ---------------------------- */
 
 export const WEB_API_PREFIX = "/dsh-stm32/api";
+/** 工程类接口缺 projectDir 时的统一提示：不再回落到进程工作目录（S84）。 */
+const PROJECT_DIR_REQUIRED = "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话";
+
+/**
+ * 会话工作目录解析器（S84）：宿主 `workingDirectory` 服务由 `src/index.ts` 注入。
+ * 面板没传 projectDir 时先问它，避免把插件进程的 profile 目录当成工程。
+ */
+let sessionWorkspaceResolver: (() => Promise<string>) | null = null;
+
+export function setSessionWorkspaceResolver(resolver: (() => Promise<string>) | null): void {
+  sessionWorkspaceResolver = resolver;
+}
 
 /** 模块加载时刻：用来判断运行中的进程是不是本次构建后的实例。 */
 const PLUGIN_STARTED_AT = Date.now();
@@ -639,6 +651,19 @@ export async function handleWebApi(input: {
 }): Promise<WebJson> {
   const method = input.method.toUpperCase();
   const path = input.path.replace(/\/+$/u, "");
+  let sessionDir = "";
+  if (sessionWorkspaceResolver !== null) {
+    try {
+      sessionDir = (await sessionWorkspaceResolver()).trim();
+    } catch {
+      sessionDir = "";
+    }
+  }
+  /** 显式给了就用显式的，否则退到会话工作目录（S84）。 */
+  const withProject = (raw: string): string => {
+    const trimmed = raw.trim();
+    return trimmed !== "" ? trimmed : sessionDir;
+  };
   const query = input.query ?? {};
   const needsBody =
     path !== WEB_API_PREFIX + "/config" &&
@@ -731,7 +756,8 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/source") {
     // 源码片段：只读工程目录内的文件，给「文件:行」补上下文。
-    const projectDir = typeof query["projectDir"] === "string" ? query["projectDir"] : process.cwd();
+    const projectDir = withProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const file = typeof query["file"] === "string" ? query["file"] : "";
     const line = Number.parseInt(typeof query["line"] === "string" ? query["line"] : "", 10);
     const context = Number.parseInt(typeof query["context"] === "string" ? query["context"] : "3", 10);
@@ -765,9 +791,10 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/build") {
     // 人在面板上点构建：不经过模型，但结果按同一种事件写进时间线。
-    const projectDir = typeof parsed.value.projectDir === "string" && parsed.value.projectDir.trim() !== ""
-      ? parsed.value.projectDir.trim()
-      : process.cwd();
+    const projectDir = withProject(typeof parsed.value.projectDir === "string"
+      ? parsed.value.projectDir
+      : "");
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const clean = parsed.value.clean === true;
     const target = typeof parsed.value.target === "string" ? parsed.value.target : undefined;
     const artifacts = Array.isArray(parsed.value.artifacts)
@@ -785,9 +812,10 @@ export async function handleWebApi(input: {
     return ok({ build: report });
   }
   if (path === WEB_API_PREFIX + "/flash") {
-    const projectDir = typeof parsed.value.projectDir === "string" && parsed.value.projectDir.trim() !== ""
-      ? parsed.value.projectDir.trim()
-      : process.cwd();
+    const projectDir = withProject(typeof parsed.value.projectDir === "string"
+      ? parsed.value.projectDir
+      : "");
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const adapterSpeed = typeof parsed.value.adapterSpeed === "number" && Number.isFinite(parsed.value.adapterSpeed)
       ? parsed.value.adapterSpeed
       : undefined;
@@ -805,7 +833,9 @@ export async function handleWebApi(input: {
     // 工程选择器（S82）：工作区索引 + 现场扫描合并，附当前工程描述。
     const rootParam = typeof query["root"] === "string" ? query["root"].trim() : "";
     const projectParam = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const workspaceRoot = rootParam !== "" ? rootParam : process.cwd();
+    const workspaceRoot = rootParam !== ""
+      ? rootParam
+      : (projectParam !== "" ? dirname(resolve(projectParam)) : (sessionDir !== "" ? sessionDir : process.cwd()));
     const index = readWorkspaceIndex(workspaceRoot);
     const scanned = scanWorkspaceProjects(workspaceRoot);
     const seen = new Set(index.projects.map((item) => item.dir));
@@ -829,7 +859,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-sync") {
     // .ioc 与生成代码是否同步：只比修改时间，不读内容、不跑 CubeMX。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readIocSync(projectDir);
     if (!read.ok) return fail(409, read.error);
     return ok({ iocSync: read.report });
@@ -849,7 +880,9 @@ export async function handleWebApi(input: {
     if (names.length === 0) return fail(400, "names 不能为空（要改的中断名数组）");
     const preempt = typeof parsed.value.preempt === "number" ? parsed.value.preempt : Number.NaN;
     const sub = typeof parsed.value.sub === "number" ? parsed.value.sub : Number.NaN;
-    const written = setInterruptPriorities(requested !== "" ? requested : process.cwd(), names, preempt, sub);
+    const dir = withProject(requested);
+    if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const written = setInterruptPriorities(dir, names, preempt, sub);
     if (!written.ok) return fail(409, written.error);
     return ok({ interruptPriorities: written.report });
   }
@@ -860,13 +893,16 @@ export async function handleWebApi(input: {
     if (name.trim() === "") return fail(400, "name 不能为空（例如 USART1）");
     const preempt = typeof parsed.value.preempt === "number" ? parsed.value.preempt : Number.NaN;
     const sub = typeof parsed.value.sub === "number" ? parsed.value.sub : Number.NaN;
-    const written = setInterruptPriority(requested !== "" ? requested : process.cwd(), name, preempt, sub);
+    const dir = withProject(requested);
+    if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const written = setInterruptPriority(dir, name, preempt, sub);
     if (!written.ok) return fail(409, written.error);
     return ok({ interruptPriority: written.report });
   }
   if (path === WEB_API_PREFIX + "/interrupts") {
     // 中断页：只读 .ioc 的 NVIC.*，不启动 CubeMX、不改配置。
-    const projectDir = typeof query["projectDir"] === "string" ? query["projectDir"] : process.cwd();
+    const projectDir = withProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readInterrupts(projectDir);
     if (!read.ok) return fail(409, read.error);
     return ok({ interrupts: read.report });
@@ -874,7 +910,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/pinout") {
     // 引脚面板：读工程 .ioc，按外设分组。只读文件，不跑 CubeMX、不碰探针。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readPinout(projectDir, env);
     if (!read.ok) return fail(409, read.error);
     return ok({ pinout: read.report });
@@ -882,7 +919,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/clocks") {
     // 时钟页：读工程 .ioc 里 CubeMX 已经写下的各路频率，只读不改。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readClockTree(projectDir);
     if (!read.ok) return fail(409, read.error);
     return ok({ clocks: read.report });
@@ -911,7 +949,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-diff") {
     // 变更页：当前 .ioc 与上次基线逐键比较。只读工程文件。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readIocDiff(projectDir, env);
     if (!read.ok) return fail(409, read.error);
     return ok({ diff: read.report });
@@ -919,7 +958,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-diff/save") {
     // 记录基线：把当前 .ioc 复制到用户目录。只写自己的基线文件，不动工程。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const saved = saveIocSnapshot(projectDir, env);
     if (!saved.ok) return fail(409, saved.error);
     return ok({ snapshot: saved.report });
@@ -929,7 +969,9 @@ export async function handleWebApi(input: {
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
     const key = typeof parsed.value.key === "string" ? parsed.value.key : "";
     if (key.trim() === "") return fail(400, "key 不能为空");
-    const restored = restoreIocKey(requested !== "" ? requested : process.cwd(), key, env);
+    const dir = withProject(requested);
+    if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const restored = restoreIocKey(dir, key, env);
     if (!restored.ok) return fail(409, restored.error);
     return ok({ restored: restored.report });
   }
@@ -938,14 +980,18 @@ export async function handleWebApi(input: {
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
     const pin = typeof query["pin"] === "string" ? query["pin"] : "";
     if (pin.trim() === "") return fail(400, "pin 不能为空");
-    const keys = readIocKeysForPin(requested !== "" ? requested : process.cwd(), pin, env);
+    const dir = withProject(requested);
+    if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const keys = readIocKeysForPin(dir, pin, env);
     if (!keys.ok) return fail(409, keys.error);
     return ok({ iocKeys: keys.report });
   }
   if (path === WEB_API_PREFIX + "/ioc-diff/restore-all") {
     // 一次性把改动/删除的键恢复成基线值，整批只备份一次。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
-    const restored = restoreAllIocKeys(requested !== "" ? requested : process.cwd(), env);
+    const dir = withProject(requested);
+    if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const restored = restoreAllIocKeys(dir, env);
     if (!restored.ok) return fail(409, restored.error);
     return ok({ restoredAll: restored.report });
   }
@@ -985,7 +1031,8 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/artifacts") {
     // 产物页：elf / hex / bin 的文件信息与芯片容量。只读文件属性，不起子进程。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = requested !== "" ? requested : process.cwd();
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readArtifacts(projectDir, env);
     if (!read.ok) return fail(409, read.error);
     return ok({ artifacts: read.report });

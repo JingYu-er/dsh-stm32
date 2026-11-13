@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S83）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S84）
 
 ### 一、目标与约束
 
@@ -6751,7 +6751,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`tsc` 0、build 0、**79 套件 / 1074 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1971.3 KB / 293 文件 / 解包 15749.3 KB。
 - 教训：**工具自己的错误文案也要进故障规则表**。规则只认编译器原文，就会把自己的「找不到构建目录」当成未知故障。
 
-### 八十七、教训
+### 八十七、工程目录不再回落到进程工作目录（S84）
+
+- 问题：面板没打开调试会话时，引脚页显示「当前没有可用的工程目录」，变更页报「工程目录里没有 .ioc：`C:\Users\<用户>\.dsh\profiles\desktop`」——那个路径是 DSH 进程的工作目录（profile 目录），被十几处 `projectDir ?? process.cwd()` 当成工程用了。工具层早就在 `src/tools/project-dir.ts` 修过同一个洞，Web API 这一层漏了。
+- 做法：`src/engine/web-api.ts` 加 `setSessionWorkspaceResolver`（由 `src/index.ts` 注入宿主 `workingDirectory.ensure`）与 `withProject(raw)`：显式 `projectDir` 优先，否则用会话工作目录，两者都没有才回 400「projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话」。所有工程类路由（pinout / clocks / interrupts / ioc-diff / ioc-diff/save / ioc-diff/restore / ioc-diff/restore-all / ioc-keys / ioc-sync / artifacts / source / build / flash）统一走它，`process.cwd()` 只剩 `/projects` 的最后一档兜底。
+- 配套：`/projects` 的工作区根改为「显式 `root` → 当前工程父目录 → 会话工作目录 → cwd」；`scanWorkspaceProjects` 把工作区根自己也算一个工程（宿主常把会话目录当根，它往往正是工程目录）；客户端在既没选工程、也没调试会话时退到 `/projects` 的第一个工程（`fallbackProjectDir`），并把空状态文案改成「在工具栏「工程」里选一个，或先打开调试会话」。
+- 验证：tsc 0、build 0、**79 套件 / 1077 pass / 0 fail**（新增两条：缺 `projectDir` 回 400 且提示含「projectDir 不能为空」；注入 resolver 后 `/pinout` 回 200 并读出 `STM32F103C8T6`）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1972.2 KB / 293 文件 / 解包 15753.4 KB、`client/client.js` 4901 行。
+- 教训：**「省略参数」与「参数为空」是两件事**。前者该去问宿主要上下文，后者该被明确拒绝；用 `process.cwd()` 同时兜这两件事，等于把错误变成一个看起来合理的路径。
+
+### 八十八、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

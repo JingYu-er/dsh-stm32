@@ -8,18 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import {
-  capabilitiesOf,
-  configSnapshot,
-  handleWebApi,
-  installStart,
-  installTaskState,
-  resetInstallTasks,
-  saveConfig,
-  summarizeProbe,
-  WEB_API_PATHS,
-  WEB_API_PREFIX,
-} from "../lib/engine/web-api.js";
+import { capabilitiesOf, configSnapshot, handleWebApi, installStart, installTaskState, resetInstallTasks, saveConfig, summarizeProbe, WEB_API_PATHS, WEB_API_PREFIX, setSessionWorkspaceResolver } from "../lib/engine/web-api.js";
 import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
 import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
 import { emitEvent, eventSnapshot, resetEventBus, setEventSessionKey } from "../lib/engine/event-bus.js";
@@ -479,6 +468,35 @@ test("GET/POST /watch：列清单、加值监视、移除、清空、非法动�
   const put = await handleWebApi({ method: "PUT", path: WEB_API_PREFIX + "/watch", query: {}, deps });
   assert.equal(put.status, 405);
   removeAllWatches(watchState);
+});
+
+test("没有显式 projectDir 时按会话工作目录兜底（S84）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "s84-proj-"));
+  fs.writeFileSync(path.join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.PinsNb=1\nMcu.Pin0=PC13-TAMPER-RTC\n", "utf8");
+  setSessionWorkspaceResolver(async () => dir);
+  try {
+    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/pinout", query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
+    assert.equal(response.status, 200, "有会话工作目录时应成功");
+    assert.equal(response.body.pinout.mcu.cpn, "STM32F103C8T6");
+  } finally {
+    setSessionWorkspaceResolver(null);
+  }
+});
+
+test("工程类接口缺 projectDir 时回 400，不再回落到进程工作目录（S84）", async () => {
+  for (const path of ["pinout", "clocks", "interrupts", "ioc-diff", "ioc-sync"]) {
+    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/" + path, query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
+    assert.equal(response.status, 400, path + " 缺 projectDir 应回 400");
+    assert.match(String(response.body.error), /projectDir 不能为空/u, path + " 的提示要说清缺什么");
+  }
+});
+
+test("工程类接口缺 projectDir 时回 400，不再回落到进程工作目录（S84）", async () => {
+  for (const path of ["pinout", "clocks", "interrupts", "ioc-diff", "ioc-sync"]) {
+    const response = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/" + path, query: {}, deps: { subprocess: fakeSubprocess, env: {} } });
+    assert.equal(response.status, 400, path + " 缺 projectDir 应回 400");
+    assert.match(String(response.body.error), /projectDir 不能为空/u, path + " 的提示要说清缺什么");
+  }
 });
 
 test("GET /projects：工作区索引与扫描合并，并返回当前工程描述（S82）", async () => {
