@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S77）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S78）
 
 ### 一、目标与约束
 
@@ -6689,7 +6689,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：tsc 0、build 0、**79 套件 / 1064 pass / 0 fail**（pinout-units 加「有 db 给封装与脚号」「无 db 降级提示」两条）、ACCEPTANCE OK（新增「物理引脚布局字段齐全（S77）」）、`test:pack` 0、`test:size` 1964.0 KB / 292 文件 / 解包 15721.4 KB、client 4782 行。
 - 教训：**同一个「引脚」，按端口看与按封装看是两个问题**。前者查功能冲突，后者查接线；两种视图都要有，且事实只能来自器件库。
 
-### 八十一、教训
+### 八十一、证据落盘与保留可配置（S78）
+
+- 问题：S72 之后正常会话也落盘，但节奏与保留是写死的（30 秒、7 天、20 会话）。想留长一点、或嫌写得勤，都得改代码。
+- 做法：`src/engine/event-log.ts` 新增 `evidencePolicy(env)`，三项各自独立解析，优先级「环境变量 > 配置文件 > 默认」：环境变量 `DSH_STM32_EVIDENCE_FLUSH_SECONDS` / `_KEEP_DAYS` / `_KEEP_SESSIONS`；配置文件的 `evidenceFlushSeconds` / `evidenceKeepDays` / `evidenceKeepSessions`；默认 30 秒 / 7 天 / 20 会话。每项夹到 `POLICY_LIMITS`（5–3600 秒、0–365 天、1–200 会话），并返回 `sources` 说明这一项从哪来——面板据此显示「每 30 s 落盘 · 保留 7 天 / 20 会话」并可在 `title` 里看到来源。`startEventLog` 用 `policy.flushSeconds` 当拍间隔、把 `keepDays` / `keepSessions` 传给 `pruneEvidence`；`/evidence` 回 policy，`/evidence/prune` 按 policy 清。
+- 两个边界：`DSH_STM32_NO_CONFIG=1` 时不读配置文件（与工具链配置同一开关，测试与验收可完全隔离）；时间间隔有下限 5 秒，避免有人把定时器开成秒级轮询把磁盘写满。
+- 验证：tsc 0、build 0、**79 套件 / 1065 pass / 0 fail**（event-bus-units 加「默认值、环境变量夹取、配置文件生效」一条）、ACCEPTANCE OK（新增「证据策略字段齐全（S78）」）、`test:pack` 0、`test:size` 1965.8 KB / 292 文件 / 解包 15726.5 KB、client 4795 行。
+- 教训：**可配置项要把「来源」一起报出来**。用户看到 30 秒与 60 秒的差别时，第一句话必然是「这值哪来的」；先给 `sources`，就不用再翻两份配置。
+
+### 八十二、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

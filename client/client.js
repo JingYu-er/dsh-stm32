@@ -4121,7 +4121,7 @@ window.__ModuleLoader__.load({
 
     /** 证据目录里的回放候选：打开选择器时才拉一次。 */
     function useEvidence(open) {
-      const [value, setValue] = useState({ root: "", files: [], groups: [], usage: null });
+      const [value, setValue] = useState({ root: "", files: [], groups: [], usage: null, policy: null });
       const [error, setError] = useState("");
       const [tick, setTick] = useState(0);
       useEffect(() => {
@@ -4136,6 +4136,7 @@ window.__ModuleLoader__.load({
               files: result.value.evidence.files ?? [],
               groups: result.value.evidence.groups ?? [],
               usage: result.value.evidence.usage ?? null,
+              policy: result.value.evidence.policy ?? null,
             });
             setError("");
           } else {
@@ -4322,7 +4323,7 @@ window.__ModuleLoader__.load({
         );
       const groups = Array.isArray(evidence.groups) ? evidence.groups : [];
       const rows = evidence.files.length === 0
-        ? [e("div", { key: "empty", style: debugStyles.empty }, evidence.error === "" ? "证据目录里还没有文件（环形缓冲溢出时才落盘）。" : evidence.error)]
+        ? [e("div", { key: "empty", style: debugStyles.empty }, evidence.error === "" ? "证据目录里还没有文件：本会话的事件通常会在半分钟内写出第一份。" : evidence.error)]
         : groups.length > 0
           ? groups.map((group) =>
               e(
@@ -4357,6 +4358,18 @@ window.__ModuleLoader__.load({
         { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "6px 0" } },
         e("div", { style: { fontSize: "12px", opacity: 0.7, display: "flex", gap: "8px", flexWrap: "wrap" }, title: evidence.root },
           e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "证据目录：" + (evidence.root === "" ? "—" : evidence.root)),
+          e(
+            "span",
+            {
+              style: { flex: "0 0 auto", opacity: 0.6, fontSize: "11px" },
+              title: evidence.policy === null || evidence.policy === undefined
+                ? ""
+                : "落盘间隔来自 " + String(evidence.policy.sources?.flushSeconds ?? "default") + "，保留来自 " + String(evidence.policy.sources?.keepDays ?? "default") + " / " + String(evidence.policy.sources?.keepSessions ?? "default"),
+            },
+            evidence.policy === null || evidence.policy === undefined
+              ? ""
+              : "每 " + String(evidence.policy.flushSeconds) + " s 落盘 · 保留 " + String(evidence.policy.keepDays) + " 天 / " + String(evidence.policy.keepSessions) + " 会话",
+          ),
           usageText === "" ? null : e("span", { style: { opacity: 0.75 } }, usageText),
           e("button", { type: "button", style: debugStyles.button, onClick: prune, title: "删掉 7 天前、或超出 20 个会话的旧证据" }, "清理旧证据"),
         ),

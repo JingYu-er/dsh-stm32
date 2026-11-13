@@ -9,9 +9,11 @@
  * 每批一个文件，按批次的起始时刻命名，复盘时按文件名排序即为时间顺序。
  */
 
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { toolchainConfigPath } from "../data/toolchain-config.js";
 import {
   drainEvicted,
   eventSessionKey,
@@ -28,6 +30,74 @@ export const EVENT_LOG_INTERVAL_MS = 30_000;
 export const EVENT_EVIDENCE_KEEP_SESSIONS = 20;
 /** 证据目录保留天数上限：超过这个天数的日期目录整体删掉。 */
 export const EVENT_EVIDENCE_KEEP_DAYS = 7;
+
+/** 证据策略：落盘间隔与保留口径（S78），可用环境变量或配置文件覆盖。 */
+export interface EvidencePolicy {
+  readonly flushSeconds: number;
+  readonly keepDays: number;
+  readonly keepSessions: number;
+  /** 三项各自来自哪里：env / config / default，面板据此说明。 */
+  readonly sources: { readonly flushSeconds: string; readonly keepDays: string; readonly keepSessions: string };
+}
+
+/** 允许范围：落盘 5 秒–1 小时；保留天数 0（不按天清）–365；会话数 1–200。 */
+const POLICY_LIMITS = {
+  flushSeconds: { min: 5, max: 3600, fallback: 30 },
+  keepDays: { min: 0, max: 365, fallback: 7 },
+  keepSessions: { min: 1, max: 200, fallback: 20 },
+} as const;
+
+function readPolicyConfig(env: NodeJS.ProcessEnv): Record<string, unknown> | null {
+  const flag = env["DSH_STM32_NO_CONFIG"];
+  if (flag === "1" || flag === "true") return null;
+  try {
+    const text = readFileSync(toolchainConfigPath(env), "utf8");
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function pickNumber(
+  key: "flushSeconds" | "keepDays" | "keepSessions",
+  envKey: string,
+  env: NodeJS.ProcessEnv,
+  config: Record<string, unknown> | null,
+): { value: number; source: string } {
+  const limits = POLICY_LIMITS[key];
+  const fromEnv = env[envKey];
+  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
+    const parsed = Number.parseInt(fromEnv.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return { value: Math.min(limits.max, Math.max(limits.min, parsed)), source: "env " + envKey };
+    }
+    return { value: limits.fallback, source: "default（" + envKey + " 不是整数）" };
+  }
+  const fromConfig = config === null ? undefined : config["evidence" + key.charAt(0).toUpperCase() + key.slice(1)];
+  if (typeof fromConfig === "number" && Number.isFinite(fromConfig)) {
+    return { value: Math.min(limits.max, Math.max(limits.min, Math.round(fromConfig))), source: "config evidence" + key.charAt(0).toUpperCase() + key.slice(1) };
+  }
+  return { value: limits.fallback, source: "default" };
+}
+
+/**
+ * 读出证据策略（S78）：环境变量优先，其次配置文件，最后默认值。
+ *
+ * 落盘间隔与保留口径都允许改；越界一律夹到允许范围，非法值退回默认。
+ */
+export function evidencePolicy(env: NodeJS.ProcessEnv = process.env): EvidencePolicy {
+  const config = readPolicyConfig(env);
+  const flush = pickNumber("flushSeconds", "DSH_STM32_EVIDENCE_FLUSH_SECONDS", env, config);
+  const days = pickNumber("keepDays", "DSH_STM32_EVIDENCE_KEEP_DAYS", env, config);
+  const sessions = pickNumber("keepSessions", "DSH_STM32_EVIDENCE_KEEP_SESSIONS", env, config);
+  return {
+    flushSeconds: flush.value,
+    keepDays: days.value,
+    keepSessions: sessions.value,
+    sources: { flushSeconds: flush.source, keepDays: days.source, keepSessions: sessions.source },
+  };
+}
 
 /** 证据目录根：允许用环境变量改到别处（例如放到工程内便于随工程归档）。 */
 export function evidenceRoot(env: NodeJS.ProcessEnv = process.env): string {
@@ -288,7 +358,8 @@ export function startEventLog(options: {
   env?: NodeJS.ProcessEnv;
   onError?: (error: unknown) => void;
 } = {}): () => Promise<void> {
-  const intervalMs = options.intervalMs ?? EVENT_LOG_INTERVAL_MS;
+  const policy = evidencePolicy(options.env);
+  const intervalMs = options.intervalMs ?? policy.flushSeconds * 1000;
   let running = false;
   const tick = async (): Promise<void> => {
     if (running) return;
@@ -296,7 +367,7 @@ export function startEventLog(options: {
     try {
       // 每拍把新事件也写一份（S72）：不再只有溢出才留证据。
       await flushPending({ root: options.root, env: options.env });
-      await pruneEvidence({ root: options.root, env: options.env });
+      await pruneEvidence({ root: options.root, env: options.env, keepDays: policy.keepDays, keepSessions: policy.keepSessions });
     } catch (error) {
       options.onError?.(error);
     } finally {

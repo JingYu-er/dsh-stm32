@@ -34,7 +34,7 @@ import {
   subscribeEvents,
   type DebugEvent,
 } from "./event-bus.js";
-import { evidenceRoot, pruneEvidence } from "./event-log.js";
+import { evidencePolicy, evidenceRoot, pruneEvidence } from "./event-log.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
@@ -926,11 +926,14 @@ export async function handleWebApi(input: {
     const root = evidenceRoot(env);
     const files = await listEvidenceFiles(root);
     const bytes = files.reduce((sum, file) => sum + file.size, 0);
-    return ok({ evidence: { root, files, groups: groupEvidenceFiles(files), usage: { count: files.length, bytes } } });
+    return ok({
+      evidence: { root, files, groups: groupEvidenceFiles(files), usage: { count: files.length, bytes }, policy: evidencePolicy(env) },
+    });
   }
   if (path === WEB_API_PREFIX + "/evidence/prune") {
-    // 保留策略：日期目录超过 7 天、或会话目录超过 20 个时清掉最旧的；面板也给一个手动入口。
-    const pruned = await pruneEvidence({ env });
+    // 保留策略：按配置的天数与会话数清最旧的；面板也给一个手动入口。
+    const policy = evidencePolicy(env);
+    const pruned = await pruneEvidence({ env, keepDays: policy.keepDays, keepSessions: policy.keepSessions });
     return ok({ pruned });
   }
   if (path === WEB_API_PREFIX + "/replay") {

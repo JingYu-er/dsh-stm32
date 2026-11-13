@@ -22,16 +22,7 @@ import {
   subscribeEvents,
   takeDroppedCount,
 } from "../lib/engine/event-bus.js";
-import {
-  dateFolder,
-  evidenceRoot,
-  flushEvicted,
-  flushPending,
-  pruneEvidence,
-  resetArchiveCursor,
-  safeSessionKey,
-  sessionEvidenceDir,
-} from "../lib/engine/event-log.js";
+import { dateFolder, evidenceRoot, flushEvicted, flushPending, pruneEvidence, resetArchiveCursor, safeSessionKey, sessionEvidenceDir, evidencePolicy } from "../lib/engine/event-log.js";
 import { instrumentContext, withToolEvents } from "../lib/engine/tool-events.js";
 import { openEventStream } from "../lib/engine/web-api.js";
 import { CHANNEL_LINE_LIMIT, emitChannel } from "../lib/engine/channels.js";
@@ -410,4 +401,30 @@ test("事件流：带 session 时只补发并只推送本会话事件", () => {
   emitEvent({ source: "model", kind: "stm32_flash", summary: "A 增量", session: "session-a" });
   assert.ok(text().includes("A 增量"));
   stop();
+});
+
+test("evidencePolicy：默认值、环境变量夹取、配置文件生效（S78）", () => {
+  const plain = evidencePolicy({ DSH_STM32_NO_CONFIG: "1" });
+  assert.deepEqual([plain.flushSeconds, plain.keepDays, plain.keepSessions], [30, 7, 20], "默认 30 秒 / 7 天 / 20 会话");
+  assert.match(plain.sources.flushSeconds, /default/u);
+
+  const clamped = evidencePolicy({
+    DSH_STM32_NO_CONFIG: "1",
+    DSH_STM32_EVIDENCE_FLUSH_SECONDS: "1",
+    DSH_STM32_EVIDENCE_KEEP_DAYS: "999",
+    DSH_STM32_EVIDENCE_KEEP_SESSIONS: "0",
+  });
+  assert.deepEqual([clamped.flushSeconds, clamped.keepDays, clamped.keepSessions], [5, 365, 1], "越界夹到允许范围");
+  assert.match(clamped.sources.keepDays, /^env /u);
+
+  const dir = mkdtempSync(join(tmpdir(), "evp-"));
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify({ evidenceFlushSeconds: 10, evidenceKeepDays: 3, evidenceKeepSessions: 5 }), "utf8");
+  const fromConfig = evidencePolicy({ DSH_STM32_CONFIG: configPath });
+  assert.deepEqual([fromConfig.flushSeconds, fromConfig.keepDays, fromConfig.keepSessions], [10, 3, 5], "配置文件里的三项生效");
+  assert.match(fromConfig.sources.flushSeconds, /^config /u);
+
+  const envWins = evidencePolicy({ DSH_STM32_CONFIG: configPath, DSH_STM32_EVIDENCE_FLUSH_SECONDS: "20" });
+  assert.equal(envWins.flushSeconds, 20, "环境变量优先于配置文件");
+  assert.equal(envWins.keepDays, 3, "未覆盖的项仍取配置文件");
 });
