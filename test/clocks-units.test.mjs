@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { dividerLabel, mulLabel, parseHz, readClockTree } from "../lib/engine/clocks.js";
+import { dividerLabel, familyOfCpn, limitForNode, mulLabel, parseHz, readClockTree } from "../lib/engine/clocks.js";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -88,4 +88,45 @@ test("readClockTree：.ioc 没有 RCC 键时节点全为 null，不伪造频率"
   assert.equal(read.report.nodes.every((node) => node.hz === null), true);
   assert.equal(read.report.sysclkSourceLabel, "");
   assert.equal(read.report.others.length, 0);
+});
+
+test("familyOfCpn：型号取族，只认总线上限表里有的族", () => {
+  assert.equal(familyOfCpn("STM32F103C8T6"), "STM32F1");
+  assert.equal(familyOfCpn("stm32g431cbt6"), "STM32G4");
+  assert.equal(familyOfCpn("STM32H743ZIT6"), "");
+  assert.equal(familyOfCpn(""), "");
+});
+
+test("limitForNode：只有 APB1 / APB2 / ADC 三路受手册上限约束", () => {
+  const limits = { apb1Hz: 36_000_000, apb2Hz: 72_000_000, adcHz: 14_000_000 };
+  assert.equal(limitForNode("PCLK1 / APB1", limits), 36_000_000);
+  assert.equal(limitForNode("PCLK2 / APB2", limits), 72_000_000);
+  assert.equal(limitForNode("ADC", limits), 14_000_000);
+  assert.equal(limitForNode("TIM (APB1)", limits), null, "定时器是 APB1 的二倍频，不能拿 APB1 上限判");
+  assert.equal(limitForNode("PCLK1 / APB1", null), null);
+});
+
+test("readClockTree：F1 @72 MHz 不超限，ADC 36 MHz 超过 14 MHz 受限（S66）", () => {
+  const dir = tempDir("dsh-clocks-limits-");
+  fs.writeFileSync(path.join(dir, "demo.ioc"), IOC, "utf8");
+  const result = readClockTree(dir);
+  assert.equal(result.ok, true);
+  const report = result.report;
+  assert.equal(report.limits.family, "STM32F1");
+  assert.equal(report.limits.apb1Hz, 36_000_000);
+  const byLabel = new Map(report.nodes.map((node) => [node.label, node]));
+  assert.equal(byLabel.get("PCLK1 / APB1").overLimit, false, "36 MHz 正好是上限，不算超");
+  assert.equal(byLabel.get("PCLK2 / APB2").overLimit, false);
+  assert.equal(byLabel.get("ADC").overLimit, true, "ADC 36 MHz 超过 14 MHz 上限");
+  assert.equal(byLabel.get("ADC").limitHz, 14_000_000);
+  assert.equal(byLabel.get("SYSCLK").limitHz, null, "SYSCLK 上限不在总线上限表里，不给判断");
+});
+
+test("readClockTree：族不在表里时 limits 为 null，各路都不判超限", () => {
+  const dir = tempDir("dsh-clocks-nolimit-");
+  fs.writeFileSync(path.join(dir, "demo.ioc"), IOC.replace("STM32F103C8T6", "STM32H743ZIT6"), "utf8");
+  const result = readClockTree(dir);
+  assert.equal(result.ok, true);
+  assert.equal(result.report.limits, null);
+  for (const node of result.report.nodes) assert.equal(node.overLimit, false);
 });

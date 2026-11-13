@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S65）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S66）
 
 ### 一、目标与约束
 
@@ -6584,7 +6584,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 顺带修正本文档 §92 标题口径：正文已写到 S65，标题原写「S1–S45」。
 - 教训：**提示要贴在「会切走」的位置**，不是贴在出事的地方。失败发生在时间线，但人不在那儿。
 
-### 六十九、教训
+### 六十九、时钟页超限标黄（S66）
+
+- 问题：时钟页只把 CubeMX 写进 `.ioc` 的频率列出来，看不出哪一路已经超过手册上限——ADC 配成 36 MHz 在 F1 上是错的，但页面上和正常值长得一样。
+- 数据来源：`src/data/clock-db.ts` 已有的 `BUS_LIMITS`（按族索引 `apb1Hz` / `apb2Hz` / `adcHz`，注释里带手册号）。不新造一张表，避免两处上限不一致。
+- 做法（服务端）：`src/engine/clocks.ts` 新增 `familyOfCpn(cpn)`（`STM32F103C8T6` → `STM32F1`，表里没有就空串）与 `limitForNode(label, limits)`；`ClockNode` 增 `limitHz` / `overLimit`，报告增 `limits: {family, apb1Hz, apb2Hz, adcHz} | null`。
+- 只判三路：`PCLK1 / APB1`、`PCLK2 / APB2`、`ADC`。**定时器不判**——`TIM (APB1)` 是 APB1 的二倍频，拿 APB1 上限去比会误报（F1 上 TIM2 就是 72 MHz 而 APB1 上限 36 MHz）。`SYSCLK` 也不判：`BUS_LIMITS` 里没有 SYSCLK 列，不猜。
+- 做法（客户端）：超限行的频率标 `#e8b339`、加粗、加「超」字并 `title` 写上限；分频列尾显示「限 36 MHz」；头部显示「STM32F1 上限 APB1 36 MHz · APB2 72 MHz · ADC 14 MHz」，族不在表里时显示「上限：未收录」。
+- 验证：`test/clocks-units.test.mjs` 增 3 条（族名归一、只判三路、F1 @72 MHz 时 ADC 36 MHz 判超限且 SYSCLK 的 `limitHz` 为 null、未知族全不判）；`client-debug-units` 断言 `overLimit`；验收脚本加「时钟上限与超限标记」。总计 **79 套件 / 1059 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1949.7 KB / 292 文件 / 解包 15660.7 KB、client 4303 行。
+- 教训：**「有上限」和「能判超限」不是一回事**。定时器二倍频、SYSCLK 缺数据这两处，宁可显示「未判」，也不要拿相邻的列去比——误报比不报更费时间。
+
+### 七十、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

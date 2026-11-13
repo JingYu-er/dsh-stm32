@@ -8,6 +8,7 @@
 
 import { readFileSync } from "node:fs";
 
+import { BUS_LIMITS, type BusLimits } from "../data/clock-db.js";
 import { parseIocEntries } from "./ioc.js";
 import { findIocPath } from "./pinout.js";
 
@@ -20,6 +21,10 @@ export interface ClockNode {
   readonly key: string;
   /** 分频说明，例如 ÷2；没有就空串。 */
   readonly divider: string;
+  /** 这一路的手册上限（Hz）；没有上限或芯片族不在表里时为 null。 */
+  readonly limitHz: number | null;
+  /** 频率是否超过手册上限（S66）。 */
+  readonly overLimit: boolean;
 }
 
 export interface ClockTreeReport {
@@ -36,6 +41,8 @@ export interface ClockTreeReport {
   readonly nodes: readonly ClockNode[];
   /** 解析到的其它 RCC.*Freq* 键，供排查。 */
   readonly others: readonly ClockNode[];
+  /** 该型号所属族的总线上限；族不在表里时为 null。 */
+  readonly limits: { readonly family: string; readonly apb1Hz: number; readonly apb2Hz: number; readonly adcHz: number } | null;
 }
 
 export type ClockTreeResult = { readonly ok: true; readonly report: ClockTreeReport } | { readonly ok: false; readonly error: string };
@@ -59,6 +66,26 @@ const NODE_SPECS: readonly NodeSpec[] = [
   { label: "SysTick", key: "RCC.TimSysFreq_Value" },
   { label: "MCO", key: "RCC.MCOFreq_Value" },
 ];
+
+/**
+ * 型号 → 总线上限表的键（S66），例如 STM32F103C8T6 → STM32F1、STM32G431CBT6 → STM32G4。
+ * 表里没有的族返回空串；此时不做上限判断，而不是猜一个值。
+ */
+export function familyOfCpn(cpn: string): string {
+  const match = /^STM32([A-Z])(\d)/u.exec(cpn.trim().toUpperCase());
+  if (match === null || match[1] === undefined || match[2] === undefined) return "";
+  const family = "STM32" + match[1] + match[2];
+  return BUS_LIMITS[family] === undefined ? "" : family;
+}
+
+/** 节点 → 该族总线上限；只有真正受手册约束的三路给出上限。 */
+export function limitForNode(label: string, limits: BusLimits | null): number | null {
+  if (limits === null) return null;
+  if (label === "PCLK1 / APB1") return limits.apb1Hz;
+  if (label === "PCLK2 / APB2") return limits.apb2Hz;
+  if (label === "ADC") return limits.adcHz;
+  return null;
+}
 
 /** `.ioc` 的频率值是十进制整数；带小数的写法一律视为没有。 */
 export function parseHz(raw: string | undefined): number | null {
@@ -110,18 +137,23 @@ export function readClockTree(projectDir: string): ClockTreeResult {
     return { ok: false, error: "读取 .ioc 失败：" + message };
   }
   const used = new Set<string>();
+  const cpn = entries.get("Mcu.CPN") ?? "";
+  const family = familyOfCpn(cpn);
+  const limits: BusLimits | null = family === "" ? null : (BUS_LIMITS[family] ?? null);
   const nodes: ClockNode[] = NODE_SPECS.map((spec) => {
     used.add(spec.key);
     if (spec.dividerKey !== undefined) used.add(spec.dividerKey);
     const divider = spec.dividerKey === undefined ? "" : dividerLabel(entries.get(spec.dividerKey) ?? "");
-    return { label: spec.label, hz: parseHz(entries.get(spec.key)), key: spec.key, divider };
+    const hz = parseHz(entries.get(spec.key));
+    const limitHz = limitForNode(spec.label, limits);
+    return { label: spec.label, hz, key: spec.key, divider, limitHz, overLimit: hz !== null && limitHz !== null && hz > limitHz };
   });
   const others: ClockNode[] = [];
   for (const [key, value] of entries) {
     if (!key.startsWith("RCC.") || !/Freq/iu.test(key) || used.has(key)) continue;
     const hz = parseHz(value);
     if (hz === null) continue;
-    others.push({ label: key.slice("RCC.".length), hz, key, divider: "" });
+    others.push({ label: key.slice("RCC.".length), hz, key, divider: "", limitHz: null, overLimit: false });
   }
   others.sort((left, right) => left.key.localeCompare(right.key, "en"));
   const source = entries.get("RCC.SYSCLKSource") ?? "";
@@ -132,7 +164,7 @@ export function readClockTree(projectDir: string): ClockTreeResult {
     report: {
       projectDir: dir,
       iocPath,
-      cpn: entries.get("Mcu.CPN") ?? "",
+      cpn,
       sysclkSource: source,
       sysclkSourceLabel: SYSCLK_SOURCES[source] ?? source,
       pll: {
@@ -143,6 +175,7 @@ export function readClockTree(projectDir: string): ClockTreeResult {
       },
       nodes,
       others,
+      limits: limits === null ? null : { family, apb1Hz: limits.apb1Hz, apb2Hz: limits.apb2Hz, adcHz: limits.adcHz },
     },
   };
 }
