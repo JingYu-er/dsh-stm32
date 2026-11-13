@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十四条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 44);
-  assert.equal(new Set(WEB_API_PATHS).size, 44);
+test("WEB_API_PATHS：四十五条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 45);
+  assert.equal(new Set(WEB_API_PATHS).size, 45);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -257,6 +257,7 @@ test("WEB_API_PATHS：四十四条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/faults"), true, "故障面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/artifacts"), true, "产物面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/probe-info"), true, "探针信息卡必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/interrupts/priorities"), true, "批量改优先级必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/evidence"), true, "回放选择器必须有证据列表路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/replay"), true, "回放必须有读取证据文件的路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ioc-diff"), true, "变更页必须有对比路由");
@@ -1162,6 +1163,37 @@ test("POST /interrupts/priority：改一路优先级、写前备份，非法值�
     deps: deps,
   });
   assert.equal(badRange.status, 409);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("POST /interrupts/priorities：批量改优先级，缺 names 回 400", async () => {
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-irq-batch-"));
+  const ioc = path.join(dir, "demo.ioc");
+  fs.writeFileSync(ioc, ["NVIC.USART1_IRQn=true\\:1\\:0\\:false\\:false\\:true\\:false\\:false\\:false", "NVIC.TIM2_IRQn=true\\:1\\:0\\:false\\:false\\:true\\:false\\:false\\:false"].join("\n"), "utf8");
+
+  const saved = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/interrupts/priorities",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, names: ["USART1", "TIM2"], preempt: 7, sub: 3 }),
+    deps: deps,
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.interruptPriorities.applied.length, 2);
+  const text = fs.readFileSync(ioc, "utf8");
+  assert.ok(text.includes("NVIC.USART1_IRQn=true\\:7\\:3\\:"));
+  assert.ok(text.includes("NVIC.TIM2_IRQn=true\\:7\\:3\\:"));
+
+  const noNames = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/interrupts/priorities",
+    query: {},
+    body: JSON.stringify({ projectDir: dir, preempt: 1, sub: 1 }),
+    deps: deps,
+  });
+  assert.equal(noNames.status, 400);
+  assert.ok(String(noNames.body.error).includes("names"));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

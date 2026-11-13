@@ -39,7 +39,7 @@ import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
 import { closeSerial, listPorts, openSerial, sendSerial, serialStatus } from "./serial.js";
-import { readInterrupts, setInterruptPriority } from "./interrupts.js";
+import { readInterrupts, setInterruptPriorities, setInterruptPriority } from "./interrupts.js";
 import { readIocSync } from "./ioc-sync.js";
 import { addWatches, clearWatches, listWatches, removeWatches } from "./watch-admin.js";
 import { buildFromPanel, flashFromPanel } from "./panel-actions.js";
@@ -474,6 +474,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/debug/stop",
   WEB_API_PREFIX + "/interrupts",
   WEB_API_PREFIX + "/interrupts/priority",
+  WEB_API_PREFIX + "/interrupts/priorities",
   WEB_API_PREFIX + "/ioc-sync",
   WEB_API_PREFIX + "/watch",
   WEB_API_PREFIX + "/build",
@@ -812,6 +813,17 @@ export async function handleWebApi(input: {
       ...(input.deps.signal === undefined ? {} : { signal: input.deps.signal }),
     });
     return ok({ probeInfo: report });
+  }
+  if (path === WEB_API_PREFIX + "/interrupts/priorities") {
+    // 批量改优先级（S74）：一次备份、一次写盘，逐路返回结果。
+    const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
+    const names = Array.isArray(parsed.value.names) ? parsed.value.names.filter((name) => typeof name === "string") : [];
+    if (names.length === 0) return fail(400, "names 不能为空（要改的中断名数组）");
+    const preempt = typeof parsed.value.preempt === "number" ? parsed.value.preempt : Number.NaN;
+    const sub = typeof parsed.value.sub === "number" ? parsed.value.sub : Number.NaN;
+    const written = setInterruptPriorities(requested !== "" ? requested : process.cwd(), names, preempt, sub);
+    if (!written.ok) return fail(409, written.error);
+    return ok({ interruptPriorities: written.report });
   }
   if (path === WEB_API_PREFIX + "/interrupts/priority") {
     // 中断页改优先级：只改 NVIC.<name>_IRQn 那一条，写前备份。

@@ -13,6 +13,7 @@ import {
   interruptName,
   parseNvicValue,
   readInterrupts,
+  setInterruptPriorities,
   setInterruptPriority,
 } from "../lib/engine/interrupts.js";
 
@@ -100,6 +101,37 @@ test("改优先级：只动这一条的第二、三段，其余段与其它行�
   const entry = reread.report.entries.find((item) => item.name === "USART1");
   assert.equal(entry.preempt, 5);
   assert.equal(entry.sub, 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("批量改优先级：一次备份、一次写盘，未知的逐条报错", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-irq-batch-"));
+  const ioc = path.join(dir, "demo.ioc");
+  fs.writeFileSync(ioc, [NVIC_LINE("USART1", true, 2, 0), NVIC_LINE("TIM2", true, 1, 1), "RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK"].join("\n"), "utf8");
+
+  const written = setInterruptPriorities(dir, ["USART1", "TIM2", "TIM9"], 6, 2);
+  assert.equal(written.ok, true);
+  assert.equal(written.report.applied.length, 2);
+  assert.equal(written.report.errors.length, 1);
+  assert.match(String(written.report.errors[0].error), /没有这一路中断/u);
+  assert.equal(written.report.changed, true);
+  assert.ok(fs.existsSync(written.report.backupPath), "整批只备份一次也要有备份文件");
+  const text = fs.readFileSync(ioc, "utf8");
+  assert.ok(text.includes("NVIC.USART1_IRQn=true\\:6\\:2\\:"));
+  assert.ok(text.includes("NVIC.TIM2_IRQn=true\\:6\\:2\\:"));
+  assert.ok(text.includes("RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK"), "其它行不动");
+
+  const reread = readInterrupts(dir);
+  assert.equal(reread.ok, true);
+  assert.equal(reread.report.entries.find((item) => item.name === "USART1").preempt, 6);
+  assert.equal(reread.report.entries.find((item) => item.name === "TIM2").sub, 2);
+
+  const empty = setInterruptPriorities(dir, [], 0, 0);
+  assert.equal(empty.ok, false);
+  assert.match(empty.error, /names/u);
+  const badRange = setInterruptPriorities(dir, ["USART1"], 16, 0);
+  assert.equal(badRange.ok, false);
+  assert.match(badRange.error, /抢占优先级/u);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
