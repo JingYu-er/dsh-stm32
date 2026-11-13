@@ -143,6 +143,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("fault-chip-"), "故障页要能按分类筛选");
     assert.ok(source.includes("fault-group-"), "故障页要能按规则合并显示");
     assert.ok(source.includes("按规则合并"), "故障页要显示分组标题");
+    assert.ok(source.includes("toolDurations"), "时间线要能算每次调用的耗时");
+    assert.ok(source.includes("TOOL_SLOW_MS"), "慢调用要有阈值常量");
+    assert.ok(source.includes("按耗时"), "时间线要能按耗时排序");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));

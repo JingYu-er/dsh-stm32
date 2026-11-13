@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S46）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S47）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -884,6 +884,7 @@ const fake = {
 - `ChannelBlock` 的关键字过滤与 RTT 级别按钮：纯展示层，只作用于当前暂停/清空窗口。
 - `POST /debug/touch` 与 `DebugSessionManager.touch()`：会话续期只重置空闲计时，总时长上限不变。
 - 时间线工具栏：状态筛选（全部 / 只看失败）与「导出 JSONL」，纯客户端，导出的是当前视图。
+- 客户端 `toolDurations`：按 `callId` 配对 start 与 ok/fail 算耗时，超过 `TOOL_SLOW_MS`（5 秒）标黄；工具栏可切「按时间 / 按耗时」。
 - 时间线勾选与「复制已选（N）」：`eventRefBlock` 把多条事件拼成一段引用，顺序按时间线而不是勾选顺序；纯客户端。
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
 - 客户端 `OverviewPanel` 的工具链一行：`useProbeSummary(60000)` 读 `GET /probe`，能力四项只认 `capabilities`，缺件直接列名。
@@ -914,5 +915,5 @@ const fake = {
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
 | 单测 | 79 个套件 / 1050 pass / 0 fail |
-| 客户端 | `client/client.js` 3785 行（手写，不经 tsc） |
-| 包体 | 1936.6 KB / 292 文件 / 解包 15600.6 KB（护栏上限 3906.3 KB） |
+| 客户端 | `client/client.js` 3852 行（手写，不经 tsc） |
+| 包体 | 1938.6 KB / 292 文件 / 解包 15607.0 KB（护栏上限 3906.3 KB） |

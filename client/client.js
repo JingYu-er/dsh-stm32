@@ -976,6 +976,38 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 超过这个耗时的工具调用在时间线上标黄（S47）。 */
+    const TOOL_SLOW_MS = 5000;
+
+    /**
+     * 按 callId 把 start 与 ok/fail 配成一对，算每次调用的耗时。
+     *
+     * 面板不另记计时器：事件里已经有时间戳，重连后补发的历史也能算出来。
+     */
+    function toolDurations(events) {
+      const starts = new Map();
+      const done = new Map();
+      for (const event of events) {
+        const callId = event.payload !== null && typeof event.payload === "object" && typeof event.payload.callId === "string" ? event.payload.callId : "";
+        if (callId === "") continue;
+        const at = Date.parse(String(event.time));
+        if (!Number.isFinite(at)) continue;
+        if (event.status === "start") {
+          starts.set(callId, at);
+        } else if (event.status === "ok" || event.status === "fail") {
+          const start = starts.get(callId);
+          if (start === undefined) continue;
+          const ms = at - start;
+          done.set(callId, { ms: ms >= 0 ? ms : 0, slow: ms >= TOOL_SLOW_MS });
+        }
+      }
+      return done;
+    }
+
+    function durationText(ms) {
+      return ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : String(Math.round(ms)) + " ms";
+    }
+
     function Timeline(props) {
       const body = props.events.length === 0
         ? e("div", { style: debugStyles.empty }, props.connection === "open" ? "尚无事件。调用任一 stm32_* 工具后在此出现。" : "等待事件流连接。")
@@ -1005,6 +1037,19 @@ window.__ModuleLoader__.load({
               e("span", { style: debugStyles.rowTime }, clockText(event.time)),
               e("span", { style: debugStyles.rowKind }, (DEBUG_STATUS_SIGN[event.status] ?? "·") + " " + String(event.kind)),
               e("span", { style: debugStyles.rowText, title: String(event.summary) }, String(event.summary)),
+              (() => {
+                const callId = event.payload !== null && typeof event.payload === "object" && typeof event.payload.callId === "string" ? event.payload.callId : "";
+                const timing = callId === "" || props.durations === null ? undefined : props.durations.get(callId);
+                if (timing === undefined) return null;
+                return e(
+                  "span",
+                  {
+                    style: Object.assign({}, debugStyles.rowTime, timing.slow ? { color: "#e8b339", opacity: 1 } : { opacity: 0.55 }),
+                    title: timing.slow ? "超过 " + String(TOOL_SLOW_MS / 1000) + " 秒的调用" : "本次调用耗时",
+                  },
+                  (timing.slow ? "慢 " : "") + durationText(timing.ms),
+                );
+              })(),
             ),
           );
       return e(DebugPanel, { title: DEBUG_LABELS.timeline, flex: "1 1 0", onCollapse: props.onCollapse }, body);
@@ -3499,6 +3544,7 @@ window.__ModuleLoader__.load({
       const [pickerOpen, setPickerOpen] = useState(false);
       const [pickerMessage, setPickerMessage] = useState("");
       const [onlyFail, setOnlyFail] = useState(false);
+      const [sortBy, setSortBy] = useState("time");
       const [focusFailures, setFocusFailures] = useState(0);
       const replayState = useReplay();
       const [filter, setFilter] = useState("");
@@ -3524,6 +3570,17 @@ window.__ModuleLoader__.load({
         ? matchedBase
         : matchedBase.filter((event) => (String(event.kind) + " " + String(event.summary)).toLowerCase().includes(filter.trim().toLowerCase()));
       const visible = replayState.replay === null ? matched : replayState.replay.events;
+      const durations = toolDurations(visible);
+      const ordered =
+        sortBy === "duration"
+          ? visible
+              .slice()
+              .sort((left, right) => {
+                const leftMs = durations.get(left.payload !== null && typeof left.payload === "object" ? String(left.payload.callId ?? "") : "")?.ms ?? -1;
+                const rightMs = durations.get(right.payload !== null && typeof right.payload === "object" ? String(right.payload.callId ?? "") : "")?.ms ?? -1;
+                return rightMs - leftMs;
+              })
+          : visible;
       const pickedSet = new Set(picked);
       const pickedEvents = picked
         .map((seq) => visible.find((event) => event.seq === seq))
@@ -3597,7 +3654,8 @@ window.__ModuleLoader__.load({
         panels.push(
           e(Timeline, {
             key: "timeline",
-            events: visible,
+            events: ordered,
+            durations,
             connection,
             selectedSeq,
             pickedSet,
@@ -3664,6 +3722,15 @@ window.__ModuleLoader__.load({
               onClick: () => setOnlyFail((value) => !value),
             },
             onlyFail === true ? "只看失败" : "全部事件",
+          ),
+          e(
+            "button",
+            {
+              style: Object.assign({}, debugStyles.button, sortBy === "duration" ? { borderColor: "color-mix(in srgb, currentColor 45%, transparent)" } : {}),
+              title: "按耗时从长到短排列；没有 start/ok 配对的事件排在最后",
+              onClick: () => setSortBy((value) => (value === "duration" ? "time" : "duration")),
+            },
+            sortBy === "duration" ? "按耗时" : "按时间",
           ),
           e("span", { style: { opacity: 0.6 } }, "显示 " + String(visible.length) + " / " + String(events.length)),
           e("span", { style: debugStyles.spacer }),
