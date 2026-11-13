@@ -20,6 +20,7 @@ import { checkSchematic, readIocPins } from "../lib/engine/schematic/checks.js";
 import { findRootSchematic, readSchematic } from "../lib/engine/schematic/model.js";
 import { crossCheckPcb, readPcb } from "../lib/engine/schematic/pcb.js";
 import { parseSexpr } from "../lib/engine/schematic/sexpr.js";
+import { agentOfSession, resetSessionAgents } from "../lib/engine/session-context.js";
 import { registerSchematicTools } from "../lib/tools/schematic.js";
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "kicad-10-d-nfc");
@@ -173,4 +174,16 @@ test("工具参数错误：目录里没有原理图时给人话，不抛栈", as
   const value = await tools.get("stm32_sch_read").execute({ projectDir: empty }, { signal: new AbortController().signal });
   assert.equal(value.ok, false);
   assert.match(value.message, /没有 \.kicad_sch/u);
+});
+
+test("工具 stm32_sch_read：没传 projectDir 时按 exec.agent 解析会话工作目录（S93）", async () => {
+  // 工具必须把宿主传进来的 exec 一路带到 resolveProjectDir：少了它，会话工作目录换不到，
+  // 调试台拿不到默认工程，工具会退到插件进程的 cwd（不是用户的工作区）。
+  resetSessionAgents();
+  const tools = makeToolContext(FIXTURE);
+  const agent = { id: "session-abc-123" };
+  const value = await tools.get("stm32_sch_read").execute({}, { signal: new AbortController().signal, agent });
+  assert.equal(value.ok, true);
+  assert.equal(value.components, 43);
+  assert.ok(agentOfSession("session-abc-123") !== undefined, "exec.agent 应登记到会话对照表");
 });

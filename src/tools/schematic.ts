@@ -355,9 +355,12 @@ export function registerSchematicTools(ctx: DshContext): void {
     output: { schema: readOutputSchema, render: (_args, value) => [{ type: "text", text: formatRead(value as SchReadValue).join("\n") }] },
     timeoutMs: 60_000,
     isConcurrencySafe: () => true,
-    async execute(rawArgs: { projectDir?: string; rootFile?: string; includeComponents?: boolean; includeNets?: boolean } | undefined): Promise<SchReadValue> {
+    async execute(
+      rawArgs: { projectDir?: string; rootFile?: string; includeComponents?: boolean; includeNets?: boolean } | undefined,
+      exec: ToolExec,
+    ): Promise<SchReadValue> {
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, {} as ToolExec);
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const loaded = loadSchematic(resolution.projectDir, typeof args.rootFile === "string" ? args.rootFile : "");
       if (loaded.report === null) return emptyRead(loaded.error);
       const report = loaded.report;
@@ -421,9 +424,12 @@ export function registerSchematicTools(ctx: DshContext): void {
     output: { schema: pinsOutputSchema, render: (_args, value) => [{ type: "text", text: formatPins(value as SchPinsValue).join("\n") }] },
     timeoutMs: 60_000,
     isConcurrencySafe: () => true,
-    async execute(rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[] } | undefined): Promise<SchPinsValue> {
+    async execute(
+      rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[] } | undefined,
+      exec: ToolExec,
+    ): Promise<SchPinsValue> {
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, {} as ToolExec);
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const loaded = loadSchematic(resolution.projectDir, typeof args.rootFile === "string" ? args.rootFile : "");
       if (loaded.report === null || loaded.report.mcu === null) {
         return { ok: false, message: loaded.error !== "" ? loaded.error : "原理图里没有识别到 STM32 主控", mcu: "", dbVersion: "", pins: [], notes: [] };
@@ -489,9 +495,12 @@ export function registerSchematicTools(ctx: DshContext): void {
     output: { schema: checkOutputSchema, render: (_args, value) => [{ type: "text", text: formatCheck(value as SchCheckValue).join("\n") }] },
     timeoutMs: 60_000,
     isConcurrencySafe: () => true,
-    async execute(rawArgs: { projectDir?: string; rootFile?: string; pcbFile?: string; iocFile?: string; severity?: string } | undefined): Promise<SchCheckValue> {
+    async execute(
+      rawArgs: { projectDir?: string; rootFile?: string; pcbFile?: string; iocFile?: string; severity?: string } | undefined,
+      exec: ToolExec,
+    ): Promise<SchCheckValue> {
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, {} as ToolExec);
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
       const loaded = loadSchematic(resolution.projectDir, typeof args.rootFile === "string" ? args.rootFile : "");
       if (loaded.report === null) {
         return {

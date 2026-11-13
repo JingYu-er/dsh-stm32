@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S92）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S93）
 
 ### 一、目标与约束
 
@@ -6885,7 +6885,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/session-context-units.test.mjs` 增 1 条（agent.id 单独登记、两把钥匙都能开），全量 **82 个套件 / 1106 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1973.6 KB / 303 文件 / 解包 15801.3 KB。
 - 教训：**宿主没公开的事件结构不能当作已确认的事实**。`session.header.id` 是猜的，猜错时不会报错，只会让功能静默退化；凡是「取不到就降级」的分支，都要有另一条来自真实调用链的登记路径兜住。
 
-### 一百、教训
+### 一百、原理图工具没把 exec 传下去（S93）
+
+- 起因：S92 之后重启，面板仍显示「当前没有可用的工程目录」。同一次会话里，不带 `projectDir` 的两个工具结果相反：`stm32_doctor` 能解析出 `D:\JingYu\Desktop\c8t6_vscode_test\demo`，`stm32_sch_read` 却落到 `C:\Users\Admin\.dsh\profiles\desktop`（插件进程的 cwd）。
+- 结论：宿主 `workingDirectory` 服务是好的，断在参数传递。`src/tools/schematic.ts` 三处 `resolveProjectDir(ctx, args.projectDir, {} as ToolExec)` 传的是空对象，`exec.agent` 恒为 undefined——既登记不了会话对照表，也换不到会话目录，只能走 `process.cwd()` 兜底。
+- 改法：三个工具（`stm32_sch_read` / `stm32_sch_pins` / `stm32_sch_check`）的 `execute` 增第二参 `exec: ToolExec` 并原样传进 `resolveProjectDir`。全仓再查 `{} as ToolExec` 已无残留。
+- 验证：`test/schematic-units.test.mjs` 增 1 条（不带 `projectDir`、只给 `exec.agent`，应解析出夹具并登记会话），全量 **82 个套件 / 1107 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1973.6 KB / 303 文件 / 解包 15801.3 KB。
+- 教训：**新工具照抄旧工具时，最容易漏掉的是第二个参数**。类型上 `{} as ToolExec` 能过编译，运行时只是静默降级；凡是「拿不到身份就换默认值」的接口，写完要立刻用一个真 agent 跑一遍，否则缺陷会以「功能不生效」的形态出现在用户那里，而不是出现在错误里。
+
+### 一百零一、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
