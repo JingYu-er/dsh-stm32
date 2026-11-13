@@ -146,6 +146,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("toolDurations"), "时间线要能算每次调用的耗时");
     assert.ok(source.includes("TOOL_SLOW_MS"), "慢调用要有阈值常量");
     assert.ok(source.includes("按耗时"), "时间线要能按耗时排序");
+    assert.ok(source.includes("evidence-group-"), "证据列表要按会话分组");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));

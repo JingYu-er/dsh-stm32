@@ -491,6 +491,36 @@ const REPLAY_MAX_BYTES = 8 * 1024 * 1024;
 const REPLAY_MAX_EVENTS = 5000;
 
 /** 列证据目录下的 .jsonl，按修改时间倒序；最深到「日期 / 会话 / 文件」这一层。 */
+/** 证据文件的分组键：`<日期>/<会话键>/events-….jsonl` 里的会话键。 */
+export function evidenceSessionKey(filePath: string): string {
+  const parts = filePath.split("/");
+  return parts.length >= 3 ? parts[1] ?? "" : "";
+}
+
+/**
+ * 按会话把证据文件分组（S48）。
+ *
+ * 目录结构已经是「日期/会话/文件」，列表却把 200 个文件平铺出来，找某个会话
+ * 要自己筛。分组只做展示，文件路径仍是唯一标识。
+ */
+export function groupEvidenceFiles(
+  files: readonly { path: string; size: number; mtimeMs: number }[],
+): Array<{ key: string; bytes: number; latestMs: number; files: Array<{ path: string; size: number; mtimeMs: number }> }> {
+  const groups = new Map<string, { key: string; bytes: number; latestMs: number; files: Array<{ path: string; size: number; mtimeMs: number }> }>();
+  for (const file of files) {
+    const key = evidenceSessionKey(file.path);
+    const found = groups.get(key);
+    if (found === undefined) {
+      groups.set(key, { key, bytes: file.size, latestMs: file.mtimeMs, files: [file] });
+      continue;
+    }
+    found.bytes += file.size;
+    found.latestMs = Math.max(found.latestMs, file.mtimeMs);
+    found.files.push(file);
+  }
+  return Array.from(groups.values()).sort((left, right) => right.latestMs - left.latestMs || left.key.localeCompare(right.key));
+}
+
 async function listEvidenceFiles(root: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
   const found: Array<{ path: string; size: number; mtimeMs: number }> = [];
   const walk = async (dir: string, prefix: string, depth: number): Promise<void> => {
@@ -863,7 +893,7 @@ export async function handleWebApi(input: {
     const root = evidenceRoot(env);
     const files = await listEvidenceFiles(root);
     const bytes = files.reduce((sum, file) => sum + file.size, 0);
-    return ok({ evidence: { root, files, usage: { count: files.length, bytes } } });
+    return ok({ evidence: { root, files, groups: groupEvidenceFiles(files), usage: { count: files.length, bytes } } });
   }
   if (path === WEB_API_PREFIX + "/evidence/prune") {
     // 保留策略：日期目录超过 7 天、或会话目录超过 20 个时清掉最旧的；面板也给一个手动入口。

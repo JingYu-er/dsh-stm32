@@ -775,13 +775,23 @@ test("GET /evidence 与 /replay：列出证据文件、逐行还原事件、拒�
     "{坏行",
   ];
   fs.writeFileSync(file, lines.join("\n") + "\n", "utf8");
+  const other = path.join(root, "2026-11-12", "sess-b");
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, "events-130000.jsonl"), lines[0] + "\n", "utf8");
   const deps = { subprocess: fakeSubprocess, env: { DSH_STM32_EVIDENCE: root } };
 
   const listed = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/evidence", query: {}, deps: deps });
   assert.equal(listed.status, 200);
   assert.equal(listed.body.evidence.root, root);
-  assert.equal(listed.body.evidence.files.length, 1);
-  assert.equal(listed.body.evidence.files[0].path, "2026-11-12/sess-a/events-120000.jsonl");
+  assert.equal(listed.body.evidence.files.length, 2);
+  assert.deepEqual(
+    listed.body.evidence.files.map((item) => item.path).sort(),
+    ["2026-11-12/sess-a/events-120000.jsonl", "2026-11-12/sess-b/events-130000.jsonl"],
+    "按修改时间倒序列出两个文件",
+  );
+  assert.equal(listed.body.evidence.groups.length, 2, "按会话分成两组");
+  assert.equal(listed.body.evidence.groups.map((item) => item.key).sort().join(","), "sess-a,sess-b");
+  assert.equal(listed.body.evidence.groups.find((item) => item.key === "sess-b").files.length, 1);
 
   const replayed = await handleWebApi({
     method: "GET",
