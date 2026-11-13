@@ -152,6 +152,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 固件日志（RTT） | `stm32_rtt`：控制块按 SEGGER 约定放在 RAM，openocd 的 `rtt setup/start/server start` 把通道 0 搬成 TCP 流，再按 13 字节头解出级别与时间戳——不接串口、不改接线 |
 | 变量监视 / 观察点 | `stm32_watch`：`action=add` 登记表达式（`kind=value` 只是采样，不用开会话）；`action=sample` 停下→逐项求值→算 delta→原本在跑就放回；`kind=write/read/access` 装成硬件观察点（gdb `watch`/`rwatch`/`awatch`），受 F1 的 4 个数据比较器预算约束 |
 | 串口交互（Windows P1） | `stm32_serial`：`list` / `open` / `read` / `send` / `transact` / `status` / `close` 七个动作；零 npm 依赖（PowerShell 5.1 + `System.IO.Ports` 常驻桥持有 COM 口），默认 115200 8N1、DTR/RTS 不拉高、`persist=false`、单会话；**不含 GUI 面板、SSE、Linux/macOS 与自动重连**（见[串口](#串口windows-p1)） |
+| 调试台面板 | 会话页签里的「调试台」：时间线 / 事件详情 / 实时通道 / 引脚 / 时钟 / 中断 / 故障 / 产物 / 变更 / 概览，44 条 `/dsh-stm32/api/*` 路由 + SSE 事件流，详见[调试台](#调试台面板) |
 | 给模型的工作纪律 | 随插件下发 SKILL `stm32-workflow`（只改 USER CODE、不动生成区、烧录与调试分开、结论要带寄存器证据） |
 
 ## 工具参考
@@ -274,6 +275,27 @@ stm32_serial action=close
 | `/stm32-stop` | 关掉 `/stm32-debug` 开的会话，把探针还给 VS Code | 否 |
 
 `[dir]` 省略时用当前会话的工作目录。
+
+## 调试台（面板）
+
+会话页签里除「对话 / 上下文 / 编队」之外多一个**调试台**（`conversation.view`，id `stm32-debug`）。它把插件内部的事件流、硬件状态与常用操作放到同一屏，用于人和模型一起看现场——模型调工具，面板同步显示结果。
+
+| 标签 | 看什么 | 能做什么 |
+| --- | --- | --- |
+| 概览 | 型号 / SYSCLK / 容量 / 会话 / 工具链 / 证据占用 / 告警行 | 点告警跳到失败筛选或实时通道 |
+| 时间线 | 每次工具调用的开始、结束、耗时与结果 | 勾选多条复制引用、按工具名筛选、按耗时排序、导出 JSONL |
+| 事件详情 | 单条事件的参数与结果、payload | 复制引用或 payload、跳源码（编译错误与断点命中） |
+| 实时通道 | 串口 / RTT / 监视三类输出，可暂停、清空、按关键字与级别筛 | 开常驻采样、面板直接发串口、导出当前窗口文本 |
+| 引脚 | `.ioc` 里的引脚与分组，表 / 端口图两种视图 | 筛选、点行复制引用、看该脚的 `.ioc` 键、导出 CSV |
+| 时钟 | SYSCLK / PLL / AHB·APB 分频与逐路频率，表 / 流向图 | 超限（APB、ADC）标黄并给出芯片上限 |
+| 中断 | NVIC 列表与抢占 / 子优先级 | 就地改优先级（写前备份 `.ioc`）、按优先级或名字排序 |
+| 故障 | 失败事件、解码后的分类与提示 | 按分类 / 规则筛选、按规则合并、复制整组、导出 CSV |
+| 产物 | elf / hex / bin、大小、逐文件 SHA-256、Flash/RAM 占用 | 与上一次构建对比、复制校验和 |
+| 变更 | 当前 `.ioc` 与基线的差异（新增 / 删除 / 改动） | 记基线、恢复单键或全部差异 |
+
+数据面：`/dsh-stm32/api/*` 共 44 条路由，事件走 SSE（`/events?since=&session=`），面板按会话过滤；每条工具调用都带 `callId`，在途调用可以在面板里直接中止。事件在内存里保留 5000 条，溢出的部分每 30 秒写成 `~/.dsh-stm32/evidence/<日期>/<会话>/events-<时分秒>.jsonl`，超过 7 天或 20 个会话自动清理。
+
+生效方式：改 `client/client.js` 后跑 `node scripts/copy-client.mjs` 并刷新页面即可；改 `src/` 里的服务端代码要**完全退出 DSH 再启动**（窗口关掉不算，后台进程要退）。
 
 ## 设计要点
 
