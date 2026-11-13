@@ -2161,6 +2161,7 @@ window.__ModuleLoader__.load({
       const [message, setMessage] = useState("");
       const [saving, setSaving] = useState(false);
       const [needle, setNeedle] = useState("");
+      const [order, setOrder] = useState("priority");
       const beginEdit = (entry) => {
         setEditing(entry.name);
         setPreemptText(String(entry.preempt));
@@ -2209,7 +2210,12 @@ window.__ModuleLoader__.load({
       const entries = Array.isArray(report.entries) ? report.entries : [];
       /** 按中断名模糊匹配（S55）；空白表示不过滤。 */
       const wanted = needle.trim().toLowerCase();
-      const shown = wanted === "" ? entries : entries.filter((entry) => String(entry.name).toLowerCase().includes(wanted));
+      const filtered = wanted === "" ? entries : entries.filter((entry) => String(entry.name).toLowerCase().includes(wanted));
+      /* 排序只影响显示顺序（S63）：服务端给的是「抢占 → 子 → 名字」，按名字排便于找某一路。 */
+      const shown =
+        order === "name"
+          ? filtered.slice().sort((left, right) => String(left.name).localeCompare(String(right.name)))
+          : filtered;
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", padding: "0 10px 8px" } },
@@ -2225,6 +2231,26 @@ window.__ModuleLoader__.load({
             style: { fontSize: "11px", padding: "1px 6px", flex: "0 0 34%" },
           }),
           wanted === "" ? null : e("span", { style: { fontSize: "11px", opacity: 0.55 } }, "命中 " + String(shown.length)),
+          e(
+            "button",
+            {
+              type: "button",
+              style: Object.assign({}, debugStyles.button, order === "priority" ? { fontWeight: 600 } : { opacity: 0.7 }),
+              title: "按抢占优先级排序（默认）",
+              onClick: () => setOrder("priority"),
+            },
+            "按优先级",
+          ),
+          e(
+            "button",
+            {
+              type: "button",
+              style: Object.assign({}, debugStyles.button, order === "name" ? { fontWeight: 600 } : { opacity: 0.7 }),
+              title: "按中断名排序，便于查某一路",
+              onClick: () => setOrder("name"),
+            },
+            "按名字",
+          ),
         ),
         message === "" ? null : e("div", { style: { fontSize: "11px", opacity: 0.8, padding: "0 0 4px" } }, message),
         entries.length === 0
