@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   drainEvicted,
   eventSessionKey,
+  eventSnapshot,
   requeueEvicted,
   takeDroppedCount,
   type DebugEvent,
@@ -63,6 +64,48 @@ function eventLine(event: DebugEvent): string {
   return JSON.stringify(event) + "\n";
 }
 
+/** 已经写进证据目录的最大序号；换会话时归零，避免把别的会话的序号当基线。 */
+let archivedSeq = 0;
+let archivedKey = "";
+
+/** 测试用：把归档游标归零。 */
+export function resetArchiveCursor(): void {
+  archivedSeq = 0;
+  archivedKey = "";
+}
+
+/**
+ * 写一批事件并返回写入信息。
+ *
+ * 目录与文件名规则只在这里实现一次：`flushEvicted` 与 `flushPending` 共用。
+ */
+async function writeBatch(
+  events: DebugEvent[],
+  options: { root: string; now: Date; key: string; dropped: number },
+): Promise<{ written: number; file: string }> {
+  const dir = sessionEvidenceDir(options.root, options.key, options.now);
+  const file = path.join(dir, "events-" + timeName(options.now) + ".jsonl");
+  const lines: string[] = [];
+  if (options.dropped > 0) {
+    // 缺口本身要留痕：否则证据目录看起来连续，实际中间丢了条目。
+    lines.push(
+      eventLine({
+        seq: events.length > 0 ? (events[0]?.seq ?? 0) : 0,
+        time: options.now.toISOString(),
+        source: "system",
+        kind: "log",
+        status: "fail",
+        summary: "落盘通道积压，丢弃 " + String(options.dropped) + " 条事件",
+        payload: { dropped: options.dropped },
+      }),
+    );
+  }
+  for (const event of events) lines.push(eventLine(event));
+  await mkdir(dir, { recursive: true });
+  await appendFile(file, lines.join(""), "utf8");
+  return { written: events.length, file };
+}
+
 /**
  * 写一批被挤出的事件。成功返回写入条数；失败把事件放回队列并抛出，由调用方决定是否重试。
  */
@@ -78,31 +121,49 @@ export async function flushEvicted(options: {
   const key = eventSessionKey() === "" ? "unbound" : eventSessionKey();
   const root = options.root ?? evidenceRoot(options.env);
   const dir = sessionEvidenceDir(root, key, now);
-  const file = path.join(dir, "events-" + timeName(now) + ".jsonl");
-  const lines: string[] = [];
-  if (dropped > 0) {
-    // 缺口本身要留痕：否则证据目录看起来连续，实际中间丢了条目。
-    lines.push(
-      eventLine({
-        seq: events.length > 0 ? (events[0]?.seq ?? 0) : 0,
-        time: now.toISOString(),
-        source: "system",
-        kind: "log",
-        status: "fail",
-        summary: "落盘通道积压，丢弃 " + String(dropped) + " 条事件",
-        payload: { dropped },
-      }),
-    );
-  }
-  for (const event of events) lines.push(eventLine(event));
   try {
-    await mkdir(dir, { recursive: true });
-    await appendFile(file, lines.join(""), "utf8");
+    const result = await writeBatch(events, { root, now, key, dropped });
+    return { written: result.written, file: result.file, dropped };
   } catch (error) {
     requeueEvicted(events);
     throw error;
   }
-  return { written: events.length, file, dropped };
+}
+
+/**
+ * 写「还没落盘的」事件（S72）：溢出队列 + 环形缓冲里序号超过游标的部分。
+ *
+ * 正常会话不再等到溢出才留证据——每拍把新事件写一份，重启后仍能回放。
+ * 游标记的是「已写过」的最大序号，所以同一事件不会写两遍。
+ */
+export async function flushPending(options: {
+  root?: string;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+} = {}): Promise<{ written: number; file: string | null; dropped: number }> {
+  const now = options.now ?? new Date();
+  const key = eventSessionKey() === "" ? "unbound" : eventSessionKey();
+  if (key !== archivedKey) {
+    archivedKey = key;
+    archivedSeq = 0;
+  }
+  const dropped = takeDroppedCount();
+  // 只归档本会话的事件：换会话后 ring 里还有上一个会话的条目，不能重复写进新目录。
+  const mine = (event: DebugEvent): boolean => event.session === undefined || event.session === key;
+  const evicted = drainEvicted().filter((event) => event.seq > archivedSeq && mine(event));
+  const recent = eventSnapshot(archivedSeq).filter(mine);
+  const events = evicted.concat(recent);
+  if (events.length === 0 && dropped === 0) return { written: 0, file: null, dropped: 0 };
+  const root = options.root ?? evidenceRoot(options.env);
+  try {
+    const result = await writeBatch(events, { root, now, key, dropped });
+    const last = events[events.length - 1];
+    if (last !== undefined) archivedSeq = last.seq;
+    return { written: result.written, file: result.file, dropped };
+  } catch (error) {
+    requeueEvicted(evicted);
+    throw error;
+  }
 }
 
 /**
@@ -233,7 +294,8 @@ export function startEventLog(options: {
     if (running) return;
     running = true;
     try {
-      await flushEvicted({ root: options.root, env: options.env });
+      // 每拍把新事件也写一份（S72）：不再只有溢出才留证据。
+      await flushPending({ root: options.root, env: options.env });
       await pruneEvidence({ root: options.root, env: options.env });
     } catch (error) {
       options.onError?.(error);

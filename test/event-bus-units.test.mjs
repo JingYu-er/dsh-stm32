@@ -26,7 +26,9 @@ import {
   dateFolder,
   evidenceRoot,
   flushEvicted,
+  flushPending,
   pruneEvidence,
+  resetArchiveCursor,
   safeSessionKey,
   sessionEvidenceDir,
 } from "../lib/engine/event-log.js";
@@ -151,6 +153,40 @@ test("挤出事件按批写入证据目录，一行一条 JSON", async () => {
     assert.equal(empty.file, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("未溢出的事件也落盘：同一事件只写一次，会话换了重新记基线", async () => {
+  resetEventBus();
+  resetArchiveCursor();
+  setEventSessionKey("sess-archive");
+  const root = tempDir("evidence-archive");
+  const now = new Date(2026, 10, 12, 10, 0, 0);
+  try {
+    emitEvent({ source: "model", kind: "stm32_build", status: "ok", summary: "第一条" });
+    emitEvent({ source: "model", kind: "stm32_flash", status: "ok", summary: "第二条" });
+    const first = await flushPending({ root, now });
+    assert.equal(first.written, 2, "没溢出也要把新事件写下去");
+    assert.ok(first.file !== null && existsSync(first.file));
+    const again = await flushPending({ root, now });
+    assert.equal(again.written, 0, "没有新事件时不应重复写");
+    assert.equal(again.file, null);
+
+    emitEvent({ source: "model", kind: "stm32_build", status: "ok", summary: "第三条" });
+    const third = await flushPending({ root, now });
+    assert.equal(third.written, 1, "只写新增的那一条");
+    const lines = readFileSync(String(third.file), "utf8").trim().split(String.fromCharCode(10));
+    const parsed = lines.map((line) => JSON.parse(line));
+    assert.equal(parsed[parsed.length - 1].seq, 3, "游标之后的序号才写");
+
+    setEventSessionKey("sess-archive-2");
+    emitEvent({ source: "model", kind: "stm32_build", status: "ok", summary: "新会话第一条" });
+    const switched = await flushPending({ root, now });
+    assert.equal(switched.written, 1, "换会话后游标归零，新会话的事件要写进去");
+    assert.ok(String(switched.file).includes("sess-archive-2"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    resetArchiveCursor();
   }
 });
 
