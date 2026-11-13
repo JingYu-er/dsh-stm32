@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { dividerLabel, familyOfCpn, limitForNode, mulLabel, parseHz, readClockTree } from "../lib/engine/clocks.js";
+import { dividerLabel, familyOfCpn, limitForNode, mulLabel, parseHz, readClockTree, suggestFix } from "../lib/engine/clocks.js";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -118,8 +118,14 @@ test("readClockTree：F1 @72 MHz 不超限，ADC 36 MHz 超过 14 MHz 受限（S
   assert.equal(byLabel.get("PCLK1 / APB1").overLimit, false, "36 MHz 正好是上限，不算超");
   assert.equal(byLabel.get("PCLK2 / APB2").overLimit, false);
   assert.equal(byLabel.get("ADC").overLimit, true, "ADC 36 MHz 超过 14 MHz 上限");
-  assert.match(String(byLabel.get("ADC").suggest), /÷\d/u, "ADC 超限要给分频建议");
+  // 分频器挂在 PCLK2 上（72 MHz），不是挂在上次的 ADC 频率上：
+  // 72/6 = 12 MHz 才合规，72/4 = 18 MHz 仍然超限。
+  assert.match(String(byLabel.get("ADC").suggest), /÷6（12 MHz）/u, "ADC 预分频应基于 PCLK2 算");
+  assert.match(String(byLabel.get("ADC").suggest), /工程没有启用 ADC/u, "没启用 ADC 时要说明这条不影响运行");
   assert.equal(byLabel.get("PCLK1 / APB1").suggest, "", "未超限不给建议");
+  assert.equal(suggestFix("ADC", 36_000_000, 14_000_000, 72_000_000), "把 ADC 预分频改成 ÷6（12 MHz）");
+  assert.equal(suggestFix("PCLK1 / APB1", 48_000_000, 36_000_000, 72_000_000), "把 APB1 分频改成 ÷2（36 MHz）");
+  assert.equal(suggestFix("ADC", 12_000_000, 14_000_000, 72_000_000), "", "未超限不给建议");
   assert.equal(byLabel.get("ADC").limitHz, 14_000_000);
   assert.equal(byLabel.get("SYSCLK").limitHz, null, "SYSCLK 上限不在总线上限表里，不给判断");
 });
