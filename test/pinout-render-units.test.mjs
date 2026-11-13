@@ -11,9 +11,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 
-const SOURCE = fs
-  .readFileSync(new URL("../client/client.js", import.meta.url), "utf8")
-  .replace("function PinoutPanel(props) {", "globalThis.__PINOUT__ = function PinoutPanel(props) {");
+const CLIENT = fs.readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+const SOURCE = CLIENT
+  .replace("function PinoutPanel(props) {", "globalThis.__PINOUT__ = function PinoutPanel(props) {")
+  .replace("function ClockPanel(props) {", "globalThis.__CLOCK__ = function ClockPanel(props) {");
 
 const PIN = { pin: "PA9", signal: "USART1_TX", label: "", mode: "Asynchronous", locked: false, kind: "peripheral" };
 
@@ -80,7 +81,7 @@ function harness() {
   run(globalThis, window, stub.document, stub.localStorage, stub.navigator, stub.location, stub.EventSource, setInterval, clearInterval, setTimeout, clearTimeout);
   assert.equal(typeof factory, "function", "client.js 应通过 __ModuleLoader__.load 交出一个 factory");
   factory(requireStub);
-  return { Panel: globalThis.__PINOUT__, queue };
+  return { Panel: globalThis.__PINOUT__, Clock: globalThis.__CLOCK__, queue };
 }
 
 /**
@@ -117,5 +118,54 @@ test("引脚面板：没有工程目录时给出可读提示，而不是空白�
   const { Panel, queue } = harness();
   queue.push(null, "", 0, null, "", "table", null, "");
   const text = renderText(Panel({ projectDir: "" }));
+  assert.ok(text.includes("当前没有可用的工程目录"), "空工程目录要有提示");
+});
+
+/* ---------------- 时钟面板（S84e） ---------------- */
+
+const CLOCKS = {
+  projectDir: "D:/demo",
+  iocPath: "D:/demo/demo.ioc",
+  cpn: "STM32F103C8T6",
+  sysclkSource: "RCC_SYSCLKSOURCE_PLLCLK",
+  sysclkSourceLabel: "PLL",
+  pll: { source: "RCC_PLLSOURCE_HSE", sourceLabel: "HSE", mul: "RCC_PLL_MUL9", mulLabel: "×9" },
+  nodes: [
+    { label: "SYSCLK", hz: 72000000, key: "RCC.SYSCLKFreq_VALUE", divider: "", limitHz: null, overLimit: false, suggest: "" },
+    { label: "PCLK1 / APB1", hz: 36000000, key: "RCC.APB1Freq_Value", divider: "÷2", limitHz: 36000000, overLimit: false, suggest: "" },
+    {
+      label: "ADC",
+      hz: 36000000,
+      key: "RCC.ADCFreqValue",
+      divider: "÷2",
+      limitHz: 14000000,
+      overLimit: true,
+      suggest: "把分频改成 ÷4（9 MHz）",
+    },
+  ],
+  others: [],
+  limits: { family: "STM32F1", apb1Hz: 36000000, apb2Hz: 72000000, adcHz: 14000000 },
+};
+
+/** useState 顺序：ClockPanel(mode) → useClockTree(clocks, error, tick)（钩子已提到早退之前）。 */
+function renderClock(mode) {
+  const { Clock, queue } = harness();
+  queue.push(mode, CLOCKS, "", 0);
+  return Clock({ projectDir: "D:/demo" });
+}
+
+for (const mode of ["table", "flow"]) {
+  test(`时钟面板在「${mode}」视图下能渲染（S84e）`, () => {
+    const text = renderText(renderClock(mode));
+    assert.ok(text.includes("STM32F103C8T6"), "应显示型号：" + text.slice(0, 80));
+    assert.ok(text.includes("SYSCLK"), "应显示 SYSCLK 一路");
+    assert.ok(text.includes("÷4"), "超限行应带分频建议");
+  });
+}
+
+test("时钟面板：没有工程目录时不调用钩子也能给出提示（S84e）", () => {
+  const { Clock, queue } = harness();
+  queue.push("table", null, "", 0);
+  const text = renderText(Clock({ projectDir: "" }));
   assert.ok(text.includes("当前没有可用的工程目录"), "空工程目录要有提示");
 });

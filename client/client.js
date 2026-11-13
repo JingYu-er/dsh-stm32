@@ -2644,6 +2644,9 @@ window.__ModuleLoader__.load({
 
     function ClockPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
+      /* 钩子必须在任何早退之前（S84e）：否则「读取中 → 数据到达」那一帧钩子数量变化，
+         React 直接抛错，整块面板变空白。 */
+      const [mode, setMode] = useState("table");
       const state = useClockTree(projectDir, 10000);
       const clocks = state.clocks;
       if (projectDir === "") {
@@ -2656,7 +2659,6 @@ window.__ModuleLoader__.load({
         return e("div", { style: { padding: "12px", opacity: 0.6, fontSize: "12px" } }, "读取时钟树…");
       }
       const nodes = clocks.nodes ?? [];
-      const [mode, setMode] = useState("table");
       const peak = nodes.reduce((max, node) => (typeof node.hz === "number" && node.hz > max ? node.hz : max), 0);
       const row = (node) =>
         e(
