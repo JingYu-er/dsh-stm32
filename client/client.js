@@ -2118,6 +2118,7 @@ window.__ModuleLoader__.load({
       const [subText, setSubText] = useState("");
       const [message, setMessage] = useState("");
       const [saving, setSaving] = useState(false);
+      const [needle, setNeedle] = useState("");
       const beginEdit = (entry) => {
         setEditing(entry.name);
         setPreemptText(String(entry.preempt));
@@ -2164,18 +2165,31 @@ window.__ModuleLoader__.load({
       if (state.error !== "") return e("div", { style: { padding: "6px 10px", opacity: 0.75, fontSize: "12px" } }, state.error);
       if (report === null) return e("div", { style: { padding: "6px 10px", opacity: 0.6, fontSize: "12px" } }, "读取中断表…");
       const entries = Array.isArray(report.entries) ? report.entries : [];
+      /** 按中断名模糊匹配（S55）；空白表示不过滤。 */
+      const wanted = needle.trim().toLowerCase();
+      const shown = wanted === "" ? entries : entries.filter((entry) => String(entry.name).toLowerCase().includes(wanted));
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", padding: "0 10px 8px" } },
         e(
           "div",
-          { style: { padding: "4px 0 6px", fontSize: "12px", opacity: 0.85 } },
-          report.iocName + "：使能 " + String(report.enabledCount) + " / " + String(entries.length) + " 路",
+          { style: { padding: "4px 0 6px", fontSize: "12px", opacity: 0.85, display: "flex", gap: "8px", alignItems: "center" } },
+          e("span", null, report.iocName + "：使能 " + String(report.enabledCount) + " / " + String(entries.length) + " 路"),
+          e("span", { style: debugStyles.spacer }),
+          e("input", {
+            value: needle,
+            onChange: (event) => setNeedle(event.target.value),
+            placeholder: "筛选中断名",
+            style: { fontSize: "11px", padding: "1px 6px", flex: "0 0 34%" },
+          }),
+          wanted === "" ? null : e("span", { style: { fontSize: "11px", opacity: 0.55 } }, "命中 " + String(shown.length)),
         ),
         message === "" ? null : e("div", { style: { fontSize: "11px", opacity: 0.8, padding: "0 0 4px" } }, message),
         entries.length === 0
           ? e("div", { style: { opacity: 0.6, fontSize: "12px" } }, "这个 .ioc 里没有 NVIC 中断配置。")
-          : entries.map(row),
+          : shown.length === 0
+            ? e("div", { style: { opacity: 0.6, fontSize: "12px" } }, "没有匹配的中断名。")
+            : shown.map(row),
       );
     }
 
