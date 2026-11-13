@@ -49,7 +49,7 @@ import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
 import { decodeFault, groupFaults } from "./fault-hints.js";
-import { readIocDiff, readIocKeysForPin, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
+import { readIocDiff, readIocKeysForPin, restoreAllIocKeys, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
@@ -460,6 +460,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ioc-diff",
   WEB_API_PREFIX + "/ioc-diff/save",
   WEB_API_PREFIX + "/ioc-diff/restore",
+  WEB_API_PREFIX + "/ioc-diff/restore-all",
   WEB_API_PREFIX + "/ioc-keys",
   WEB_API_PREFIX + "/abort",
   WEB_API_PREFIX + "/channels",
@@ -899,6 +900,13 @@ export async function handleWebApi(input: {
     const keys = readIocKeysForPin(requested !== "" ? requested : process.cwd(), pin, env);
     if (!keys.ok) return fail(409, keys.error);
     return ok({ iocKeys: keys.report });
+  }
+  if (path === WEB_API_PREFIX + "/ioc-diff/restore-all") {
+    // 一次性把改动/删除的键恢复成基线值，整批只备份一次。
+    const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
+    const restored = restoreAllIocKeys(requested !== "" ? requested : process.cwd(), env);
+    if (!restored.ok) return fail(409, restored.error);
+    return ok({ restoredAll: restored.report });
   }
   if (path === WEB_API_PREFIX + "/evidence") {
     // 回放：列出证据目录里可载入的 jsonl 文件。只读目录，不读内容。

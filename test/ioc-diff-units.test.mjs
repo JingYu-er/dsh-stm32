@@ -10,6 +10,7 @@ import {
   parseIocEntries,
   readIocDiff,
   readIocKeysForPin,
+  restoreAllIocKeys,
   restoreIocKey,
   saveIocSnapshot,
   snapshotPath,
@@ -175,4 +176,32 @@ test("readIocKeysForPin：带功能后缀的引脚取第一段，只读不改文
   assert.equal(readFileSync(iocPath, "utf8"), before, "只读，不改 .ioc");
   assert.equal(readIocKeysForPin("  ", "PA0").ok, false);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("restoreAllIocKeys：一次写回改动与删除，整批只备份一次，新增不动", () => {
+  const dir = projectWithIoc(["Mcu.CPN=STM32F103C8T6", "Mcu.IP0=NVIC", "PA0.Signal=GPIO_Output"].join("\n"));
+  const env = { DSH_STM32_SNAPSHOTS: mkdtempSync(join(tmpdir(), "dsh-ioc-snap-")) };
+  assert.equal(saveIocSnapshot(dir, env).ok, true);
+  writeFileSync(join(dir, "demo.ioc"), ["Mcu.CPN=STM32F103C8T6", "PA0.Signal=GPIO_Input", "PB1.Signal=GPIO_Output"].join("\n"), "utf8");
+
+  const result = restoreAllIocKeys(dir, env);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.report.restored.sort(), ["Mcu.IP0", "PA0.Signal"]);
+  assert.equal(result.report.changed, true);
+  assert.equal(existsSync(result.report.backupPath), true);
+  const text = readFileSync(join(dir, "demo.ioc"), "utf8");
+  assert.ok(text.includes("Mcu.IP0=NVIC"), "删除的键要补回来");
+  assert.ok(text.includes("PA0.Signal=GPIO_Output"), "改动的键要写回基线值");
+  assert.ok(text.includes("PB1.Signal=GPIO_Output"), "新增的键不动");
+  assert.equal(readIocDiff(dir, env).report.counts.changed, 0);
+
+  // 没有基线、没有差异两种情况都要能被调用方区分。
+  const noBaseline = restoreAllIocKeys(projectWithIoc("Mcu.CPN=STM32F103C8T6"), { DSH_STM32_SNAPSHOTS: mkdtempSync(join(tmpdir(), "dsh-ioc-snap-")) });
+  assert.equal(noBaseline.ok, false);
+  assert.ok(noBaseline.error.includes("基线"));
+  const clean = restoreAllIocKeys(dir, env);
+  assert.equal(clean.ok, true);
+  assert.deepEqual(clean.report.restored, []);
+  assert.equal(clean.report.changed, false);
+  assert.equal(restoreAllIocKeys("  ", env).ok, false);
 });
