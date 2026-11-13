@@ -6882,7 +6882,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 起因：按 S91 实测调试台时发现另一条路径仍然断着。`session/event` 里用 `sessionIdOf(session)` 取 `session.header.id`，但宿主实际给的对象未必带这个字段；取到空串时只更新了兜底引用，按会话 id 的表始终是空的。
 - 后果：`/projects`、`/pinout` 等接口按 `session=` 查不到工作目录，面板只能显示「没有可用的会话工作目录」。这与设计意图相反——该提示本应只在「这条会话确实没有工程」时出现。
 - 改法：`src/engine/session-context.ts` 的 `noteSessionAgent()` 同时按「传入的会话 id」与「agent 自己的 id」记两份（都走同一个容量上限）；`src/tools/project-dir.ts` 改为 `noteSessionAgent(exec.agent.id, exec.agent)`——工具层是唯一稳定带着 agent 的地方，而调试台注入的会话 id 与 `exec.agent.id` 是同一个值（证据目录名即此值）。
-- 验证：`test/session-context-units.test.mjs` 增 1 条（agent.id 单独登记、两把钥匙都能开），全量 **82 个套件 / 1106 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1973.4 KB / 303 文件 / 解包 15800.8 KB。
+- 验证：`test/session-context-units.test.mjs` 增 1 条（agent.id 单独登记、两把钥匙都能开），全量 **82 个套件 / 1106 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1973.6 KB / 303 文件 / 解包 15801.3 KB。
 - 教训：**宿主没公开的事件结构不能当作已确认的事实**。`session.header.id` 是猜的，猜错时不会报错，只会让功能静默退化；凡是「取不到就降级」的分支，都要有另一条来自真实调用链的登记路径兜住。
 
 ### 一百、教训

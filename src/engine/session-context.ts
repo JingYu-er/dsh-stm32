@@ -26,8 +26,16 @@ function agentIdOf(agent: unknown): string {
 }
 
 function remember(key: string, agent: unknown): void {
-  if (key === "") return;
-  agents.set(key, agent);
+  const trimmed = key.trim();
+  if (trimmed === "") return;
+  // 宿主与工具层对同一会话的写法不统一：可能带 `session-` 前缀，也可能是裸 UUID。
+  // 三种写法都登记，任何一方查都命中；条目仍在容量上限内，不跨会话。
+  const bare = trimmed.startsWith("session-") ? trimmed.slice("session-".length) : trimmed;
+  const names = new Set([trimmed, bare, "session-" + bare]);
+  for (const name of names) {
+    if (name === "") continue;
+    agents.set(name, agent);
+  }
   while (agents.size > SESSION_LIMIT) {
     const oldest = agents.keys().next();
     if (oldest.done === true) return;
