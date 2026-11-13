@@ -6713,6 +6713,14 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：tsc 0、build 0、**79 套件 / 1066 pass / 0 fail**（build-units 加 `parseBerkeleySize` 一条）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1967.1 KB / 292 文件 / 解包 15731.2 KB。真机「无改动构建」的占用仍需重启 DSH 后点一次构建确认。
 - 教训：**「没有数据」要区分「没发生」与「没采集」**。增量构建属于后者，用现成产物补一次采集，比让用户去点「清理构建」便宜得多。
 
+### 八十三补、真机确认与 notes 顺序修正（S80 收尾）
+
+- 真机验证（重启 DSH 后，端口 51352，`self.routeCount === 46`）：对 demo 工程连续两次 `POST /build`，`logTail` 都是 `ninja: no work to do.`，`memoryUsage` 都有 FLASH 4836 B / 65536 B（7.4%）与 RAM 1584 B / 20480 B（7.7%），elf 653580 B —— S80 的 `arm-none-eabi-size` 兜底在真机成立。
+- 发现的问题：`notes` 只写了「占用：FLASH 7.4%，RAM 7.7%」，没写「占用是量出来的」。原因是三条 `if/else if` 互斥，`measured` 分支被 `memoryUsage.length > 0` 吃掉。
+- 改法：把 `measured` 的判断挪进「有占用」分支内部——先写占用百分比，再追加「本次没有重新链接；占用由 arm-none-eabi-size 直接量 elf 得到」；没有占用时才走原来的两条提示。
+- 回归：`test/build-units.test.mjs` 新增 `runBuild` 用例（假 subprocess：cmake 返回 `ninja: no work to do.`、size 返回 berkeley 行；临时工程造 `build/Debug` 与 elf；断言 FLASH = text + data、RAM = data + bss、notes 里同时有「没有重新链接」与「arm-none-eabi-size」）。全量 **79 套件 / 1073 pass / 0 fail**、ACCEPTANCE OK、`test:size` 1971.2 KB / 293 文件 / 解包 15748.7 KB。
+- 教训：**互斥的条件分支里，附加说明要跟着主信息走**。「有数据」与「数据从哪来」不是二选一。
+
 ### 八十四、工程与工作区自描述文件（S82）
 
 - 问题：面板要用工程目录，但来源只有「当前调试会话的 projectDir」——没开会话时为空；同一会话换工程时，各页签各读各的，容易看串。用户提出：在工程里放一份描述文件，创建工程时在工作区根再放一份索引，两处同名、语义分层的 `dsh-stm32.conf`。

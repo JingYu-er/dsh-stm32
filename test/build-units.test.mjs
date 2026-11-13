@@ -1,8 +1,10 @@
 // 编译引擎单测：node test/build-units.test.mjs
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { countWarnings, detectBuildDir, findElf, parseBerkeleySize, parseBuildErrors, parseMemoryUsage } from "../lib/engine/build.js";
+import { countWarnings, detectBuildDir, findElf, parseBerkeleySize, parseBuildErrors, parseMemoryUsage, runBuild } from "../lib/engine/build.js";
 
 import { FIXTURE_PROJECT as DEMO } from "./fixtures.mjs";
 
@@ -71,6 +73,53 @@ test("parseBerkeleySize：增量构建时量 elf 的 text/data/bss（S80）", ()
   assert.deepEqual(parseBerkeleySize(text), { text: 3852, data: 984, bss: 1584 });
   assert.equal(parseBerkeleySize("no numbers here"), null, "认不出就给 null");
   assert.equal(parseBerkeleySize(""), null);
+});
+
+
+// 无改动构建：链接器没输出占用时，用 arm-none-eabi-size 补一次，并在 notes 里说明来源（S80/S80-fix）。
+function fakeNoopSubprocess(sizeStdout) {
+  return {
+    resolveExecutable: async (name) => "C:/fake/" + name + ".exe",
+    spawn(spec) {
+      const isSize = spec.argv.some((item) => String(item).includes("arm-none-eabi-size"));
+      const text = isSize ? sizeStdout : "ninja: no work to do.\n";
+      return {
+        collected: {
+          stdout: { readFrom: () => ({ text, nextOffset: text.length }) },
+          stderr: { readFrom: () => ({ text: "", nextOffset: 0 }) },
+        },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        terminate() {},
+        waitForExit: () => Promise.resolve({ exitCode: 0, signal: null }),
+      };
+    },
+  };
+}
+
+test("runBuild：无改动构建时用 size 量 elf，并在 notes 说明来源（S80）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "build-size-"));
+  mkdirSync(join(dir, "build", "Debug"), { recursive: true });
+  writeFileSync(join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  writeFileSync(
+    join(dir, "build", "Debug", "CMakeCache.txt"),
+    "CMAKE_PROJECT_NAME:STATIC=demo\nCMAKE_BUILD_TYPE:STRING=Debug\n",
+    "utf8",
+  );
+  writeFileSync(join(dir, "build", "Debug", "demo.elf"), "ELF", "utf8");
+
+  const report = await runBuild({
+    subprocess: fakeNoopSubprocess("   text\t   data\t    bss\t    dec\t    hex\tfilename\n   3852\t    984\t   1584\t   6420\t   1914\tdemo.elf\n"),
+    projectDir: dir,
+    env: {},
+    binDirs: ["C:/fake/bin"],
+  });
+  assert.equal(report.ok, true, "构建应成功");
+  assert.equal(report.memoryUsage.length, 2, "缺链接器输出时也要有占用");
+  assert.equal(report.memoryUsage[0].region, "FLASH");
+  assert.equal(report.memoryUsage[0].usedBytes, 4836, "FLASH = text + data");
+  assert.equal(report.memoryUsage[1].usedBytes, 2568, "RAM = data + bss");
+  assert.ok(report.notes.some((note) => note.includes("arm-none-eabi-size")), "notes 要说明占用是量出来的");
+  assert.ok(report.notes.some((note) => note.includes("没有重新链接")), "notes 要说明本次没链接");
 });
 
 let failed = 0;

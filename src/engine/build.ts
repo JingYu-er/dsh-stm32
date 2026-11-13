@@ -497,9 +497,13 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     const selectionNote = elfSelectionNote(buildDir);
     if (selectionNote !== "") notes.push(selectionNote);
   }
-  if (memoryUsage.length > 0) notes.push("占用：" + memoryUsage.map((item) => item.region + " " + String(item.percent) + "%").join("，"));
-  else if (elf !== null && measured) notes.push("本次没有重新链接；占用由 arm-none-eabi-size 直接量 elf 得到");
-  else if (elf !== null) notes.push("本次是增量构建，没有重新链接，因此没有内存占用数据（需要时用 clean 构建）");
+  if (memoryUsage.length > 0) {
+    notes.push("占用：" + memoryUsage.map((item) => item.region + " " + String(item.percent) + "%").join("，"));
+    // 占用不是链接器给的，就得说明来源，否则读者会以为这次真的链接了（S80）。
+    if (measured) notes.push("本次没有重新链接；占用由 arm-none-eabi-size 直接量 elf 得到");
+  } else if (elf !== null) {
+    notes.push("本次是增量构建，没有重新链接，因此没有内存占用数据（需要时用 clean 构建）");
+  }
 
   if (outcome.spawnError !== null) {
     return fail(request, "cmake 启动失败：" + outcome.spawnError, { ...base, errors: [outcome.spawnError] });
