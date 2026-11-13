@@ -1,6 +1,8 @@
-# 调试台（面板）—— 未发布的功能记录
+# 调试台（面板）—— 归档：已随 v0.1.8 发布
 
-> 状态：已在仓库内实现并逐阶段验收，**未发布新版本**（`package.json` 仍为 0.1.7）。本文件记录这次「调试台」系列改动的内容与验证口径，供发布时整理 changelog 使用。
+> **归档说明（2026-11-13）**：本文件描述的「调试台」已随 **v0.1.8** 发布，发布正文见
+> [`v0.1.8.md`](v0.1.8.md)。这里保留最初的功能记录，其中计数已过期（发布时为 80 套件 / 1088 pass、
+> 46 条路由、包体 1979.8 KB / 295 文件），以 v0.1.8 的 release notes 为准。
 
 ## 它是什么
 
@@ -25,20 +27,20 @@ DSH 主窗口会话页签里的一个工作面板（`conversation.view`，id `st
 
 ## 数据面
 
-- 45 条 `/dsh-stm32/api/*` 路由；事件流用 SSE（`/events?since=<seq>&session=<id>`），先补发存量再增量。
+- 46 条 `/dsh-stm32/api/*` 路由；事件流用 SSE（`/events?since=<seq>&session=<id>`），先补发存量再增量。
 - 环形缓冲 5000 条、单条 payload 8 KB；**每 30 秒**把本会话未落盘的事件写进 `~/.dsh-stm32/evidence/<日期>/<会话>/events-<时分秒>.jsonl`。
 - 保留策略：7 天或 20 个会话，超出由 `pruneEvidence` 清理；面板可手动触发并显示占用。
 - 调试会话、串口、RTT、监视、构建、烧录都从既有引擎读，面板不另起一套状态。
 
 ## 验证口径（本机）
 
-- `npm run build` 0；`node test/run-units.mjs` → 79 套件 / 1064 pass / 0 fail。
+- `npm run build` 0；`node test/run-units.mjs` → 80 套件 / 1088 pass / 0 fail（发布时实测）。
 - 验收脚本 `node .dsh-stm32/acceptance.mjs` → ACCEPTANCE OK（90 项 PASS，覆盖事件流、证据落盘与清理、产物、故障、中断、变更、串口、探针、时钟上限、物理引脚）。
-- `npm run test:pack` 通过；`npm run test:size` 1964.0 KB / 292 文件 / 解包 15721.4 KB（护栏上限 3906.3 KB）。
+- `npm run test:pack` 通过；`npm run test:size` 1979.8 KB / 295 文件 / 解包 15772.0 KB（护栏上限 3906.3 KB）。
 - 真机（DAPLink + STM32F103C8T6）：openocd 编程 `* Programming Finished *` / `* Verified OK *`；面板构建返回 elf 与耗时，面板烧录 `programmed: true` / `verified: true`；证据目录在 35 秒内出现本会话文件并能回放。
 
 ## 生效方式
 
 - 客户端改动（`client/client.js`）：`node scripts/copy-client.mjs` 后刷新页面。
 - 服务端改动（`src/**`）：完全退出 DSH 再启动（关窗口不够）。
-- 版本号本次未升；状态条会显示「v0.1.7 · 45 路由」，`lib` 比进程新时标黄提示「有新构建」。
+- 版本号为 v0.1.8；状态条会显示「v0.1.8 · 46 路由」，`lib` 比进程新时标黄提示「有新构建」。

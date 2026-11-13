@@ -6892,3 +6892,26 @@ https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base
   先钉 sha256、再列候选，才能既好装又不失守。
 - **pacman 的慢不能靠等**：官方源单包 20 KB/s 时，`cmake` 一个包要 25 分钟；
   把镜像放到 `mirrorlist.mingw` / `mirrorlist.msys` 最前，同样的包在 45 秒内下完。
+
+## §94 发布 0.1.8：调试台（2026-11-13）
+
+### 一、为什么现在发
+
+v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条人机联调面板的改动，全部只在本机开发树里验收过，没有版本号可对照。功能已收敛到「十个标签 + 46 条路由」，再攒下去只会让「哪些是已发布行为」更难回答，因此按 v0.1.7 的同口径发布：只升版本、写 release notes、打 tag，工具参数不动。
+
+### 二、改了什么
+
+- `package.json` / `package-lock.json` 0.1.7 → **0.1.8**；`README.md` / `README_EN.md` 的版本徽章与安装校验提示同步。
+- 新增 `docs/release-notes/v0.1.8.md`（发布正文，可直接贴到 release 页）。
+- `docs/release-notes/unreleased-debug-console.md` 转成归档页，正文指向 v0.1.8，并修掉里面已过期的计数（45 路由 → 46、79 套件 / 1064 pass → 80 / 1088、1964.0 KB → 1979.8 KB）。
+- 无破坏性变更：25 个工具的参数、返回结构、权限都不变；新增的只是面板、`/dsh-stm32/api/*` 路由与 `dsh-stm32.conf` / 证据目录这些新文件。
+
+### 三、验证
+
+- `npm run build` 0；`node test/run-units.mjs` **80 套件 / 1088 pass / 0 fail**；`node .dsh-stm32/acceptance.mjs` → ACCEPTANCE OK；`npm run test:pack` 通过；`npm run test:size` 1979.8 KB / 295 文件 / 解包 15772.0 KB。
+- tag `v0.1.8`（annotated），commit 与 tag 一起 push。
+
+### 四、教训
+
+- **发布文本要按「读者的下一个问题」组织**：先给一眼看完的对照表，再给能做什么、数据面、修了什么、不做什么、怎么验证、怎么升级；只罗列提交信息，读的人还得自己拼。
+- **归档页必须改，不能只新增**：旧的「未发布」文档留在仓库里，下一次就会被当成现状引用；转成归档并写清指向，成本比事后解释低。

@@ -725,8 +725,9 @@ test("GET /status：返回事件计数、会话键与证据目录", async () => 
   assert.equal(status.ringLimit, 5000);
   assert.equal(status.evidenceOverride, true);
   assert.ok(String(status.evidenceRoot).replace(/\\/gu, "/").endsWith("D:/evidence"), String(status.evidenceRoot));
-  // 自检：版本来自 package.json，路由数是本次注册的数量，时间戳都是正数。
-  assert.match(status.self.version, /^0\.1\.7$/u, JSON.stringify(status.self));
+  // 自检：版本来自 package.json（读一次真值，发布升版时不必改断言），路由数是本次注册的数量，时间戳都是正数。
+  const pkgVersion = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+  assert.equal(status.self.version, pkgVersion, JSON.stringify(status.self));
   assert.equal(status.self.routeCount, WEB_API_PATHS.length);
   assert.ok(status.self.startedAt > 0);
   assert.ok(status.self.libMtimeMs > 0);
