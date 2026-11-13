@@ -1946,6 +1946,7 @@ window.__ModuleLoader__.load({
       const [copiedPin, setCopiedPin] = useState("");
       const [mode, setMode] = useState("table");
       const [pinKeys, setPinKeys] = useState(null);
+      const [needle, setNeedle] = useState("");
       const showKeys = async (pinName) => {
         const result = await callApi("GET", "ioc-keys?projectDir=" + encodeURIComponent(projectDir) + "&pin=" + encodeURIComponent(pinName));
         if (result.ok) setPinKeys({ report: result.value.iocKeys, error: "" });
@@ -1959,6 +1960,13 @@ window.__ModuleLoader__.load({
         } catch {
           setCopiedPin("");
         }
+      };
+      /** 按引脚名、信号名、标号模糊匹配（S53）；空白表示不过滤。 */
+      const pinMatches = (pin) => {
+        const wanted = needle.trim().toLowerCase();
+        if (wanted === "") return true;
+        const text = [pin.pin, pin.signal, pin.label ?? ""].join(" ").toLowerCase();
+        return text.includes(wanted);
       };
       const head = [];
       if (projectDir === "") {
@@ -1990,7 +1998,16 @@ window.__ModuleLoader__.load({
           e("div", { key: "mode", style: { display: "flex", gap: "6px", padding: "0 0 4px" } },
             e("button", { type: "button", onClick: () => setMode("table"), style: Object.assign({}, debugStyles.button, mode === "table" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "表"),
             e("button", { type: "button", onClick: () => setMode("map"), style: Object.assign({}, debugStyles.button, mode === "map" ? { background: "color-mix(in srgb, currentColor 14%, transparent)" } : {}) }, "图"),
-            e("span", { style: { fontSize: "11px", opacity: 0.5, alignSelf: "center" } }, mode === "map" ? "按端口排布；点格子复制引用" : "按外设分组"),
+            e("input", {
+              value: needle,
+              onChange: (event) => setNeedle(event.target.value),
+              placeholder: "筛选引脚 / 信号 / 标号",
+              style: { fontSize: "11px", padding: "1px 6px", flex: "0 0 34%" },
+            }),
+            e("span", { style: { fontSize: "11px", opacity: 0.5, alignSelf: "center" } },
+              needle.trim() === ""
+                ? (mode === "map" ? "按端口排布；点格子复制引用" : "按外设分组")
+                : "命中 " + String(hitPins) + " / " + String(totalPins)),
           ),
         );
         const warnings = pinout.warnings ?? [];
@@ -2002,28 +2019,37 @@ window.__ModuleLoader__.load({
           );
         }
       }
-      const groups = pinout === null || state.error !== "" ? [] : (pinout.groups ?? []);
+      const allGroups = pinout === null || state.error !== "" ? [] : (pinout.groups ?? []);
+      const groups = allGroups
+        .map((group) => Object.assign({}, group, { pins: group.pins.filter(pinMatches) }))
+        .filter((group) => group.pins.length > 0);
+      const totalPins = (pinout === null ? [] : (pinout.pins ?? [])).length;
+      const hitPins = groups.reduce((sum, group) => sum + group.pins.length, 0);
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", padding: "0 10px 8px" } },
         head,
         mode === "map"
-          ? e(PinMap, { key: "map", pins: pinout === null ? [] : (pinout.pins ?? []), onCopy: copyPin })
+          ? e(PinMap, { key: "map", pins: (pinout === null ? [] : (pinout.pins ?? [])).filter(pinMatches), onCopy: copyPin })
           : null,
-        mode === "map" ? null : groups.map((group) =>
-          e(
-            "div",
-            { key: group.name, style: { padding: "4px 0", borderTop: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },
-            e(
-              "div",
-              { style: { fontSize: "12px", opacity: 0.7, paddingBottom: "2px" } },
-              group.name + "（" + String(group.pins.length) + "）",
+        mode === "map"
+          ? null
+          : groups.length === 0 && needle.trim() !== ""
+            ? e("div", { style: { padding: "6px 0", opacity: 0.6 } }, "没有匹配的引脚。")
+            : groups.map((group) =>
+              e(
+                "div",
+                { key: group.name, style: { padding: "4px 0", borderTop: "1px solid color-mix(in srgb, currentColor 8%, transparent)" } },
+                e(
+                  "div",
+                  { style: { fontSize: "12px", opacity: 0.7, paddingBottom: "2px" } },
+                  group.name + "（" + String(group.pins.length) + "）",
+                ),
+                group.pins.map((pin) =>
+                  e(PinRow, { key: pin.pin + ":" + pin.signal, pin: pin, copied: copiedPin === pin.pin, onCopy: copyPin, onShowKeys: showKeys }),
+                ),
+              ),
             ),
-            group.pins.map((pin) =>
-              e(PinRow, { key: pin.pin + ":" + pin.signal, pin: pin, copied: copiedPin === pin.pin, onCopy: copyPin, onShowKeys: showKeys }),
-            ),
-          ),
-        ),
         pinKeys === null
           ? null
           : e(
