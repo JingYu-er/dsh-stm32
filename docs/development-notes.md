@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S82）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S83）
 
 ### 一、目标与约束
 
@@ -6741,7 +6741,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：client 源码断言（`useProjects`、`DEBUG_PROJECT_KEY`、`已载入最近一份历史记录`）+ 全量 1072 pass + ACCEPTANCE OK。
 - 教训：**空状态要自己找一次历史**。面板显示「没有事件」时，先看看磁盘上有没有，再决定要不要说「没有」。
 
-### 八十六、教训
+### 八十六、演示固件与串口双向验证（S83）
+
+- 目的：给 DAPLink + STM32F103C8T6 一个「跑起来就能点满页签」的固件，用来验收调试台。
+- 固件（`demo` 工程）：主循环每圈 `g_work_loops++`、每 25 圈翻 PC13、每秒一帧 `T loops=… led=… mode=…`；串口命令 `s` 状态、`r` 清零、`l` 切 LED、`w` 忙等约 1 秒、`?` 帮助；被监视量还有 `g_uart_tx_lines` / `g_uart_rx_bytes` / `g_uart_commands` / `g_uart_errors` / `g_last_command`。工程侧改动：`HAL_UART_MODULE_ENABLED`、`cmake/stm32cubemx/CMakeLists.txt` 加 `stm32f1xx_hal_uart.c`、`demo.ioc` 补 PA9/PA10。
+- 接线：DAPLink 的虚拟串口与 SWD 引脚不复用，必须 PA9→转接板的 RXD、PA10→TXD、共地。实测换了 CH340（COM5）之后才通。
+- 实测：构建 FLASH 11612 B（17.72%）、RAM 2128 B（10.39%）；烧录 `programmed/verified`；SWD 两次读 `g_work_loops` 4262 → 34743；串口侧收到 `T loops=` 起始噪声与状态行；发 `l` 后固件回 `L mode=0` 且 LED 停在 264；发 `z` 回 `E unknown command 'z'`；`/channels` 的 `serial.lines` 19；等 30 秒后证据里出现 27 条 `channel:serial`，`/replay` 可原样载回。
+- 顺带修：`/faults` 对「编译失败：FAILED: [code=1] …」与「找不到已配置的构建目录」两条自家文案没有规则，兜到 `other/none`。`src/engine/fault-hints.ts` 增 `build.no-build-dir`（提示先跑 cmake 配置）与 `build.cmake-failed`（提示看 errors 与 cmake/user 登记），`test/fault-hints-units.test.mjs` 增对应用例。
+- 验证：`tsc` 0、build 0、**79 套件 / 1074 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 0、`test:size` 1971.3 KB / 293 文件 / 解包 15749.3 KB。
+- 教训：**工具自己的错误文案也要进故障规则表**。规则只认编译器原文，就会把自己的「找不到构建目录」当成未知故障。
+
+### 八十七、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

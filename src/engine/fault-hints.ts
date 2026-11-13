@@ -54,6 +54,18 @@ const RULES: readonly Rule[] = [
     hint: "烧录校验不通过：确认芯片型号与工程一致，重新上电后重烧一次。",
   },
   {
+    id: "build.no-build-dir",
+    category: "build",
+    test: /找不到已配置的构建目录/iu,
+    hint: "没有构建目录：先跑一次 cmake 配置（或用 stm32_build 的预设），不要在未配置的目录上直接构建。",
+  },
+  {
+    id: "build.cmake-failed",
+    category: "build",
+    test: /FAILED: \[code=\d+\]/iu,
+    hint: "编译或链接失败：看同一事件里 errors 的前几行，通常是源码写错，或新增的 .c 没有登记进 cmake/user/CMakeLists.txt。",
+  },
+  {
     id: "build.undefined-reference",
     category: "build",
     test: /undefined reference|undefined symbol/iu,

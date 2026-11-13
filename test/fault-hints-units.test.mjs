@@ -65,3 +65,14 @@ test("groupFaults：同一条规则合并计数，保留首末序号与时间，
   assert.equal(groups[1].count, 1);
   assert.deepEqual(groupFaults([]), []);
 });
+
+test("decodeFault：CMake 失败与缺构建目录各自给出检查点（S83）", () => {
+  const failed = decodeFault("编译失败：FAILED: [code=1] CMakeFiles/demo.dir/Core/Src/main.c.obj");
+  assert.equal(failed.category, "build");
+  assert.equal(failed.rule, "build.cmake-failed");
+  assert.match(failed.hint, /cmake\/user/u);
+
+  const noDir = decodeFault("在 D:/proj 下找不到已配置的构建目录，也没有可用的 CMakePresets.json；先手动 cmake 配置一次");
+  assert.equal(noDir.rule, "build.no-build-dir");
+  assert.match(noDir.hint, /cmake/u);
+});
