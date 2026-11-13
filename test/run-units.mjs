@@ -9,6 +9,7 @@
 // 套件退出码非 0 一律算失败，即使它自己打印了 fail=0。
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -139,6 +140,10 @@ function tail(out, n) {
   return lines.slice(-n).join("\n    ");
 }
 
+// 单测不许把「最近用过的工程」写进开发机真实的 ~/.dsh-stm32：resolveProjectDir 每跑一次都会记一笔，
+// 于是 web-api 的「缺参数回 400」用例会被本机备忘变成 200。整轮换到临时根目录。
+const memoHome = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-stm32-units-home-"));
+
 let totalPass = 0;
 let totalFail = 0;
 let unparsed = 0;
@@ -154,7 +159,7 @@ for (const name of suites) {
       stdio: ["ignore", "pipe", "pipe"],
       // 单测不许受开发机上真实存在的 ~/.dsh-stm32/config.json 影响（装了工具链的机器上
       // search-roots 的"默认候选"断言会因此变红）；toolchain-units 自己会清掉这个变量再测配置读取。
-      env: { ...process.env, DSH_STM32_NO_CONFIG: "1" },
+      env: { ...process.env, DSH_STM32_NO_CONFIG: "1", DSH_STM32_HOME: memoHome },
     });
   } catch (error) {
     out = String(error.stdout ?? "") + String(error.stderr ?? "");

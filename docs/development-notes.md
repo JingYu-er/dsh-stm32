@@ -6767,6 +6767,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
   - 新增 `src/engine/workspace-memo.ts`：`workspaceMemoPath`（默认 `~/.dsh-stm32/last-workspace.txt`，`DSH_STM32_HOME` 覆盖根）、`rememberWorkspace`（写失败静默）、`recallWorkspace`（读不到空串）。`resolveProjectDir` 定下目录后记一笔。
   - `web-api` 的兜底链变成「显式 → 会话工作目录 → 最近一次用过的工程 → 空（400）」；`/projects` 的工作区根同样多一档 `memoDir`。
 - 验证：79→**80 套件 / 1080 pass / 0 fail**（新增 `workspace-memo-units` 3 条与 `/pinout` 走备忘的用例；两条重复的 S84 用例合并，并用临时 `DSH_STM32_HOME` 隔离，否则本机备忘会把 400 用例变成 200）、ACCEPTANCE OK、`test:pack` 0、`test:size` 1973.4 KB / 295 文件 / 解包 15756.7 KB。
+- 回归隔离：`test/run-units.mjs` 现在整轮设 `DSH_STM32_HOME` 到临时目录——`resolveProjectDir` 每跑一次都会写备忘，不隔离时会把开发机真实 `~/.dsh-stm32/last-workspace.txt` 改成测试夹具路径，反过来让 web-api 的「缺参数回 400」用例变成 200。
 - 教训：**兜底链要一档一档可验证**。加了「会话目录」这一档不等于拿得到它——resolver 拿不到的输入（agent）要显式补上，否则新档位永远命中不了。
 
 ### 八十九、教训
