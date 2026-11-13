@@ -2148,6 +2148,7 @@ window.__ModuleLoader__.load({
     /** 故障页：读取本会话失败事件的解码结果；进页拉一次，失败事件变化时再刷。 */
     function useFaults(sessionId, intervalMs) {
       const [faults, setFaults] = useState(null);
+      const [groups, setGroups] = useState([]);
       const [error, setError] = useState("");
       const [tick, setTick] = useState(0);
       useEffect(() => {
@@ -2158,6 +2159,7 @@ window.__ModuleLoader__.load({
           if (closed) return;
           if (result.ok) {
             setFaults(result.value.faults ?? []);
+            setGroups(result.value.groups ?? []);
             setError("");
           } else {
             setError(result.error);
@@ -2170,7 +2172,7 @@ window.__ModuleLoader__.load({
           clearInterval(timer);
         };
       }, [sessionId, tick]);
-      return { faults, error, reload: () => setTick((value) => value + 1) };
+      return { faults, groups, error, reload: () => setTick((value) => value + 1) };
     }
 
     const FAULT_CATEGORY_LABEL = { probe: "探针", target: "目标", build: "编译", flash: "烧录", toolchain: "工具链", network: "网络", debug: "调试", tool: "文件", other: "其它" };
@@ -2178,6 +2180,7 @@ window.__ModuleLoader__.load({
     function FaultPanel(props) {
       const state = useFaults(props.sessionId, 5000);
       const [category, setCategory] = useState("");
+      const [rule, setRule] = useState("");
       if (state.error !== "") {
         return e("div", { style: { padding: "12px", opacity: 0.75, fontSize: "12px" } }, "读取故障失败：" + state.error);
       }
@@ -2190,7 +2193,8 @@ window.__ModuleLoader__.load({
       }
       const counts = new Map();
       for (const fault of faults) counts.set(fault.category, (counts.get(fault.category) ?? 0) + 1);
-      const shown = category === "" ? faults : faults.filter((fault) => fault.category === category);
+      const byCategory = category === "" ? faults : faults.filter((fault) => fault.category === category);
+      const shown = rule === "" ? byCategory : byCategory.filter((fault) => fault.rule === rule);
       const chip = (key, label, count) =>
         e(
           "button",
@@ -2202,9 +2206,55 @@ window.__ModuleLoader__.load({
           },
           label + " " + String(count),
         );
+      const groupRow = (item) =>
+        e(
+          "button",
+          {
+            key: "fault-group-" + item.rule,
+            type: "button",
+            title: item.hint === "" ? "命中规则 " + item.rule : item.hint,
+            onClick: () => setRule(rule === item.rule ? "" : item.rule),
+            style: Object.assign({}, debugStyles.button, {
+              display: "flex",
+              gap: "8px",
+              alignItems: "baseline",
+              width: "100%",
+              justifyContent: "flex-start",
+              textAlign: "left",
+              padding: "4px 6px",
+              fontSize: "12px",
+              opacity: rule === "" || rule === item.rule ? 1 : 0.55,
+              background: rule === item.rule ? "color-mix(in srgb, currentColor 14%, transparent)" : "transparent",
+            }),
+          },
+          e("span", { style: { fontVariantNumeric: "tabular-nums", minWidth: "34px" } }, "×" + String(item.count)),
+          e("span", { style: { opacity: 0.8 } }, String(item.rule)),
+          e("span", { style: { marginLeft: "auto", opacity: 0.55 } }, clockText(item.lastTime)),
+        );
+      const groupsBlock =
+        state.groups.length === 0
+          ? null
+          : e(
+              "div",
+              { style: { paddingBottom: "4px" } },
+              e(
+                "div",
+                { style: { display: "flex", gap: "8px", alignItems: "baseline", opacity: 0.6, fontSize: "12px", paddingBottom: "2px" } },
+                e("span", {}, "按规则合并（" + String(state.groups.length) + " 组）"),
+                rule === ""
+                  ? null
+                  : e(
+                      "button",
+                      { type: "button", onClick: () => setRule(""), style: Object.assign({}, debugStyles.button, { fontSize: "11px", padding: "1px 6px" }) },
+                      "清除规则筛选",
+                    ),
+              ),
+              state.groups.slice(0, 6).map(groupRow),
+            );
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", overflow: "auto", padding: "6px 10px 10px" } },
+        groupsBlock,
         e(
           "div",
           { style: { display: "flex", flexWrap: "wrap", gap: "4px", paddingBottom: "6px" } },

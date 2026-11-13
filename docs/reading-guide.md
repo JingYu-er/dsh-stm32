@@ -858,7 +858,7 @@ const fake = {
 
 读完这一遍，最值得回头再看两处的顺序是：**先 7.8（generate）再看 5.5**，因为 generate 是全仓库复杂度顶点，看懂它就等于看懂了「编码层 + 备份 + 缓存 + 产物判据 + 锁」这五条横切关注点如何在一个流程里共存。
 
-## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S45）
+## 15. 调试台：事件流与停靠网格（0.1.7 增补，S1–S46）
 
 > 接续 §14。这一节新增的是一个主窗口标签（`conversation.view`）和它背后的只读事件流，不改任何工具的行为与契约。
 
@@ -874,7 +874,7 @@ const fake = {
 - `POST /dsh-stm32/api/debug/breakpoints`：断点面板的三个动作（list / add / remove），位置与编号白名单，不做任意 gdb 命令转发。
 - `src/engine/progress.ts` 与 `POST /dsh-stm32/api/abort`：在途调用登记表与中止；派生 AbortController 把宿主的 abort 转发进来，面板只掐自己这一支，工具仍把信号透传给子进程。`/status` 的 `running` 与事件流里的 `callId` 是同一份事实的两种读法。
 - `src/engine/pinout.ts` 与 `/pinout`：引脚面板。`readPinout(projectDir)` 复用 `summarizeIoc`，`groupOfPin` / `groupPins` 决定分组与顺序（外设自然序在前，GPIO/调试口/时钟/虚拟引脚在后）。
-- `src/engine/fault-hints.ts` 与 `/faults`：故障页。`decodeFault` 是纯函数规则表，按最具体优先；没命中就返回空提示，不猜原因。
+- `src/engine/fault-hints.ts` 与 `/faults`：故障页。`decodeFault` 是纯函数规则表，按最具体优先；没命中就返回空提示，不猜原因。`groupFaults` 按规则合并计数给面板显示，不改事件本身。
 - `/evidence` 与 `/replay`：列证据文件、按路径还原事件；回放入口在时间线工具栏，不与实时事件混流。
 - `src/engine/ioc-diff.ts` 与 `/ioc-diff`、`/ioc-diff/save`、`/ioc-diff/restore`：当前 .ioc 与用户目录里基线的逐键差异；基线覆盖式保存，不依赖 git；`restoreIocKey` 把某个键写回基线值，写前备份到 `<工程>/.dsh-stm32/backups`。
 - `src/engine/breakpoint-hits.ts`：从 gdb 输出解析断点/观察点停点，`HitHistory` 环形 50 条；`/debug` 的 `hits` 给断点面板底部列表。
@@ -913,6 +913,6 @@ const fake = {
 | --- | --- |
 | 注册工具 | 25 个 |
 | 源码 | `src/**/*.ts` 131 个文件 |
-| 单测 | 79 个套件 / 1049 pass / 0 fail |
-| 客户端 | `client/client.js` 3735 行（手写，不经 tsc） |
-| 包体 | 1935.0 KB / 292 文件 / 解包 15594.7 KB（护栏上限 3906.3 KB） |
+| 单测 | 79 个套件 / 1050 pass / 0 fail |
+| 客户端 | `client/client.js` 3785 行（手写，不经 tsc） |
+| 包体 | 1936.6 KB / 292 文件 / 解包 15600.6 KB（护栏上限 3906.3 KB） |

@@ -745,6 +745,9 @@ test("GET /faults：只取失败事件并带上解码提示，limit 生效", asy
   });
   assert.equal(all.status, 200);
   assert.equal(all.body.total, 2, "只数本会话的失败事件");
+  assert.equal(all.body.groups.length, 2, "按规则合并后两组");
+  assert.equal(all.body.groups[0].count, 1);
+  assert.equal(all.body.groups.map((item) => item.rule).sort().join(","), "build.undefined-reference,probe.cmsis-dap-missing");
   assert.equal(all.body.faults.length, 2);
   assert.equal(all.body.faults[0].category, "probe");
   assert.equal(all.body.faults[1].rule, "build.undefined-reference");

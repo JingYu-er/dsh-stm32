@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { decodeFault } from "../lib/engine/fault-hints.js";
+import { decodeFault, groupFaults } from "../lib/engine/fault-hints.js";
 
 test("decodeFault：探针未识别与目标无响应各自归类", () => {
   const probe = decodeFault("Error: unable to find a matching CMSIS-DAP device");
@@ -45,4 +45,23 @@ test("decodeFault：没命中就给空提示与原样归类，不臆造原因", 
   assert.equal(unknown.hint, "");
   assert.equal(unknown.rule, "none");
   assert.deepEqual(decodeFault("   "), { category: "other", hint: "", rule: "none" });
+});
+
+test("groupFaults：同一条规则合并计数，保留首末序号与时间，按 count 降序", () => {
+  const items = [
+    { seq: 3, time: "2026-11-13T07:00:00.000Z", rule: "build.undefined-reference", category: "build", hint: "看链接命令" },
+    { seq: 5, time: "2026-11-13T07:00:05.000Z", rule: "build.undefined-reference", category: "build", hint: "看链接命令" },
+    { seq: 9, time: "2026-11-13T07:00:09.000Z", rule: "probe.cmsis-dap-missing", category: "probe", hint: "换 USB 口" },
+  ];
+  const groups = groupFaults(items);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].rule, "build.undefined-reference");
+  assert.equal(groups[0].count, 2);
+  assert.equal(groups[0].firstSeq, 3);
+  assert.equal(groups[0].lastSeq, 5);
+  assert.equal(groups[0].firstTime, "2026-11-13T07:00:00.000Z");
+  assert.equal(groups[0].lastTime, "2026-11-13T07:00:05.000Z");
+  assert.equal(groups[0].category, "build");
+  assert.equal(groups[1].count, 1);
+  assert.deepEqual(groupFaults([]), []);
 });

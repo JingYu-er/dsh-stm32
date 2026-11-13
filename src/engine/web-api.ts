@@ -48,7 +48,7 @@ import { readProbeInfo } from "./probe-info.js";
 import { debugSessions } from "./debug-session.js";
 import { readClockTree } from "./clocks.js";
 import { readArtifacts } from "./artifacts.js";
-import { decodeFault } from "./fault-hints.js";
+import { decodeFault, groupFaults } from "./fault-hints.js";
 import { readIocDiff, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
@@ -831,7 +831,7 @@ export async function handleWebApi(input: {
         rule: decoded.rule,
       };
     });
-    return ok({ faults, total: failures.length });
+    return ok({ faults, total: failures.length, groups: groupFaults(faults) });
   }
   if (path === WEB_API_PREFIX + "/ioc-diff") {
     // 变更页：当前 .ioc 与上次基线逐键比较。只读工程文件。

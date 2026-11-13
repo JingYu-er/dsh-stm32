@@ -112,3 +112,55 @@ export function decodeFault(text: string): FaultHint {
   }
   return { category: "other", hint: "", rule: "none" };
 }
+
+/** 同一条规则命中的多次失败合并成一组。 */
+export interface FaultGroup {
+  readonly rule: string;
+  readonly category: FaultCategory;
+  readonly hint: string;
+  readonly count: number;
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly firstTime: string;
+  readonly lastTime: string;
+}
+
+/**
+ * 按规则合并失败事件（S46）。
+ *
+ * 一次构建失败往往连着几条同因错误（多个未定义符号各算一条），逐条列会把
+ * 真正不同的那一条挤到屏幕外。合并只影响展示：计数、首末序号与时间保留，
+ * 原始事件仍在时间线与 `faults` 列表里。
+ */
+export function groupFaults(
+  items: readonly { seq: number; time: string; rule: string; category: FaultCategory; hint: string }[],
+): FaultGroup[] {
+  const groups = new Map<string, FaultGroup>();
+  for (const item of items) {
+    const found = groups.get(item.rule);
+    if (found === undefined) {
+      groups.set(item.rule, {
+        rule: item.rule,
+        category: item.category,
+        hint: item.hint,
+        count: 1,
+        firstSeq: item.seq,
+        lastSeq: item.seq,
+        firstTime: item.time,
+        lastTime: item.time,
+      });
+      continue;
+    }
+    groups.set(item.rule, {
+      rule: found.rule,
+      category: found.category,
+      hint: found.hint,
+      count: found.count + 1,
+      firstSeq: Math.min(found.firstSeq, item.seq),
+      lastSeq: Math.max(found.lastSeq, item.seq),
+      firstTime: found.firstTime,
+      lastTime: item.time,
+    });
+  }
+  return Array.from(groups.values()).sort((left, right) => right.count - left.count || left.rule.localeCompare(right.rule));
+}
