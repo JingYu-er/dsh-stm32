@@ -864,8 +864,6 @@ const fake = {
 
 ### 15.1 先读哪里
 
-（`src/engine/clocks.ts` 的 `familyOfCpn` / `limitForNode` 给出总线上限与超限判断。）
-
 - `src/engine/event-bus.ts`：环形缓冲与序号。`EVENT_RING_LIMIT = 5000`、`EVENT_PAYLOAD_LIMIT = 8192`、`EVENT_PENDING_LIMIT = 2000`；`emitEvent` 是唯一写入入口。
 - `src/engine/event-log.ts`：被挤出的事件按 30 秒一批写到 `<证据根>/<日期>/<会话键>/events-<HHmmss>.jsonl`；缺口先写一条 `kind:"log"` 的事件。
 - `src/engine/tool-events.ts`：装配期 Proxy 只包 `tools.register`，给 `stm32_*` 工具加 start / ok / fail。
@@ -875,7 +873,7 @@ const fake = {
 - `GET /dsh-stm32/api/debug` 与客户端会话卡：只读调试会话摘要（端口、剩余租约、断点与观察点配额），5 秒轮询。
 - `POST /dsh-stm32/api/debug/breakpoints`：断点面板的三个动作（list / add / remove），位置与编号白名单，不做任意 gdb 命令转发。
 - `src/engine/progress.ts` 与 `POST /dsh-stm32/api/abort`：在途调用登记表与中止；派生 AbortController 把宿主的 abort 转发进来，面板只掐自己这一支，工具仍把信号透传给子进程。`/status` 的 `running` 与事件流里的 `callId` 是同一份事实的两种读法。
-- `src/engine/pinout.ts` 与 `/pinout`：引脚面板。`readPinout(projectDir)` 复用 `summarizeIoc`，`groupOfPin` / `groupPins` 决定分组与顺序（外设自然序在前，GPIO/调试口/时钟/虚拟引脚在后）。
+- `src/engine/pinout.ts` 与 `/pinout`：引脚面板。`readPinout(projectDir, env)` 复用 `summarizeIoc`，`groupOfPin` / `groupPins` 决定分组与顺序（外设自然序在前，GPIO/调试口/时钟/虚拟引脚在后）；同一份报告里的 `physical` 来自 `readPhysicalLayout`（读 CubeMX `db/mcu/<Mcu.Name>.xml` 的 `Position`，`pinCount` 取最大脚号而不是去重后的名字数），客户端「方框」视图由 `pinBoxSides` 摊到四边、`PinBox` 渲染，没有 db 时只显示 `reason`。
 - `src/engine/fault-hints.ts` 与 `/faults`：故障页。`decodeFault` 是纯函数规则表，按最具体优先；没命中就返回空提示，不猜原因。`groupFaults` 按规则合并计数给面板显示，不改事件本身。
 - `/evidence` 与 `/replay`：列证据文件（`groupEvidenceFiles` 按会话分组，路径仍是唯一标识）、按路径还原事件；回放入口在时间线工具栏，不与实时事件混流。
 - `src/engine/ioc-diff.ts` 与 `/ioc-diff`、`/ioc-diff/save`、`/ioc-diff/restore`：当前 .ioc 与用户目录里基线的逐键差异；基线覆盖式保存，不依赖 git；`restoreIocKey` 把某个键写回基线值，写前备份到 `<工程>/.dsh-stm32/backups`。
@@ -893,7 +891,7 @@ const fake = {
 - `src/engine/artifacts.ts` 与 `/artifacts`：产物页。`readArtifacts` 只读构建目录里的 elf/hex/bin 文件属性，容量取 `findChipFact` 的芯片事实；Flash/RAM 占用不在这里算，面板从 `stm32_build` 的 ok 事件里取 `memoryUsage`，保证只有一份数字。
 - 客户端 `OverviewPanel` 的工具链一行：`useProbeSummary(60000)` 读 `GET /probe`，能力四项只认 `capabilities`，缺件直接列名。
 - 客户端 `OverviewPanel`：概览页，纯拼装 `usePinout` / `useClockTree` / `useArtifacts` / `useDebugStatus` 与事件流里的构建、烧录时间戳，没有对应的服务端接口。
-- `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。
+- `src/engine/clocks.ts` 与 `/clocks`：时钟页。只读 `.ioc` 的 `RCC.*Freq_Value`，不复算；`dividerLabel` / `mulLabel` 只做展示翻译。`familyOfCpn` / `limitForNode` 按芯片族给出 APB1/APB2/ADC 上限并判超限，`suggestFix` 只对这三路枚举分频档给出「改成 ÷N」的建议（不写 `.ioc`，改配置仍走 `stm32_ioc_plan`）；客户端 `ClockPanel` 的表/图两种模式共用同一份节点数据，图模式由 `ClockFlow` 用 `clockFlowRows` 摊平层级后渲染。
 - `src/engine/event-log.ts` 的 `pruneEvidence`：证据保留（7 天 / 20 会话）与 `/evidence/prune`。
 - `src/engine/tool-events.ts` 的 `resultDigest`：白名单决定面板能看见哪些结果字段（`errors` 截 20 条、`projectDir` 用于跳源码）。
 - `src/engine/source-slice.ts` 与 `/source`：停点与编译错误跳源码。
