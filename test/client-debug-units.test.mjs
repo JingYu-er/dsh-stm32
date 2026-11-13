@@ -177,6 +177,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("failToast") && source.includes("新失败"), "新失败要在面板顶部主动提示");
     assert.ok(source.includes("readDebugEventSeq") && source.includes("writeDebugEventSeq"), "事件要能深链到地址栏");
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
+    assert.ok(source.includes("DEBUG_PROJECT_KEY"), "工程选择要按会话记住");
+    assert.ok(source.includes("function useProjects("), "面板要读工程索引");
+    assert.ok(source.includes("已载入最近一份历史记录"), "打开面板时应自动载入最近证据");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
   } finally {
     globalThis.window = previousWindow;

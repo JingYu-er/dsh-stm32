@@ -43,6 +43,7 @@ const suites = [
   "progress-units.test.mjs",
   "channel-tap-units.test.mjs",
     "pinout-units.test.mjs",
+    "project-conf-units.test.mjs",
     "clocks-units.test.mjs",
     "fault-hints-units.test.mjs",
     "artifacts-units.test.mjs",

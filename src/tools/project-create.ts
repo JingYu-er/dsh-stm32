@@ -13,6 +13,8 @@
  * 寄存器路线仅需编译工具链（capability=build）——即"缺少 CubeMX 亦可用"的场景。
  */
 
+import { dirname, resolve } from "node:path";
+
 import { ensureAssets } from "../engine/assets.js";
 import { createProjectScaffold, preflightTarget } from "../engine/scaffold.js";
 import { createRegisterProject } from "../engine/register-template.js";
@@ -24,6 +26,7 @@ import { ensureFacts } from "../engine/facts-acquire.js";
 import { liveProbeChoice } from "../engine/doctor.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { validateToolArgs } from "./project-dir.js";
+import { registerWorkspaceProject, writeProjectConf } from "../engine/project-conf.js";
 
 export const PROJECT_CREATE_TOOL = "stm32_project_create";
 
@@ -171,6 +174,27 @@ function normalizeRoute(value: string | undefined): "hal" | "register" | null {
   if (text === "hal" || text === "cube" || text === "cubemx") return "hal";
   if (text === "register" || text === "reg" || text === "bare") return "register";
   return null;
+}
+
+/**
+ * 建完工程把描述写下来（S82）：工程根一份 `dsh-stm32.conf`，工作区根再登记一条。
+ *
+ * 只在成功时写；写失败只影响面板的工程选择器，不回滚已建好的工程。
+ */
+function recordProjectConf(report: ProjectReport): void {
+  if (!report.ok) return;
+  const dir = report.targetDir;
+  if (dir.trim() === "") return;
+  const written = writeProjectConf(dir, {
+    name: report.projectName ?? "",
+    mcu: report.mcu ?? "",
+    ioc: report.iocPath ?? "",
+    build: "Debug",
+  });
+  if (!written) return;
+  // 工作区根取工程目录的上一级：用户建工程时给的就是工作区里的一个子目录。
+  const parent = dirname(resolve(dir));
+  if (parent !== resolve(dir)) registerWorkspaceProject(parent, dir);
 }
 
 export function registerProjectCreate(ctx: DshContext): void {
@@ -372,6 +396,7 @@ export function registerProjectCreate(ctx: DshContext): void {
           await ensureFacts(normalized.mcu, process.env, { timeoutMs: 180_000, signal: exec.signal });
           for (const n of generationRiskNotes(normalized.mcu)) normalized.warnings.push(n);
         }
+        recordProjectConf(normalized);
         return { message: normalized.message, report: normalized };
       }
 
@@ -414,6 +439,7 @@ export function registerProjectCreate(ctx: DshContext): void {
           for (const n of generationRiskNotes(halMcu)) halReport.warnings.push(n);
         }
       }
+      recordProjectConf(halReport);
       return { message: halReport.message, report: halReport };
     },
   });

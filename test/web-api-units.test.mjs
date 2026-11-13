@@ -236,9 +236,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十五条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 45);
-  assert.equal(new Set(WEB_API_PATHS).size, 45);
+test("WEB_API_PATHS：四十六条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 46);
+  assert.equal(new Set(WEB_API_PATHS).size, 46);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -479,6 +479,31 @@ test("GET/POST /watch：列清单、加值监视、移除、清空、非法动�
   const put = await handleWebApi({ method: "PUT", path: WEB_API_PREFIX + "/watch", query: {}, deps });
   assert.equal(put.status, 405);
   removeAllWatches(watchState);
+});
+
+test("GET /projects：工作区索引与扫描合并，并返回当前工程描述（S82）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "api-projects-"));
+  const project = path.join(root, "demo");
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\n", "utf8");
+  fs.writeFileSync(path.join(root, "dsh-stm32.conf"), "version=1\nproject=demo\n", "utf8");
+  fs.writeFileSync(
+    path.join(project, "dsh-stm32.conf"),
+    "version=1\nname=demo\nmcu=STM32F103C8T6\nioc=demo.ioc\nbuild=Debug\n",
+    "utf8",
+  );
+
+  const response = await handleWebApi({
+    method: "GET",
+    path: WEB_API_PREFIX + "/projects",
+    query: { root, projectDir: project },
+    deps: { subprocess: fakeSubprocess, env: {} },
+  });
+  assert.equal(response.status, 200);
+  const projects = response.body.projects;
+  assert.equal(projects.hasConf, true);
+  assert.ok(projects.entries.some((item) => item.dir === project), "索引里的工程应在列表里");
+  assert.equal(projects.current.mcu, "STM32F103C8T6");
 });
 
 test("GET /ioc-sync：.ioc 比 main.c 新算待生成，缺 .ioc 时 409", async () => {

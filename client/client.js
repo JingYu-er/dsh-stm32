@@ -663,6 +663,8 @@ window.__ModuleLoader__.load({
      */
 
     const DEBUG_LAYOUT_KEY = "dsh-stm32.debug.layout.v1";
+    /** 工程选择的记忆键：一个会话一份，换会话不串（S82）。 */
+    const DEBUG_PROJECT_KEY = (session) => "dsh-stm32.debug.project.v1:" + (session === "" ? "unbound" : session);
     const DEBUG_EVENT_CAP = 2000;
     const DEBUG_RECONNECT_MS = 1500;
 
@@ -3988,7 +3990,10 @@ window.__ModuleLoader__.load({
       const recording = useWatchRecording(3000);
       const tapOf = (key) => taps.channels.find((item) => item.name === key);
       const tails = collectChannelTails(props.events);
-      const projectDir = debugInfo.debug?.projectDir ?? "";
+      /* 工程目录：面板选过就用选的，否则跟当前调试会话（S82）。 */
+      const projectDir = typeof props.projectDir === "string" && props.projectDir !== ""
+        ? props.projectDir
+        : (debugInfo.debug?.projectDir ?? "");
       const setStateFor = (key, patch) => {
         setView((previous) => {
           const next = Object.assign({}, previous);
@@ -4403,6 +4408,34 @@ window.__ModuleLoader__.load({
       window.history.replaceState(null, "", window.location.pathname + window.location.search + next);
     }
 
+    /** 工程选择器数据（S82）：工作区索引 + 现场扫描。 */
+    function useProjects(projectDir, intervalMs) {
+      const [value, setValue] = useState(null);
+      const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let closed = false;
+        const load = async () => {
+          const query = "projects?projectDir=" + encodeURIComponent(projectDir ?? "");
+          const result = await callApi("GET", query);
+          if (closed) return;
+          if (result.ok) {
+            setValue(result.value.projects ?? null);
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        const timer = intervalMs === undefined || intervalMs <= 0 ? null : setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          if (timer !== null) clearInterval(timer);
+        };
+      }, [projectDir, tick, intervalMs]);
+      return { value, error, reload: () => setTick((value_) => value_ + 1) };
+    }
+
     function DebugConsole(props) {
       const sessionId = props !== null && typeof props === "object" && typeof props.sessionId === "string" ? props.sessionId : "";
       const { events, connection } = useDebugEvents(sessionId);
@@ -4432,8 +4465,38 @@ window.__ModuleLoader__.load({
       const failSeenRef = React.useRef(0);
       const [focusFailures, setFocusFailures] = useState(0);
       const replayState = useReplay();
+      const replayRef = React.useRef(null);
+      replayRef.current = replayState;
+      useEffect(() => {
+        if (sessionId === "" || autoLoadedRef.current === true) return;
+        if (events.length > 0) return;
+        const state = replayRef.current;
+        if (state === null || state.replay !== null || state.busy === true) return;
+        autoLoadedRef.current = true;
+        (async () => {
+          const listed = await callApi("GET", "evidence");
+          if (!listed.ok) return;
+          const files = listed.value.evidence?.files ?? [];
+          if (files.length === 0) return;
+          const mine = files.filter((item) => String(item.path).includes(sessionId));
+          const pick = (mine.length > 0 ? mine : files)[0];
+          if (pick === undefined) return;
+          await state.load(pick.path);
+          setPickerMessage("已载入最近一份历史记录（" + String(pick.path) + "）；点「退出回放」回到实时。");
+        })();
+      }, [sessionId, events.length]);
       const [filter, setFilter] = useState("");
       const [layout, setLayout] = useState(readDebugLayout);
+      /* 工程选择（S82）：留空表示跟当前调试会话。 */
+      const [projectOverride, setProjectOverride] = useState(() => {
+        try {
+          return window.localStorage.getItem(DEBUG_PROJECT_KEY(sessionId)) ?? "";
+        } catch {
+          return "";
+        }
+      });
+      const projects = useProjects(projectOverride);
+      const autoLoadedRef = React.useRef(false);
       useEffect(() => {
         const initial = readDebugEventSeq();
         if (initial !== null) setSelectedSeq(initial);
@@ -4586,6 +4649,7 @@ window.__ModuleLoader__.load({
             key: "channels",
             events: visible,
             sessionId: sessionId,
+            projectDir: projectOverride,
             focusFailures: focusFailures,
             onShowFailures: () => {
               setOnlyFail(true);
@@ -4719,6 +4783,28 @@ window.__ModuleLoader__.load({
               onClick: () => (replayState.replay === null ? setPickerOpen((open) => !open) : replayState.clear()),
             },
             replayState.replay === null ? "回放…" : "退出回放",
+          ),
+          e(
+            "select",
+            {
+              value: projectOverride,
+              title: "选一个工程：概览、引脚、时钟、中断、产物、变更都跟着切；留空跟当前调试会话",
+              style: { fontSize: "11px", padding: "1px 4px", maxWidth: "220px" },
+              onChange: (event) => {
+                const next = event.target.value;
+                setProjectOverride(next);
+                try {
+                  window.localStorage.setItem(DEBUG_PROJECT_KEY(sessionId), next);
+                } catch {
+                  /* 存不了就只用本次会话的选择 */
+                }
+              },
+            },
+            [e("option", { key: "auto", value: "" }, projectOverride === "" ? "工程：跟随调试会话" : "工程：跟随调试会话")].concat(
+              ((projects.value?.entries ?? [])).map((item) =>
+                e("option", { key: item.dir, value: item.dir }, (item.exists === false ? "（缺失）" : "") + item.name),
+              ),
+            ),
           ),
         ),
         pickerMessage === "" ? null : e("div", { style: { padding: "2px 10px", opacity: 0.75, fontSize: "12px" } }, pickerMessage),
