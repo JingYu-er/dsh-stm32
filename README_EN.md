@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 37 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 39 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -199,6 +199,8 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_ecad_libs` | Extract embedded footprints and symbols into real libraries under `hardware/libs` and fill in `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | Export STEP into `hardware/out`; resolves models through official 3D dir → `hardware/libs/3d` → cache and rewrites their paths; missing models are reported, not fatal |
 | `stm32_ecad_export` | Export Gerbers, drill files, pick-and-place coordinates and STEP into `hardware/out` in one go |
+| `stm32_ds_fetch` | Fetch non-STM32 datasheets into the local cache: by LCSC code, for every part used by the project, or from a manually imported PDF |
+| `stm32_ds_list` | List the local datasheet cache: code, MPN, size, fetch time and source |
 | `stm32_pdf_read` | Read a PDF: `info` for page count and text layer, `text` for page text (layout preserved), `figures` to list figures, `table` to cut parameter tables into rows and columns, `render` to rasterise a page or region into PNG for visual reading |
 | `stm32_ecad_package` | Pack `hardware/` into a deliverable zip (skips `node_modules`, `dist`, `.history`) and read it back to self-check |
 
@@ -426,7 +428,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 37 tools
+  tools/            registration and argument validation for 39 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

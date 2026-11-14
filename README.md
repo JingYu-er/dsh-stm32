@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：37 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：39 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -199,6 +199,8 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；先按「官方 3D 目录 → `hardware/libs/3d` → 缓存」解析模型并改写路径，缺模型只报告，不阻断导出 |
 | `stm32_ecad_export` | 一次导出 Gerber、钻孔、贴片坐标与 STEP 到 `hardware/out`，按最小可下单集合汇总 |
+| `stm32_ds_fetch` | 把非 STM32 器件的数据手册抓到本地缓存：按立创编号、按本工程用到的器件，或手工导入 PDF |
+| `stm32_ds_list` | 列出本地手册缓存：编号、型号、占用、抓取时间与来源 |
 | `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`table` 把参数表切成行列、`render` 把页面或局部渲染成 PNG 交给视觉读图 |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 
@@ -252,6 +254,15 @@ static void rtt_init(void) {
 | 看曲线、框图 | `mode=render` + `page`/`dpi`/`crop` | PNG 路径，交给视觉读图；抠数字用 300–400 dpi 并收紧裁切 |
 
 读图得到的是形态与量级（约 ±0.5 个最小刻度），不是精确数值；精确参数优先查同页表格。
+
+### 数据手册缓存
+
+非 STM32 器件（LDO、运放、传感器、接口芯片）第一次用到时，把厂商手册抓下来存本地：
+
+- `stm32_ds_fetch code=C25137` 按立创编号抓；`all=true` 抓本工程 `circuit` 源码里出现的全部 `jlcpcb:` 器件；`file=` 手工导入 PDF（反爬或没有编号时的退路）。
+- 缓存位置 `~/.dsh-stm32/datasheets/<编号>/`（`meta.json` + 以内容 sha256 命名的 PDF），可用 `DSH_STM32_DATASHEETS` 改目录。命中缓存时**不联网**；抓取失败记 24 小时负缓存，`refresh=true` 可强制重试。
+- `stm32_ds_list` 看已缓存哪几份、占多少空间。
+- 抓到之后直接 `stm32_pdf_read file=C25137`（或写型号）就能读，不必再给路径——引脚、电气参数、时序都从这里取，不靠记忆编。
 
 ## 斜杠命令
 
@@ -440,7 +451,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            37 个工具的注册与参数校验
+  tools/            39 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

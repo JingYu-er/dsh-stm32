@@ -17,6 +17,7 @@ import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
 import { extractPdfTables, extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../engine/pdf/reader.js";
 import { locatePoppler } from "../engine/pdf/toolchain.js";
+import { datasheetCacheDir, resolveDatasheetRef } from "../engine/datasheet/store.js";
 
 export const PDF_READ_TOOL = "stm32_pdf_read";
 
@@ -206,9 +207,12 @@ export function registerPdfTools(ctx: DshContext): void {
       exec: ToolExec,
     ) => {
       const mode = args.mode ?? "info";
-      const file = absoluteFile(args.file);
+      // 允许直接写立创编号或型号：命中本地手册缓存时按缓存路径读（S119）。
+      const cached = resolveDatasheetRef(datasheetCacheDir(), args.file);
+      const file = cached === null ? absoluteFile(args.file) : cached.file;
       const located = locatePoppler(popplerDirs());
       const base = { ok: false, error: "", mode, file, notes: [] as string[] };
+      if (cached !== null) base.notes.push("手册来自本地缓存：" + cached.entry.code + " · " + cached.entry.mpn);
       if (located.tools === null) return { ...base, error: located.error };
       if (mode === "info") {
         const info = await readPdfInfo(ctx.subprocess, located.tools, file, exec.signal);
