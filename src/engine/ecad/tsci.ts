@@ -11,12 +11,13 @@
  * tsci 的 eval 走的是 bun 的 TS 加载器；KiCad 自带的 bun 正好可用。
  */
 
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import { JLC_STANDARD, writeDru } from "./dfm.js";
+import { normalizeKicadProject } from "./normalize.js";
 import { ecadEnv, type EcadToolchain } from "./toolchain.js";
 
 export const ECAD_DIRS = ["circuit", "kicad", "libs", "out"] as const;
@@ -206,6 +207,18 @@ export async function runTsciBuild(request: TsciBuildRequest): Promise<TsciBuild
   const distRoot = findDistRoot(workspace.circuitDir);
   const found = findKicadProject(distRoot);
   if (found.kicadDir !== "") {
+    // 封装名归一化：把 tscircuit 的生成名换回真库名，并把官方封装复制进工程库。
+    if (found.circuitJson !== "" && existsSync(found.circuitJson)) {
+      const normalized = normalizeKicadProject(found.kicadDir, readFileSync(found.circuitJson, "utf8"), {
+        footprintRoot: toolchain.footprintDir,
+        libsDir: workspace.libsDir,
+      });
+      if (!normalized.ok) notes.push(`封装名没归一化：${normalized.renamed.length === 0 ? "电路里没有 kicad: 前缀的封装" : ""}`);
+      else if (normalized.renamed.length > 0) {
+        notes.push(`封装名归一化：${normalized.renamed.length} 个（复制官方封装 ${normalized.copied} 份）`);
+      }
+      for (const note of normalized.notes) notes.push(note);
+    }
     // 把嘉立创工艺写进工程的设计规则：之后跑 kicad-cli pcb drc 用的就是打板判据。
     const dru = writeDru(found.kicadDir);
     if (!dru.ok) notes.push(`设计规则没写进 KiCad 工程：${dru.error}`);

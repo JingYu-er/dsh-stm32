@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import { test } from "node:test";
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
 import { checkDfm, estimateCost, readBoardFacts, renderDru, writeDru } from "../lib/engine/ecad/dfm.js";
+import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootprints } from "../lib/engine/ecad/normalize.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
@@ -650,4 +651,71 @@ test("可制造性：细线与小孔报 error，并给出修法；成本随尺�
   assert.ok(big.approxCny > small.approxCny, "大板要更贵");
   assert.ok(four.approxCny > small.approxCny, "四层板要更贵");
   assert.ok(small.surcharges.length === 0, "常规参数不应有加价项");
+});
+
+test("封装名归一化：从 circuit.json 的模型地址还原真库名（S111）", () => {
+  const circuit = JSON.stringify([
+    { type: "source_component", source_component_id: "sc0", name: "R1" },
+    { type: "source_component", source_component_id: "sc1", name: "U1" },
+    { type: "cad_component", source_component_id: "sc0", model_step_url: "https://kicad-mod-cache.tscircuit.com/Resistor_SMD/R_0402_1005Metric.step" },
+    { type: "cad_component", source_component_id: "sc1" },
+  ]);
+  const index = readCanonicalFootprints(circuit);
+  assert.deepEqual(index.byReference.get("R1"), { lib: "Resistor_SMD", name: "R_0402_1005Metric" });
+  assert.equal(index.byReference.has("U1"), false);
+  assert.deepEqual(index.unresolved, ["U1"]);
+});
+
+test("封装名归一化：只换 tscircuit 生成名，认不出的位号留原样（S111）", () => {
+  const pcb = [
+    "(kicad_pcb (version 20240108) (generator \"dsh-stm32\")",
+    "  (footprint",
+    "    \"tscircuit:resistor\"",
+    "    (property \"Reference\" \"R1\")",
+    "  )",
+    "  (footprint",
+    "    \"tscircuit:chip\"",
+    "    (property \"Reference\" \"U1\")",
+    "  )",
+    ")",
+  ].join("\n");
+  const index = { byReference: new Map([["R1", { lib: "Resistor_SMD", name: "R_0402_1005Metric" }]]), unresolved: [] };
+  const result = normalizePcbFootprintNames(pcb, index);
+  assert.match(result.text, /"Resistor_SMD:R_0402_1005Metric"/u);
+  assert.match(result.text, /"tscircuit:chip"/u, "认不出的封装保持原样");
+  assert.equal(result.renamed.length, 1);
+  assert.deepEqual(result.unresolved, ["U1"]);
+});
+
+test("封装名归一化：复制官方封装并登记 fp-lib-table（S111）", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-ecad-norm-"));
+  try {
+    const kicadDir = join(root, "kicad");
+    const libsDir = join(root, "libs", "footprints");
+    const source = join(root, "official", "Resistor_SMD.pretty");
+    mkdirSync(kicadDir, { recursive: true });
+    mkdirSync(libsDir, { recursive: true });
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "R_0402_1005Metric.kicad_mod"), "(footprint \"R_0402_1005Metric\")\n", "utf8");
+    writeFileSync(
+      join(kicadDir, "demo.kicad_pcb"),
+      "(kicad_pcb\n  (footprint\n    \"tscircuit:resistor\"\n    (property \"Reference\" \"R1\")\n  )\n)\n",
+      "utf8",
+    );
+    const circuit = JSON.stringify([
+      { type: "source_component", source_component_id: "sc0", name: "R1" },
+      { type: "cad_component", source_component_id: "sc0", model_step_url: "https://kicad-mod-cache.tscircuit.com/Resistor_SMD/R_0402_1005Metric.step" },
+    ]);
+    const report = normalizeKicadProject(kicadDir, circuit, { footprintRoot: join(root, "official"), libsDir });
+    assert.equal(report.ok, true);
+    assert.equal(report.copied, 1);
+    assert.ok(existsSync(join(libsDir, "Resistor_SMD.pretty", "R_0402_1005Metric.kicad_mod")));
+    const pcb = readFileSync(join(kicadDir, "demo.kicad_pcb"), "utf8");
+    assert.match(pcb, /"Resistor_SMD:R_0402_1005Metric"/u);
+    const table = readFileSync(join(kicadDir, "fp-lib-table"), "utf8");
+    assert.match(table, /\(name "Resistor_SMD"\)/u);
+    assert.match(table, /\$\{KIPRJMOD\}/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

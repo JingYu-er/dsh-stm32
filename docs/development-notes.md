@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S110）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S111）
 
 ### 一、目标与约束
 
@@ -7106,7 +7106,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/client-debug-units.test.mjs` 增 3 条断言（长条式引脚、`pitch = 13`、1 脚圆点）；全量 83 套件 / 1148 pass / 0 fail；ACCEPTANCE OK；`test:size` 2025.1 KB / 313 文件 / 15978.5 KB。
 - 教训：**同一个数据换一种画法，观感差别比换配色大**。原来每个脚是一个带文字的按钮，信息密度高但看不出封装；改成几何图形后，先看到「这是颗 48 脚 QFP」，再悬停看具体脚名。
 
-### 一百一十九、教训
+### 一百一十九、封装名归一化：生成名换回真库名（S111）
+
+- 问题：`.kicad_pcb` 里封装名是 `tscircuit:resistor`、`tscircuit:chip` 这类生成名，别人用 KiCad 打开只看到「未知库」，交付包里的封装也无法按名字落到真库。
+- 真名从哪来：`circuit.json` 的 `cad_component.model_step_url` 是 `https://kicad-mod-cache.tscircuit.com/Resistor_SMD/R_0402_1005Metric.step`——由 `<resistor footprint="kicad:Resistor_SMD/R_0402_1005Metric">` 直接决定，能稳定还原「库名 : 封装名」。位号从 `.kicad_pcb` 的 `(property "Reference" "R1")` 取，两边靠位号对上。
+- 实现（`src/engine/ecad/normalize.ts`）：`readCanonicalFootprints()` 建位号索引（没有模型地址的进 `unresolved`）；`normalizePcbFootprintNames()` 按括号配对切 `(footprint …)` 块、只改以 `tscircuit:` 开头的名字，从后往前替换避免偏移失效；`normalizeKicadProject()` 写回 `.kicad_pcb`、把官方 `.kicad_mod` 复制进 `hardware/libs/footprints/<lib>.pretty`、给工程 `fp-lib-table` 追加 `${KIPRJMOD}` 相对路径条目。
+- 接在 `runTsciBuild()` 成功之后：构建完就归一化，后续 check/export/package 看到的都是真名；notes 里报「封装名归一化：N 个（复制官方封装 M 份）」。
+- 实测（demo 的两元件板）：`tscircuit:resistor` → `Resistor_SMD:R_0402_1005Metric`、`tscircuit:capacitor` → `Capacitor_SMD:C_0402_1005Metric`，复制 2 份封装、`fp-lib-table` 两条 `${KIPRJMOD}/../../../../libs/…`；改完重跑 `kicad-cli pcb drc` 通过（2 条丝印警告，0 未连接），**原来的 `lib_footprint_issues` 消失**。
+- 不归一化的部分：原理图符号（`lib_id "Device:boxresistor_right"`）仍由 tscircuit 生成并内嵌在 `.kicad_sch` 的 `lib_symbols` 里——官方符号的引脚编号与图形不一定对得上生成的网表，改名会得到「图形对、引脚错」的工程，比不改更糟。
+- 验证：`test/ecad-units.test.mjs` 增 3 条（索引还原与 unresolved、只换生成名、复制封装与表项）；全量 **83 套件 / 1151 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2028.0 KB / 314 文件 / 15987.2 KB。
+- 教训：**归一化要在「有真名可依」的层做**——PCB 封装有 `kicad:` 前缀与模型地址，能反推；原理图符号没有这层对应关系，硬套真名只会把错误藏得更深。
+
+### 一百二十、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。
