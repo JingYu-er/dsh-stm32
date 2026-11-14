@@ -12,6 +12,7 @@ import { test } from "node:test";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
+import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { locateEcadToolchain } from "../lib/engine/ecad/toolchain.js";
 import {
@@ -424,5 +425,63 @@ test("库导出：落盘 .kicad_mod 与 .kicad_sym，库表只追加缺失项并
     assert.deepEqual(findUnnamedNets(readFileSync(pcb, "utf8")), [".R1 > .pin1 to .C1 > .pin1"]);
   } finally {
     rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("制造文件导出：Gerber、钻孔、坐标、STEP 一起落盘，顺序固定（S100）", async () => {
+  const root = fakeKicadRoot();
+  const project = tempDir("ecad-fab-");
+  try {
+    const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: root });
+    const kicadDir = join(project, "kicad");
+    mkdirSync(kicadDir, { recursive: true });
+    const pcb = join(kicadDir, "board.kicad_pcb");
+    writeFileSync(pcb, "pcb", "utf8");
+    const outDir = join(project, "out");
+    const subprocess = fakeSubprocess();
+    const original = subprocess.spawn.bind(subprocess);
+    // 假 kicad-cli 不产文件；这里按输出目录补一份 Gerber 与钻孔，验证文件统计。
+    subprocess.spawn = (spec) => {
+      const handle = original(spec);
+      if (spec.argv.includes("gerbers")) {
+        mkdirSync(join(outDir, "gerbers"), { recursive: true });
+        writeFileSync(join(outDir, "gerbers", "board-F_Cu.gtl"), "g", "utf8");
+      }
+      if (spec.argv.includes("drill")) {
+        writeFileSync(join(outDir, "gerbers", "board.drl"), "d", "utf8");
+      }
+      if (spec.argv.includes("pos")) {
+        writeFileSync(join(outDir, "board-pos.csv"), "p", "utf8");
+      }
+      if (spec.argv.includes("step")) {
+        writeFileSync(join(outDir, "board.step"), "s", "utf8");
+      }
+      return handle;
+    };
+    const exported = await exportFabrication(subprocess, located.toolchain, pcb, outDir);
+    assert.equal(exported.ok, true);
+    assert.equal(exported.gerbers.length >= 1, true);
+    assert.equal(exported.drillFiles.length, 1);
+    assert.match(exported.stepFile, /board\.step$/u);
+    assert.match(exported.posFile, /board-pos\.csv$/u);
+    const kinds = subprocess.calls.map((call) => call.argv.slice(2, 4).join(" "));
+    assert.deepEqual(kinds.slice(0, 4), ["export gerbers", "export drill", "export pos", "export step"]);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("制造文件导出：没有板子时给人话，不跑 kicad-cli（S100）", async () => {
+  const root = fakeKicadRoot();
+  try {
+    const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: root });
+    const subprocess = fakeSubprocess();
+    const exported = await exportFabrication(subprocess, located.toolchain, join(root, "missing.kicad_pcb"), join(root, "out"));
+    assert.equal(exported.ok, false);
+    assert.match(exported.error, /还没有 \.kicad_pcb/u);
+    assert.equal(subprocess.calls.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

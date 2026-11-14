@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 34 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 35 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -186,6 +186,7 @@ Author circuits with tscircuit under `hardware/`, export a real KiCad project, t
 | `stm32_ecad_check` | Export the project libraries first, then run `kicad-cli sch erc` and `pcb drc`, collapsing violations into rule, severity and affected items; unnamed nets are reported too |
 | `stm32_ecad_libs` | Extract embedded footprints and symbols into real libraries under `hardware/libs` and fill in `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | Export STEP into `hardware/out`; missing 3D models are reported, not fatal |
+| `stm32_ecad_export` | Export Gerbers, drill files, pick-and-place coordinates and STEP into `hardware/out` in one go |
 
 There is exactly one writer: `.kicad_sch` / `.kicad_pcb` are produced by tscircuit and only read by the plugin. tscircuit embeds symbols and footprints in the project under generated names such as `tscircuit`, so checks first export them into real libraries under `hardware/libs` and complete the library tables; otherwise the report is dominated by "library not in configuration" noise. Unnamed nets (`.R1 > .pin1 to .C1 > .pin1`) are listed separately with the `<net name="VDD" />` fix. Building requires KiCad 10 and its bundled `bun.exe`; the first `npm install` is about 730 MB and later builds usually take 15–40 seconds. Prefer KiCad's own libraries (`footprint="kicad:..."`) and fall back to JLCPCB part numbers only when needed.
 
@@ -411,7 +412,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 34 tools
+  tools/            registration and argument validation for 35 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

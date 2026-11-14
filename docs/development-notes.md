@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S99）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S100）
 
 ### 一、目标与约束
 
@@ -6971,6 +6971,16 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 取舍：没有状态就显示「工作区未初始化」，而不是先替用户建目录——初始化会写 `package.json`，属于用户的决定；STEP 列表只在 `hardware/out` 存在时读，读失败就当空列表（还没导出过是正常状态）。
 - 验证：`test/web-api-units.test.mjs` 的路由数断言 47 → 48，并加 `/ecad` 必须在表内的断言；`test/client-debug-units.test.mjs` 加 6 条（`useEcad`、`EcadPanel`、`ecad?projectDir=`、`tabButton("ecad", …)`、`tab === "ecad"`、`stm32_ecad_init` 提示）；全量 **83 个套件 / 1133 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1994.7 KB / 309 文件 / 解包 15878.7 KB。
 - 教训：**面板的第一职责是让人知道下一步做什么**。状态页把「为什么现在不能构建」写清楚（没初始化 / 没依赖 / 没入口），比给一个按不动的按钮有用。
+
+### 一百零八、制造文件一次导出（S100）
+
+- 目标：板子画完，下一步是下单。Gerber、钻孔、贴片坐标、STEP 这四样是打样与贴片的最低要求，`kicad-cli` 每样都有子命令（`pcb export gerbers|drill|pos|step`），不需要插件自己写格式。
+- 实现 `src/engine/ecad/fabrication.ts` 的 `exportFabrication(subprocess, toolchain, pcbFile, outDir)`：顺序固定为 Gerber → 钻孔 → 坐标 → STEP，落点 `<out>/gerbers/`、`<out>/<board>-pos.csv`、`<out>/<board>.step`；每步失败只记提示、不删已产出的文件，`ok` 表示「命令都跑过且没有致命错误」，产物清单单独回。
+- 工具 `stm32_ecad_export`：面板不提供该动作，导出属于「要等几十秒、会写一堆文件」的操作，留在工具里由模型显式调用。
+- 实测（同一块 5 元件样例板）：22 个 Gerber 文件、1 个钻孔文件、`index-pos.csv`、STEP 50702 B，全流程 2–3 s。
+- 踩到的坑：探针的假 `subprocess.spawn` 第一版写成 `async`，`runCapture` 当成同步返回 ProcessHandle，`await undefined.done` 抛错被吞成 `spawnError`，表现为「kicad-cli 执行失败」而输出为空；假实现必须是同步返回句柄、`done` 才是 Promise。
+- 验证：`test/ecad-units.test.mjs` 增 2 条（四步顺序与产物统计、无板子时给人话且不跑命令），全量 **83 个套件 / 1135 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1997.0 KB / 310 文件 / 解包 15887.4 KB。
+- 教训：**导出要按「最小可下单集合」一次给全**。Gerber 有二十多个文件，用户真正要的是「这些文件齐了、板子能发出去」，先给数量与落点，再让他去看单个文件。
 
 ### 一百零二、教训
 
