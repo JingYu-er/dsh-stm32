@@ -149,6 +149,38 @@ function tail(out, n) {
 // 于是 web-api 的「缺参数回 400」用例会被本机备忘变成 200。整轮换到临时根目录。
 const memoHome = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-stm32-units-home-"));
 
+/**
+ * 从套件输出里挑出失败用例的名字与断言摘要。
+ *
+ * 只贴结尾不够：TAP 里失败用例往往出现在中段，结尾只有汇总，于是"哪条红了"要靠重跑猜。
+ * 两种 reporter 都认：TAP 的 `not ok N - 名字`，spec 的 `✖ 名字`。
+ */
+function failures(out) {
+  const names = [];
+  const tap = /^not ok \d+ - (.+)$/gmu;
+  let match = tap.exec(out);
+  while (match !== null) {
+    names.push(match[1].trim());
+    match = tap.exec(out);
+  }
+  if (names.length === 0) {
+    const spec = /^\s*\u2716\s+(.+?)(?:\s+\(\d+(?:\.\d+)?ms\))?$/gmu;
+    match = spec.exec(out);
+    while (match !== null) {
+      names.push(match[1].trim());
+      match = spec.exec(out);
+    }
+  }
+  const detail = [];
+  const assertLine = /^\s{2,}(error|expected|actual|operator|code):\s*(.+)$/gmu;
+  match = assertLine.exec(out);
+  while (match !== null && detail.length < 8) {
+    detail.push(match[1] + ": " + match[2].slice(0, 200));
+    match = assertLine.exec(out);
+  }
+  return { names: names.slice(0, 10), detail: detail };
+}
+
 let totalPass = 0;
 let totalFail = 0;
 let unparsed = 0;
@@ -181,8 +213,19 @@ for (const name of suites) {
   if (code !== 0 && counts.fail === 0) crashed += 1;
   const bad = counts.fail > 0 || code !== 0;
   console.log(name + " exit=" + code + " (" + counts.fmt + ") pass=" + counts.pass + " fail=" + counts.fail + (bad ? "  <<< 需检查" : ""));
-  // 失败时把结尾贴出来：串口/桥这类时序用例偶发失败时，没有用例名就只能靠重跑猜。
-  if (bad) console.log("    " + tail(out, 30));
+  // 失败时先给用例名与断言摘要，再贴结尾：TAP 的失败用例常在中段，只贴结尾等于没线索。
+  if (bad) {
+    const failed = failures(out);
+    if (failed.names.length > 0) {
+      console.log("    失败用例：");
+      for (const name of failed.names) console.log("      - " + name);
+    }
+    if (failed.detail.length > 0) {
+      console.log("    断言：");
+      for (const line of failed.detail) console.log("      " + line);
+    }
+    if (failed.names.length === 0) console.log("    " + tail(out, 30));
+  }
 }
 console.log("TOTAL pass=" + totalPass + " fail=" + totalFail + (unparsed > 0 ? "（" + String(unparsed) + " 个套件未统计）" : "") + (crashed > 0 ? "（" + String(crashed) + " 个套件退出码非 0 但自报 0 失败）" : ""));
 if (totalFail > 0 || unparsed > 0 || crashed > 0) process.exitCode = 1;

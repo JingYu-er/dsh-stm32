@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S100）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S101）
 
 ### 一、目标与约束
 
@@ -6981,6 +6981,22 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 踩到的坑：探针的假 `subprocess.spawn` 第一版写成 `async`，`runCapture` 当成同步返回 ProcessHandle，`await undefined.done` 抛错被吞成 `spawnError`，表现为「kicad-cli 执行失败」而输出为空；假实现必须是同步返回句柄、`done` 才是 Promise。
 - 验证：`test/ecad-units.test.mjs` 增 2 条（四步顺序与产物统计、无板子时给人话且不跑命令），全量 **83 个套件 / 1135 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1997.0 KB / 310 文件 / 解包 15887.4 KB。
 - 教训：**导出要按「最小可下单集合」一次给全**。Gerber 有二十多个文件，用户真正要的是「这些文件齐了、板子能发出去」，先给数量与落点，再让他去看单个文件。
+
+### 一百零一、流程图：通道 + 端口分槽，页签改名（S101）
+
+- 问题：原理图页签画出的框图里，九条连线最后都汇到同一条竖线上，标签叠成一团；主控的十几个端口挤在 54px 的框高里，读不出哪根线接哪里。
+- 取证：参考 `@tt-a1i/archify-dsh` v1.1.0。它的 `lib/index.js` 只有 21 行，布局逻辑在 `skills/archify/bin/archify.mjs` 与 787 KB 的 `template.html` 里，做法是「能自动路由就自动路由，路由不好才显式指定」；没有可直接复用的路由函数，借鉴的是它的三条判断——连线分通道、端口按侧分槽、文字与线分离。
+- 做法（`client/client.js` 的 `layoutSchematic`）：
+  - **每条连线独占通道**：`laneBase = xLeft + boxW + 26`，`laneX = laneBase + index * laneGap`，通道从下往上分配（目标越靠下通道越靠右），拐角用 6px 圆角；同一对框之间的多条网络在引擎侧已经合并成一条。
+  - **端口按侧分槽**：按「同一个框、同一侧」把连线排序后均匀落在框边上，`box.y + heightOf(box) * (index + 1) / (list.length + 1)`，不再共用中点。
+  - **主控框拉高到整列高度**：`columnHeight = rows * (boxH + gapY) - gapY`，`mcuHeight = max(columnHeight, boxH)`；否则十几个端口挤在 54px 里，再怎么分槽也会叠字。
+  - **标签只放在两列之间的空白列中央**：`(laneBase + xRight) / 2`，与具体通道解耦；跟着通道走会顶到右侧框上被遮住。标签再加 `paint-order: stroke` 与底色描边，压线时仍可读。
+  - **同列连线走列外侧**：两个外设之间的连接（`U17|t5` 这类）如果走列内通道会横穿整列框体，改为 `outerBase = xRight + boxW + 20`、通道间距 46（要放标签），画布宽度加上 `outerWidth`，否则通道画到画布外。
+  - 渲染顺序：连线 → 框 → 端口圆点（端口画在框之前会被框盖住）。
+- 页签改名：`DEBUG_LABELS.schematic` 从「原理图」改为「流程图」，页签表与两版 README 同步；`test/client-debug-units.test.mjs` 增 3 条断言（页签名、`laneBase`/`laneGap`、`paintOrder`）。
+- CI 可读性：`test/run-units.mjs` 新增 `failures(out)`，失败时先打印「失败用例：- 名字」与 `error/expected/actual` 摘要（同时支持 TAP 的 `not ok N - 名字` 与 spec reporter 的 `✖ 名字`），再贴日志结尾。
+- 验证：`node test/run-units.mjs` 83 个套件 / 1135 pass / 0 fail，ACCEPTANCE OK，`test:size` 2002.0 KB / 310 文件 / 解包 15898.0 KB；`client/client.js` 5458 行。
+- 教训：**连线叠在一起不是美观问题，是信息丢失**。三条线走同一段竖线，用户就分不清哪条去了哪个引脚；通道、端口分槽、标签出列，每一步都是在把「线」和「位置」重新绑定回来。
 
 ### 一百零二、教训
 

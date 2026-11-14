@@ -934,7 +934,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "原理图", ecad: "电路设计", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "流程图", ecad: "电路设计", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
     /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
     function eventRefLine(event) {
@@ -2332,6 +2332,13 @@ window.__ModuleLoader__.load({
     };
 
     /** 把 diagram 排成两列：主控在左、其余在右；返回画布尺寸与坐标。 */
+    /**
+     * 模块框图的布局（S90，S101 重画）。
+     *
+     * 左列是主控，右列是外设；连线走「独立通道」：每条线在自己的 x 上纵向折一次，
+     * 通道按目标高度排序分配，所以不会出现多条线压在同一段竖线上的情况。
+     * 拐角用 6px 圆角，标签压在靠近目标的横段上，并描一圈底色当作遮罩。
+     */
     function layoutSchematic(diagram) {
       const blocks = diagram !== null && Array.isArray(diagram.blocks) ? diagram.blocks : [];
       const links = diagram !== null && Array.isArray(diagram.links) ? diagram.links : [];
@@ -2339,36 +2346,104 @@ window.__ModuleLoader__.load({
       const right = blocks.filter((block) => block.kind !== "mcu");
       const boxW = 212;
       const boxH = 54;
-      const gapY = 20;
+      const gapY = 18;
       const xLeft = 18;
-      const xRight = 330;
       const top = 22;
-      const pos = new Map();
-      left.forEach((block, index) => pos.set(block.id, { x: xLeft, y: top + index * (boxH + gapY) }));
-      right.forEach((block, index) => pos.set(block.id, { x: xRight, y: top + index * (boxH + gapY) }));
+      const laneGap = 11;
       const rows = Math.max(left.length, right.length, 1);
-      const width = xRight + boxW + 18;
-      const height = top + rows * (boxH + gapY) + 18;
+      const gutter = 52 + Math.max(links.length, 1) * laneGap;
+      const xRight = xLeft + boxW + gutter;
+      // 主控一侧的连线通常最多，把主控框拉高到整列高度，端口就能拉开间距；
+      // 否则所有端口挤在 54px 里，标签必然叠在一起。
+      const columnHeight = rows * (boxH + gapY) - gapY;
+      const mcuHeight = Math.max(columnHeight, boxH);
+      const pos = new Map();
+      left.forEach((block, index) => pos.set(block.id, { x: xLeft, y: top + index * (boxH + gapY), h: mcuHeight }));
+      right.forEach((block, index) => pos.set(block.id, { x: xRight, y: top + index * (boxH + gapY), h: boxH }));
+      const height = top + columnHeight + 14;
       const boxes = blocks
         .filter((block) => pos.has(block.id))
         .map((block) => Object.assign({}, pos.get(block.id), { block: block }));
-      const paths = [];
+      const heightOf = (point) => (typeof point.h === "number" ? point.h : boxH);
+
+      const edges = [];
       for (const link of links) {
         const a = pos.get(link.from);
         const b = pos.get(link.to);
-        if (a === undefined || b === undefined) continue;
-        const ay = a.y + boxH / 2;
-        const by = b.y + boxH / 2;
-        if (a.x === b.x) {
-          const x = a.x + boxW;
-          paths.push({ key: link.from + "|" + link.to, d: "M " + String(x) + " " + String(ay) + " H " + String(x + 12) + " V " + String(by) + " H " + String(b.x + boxW), label: link.label, lx: x + 16, ly: (ay + by) / 2 + 3, anchor: "start" });
-          continue;
-        }
-        const ax = a.x < b.x ? a.x + boxW : a.x;
-        const bx = a.x < b.x ? b.x : b.x + boxW;
-        const midX = (ax + bx) / 2;
-        paths.push({ key: link.from + "|" + link.to, d: "M " + String(ax) + " " + String(ay) + " H " + String(midX) + " V " + String(by) + " H " + String(bx), label: link.label, lx: midX, ly: (ay + by) / 2 - 6, anchor: "middle" });
+        if (a === undefined || b === undefined || a === b) continue;
+        edges.push({ link: link, a: a, b: b, forward: a.x < b.x });
       }
+      // 端口按「同一条边上有几根线」分槽：全挤在竖直中点会让不同网络的横段叠成一条线，
+      // 读者会以为它们连在一起。
+      const slots = new Map();
+      const addSlot = (key, edge, role, otherY) => {
+        const list = slots.get(key) ?? [];
+        list.push({ edge: edge, role: role, otherY: otherY });
+        slots.set(key, list);
+      };
+      for (const edge of edges) {
+        addSlot(edge.link.from + (edge.forward ? "|right" : "|left"), edge, "src", edge.b.y);
+        addSlot(edge.link.to + (edge.forward ? "|left" : "|right"), edge, "dst", edge.a.y);
+      }
+      const portY = new Map();
+      for (const list of slots.values()) {
+        list.sort((one, other) => one.otherY - other.otherY);
+        list.forEach((entry, index) => {
+          const box = entry.role === "src" ? entry.edge.a : entry.edge.b;
+          const spread = heightOf(box);
+          portY.set(entry.edge.link.from + "|" + entry.edge.link.to + "|" + entry.role, box.y + (spread * (index + 1)) / (list.length + 1));
+        });
+      }
+      // 通道从下往上分配：目标越靠下，通道越靠右。这样同目标的多条线彼此不压线。
+      // 同一列的连线（例如两个外设之间的总线）走列外侧的通道，否则会横穿整列框体。
+      edges.sort((one, other) => other.b.y - one.b.y || other.a.y - one.a.y);
+      // 同一列的连线走列外侧：lineCount 决定要预留多宽，宽度在 return 前补上。
+      const sameColumn = edges.filter((edge) => edge.a.x === edge.b.x);
+      // 同列连线的通道要留得比列内通道宽：标签写在通道右侧，窄了会互相压字。
+      const outerLaneGap = 46;
+      const outerWidth = sameColumn.length * outerLaneGap + 96;
+      const laneBase = xLeft + boxW + 26;
+      const outerBase = xRight + boxW + 20;
+      const radius = 6;
+      const paths = [];
+      let outerIndex = 0;
+      edges.forEach((edge, index) => {
+        const sameCol = edge.a.x === edge.b.x;
+        const laneX = sameCol ? outerBase + outerIndex++ * outerLaneGap : laneBase + index * laneGap;
+        const sx = sameCol ? edge.a.x + boxW : edge.forward ? edge.a.x + boxW : edge.a.x;
+        const tx = sameCol ? edge.b.x + boxW : edge.forward ? edge.b.x : edge.b.x + boxW;
+        const sy = portY.get(edge.link.from + "|" + edge.link.to + "|src");
+        const ty = portY.get(edge.link.from + "|" + edge.link.to + "|dst");
+        const dir = sameCol || edge.forward ? 1 : -1;
+        let d;
+        if (Math.abs(ty - sy) < 0.5) {
+          d = "M " + String(sx) + " " + String(sy) + " H " + String(tx);
+        } else {
+          const down = ty > sy ? 1 : -1;
+          d =
+            "M " + String(sx) + " " + String(sy) +
+            " H " + String(laneX - radius * dir) +
+            " Q " + String(laneX) + " " + String(sy) + " " + String(laneX) + " " + String(sy + down * radius) +
+            " V " + String(ty - down * radius) +
+            " Q " + String(laneX) + " " + String(ty) + " " + String(laneX + radius * dir) + " " + String(ty) +
+            " H " + String(tx);
+        }
+        // 标签只放在两列之间的空白列里：压在框上会被框遮住，放在竖线中段会和别的竖线叠字。
+        // 正向（主控 → 外设）放在目标侧横段上方；反向放在通道右侧，避免压到主控框。
+        // 标签统一排在两列之间的空白列中央，与具体通道无关；跟着通道走会顶到右侧框上。
+        const labelX = sameCol ? laneX + 5 : (laneBase + xRight) / 2;
+        paths.push({
+          key: edge.link.from + "|" + edge.link.to,
+          d: d,
+          label: edge.link.label,
+          lx: labelX,
+          ly: sameCol ? (sy + ty) / 2 - 6 : (edge.forward ? ty : sy) - 6,
+          anchor: sameCol ? "start" : "middle",
+          ports: [{ x: sx, y: sy }, { x: tx, y: ty }],
+        });
+      });
+      // 外侧通道也要算进画布宽度，否则同列连线的通道会画到画布之外。
+      const width = xRight + boxW + 18 + outerWidth;
       return { width: width, height: height, boxW: boxW, boxH: boxH, boxes: boxes, paths: paths };
     }
 
@@ -2503,7 +2578,7 @@ window.__ModuleLoader__.load({
       } else if (state.error !== "") {
         head.push(e("div", { key: "error", style: { padding: "6px 0", opacity: 0.75 } }, state.error));
       } else if (schematic === null) {
-        head.push(e("div", { key: "loading", style: { padding: "6px 0", opacity: 0.6 } }, "读取原理图…"));
+        head.push(e("div", { key: "loading", style: { padding: "6px 0", opacity: 0.6 } }, "读取流程图…"));
       } else {
         head.push(
           e(
@@ -2520,7 +2595,7 @@ window.__ModuleLoader__.load({
             ),
             e("span", { style: errors.length > 0 ? { color: "var(--dsw-alias-state-error-primary)" } : {} }, "错误 " + String(errors.length)),
             e("span", { style: warnings.length > 0 ? { color: D32_WARN } : {} }, "提示 " + String(warnings.length)),
-            e("span", { style: { opacity: 0.55 }, title: "只读：本页不改原理图，也不改工程配置" }, "只读"),
+            e("span", { style: { opacity: 0.55 }, title: "只读：本页不改原理图，也不改工程配置（流程图由原理图派生）" }, "只读"),
           ),
         );
       }
@@ -2548,18 +2623,41 @@ window.__ModuleLoader__.load({
                     "g",
                     { key: "link-" + path.key },
                     e("path", { d: path.d, fill: "none", stroke: "var(--dsw-alias-label-tertiary)", strokeWidth: 1 }),
-                    e("text", { x: path.lx, y: path.ly, fill: "var(--dsw-alias-label-secondary)", fontFamily: D32_FONT_CODE, fontSize: "10.5px", letterSpacing: "0.06em", textAnchor: path.anchor, title: path.label }, path.label),
+                    e(
+                      "text",
+                      {
+                        x: path.lx,
+                        y: path.ly,
+                        fill: "var(--dsw-alias-label-secondary)",
+                        stroke: "var(--dsw-alias-bg-base)",
+                        strokeWidth: 3,
+                        paintOrder: "stroke",
+                        fontFamily: D32_FONT_CODE,
+                        fontSize: "10.5px",
+                        letterSpacing: "0.06em",
+                        textAnchor: path.anchor,
+                        title: path.label,
+                      },
+                      path.label,
+                    ),
                   ),
                 ),
                 ...layout.boxes.map((box) =>
                   e(
                     "g",
                     { key: "box-" + box.block.id },
-                    e("rect", { x: box.x, y: box.y, width: layout.boxW, height: layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: "var(--dsw-alias-border-l2)", strokeWidth: 1 }),
-                    e("rect", { x: box.x, y: box.y, width: 3, height: layout.boxH, fill: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other }),
+                    e("rect", { x: box.x, y: box.y, width: layout.boxW, height: box.h ?? layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: "var(--dsw-alias-border-l2)", strokeWidth: 1 }),
+                    e("rect", { x: box.x, y: box.y, width: 3, height: box.h ?? layout.boxH, fill: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other }),
                     e("text", { x: box.x + 12, y: box.y + 20, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, box.block.kind === "passive" ? "PASSIVE" : box.block.id.toUpperCase()),
                     e("text", { x: box.x + 12, y: box.y + 40, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 24 ? box.block.label.slice(0, 23) + "…" : box.block.label),
                   ),
+                ),
+                ...layout.paths.flatMap((path) =>
+                  Array.isArray(path.ports)
+                    ? path.ports.map((port, portIndex) =>
+                        e("circle", { key: "port-" + path.key + "-" + String(portIndex), cx: String(port.x), cy: String(port.y), r: 2, fill: "var(--dsw-alias-label-tertiary)" }),
+                      )
+                    : [],
                 ),
               ),
             );

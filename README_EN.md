@@ -247,7 +247,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Events | Call start and end, duration, slow-call marker, argument summary | Failures only, filter by tool, sort by duration, bulk quoting, JSONL export, event deep links |
 | Live channels | Serial / RTT / watch output | Pause, clear, keyword filter, RTT level filter, send a serial line, persistent capture, export |
 | Pins | Grouped by peripheral, by port, or as a package outline | Filter, copy references, inspect `.ioc` keys, CSV export |
-| Schematic | Block diagram: MCU, chips and connectors linked by net and bus (I2C / SPI / UART), with check results | Read-only; power nets are listed separately |
+| Diagram | Flow diagram: MCU, chips and connectors linked by net and bus (I2C / SPI / UART), with check results | Read-only; every link gets its own channel, power nets are listed separately |
 | Circuit design | tscircuit workspace state: initialised, dependencies, entries, latest build, exported STEP | read-only; suggests the next tool action |
 | Clocks | Tree and flow views, per-node frequency and divider | Over-limit markers and "change to ÷N" advice computed from the parent clock |
 | Interrupts | NVIC enablement, preemption and sub-priority | Filter, sort, edit in place, bulk edit |

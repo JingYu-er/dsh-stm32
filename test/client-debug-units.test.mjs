@@ -196,6 +196,11 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes('tabButton("schematic"'), "原理图要有独立页签（S90）");
     assert.ok(source.includes('tab === "schematic"') && source.includes("schematic?projectDir="), "页签要带工程目录请求（S90）");
     assert.ok(source.includes("powerNets") && source.includes("d32-sch-grid"), "框图要有网格底与电源网络（S90）");
+    assert.ok(source.includes('schematic: "流程图"'), "页签名改为流程图（S101）");
+    assert.ok(source.includes("const laneBase") && source.includes("const laneGap"), "连线要按通道排布，不能压在同一段竖线上（S101）");
+    assert.ok(source.includes('paintOrder: "stroke"'), "连线标签要描底色，压线时仍然可读（S101）");
+    assert.ok(source.includes("const outerLaneGap") && source.includes("const sameColumn"), "同一列的连线要走列外侧通道，不能横穿整列框体（S101）");
+    assert.ok(source.includes("const heightOf") && source.includes("mcuHeight"), "主控框要按整列高度拉高，端口才拉得开（S101）");
     assert.ok(source.includes("function setApiSessionId(") && source.includes("function withSessionParam("), "请求要带会话 id（S91）");
     assert.ok(source.includes("setApiSessionId(sessionId)"), "面板挂载时写入当前会话 id（S91）");
   } finally {
