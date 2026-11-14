@@ -22,6 +22,7 @@ import { crossCheckPcb, readPcb } from "../lib/engine/schematic/pcb.js";
 import { parseSexpr } from "../lib/engine/schematic/sexpr.js";
 import { agentOfSession, resetSessionAgents } from "../lib/engine/session-context.js";
 import { registerSchematicTools } from "../lib/tools/schematic.js";
+import { SKILL_CONTENT } from "../lib/skill/stm32-workflow.js";
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "kicad-10-d-nfc");
 
@@ -194,4 +195,14 @@ test("工具 stm32_sch_read：没传 projectDir 时按 exec.agent 解析会话�
   assert.equal(value.ok, true);
   assert.equal(value.components, 43);
   assert.ok(agentOfSession("session-abc-123") !== undefined, "exec.agent 应登记到会话对照表");
+});
+
+test("流程图规则同时出现在工具说明与技能文本里", () => {
+  const tools = makeToolContext(FIXTURE);
+  const read = tools.get("stm32_sch_read");
+  assert.ok(read !== undefined, "缺少 stm32_sch_read");
+  assert.match(read.description, /功能模块/u);
+  assert.match(SKILL_CONTENT, /流程图怎么看/u);
+  assert.match(SKILL_CONTENT, /按功能聚合/u);
+  assert.match(SKILL_CONTENT, /电源不上线/u);
 });

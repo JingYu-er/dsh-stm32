@@ -354,7 +354,7 @@ export function registerSchematicTools(ctx: DshContext): void {
   ctx.tools.register({
     name: SCH_READ_TOOL,
     description:
-      "读 KiCad 10 原理图（.kicad_sch，文件版本 20260306）：图纸树、元件与引脚网络、网络表、模块框图（主控与外设之间按总线类型连线）。只读，不写盘；接 PCB 对账与 .ioc 对照用 stm32_sch_check。",
+      "读 KiCad 10 原理图（.kicad_sch，文件版本 20260306）：图纸树、元件与引脚网络、网络表、模块框图（按功能模块聚合：主控、NFC 天线与标签、光检测、供电、调试接口、按键，模块之间按总线类型连线，不逐元件罗列）。只读，不写盘；接 PCB 对账与 .ioc 对照用 stm32_sch_check。",
     parameters: {
       type: "object",
       additionalProperties: false,
