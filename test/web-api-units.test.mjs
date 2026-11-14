@@ -1318,7 +1318,7 @@ test("没有会话目录时不再退到「最近用过的工程」（S91 撤掉�
   assert.match(String(res.body.error), /projectDir 不能为空/u);
 });
 
-test("POST /ecad/action：动作名只认六个，其余直接 400", async () => {
+test("POST /ecad/action：动作名只认七个，其余直接 400", async () => {
   const { dir, env } = tempEnv("ecad-action");
   const deps = { subprocess: fakeSubprocess, env: env };
   const wrong = await handleWebApi({
@@ -1354,4 +1354,20 @@ test("POST /ecad/action：package 在没有硬件目录时也认这个动作，�
   const action = packed.body.ecadAction;
   assert.equal(action.ok, false);
   assert.match(action.error, /还没有硬件目录/u);
+});
+
+test("POST /ecad/action：datasheets 在没有器件时也认这个动作（S120）", async () => {
+  const { dir, env } = tempEnv("ecad-datasheets");
+  const deps = { subprocess: fakeSubprocess, env: { ...env, DSH_STM32_DATASHEETS: path.join(dir, "ds") } };
+  const result = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ecad/action",
+    body: JSON.stringify({ projectDir: dir, action: "datasheets" }),
+    deps: deps,
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.ok, true);
+  assert.equal(result.body.ecadAction.ok, true);
+  assert.equal(result.body.ecadAction.files, 0);
+  assert.match(result.body.ecadAction.notes.join("\n"), /本工程 0 个立创器件/u);
 });

@@ -243,3 +243,10 @@ test("电路设计结果区显示可制造性与打样成本（S109）", () => {
   assert.match(source, /dfm\.approxCny/u);
   assert.match(source, /最细走线/u);
 });
+
+test("电路设计页签：数据手册状态与补齐按钮（S120）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /dsMissing/);
+  assert.match(source, /\["datasheets", "补手册"\]/);
+  assert.match(source, /ecad\.datasheets/);
+});

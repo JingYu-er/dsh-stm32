@@ -19,9 +19,7 @@ import {
   listDatasheets,
   type DatasheetEntry,
 } from "../engine/datasheet/store.js";
-import { parseJlcpcbFootprints } from "../engine/ecad/jlcpcb.js";
-import { planEcadWorkspace } from "../engine/ecad/tsci.js";
-import { resolveProjectLayout } from "../engine/project-layout.js";
+import { projectJlcpcbCodes } from "../engine/datasheet/auto.js";
 import { resolveProjectDir } from "./project-dir.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 
@@ -29,22 +27,6 @@ export const DS_FETCH_TOOL = "stm32_ds_fetch";
 export const DS_LIST_TOOL = "stm32_ds_list";
 
 const cacheDirOf = (env: Record<string, string | undefined>): string => datasheetCacheDir(env);
-
-function codesOfProject(projectDir: string): string[] {
-  const layout = resolveProjectLayout(projectDir);
-  const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
-  const found = new Set<string>();
-  for (const relative of listTsx(workspace.circuitDir)) {
-    const parsed = parseJlcpcbFootprints(readFileSync(join(workspace.circuitDir, relative), "utf8"));
-    for (const item of parsed) found.add(item.code);
-  }
-  return [...found].sort();
-}
-
-function listTsx(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((name) => name.endsWith(".tsx"));
-}
 
 const entryView: JsonSchema = {
   type: "object",
@@ -163,7 +145,7 @@ export function registerDatasheetTools(ctx: DshContext): void {
         if (project.projectDir === "") {
           return { ok: false, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话", cacheDir, cached: 0, fetched: [], failed: [], notes };
         }
-        const codes = codesOfProject(project.projectDir);
+        const codes = projectJlcpcbCodes(project.projectDir);
         if (codes.length === 0) notes.push("工程里没有 jlcpcb 编号：先在 circuit 源码里用 footprint=\"jlcpcb:C…\"");
         for (const code of codes) await handle(code);
       } else {

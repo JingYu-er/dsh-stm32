@@ -65,6 +65,7 @@ import { checkDfm, writeDru } from "./ecad/dfm.js";
 import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
+import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
 import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
 
@@ -1145,6 +1146,7 @@ export async function handleWebApi(input: {
           : { ok: false, error: latest.error, kicadDir: "", pcbFile: "", schematicFile: "" },
         steps: steps.slice(0, 20),
         libs: await scanEcadLibs(workspace.libsDir),
+        datasheets: datasheetStatus(projectDir),
         artifacts: await scanEcadArtifacts(workspace.outDir),
         layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },
@@ -1157,12 +1159,36 @@ export async function handleWebApi(input: {
     const projectDir = withProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const action = typeof parsed.value.action === "string" ? parsed.value.action : "";
-    if (!["build", "check", "libs", "step", "export", "package"].includes(action)) {
-      return fail(400, "action 只能是 build / check / libs / step / export / package");
+    if (!["build", "check", "libs", "step", "export", "package", "datasheets"].includes(action)) {
+      return fail(400, "action 只能是 build / check / libs / step / export / package / datasheets");
     }
     const layout = resolveProjectLayout(projectDir);
     const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
     const started = Date.now();
+    // 补手册只读 circuit 源码与网络，不需要 KiCad：放在工具链探测之前（S120）。
+    if (action === "datasheets") {
+      const ds = await ensureProjectDatasheets(projectDir, {
+        offline: (envOf(input.deps)["DSH_STM32_OFFLINE"] ?? "").trim() === "1",
+      });
+      const notes = [
+        "本工程 " + String(ds.codes.length) + " 个立创器件",
+        "缓存命中 " + String(ds.cached) + " 个，新抓 " + String(ds.fetched.length) + " 个，失败 " + String(ds.failed.length) + " 个",
+        ...ds.failed.map((item) => item.code + "：" + item.error),
+      ];
+      return ok({
+        ecadAction: {
+          action: action,
+          ok: ds.failed.length === 0,
+          error: ds.failed.length === 0 ? "" : "有 " + String(ds.failed.length) + " 个器件未完成",
+          durationMs: Date.now() - started,
+          file: "",
+          bytes: 0,
+          files: ds.fetched.length,
+          skipped: ds.cached,
+          notes,
+        },
+      });
+    }
     // 打包只读 hardware/ 目录，不需要 KiCad 与 tscircuit：先处理，免得没装工具链的机器连包都打不了。
     if (action === "package") {
       const packed = packageHardware(workspace.root, basename(projectDir));
