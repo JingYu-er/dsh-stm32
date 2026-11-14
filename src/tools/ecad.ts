@@ -10,10 +10,11 @@
  * 写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，本层不直接改它们。
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { exportStep, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
+import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
+import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
 import {
   dirSizeBytes,
@@ -30,6 +31,7 @@ export const ECAD_INIT_TOOL = "stm32_ecad_init";
 export const ECAD_BUILD_TOOL = "stm32_ecad_build";
 export const ECAD_CHECK_TOOL = "stm32_ecad_check";
 export const ECAD_STEP_TOOL = "stm32_ecad_step";
+export const ECAD_LIBS_TOOL = "stm32_ecad_libs";
 
 const findingSchema: JsonSchema = {
   type: "object",
@@ -319,8 +321,11 @@ export function registerEcadTools(ctx: DshContext): void {
           pcbFile: { type: "string" },
           erc: checkSummarySchema,
           drc: checkSummarySchema,
+          libsFootprints: { type: "number" },
+          libsSymbols: { type: "number" },
+          unnamedNets: { type: "array", items: { type: "string" } },
         },
-        required: ["ok", "error", "kicadDir", "schematicFile", "pcbFile", "erc", "drc"],
+        required: ["ok", "error", "kicadDir", "schematicFile", "pcbFile", "erc", "drc", "libsFootprints", "libsSymbols", "unnamedNets"],
       },
       render: (_args, value) => {
         const result = value as {
@@ -331,33 +336,54 @@ export function registerEcadTools(ctx: DshContext): void {
           pcbFile: string;
           erc: { errors: number; warnings: number; findings: unknown[] };
           drc: { errors: number; warnings: number; findings: unknown[] };
+          libsFootprints: number;
+          libsSymbols: number;
+          unnamedNets: string[];
         };
         if (!result.ok) return [{ type: "text", text: "检查未执行：" + result.error }];
         const erc = result.erc as unknown as KicadReport["summary"];
         const drc = result.drc as unknown as KicadReport["summary"];
-        return [{ type: "text", text: [formatReport("ERC", { ok: true, error: "", file: result.schematicFile, reportPath: "", summary: erc, raw: "" }), ...formatReport("DRC", { ok: true, error: "", file: result.pcbFile, reportPath: "", summary: drc, raw: "" })].join("\n") }];
+        const lines = [
+          ...formatReport("ERC", { ok: true, error: "", file: result.schematicFile, reportPath: "", summary: erc, raw: "" }),
+          ...formatReport("DRC", { ok: true, error: "", file: result.pcbFile, reportPath: "", summary: drc, raw: "" }),
+          "库：导出 " + String(result.libsFootprints) + " 个封装库 / " + String(result.libsSymbols) + " 个符号库（fp-lib-table / sym-lib-table 已补齐）",
+        ];
+        if (result.unnamedNets.length > 0) {
+          lines.push("未命名网络 " + String(result.unnamedNets.length) + " 条：" + result.unnamedNets.slice(0, 3).join("；"));
+          lines.push("  修法：在 tscircuit 里写 <net name=\"VDD\" />，trace 上加 net=\"VDD\"");
+        }
+        return [{ type: "text", text: lines.join("\n") }];
       },
     },
     timeoutMs: 240_000,
     isConcurrencySafe: () => true,
     execute: async (args: { projectDir?: string; severity?: string }, exec: ToolExec) => {
       const empty = { errors: 0, warnings: 0, findings: [] as unknown[] };
+      const blank = {
+        ok: false,
+        error: "",
+        kicadDir: "",
+        schematicFile: "",
+        pcbFile: "",
+        erc: empty,
+        drc: empty,
+        libsFootprints: 0,
+        libsSymbols: 0,
+        unnamedNets: [] as string[],
+      };
       const project = await projectDirOf(ctx, args.projectDir, exec);
-      if (!project.ok) {
-        return { ok: false, error: project.error, kicadDir: "", schematicFile: "", pcbFile: "", erc: empty, drc: empty };
-      }
+      if (!project.ok) return { ...blank, error: project.error };
       const located = locateEcadToolchain();
-      if (located.toolchain === null) {
-        return { ok: false, error: located.error, kicadDir: "", schematicFile: "", pcbFile: "", erc: empty, drc: empty };
-      }
+      if (located.toolchain === null) return { ...blank, error: located.error };
       const workspace = workspaceOf(project.dir);
       const { findLatestKicadBuild } = await import("../engine/ecad/tsci.js");
       const latest = findLatestKicadBuild(workspace);
-      if (!latest.ok) {
-        return { ok: false, error: latest.error, kicadDir: "", schematicFile: "", pcbFile: "", erc: empty, drc: empty };
-      }
+      if (!latest.ok) return { ...blank, error: latest.error };
       const sch = latest.schematicFile;
       const pcb = latest.pcbFile;
+      // 先补齐库表：否则 DRC 会报「封装库 'tscircuit' 不在配置中」，那是在查环境而不是查电路。
+      const libs = exportEmbeddedLibraries(workspace, pcb, sch);
+      const unnamedNets = findUnnamedNets(readFileSync(pcb, "utf8"));
       const [erc, drc] = await Promise.all([
         runErc(ctx.subprocess, located.toolchain, sch, exec.signal),
         runDrc(ctx.subprocess, located.toolchain, pcb, exec.signal),
@@ -370,6 +396,103 @@ export function registerEcadTools(ctx: DshContext): void {
         pcbFile: pcb,
         erc: erc.summary,
         drc: drc.summary,
+        libsFootprints: libs.footprintLibs.length,
+        libsSymbols: libs.symbolLibs.length,
+        unnamedNets,
+      };
+    },
+  });
+
+  ctx.tools.register({
+    name: ECAD_LIBS_TOOL,
+    description:
+      "导出内嵌库：把生成的 KiCad 板与原理图里内嵌的封装/符号抽成 hardware/libs 下的真库，并补齐 fp-lib-table 与 sym-lib-table。不改 .kicad_pcb / .kicad_sch。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          footprints: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { lib: { type: "string" }, count: { type: "number" } },
+              required: ["lib", "count"],
+            },
+          },
+          symbols: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { lib: { type: "string" }, count: { type: "number" } },
+              required: ["lib", "count"],
+            },
+          },
+          fpLibTable: { type: "string" },
+          symLibTable: { type: "string" },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "footprints", "symbols", "fpLibTable", "symLibTable", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          footprints: { lib: string; count: number }[];
+          symbols: { lib: string; count: number }[];
+          fpLibTable: string;
+          symLibTable: string;
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "库导出失败：" + result.error }];
+        const lines: string[] = [];
+        lines.push(
+          "封装库：" +
+            (result.footprints.length === 0
+              ? "无内嵌封装"
+              : result.footprints.map((item) => item.lib + "（" + String(item.count) + "）").join("、")),
+        );
+        lines.push(
+          "符号库：" +
+            (result.symbols.length === 0
+              ? "无内嵌符号"
+              : result.symbols.map((item) => item.lib + "（" + String(item.count) + "）").join("、")),
+        );
+        for (const note of result.notes) lines.push("- " + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => false,
+    execute: async (args: { projectDir?: string }, exec: ToolExec) => {
+      const blank = { ok: false, error: "", footprints: [], symbols: [], fpLibTable: "", symLibTable: "", notes: [] as string[] };
+      const project = await projectDirOf(ctx, args.projectDir, exec);
+      if (!project.ok) return { ...blank, error: project.error };
+      const workspace = workspaceOf(project.dir);
+      const { findLatestKicadBuild } = await import("../engine/ecad/tsci.js");
+      const latest = findLatestKicadBuild(workspace);
+      if (!latest.ok) return { ...blank, error: latest.error };
+      const exported = exportEmbeddedLibraries(workspace, latest.pcbFile, latest.schematicFile);
+      return {
+        ok: exported.ok,
+        error: exported.error,
+        footprints: exported.footprintLibs.map((item) => ({ lib: item.lib, count: item.count })),
+        symbols: exported.symbolLibs.map((item) => ({ lib: item.lib, count: item.count })),
+        fpLibTable: exported.fpLibTable,
+        symLibTable: exported.symLibTable,
+        notes: [...exported.notes],
       };
     },
   });

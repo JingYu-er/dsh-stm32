@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S97）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S98）
 
 ### 一、目标与约束
 
@@ -6941,6 +6941,27 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
   - **正则别把解释一起吃进去**：缺失模型的第一版正则把 `U18. File not found` 整段当成引用号；收敛为 `[^\s.:]+`。
 - 验证：新增 `test/ecad-units.test.mjs` 13 条（工具链定位与报错、工作区路径、初始化幂等、构建的三种失败提示与 argv 拼装、产物择新、ERC/DRC 解析、STEP 缺失模型），登记进 `test/run-units.mjs`；全量 **83 个套件 / 1129 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1987.7 KB / 308 文件 / 解包 15846.1 KB。
 - 教训：**跨进程工具要把「下一步怎么做」写进返回值**。缺 bun、缺依赖、缺 `node_modules`、没有构建产物这几种情况，报一句「失败」用户无法行动；报「在哪个目录执行哪条命令，再重试」才有用。
+
+### 一百零六、电路设计：库归一化与未命名网络（S98）
+
+- 问题：`tsci build` 导出的 KiCad 工程是「自包含」的——`lib_symbols` 里内嵌符号、`.kicad_pcb` 里内嵌封装，但两边的名字都归到 `tscircuit` / `Custom` 这类生成名：
+  - 原理图：`lib_id "Device:boxresistor_right"`、`"Device:capacitor_left"`，符号体在 `lib_symbols` 内，工程里没有对应的 `.kicad_sym`。
+  - PCB：`(footprint\n    "tscircuit:chip"`（封装头与名字之间是换行），封装几何内嵌，工程里没有 `.pretty`。
+  - 后果：`kicad-cli` 的 DRC 报 `lib_footprint_issues: 当前配置中不包含封装库 'tscircuit'`、ERC 报 `lib_symbol_issues: 在符号库中找不到符号 'Device'`——这些是「环境缺库」而不是「电路画错」，会淹掉真正的错误。
+- 改法（`src/engine/ecad/libs.ts`）：
+  - `scanPcbFootprints()` 按括号深度找深度 2 的 `(footprint`，`nameAfterHead()` 容忍 head 与名字之间的换行、`matchParen()` 处理字符串与转义里的括号；`scanSchSymbols()` 只取 `(lib_symbols` 内深度 2 且名字含 `:` 的符号，并把块内名字改写成不带库前缀的单名（KiCad 库文件里的符号名就是单名）。
+  - `exportEmbeddedLibraries()` 把封装写成 `hardware/libs/footprints/<lib>.pretty/<name>.kicad_mod`（头部换成 `(footprint "<name>" (version 20240108) (generator "dsh-stm32")`）、把符号按库聚合成 `hardware/libs/symbols/<lib>.kicad_sym`，再补齐工程目录里的 `fp-lib-table` / `sym-lib-table`；`mergeLibTable()` 保留用户已有条目，只追加缺的库。
+  - 库表 URI 用 `${KIPRJMOD}/` + `relative(工程目录, 目标)`：产物在 `dist/<name>/kicad` 下，离 `hardware/libs` 隔着三层，写死 `../libs` 会指错。
+  - `stm32_ecad_check` 在跑 ERC/DRC **之前**先导出库表；否则报告里的「库不在配置中」是环境噪音，用户照着改会改错地方。
+  - 新增 `stm32_ecad_libs` 单独暴露这一步（汇总导出了几个库、补了哪张表），方便用户在 KiCad 里打开工程前先补齐。
+- 未命名网络：tscircuit 不给自动走线起名时，`.kicad_pcb` 里是 `.R1 > .pin1 to .C1 > .pin1`、`Net-(C1-Pad1)` 这类由引脚路径拼出来的名字。`findUnnamedNets()` 把它们挑出来（最多 20 条），`stm32_ecad_check` 的返回值与渲染都带上条数与修法（`<net name="VDD" />` + `trace net="VDD"`），不再让它们静默流过。
+- 实测（同一块 5 元件样例板，导出库表前后各跑一次 `kicad-cli`）：
+  - ERC：6 → 6 条，但类型从「2 `pin_not_connected` + 4 `endpoint_off_grid` + 2 `lib_symbol_issues`」变成「2 `pin_not_connected` + 4 `endpoint_off_grid`」——库相关的 2 条消失。
+  - DRC：5 → 3 条，`lib_footprint_issues` 的 2 条消失，剩下 `track_width`（走线 0.15 mm 低于 0.2 mm）与 `text_height`；`unconnected_items` 与 `schematic_parity` 都是 0。
+  - 导出的库表：`fp-lib-table` 一条 `tscircuit`（URI `${KIPRJMOD}/../../../hardware/libs/footprints/tscircuit.pretty`）、`sym-lib-table` 一条 `Device`（`…/libs/symbols/Device.kicad_sym`），两者都能被 `kicad-cli` 正常加载。
+- 过程中修掉的自身缺陷：符号名改写时把 `nameAfterHead()` 返回的**相对 body 的绝对偏移**当成相对块起点的偏移，导出的 `(symbol "Device:R_Sma"R_Small"` 是坏名字；切片前先减掉块起点。
+- 验证：`test/ecad-units.test.mjs` 增 3 条（封装头换行与字符串里的括号、`lib_symbols` 按库分组并去前缀、库导出落盘 + 库表只追加 + 未命名网络识别），全量 **83 个套件 / 1132 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1992.0 KB / 309 文件 / 解包 15863.6 KB。
+- 教训：**生成器内嵌什么东西，检查器就要先把它们还原成「外部的东西」再检查**。内嵌库在编译器眼里合法，在 `kicad-cli` 眼里是缺库；先把库落到工程里、补好库表，报告才会只剩真正的电路问题。
 
 ### 一百零二、教训
 

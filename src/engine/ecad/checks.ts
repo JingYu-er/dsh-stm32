@@ -241,3 +241,22 @@ export async function exportStep(
     missingModels: [...new Set(missing)].slice(0, 20),
   };
 }
+
+/**
+ * 未命名的网络（S98）。
+ *
+ * tscircuit 不给自动生成的走线起名时，`.kicad_pcb` 里会写成 `.R1 > .pin1 to .C1 > .pin1`
+ * 这种由引脚路径拼出来的名字。它在技术上是一个网络，但人看不出电气含义，也进不了网表
+ * 对照；这里把它们挑出来，让作者补 `<net name="VDD" />` 与 `trace net="VDD"`。
+ */
+export function findUnnamedNets(pcbText: string): string[] {
+  const found = new Set<string>();
+  const pattern = /\(net\s+\d+\s+"([^"]*)"\)/gu;
+  let match = pattern.exec(pcbText);
+  while (match !== null) {
+    const name = match[1] ?? "";
+    if (name.startsWith(".") || name.startsWith("Net-(")) found.add(name);
+    match = pattern.exec(pcbText);
+  }
+  return [...found].slice(0, 20);
+}

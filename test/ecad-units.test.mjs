@@ -5,12 +5,13 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
-import { exportStep, runDrc, runErc } from "../lib/engine/ecad/checks.js";
+import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
+import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { locateEcadToolchain } from "../lib/engine/ecad/toolchain.js";
 import {
@@ -327,5 +328,101 @@ test("STEP：缺失 3D 模型只报告不阻断，成功时给出字节数", asy
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("内嵌封装抽取：封装头换行、字符串里的括号不影响切分（S98）", () => {
+  const pcb = [
+    "(kicad_pcb (version 20240108)",
+    "  (footprint",
+    '    "tscircuit:chip"',
+    '    (layer "F.Cu")',
+    '    (fp_text user "(paren inside string)")',
+    "  )",
+    '  (footprint "tscircuit:resistor"',
+    '    (property "Reference" "R1")',
+    "  )",
+    ")",
+  ].join("\n");
+  const found = scanPcbFootprints(pcb);
+  assert.deepEqual(found.map((item) => item.lib + ":" + item.name), [
+    "tscircuit:chip",
+    "tscircuit:resistor",
+  ]);
+});
+
+test("内嵌符号抽取：lib_symbols 里按库分组，导出时去掉库前缀（S98）", () => {
+  const sch = [
+    "(kicad_sch (version 20260306)",
+    "  (lib_symbols",
+    '    (symbol "Device:boxresistor_right"',
+    '      (property "Reference" "R" (at 0 0 0))',
+    "    )",
+    '    (symbol "Device:capacitor_left"',
+    "      (property)",
+    "    )",
+    '    (symbol "custom_no_lib"',
+    "    )",
+    "  )",
+    ")",
+  ].join("\n");
+  const found = scanSchSymbols(sch);
+  assert.deepEqual(found.map((item) => item.lib + ":" + item.name), [
+    "Device:boxresistor_right",
+    "Device:capacitor_left",
+  ]);
+  assert.equal(found[0].raw.startsWith('(symbol "boxresistor_right"'), true);
+});
+
+test("库导出：落盘 .kicad_mod 与 .kicad_sym，库表只追加缺失项并保留已有条目（S98）", () => {
+  const project = tempDir("ecad-libs-");
+  try {
+    const workspace = planEcadWorkspace(project, join(project, "hardware"));
+    initEcadWorkspace(workspace);
+    const kicadDir = join(workspace.kicadDir, "dist", "index", "kicad");
+    mkdirSync(kicadDir, { recursive: true });
+    const pcb = join(kicadDir, "index.kicad_pcb");
+    writeFileSync(
+      pcb,
+      [
+        "(kicad_pcb",
+        '  (footprint "tscircuit:chip"',
+        '    (property "Reference" "U1")',
+        "  )",
+        '  (net 1 ".R1 > .pin1 to .C1 > .pin1")',
+        '  (net 2 "VDD")',
+        ")",
+      ].join("\n"),
+      "utf8",
+    );
+    const sch = join(kicadDir, "index.kicad_sch");
+    writeFileSync(
+      sch,
+      '(kicad_sch (lib_symbols (symbol "Device:R_Small" (property))))\n',
+      "utf8",
+    );
+    writeFileSync(
+      join(kicadDir, "fp-lib-table"),
+      '(fp_lib_table\n  (lib (name "mine")(type "KiCad")(uri "x")(options "")(descr ""))\n)\n',
+      "utf8",
+    );
+
+    const exported = exportEmbeddedLibraries(workspace, pcb, sch);
+    assert.equal(exported.ok, true);
+    assert.deepEqual(exported.footprintLibs.map((item) => item.lib), ["tscircuit"]);
+    assert.deepEqual(exported.symbolLibs.map((item) => item.lib), ["Device"]);
+    assert.equal(readFileSync(exported.fpLibTable, "utf8").includes('(name "mine")'), true);
+    assert.match(readFileSync(exported.fpLibTable, "utf8"), /KIPRJMOD/u);
+    const mod = readFileSync(
+      join(workspace.libsDir, "footprints", "tscircuit.pretty", "chip.kicad_mod"),
+      "utf8",
+    );
+    assert.match(mod, /^\(footprint "chip" \(version 20240108\)/u);
+    const sym = readFileSync(join(workspace.libsDir, "symbols", "Device.kicad_sym"), "utf8");
+    assert.match(sym, /\(symbol "R_Small"/u);
+    assert.equal(sym.includes("Device:R_Small"), false);
+    assert.deepEqual(findUnnamedNets(readFileSync(pcb, "utf8")), [".R1 > .pin1 to .C1 > .pin1"]);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
   }
 });
