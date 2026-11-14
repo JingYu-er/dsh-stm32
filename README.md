@@ -199,7 +199,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；先按「官方 3D 目录 → `hardware/libs/3d` → 缓存」解析模型并改写路径，缺模型只报告，不阻断导出 |
 | `stm32_ecad_export` | 一次导出 Gerber、钻孔、贴片坐标与 STEP 到 `hardware/out`，按最小可下单集合汇总 |
-| `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`render` 把页面或局部渲染成 PNG 交给视觉读图 |
+| `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`table` 把参数表切成行列、`render` 把页面或局部渲染成 PNG 交给视觉读图 |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 
 写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，插件只读。tscircuit 把符号与封装内嵌在工程里、名字归到 `tscircuit` 之类的生成名，检查前会先导出成 `hardware/libs` 下的真库并补齐库表，否则报告里只剩「库不在配置中」这类环境噪音；未命名网络（`.R1 > .pin1 to .C1 > .pin1`）会单独列出并给出 `<net name="VDD" />` 的修法。构建要求 KiCad 10 与其自带的 `bun.exe`；首次 `npm install` 约 730 MB，之后构建一般 15–40 秒。板子上的元件优先用 KiCad 官方库（`footprint="kicad:..."`），需要时再用立创编号兜底。
@@ -248,6 +248,7 @@ static void rtt_init(void) {
 | 判断这份 PDF 能不能读文字 | `mode=info` | 页数、纸张、有无文字层；描边字体的 PDF 会明确提示只能看图 |
 | 查参数、读表格 | `mode=text` + `first`/`last` | 保版面的文字，表格按列对齐 |
 | 找「第几页有什么图」 | `mode=figures` | 图注清单与页号 |
+| 读某个参数表的行与列 | `mode=table` | 列名、行数据、置信度；切不全是 medium，配同页原文核对 |
 | 看曲线、框图 | `mode=render` + `page`/`dpi`/`crop` | PNG 路径，交给视觉读图；抠数字用 300–400 dpi 并收紧裁切 |
 
 读图得到的是形态与量级（约 ±0.5 个最小刻度），不是精确数值；精确参数优先查同页表格。

@@ -7181,7 +7181,21 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/pdf-units.test.mjs` 6 条（定位、文字层判定、分页切分、图注解析、crop 参数透传、能力只依赖 poppler）；全量 **87 个套件 / 1161 pass / 0 fail**；真机 `readPdfInfo` 报 110 页 A4、文字层 true，`extractPdfText` 第 44 页 2300 字，`listFigures` 认出 Figure 14，`renderPdfPage` 200 dpi 出 1654×2339 PNG。
 - 教训：**读 PDF 的关键不是解析器，而是分清「哪部分是字符、哪部分是像素」**。字符能精确引用，像素只能描述形态与量级；两者混着说，就会出现「看起来精确、其实估的」答案。
 
-### 一百二十六、教训
+### 一百二十六、PDF 表格结构化：词框聚行列，宁可少切不可乱切（S118）
+
+- 目标：`stm32_pdf_read mode=table` 直接把数据手册里的参数表读成 `{columns, rows}`，让「VDD 范围多少」这类问题不必先读整页文本再人工对列。
+- 第一版按 `pdftotext -layout` 的空格切列：一张表被切成 6 个碎片（表头被当正文、跨行单元格打断分块），直接放弃。空格数量在 PDF 里不是列边界，词与词之间的距离才是。
+- 终版 `src/engine/pdf/tables.ts`（输入是 `pdftotext -bbox` 的词框）：
+  - `clusterRows(words, tol=3.2)` 按 `y0` 聚成行；`columnSeparators()` 先取表头行的间隙（≥6pt），再补正文里出现率 ≥30% 的间隙，合并时容差 30pt——否则同一列界会被表头与表体各记一次，切出空列。
+  - `mergeVertical()` 把「只有一格」的稀疏行并进相邻密行的同列，处理 `Main / flash memory`、`Memory / type` 这种竖排单元格。
+  - 分块靠间距判段：一行 ≥3 个词且**最大间隙 <14pt** 就是句子，flush；`Table N` 行当标题，不当数据。
+  - 过滤：`longRatio`（>30 字的格子占比）≥0.5 丢、数字行占比 <0.3 丢、平均长 >35 且数字行 <0.5 丢。这三条是拿真实页校出来的——只留「短格 + 有数字」的块，散文与编号步骤不会被硬塞成两列表。
+- 实测（RM0490）：第 58 页切出表 11/12/13，表头 `Area | Addresses | Size (bytes) | Memory type`，数据如 `Information | 0x1FFF 7500 - 0x1FFF 77FF | 768 | Engineering bytes`；第 59 页切出 `Table 14. LATENCY[2:0] setting as function of HCLK frequency`，两列、`≤ 24 | 000 (1 HCLK cycle)` 这类行。
+- 已知局限（写进工具输出，不只写在文档）：合并单元格会被展开成首列继承；竖排单元格并到上一行；同一张表被分块边界截断时只出一部分（Table 14 就只到 3 行）；跨页表不合并。`confidence` 因此只在「无 warning 且列数 ≥3」时给 high，其余一律 medium，并在 notes 里提示逐格核对原文。
+- 验证：`test/pdf-units.test.mjs` 8 条（新增 `parseBboxXml` 实体解码与按页分组、两列参数表切表且句子段落被丢弃）；全量 **87 套件 / 1163 pass / 0 fail**，ACCEPTANCE OK，`test:size` 2048.1 KB / 321 文件 / 解包 16058.1 KB。
+- 教训：**表格提取的可靠判据是「短格 + 数字」，不是「有几列」**。先按这个判据把不像表的块丢掉，剩下的即使切得不全，也不会误导人。
+
+### 一百二十七、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

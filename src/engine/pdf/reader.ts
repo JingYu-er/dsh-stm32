@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import type { PopplerTools } from "./toolchain.js";
+import { extractTablesFromWords, parseBboxXml, type PdfTable } from "./tables.js";
 
 export interface PdfInfo {
   ok: boolean;
@@ -203,6 +204,61 @@ function pngSize(file: string): { width: number; height: number } {
   } catch {
     return { width: 0, height: 0 };
   }
+}
+
+export interface PdfTables {
+  ok: boolean;
+  error: string;
+  file: string;
+  first: number;
+  last: number;
+  tables: PdfTable[];
+  /** 原文一并给出：表切得对不对，可以就地核对。 */
+  pages: { page: number; text: string }[];
+  notes: string[];
+}
+
+/** 取若干页的表：-bbox 拿词框 → 按行列聚 → 返回表与同段原文。 */
+export async function extractPdfTables(
+  subprocess: SubprocessService,
+  tools: PopplerTools,
+  file: string,
+  options: { first?: number; last?: number } = {},
+  signal?: AbortSignal,
+): Promise<PdfTables> {
+  const first = Math.max(1, Math.floor(options.first ?? 1));
+  const last = Math.max(first, Math.floor(options.last ?? first));
+  const blank = { ok: false, file, first, last, tables: [] as PdfTable[], pages: [], notes: [] as string[] };
+  if (!existsSync(file)) return { ...blank, error: "PDF 不存在：" + file };
+  const bbox = await runCapture(subprocess, {
+    argv: [tools.pdftotext, "-bbox", "-f", String(first), "-l", String(last), file, "-"],
+    timeoutMs: 90_000,
+    maxBytes: 16 * 1024 * 1024,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (bbox.exitCode !== 0) {
+    return { ...blank, error: "pdftotext -bbox 执行失败：" + (bbox.stderr.trim() || String(bbox.exitCode)) };
+  }
+  const parsed = parseBboxXml(bbox.stdout);
+  const tables: PdfTable[] = [];
+  for (const [index, page] of parsed.entries()) {
+    tables.push(...extractTablesFromWords(page, { page: first + index }));
+  }
+  const text = await extractPdfText(subprocess, tools, file, { first, last }, signal);
+  const notes: string[] = [];
+  if (tables.length === 0) notes.push("这一段没有切出表：可能是正文页，或表格由图片构成；改用 render 看图");
+  const medium = tables.filter((table) => table.confidence !== "high").length;
+  if (medium > 0) notes.push("有 " + String(medium) + " 张表是 medium：合并单元格或单元格换行会被展开，逐格核对原文");
+  return {
+    ok: true,
+    error: "",
+    file,
+    first,
+    last,
+    tables,
+    pages: text.ok ? text.pages : [],
+    notes,
+  };
 }
 
 export interface RenderOptions {

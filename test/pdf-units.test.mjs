@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 import { locatePoppler } from "../lib/engine/pdf/toolchain.js";
 import { extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../lib/engine/pdf/reader.js";
+import { extractTablesFromWords, parseBboxXml } from "../lib/engine/pdf/tables.js";
 import { CAPABILITY_COMPONENTS } from "../lib/engine/toolchain-gate.js";
 
 function fakeSubprocess(respond) {
@@ -129,4 +130,53 @@ test("renderPdfPage：裁切参数按像素透传，渲染失败给人话", asyn
 
 test("PDF 能力只依赖 poppler", () => {
   assert.deepEqual(CAPABILITY_COMPONENTS.pdf, ["poppler"]);
+});
+
+
+function wordBox(text, x0, y0, width = 24) {
+  return { text, x0, y0, x1: x0 + width, y1: y0 + 9 };
+}
+
+function pageOf(rows) {
+  return { width: 600, height: 800, words: rows.flat() };
+}
+
+test("parseBboxXml 解实体并按页分组", () => {
+  const xml = [
+    '<html><body><doc>',
+    '<page width="612.000" height="792.000">',
+    '<word xMin="10.0" yMin="20.0" xMax="34.0" yMax="29.0">A&amp;B</word>',
+    "<word xMin=\"40.0\" yMin=\"20.0\" xMax=\"64.0\" yMax=\"29.0\">2</word>",
+    '</page>',
+    '<page width="612.000" height="792.000"></page>',
+    '</doc></body></html>',
+  ].join("\n");
+  const pages = parseBboxXml(xml);
+  assert.equal(pages.length, 2);
+  assert.equal(pages[0].width, 612);
+  assert.equal(pages[0].words.length, 2);
+  assert.equal(pages[0].words[0].text, "A&B");
+  assert.equal(pages[0].words[0].x1, 34);
+  assert.equal(pages[1].words.length, 0);
+});
+
+test("两列参数表能切出来，句子段落被丢掉", () => {
+  const table = [
+    [wordBox("HCLK", 40, 100, 30), wordBox("LATENCY", 160, 100, 50)],
+    [wordBox("≤", 40, 116, 8), wordBox("24", 52, 116, 12), wordBox("000", 160, 116, 20), wordBox("(1", 184, 116, 12), wordBox("cycle)", 200, 116, 34)],
+    [wordBox("≤", 40, 132, 8), wordBox("48", 52, 132, 12), wordBox("001", 160, 132, 20), wordBox("(2", 184, 132, 12), wordBox("cycles)", 200, 132, 40)],
+  ];
+  const prose = [
+    [wordBox("To", 40, 200, 14), wordBox("set", 58, 200, 16), wordBox("the", 78, 200, 16), wordBox("latency,", 98, 200, 40), wordBox("write", 142, 200, 26)],
+    [wordBox("FLASH_ACR", 40, 212, 60), wordBox("register", 104, 212, 40), wordBox("first,", 148, 212, 26), wordBox("then", 178, 212, 24)],
+  ].flat();
+  const page = pageOf([...table, prose]);
+  const tables = extractTablesFromWords(page, { page: 59 });
+  assert.equal(tables.length, 1);
+  const found = tables[0];
+  assert.equal(found.columns.length, 2);
+  assert.equal(found.cells[0][0], "HCLK");
+  assert.equal(found.cells[1][0], "≤ 24");
+  assert.equal(found.cells[2][1], "001 (2 cycles)");
+  assert.ok(!found.cells.some((row) => row.join(" ").includes("FLASH_ACR")));
 });

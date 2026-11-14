@@ -15,12 +15,12 @@ import { extname, isAbsolute, resolve } from "node:path";
 
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
-import { extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../engine/pdf/reader.js";
+import { extractPdfTables, extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../engine/pdf/reader.js";
 import { locatePoppler } from "../engine/pdf/toolchain.js";
 
 export const PDF_READ_TOOL = "stm32_pdf_read";
 
-const MODES = ["info", "text", "figures", "render"] as const;
+const MODES = ["info", "text", "figures", "table", "render"] as const;
 
 const noteSchema: JsonSchema = {
   type: "array",
@@ -74,6 +74,23 @@ const outputSchema: JsonSchema = {
         required: ["number", "title", "page"],
       },
     },
+    tables: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          page: { type: "number" },
+          rows: { type: "number" },
+          columns: { type: "array", items: { type: "string" } },
+          cells: { type: "array", items: { type: "array", items: { type: "string" } } },
+          confidence: { type: "string", enum: ["high", "medium"] },
+          warnings: { type: "array", items: { type: "string" } },
+        },
+        required: ["title", "page", "rows", "columns", "cells", "confidence", "warnings"],
+      },
+    },
     imageFile: { type: "string" },
     imageWidth: { type: "number" },
     imageHeight: { type: "number" },
@@ -106,9 +123,9 @@ export function registerPdfTools(ctx: DshContext): void {
         additionalProperties: false,
         properties: {
           file: { type: "string", description: "PDF 路径；相对工程根或当前目录。" },
-          mode: { type: "string", enum: [...MODES], description: "info（默认）/ text / figures / render。" },
+          mode: { type: "string", enum: [...MODES], description: "info（默认）/ text / figures / table / render。" },
           first: { type: "number", description: "text 与 figures 的起始页（默认 1）。" },
-          last: { type: "number", description: "text 与 figures 的结束页（默认同 first；text 最多 20 页）。" },
+          last: { type: "number", description: "text / figures / table 的结束页（默认同 first；text 最多 20 页）。" },
           page: { type: "number", description: "render 的页码（从 1 开始）。" },
           dpi: { type: "number", description: "render 的分辨率 72–600，默认 150；抠字用 400。" },
           crop: {
@@ -137,6 +154,7 @@ export function registerPdfTools(ctx: DshContext): void {
           info?: { pages: number; hasTextLayer: boolean; pageSize: string };
           pages?: { page: number; text: string }[];
           figures?: { number: string; title: string; page: number }[];
+          tables?: { title: string; page: number; rows: number; columns: string[]; cells: string[][]; confidence: string; warnings: string[] }[];
           imageFile?: string;
           imageWidth?: number;
           imageHeight?: number;
@@ -160,6 +178,15 @@ export function registerPdfTools(ctx: DshContext): void {
           lines.push("图与表 " + String(result.figures.length) + " 条：");
           for (const figure of result.figures) {
             lines.push("  Figure " + figure.number + " · " + figure.title + (figure.page > 0 ? "（第 " + String(figure.page) + " 页）" : ""));
+          }
+        }
+        if (result.mode === "table" && result.tables !== undefined) {
+          lines.push("表 " + String(result.tables.length) + " 张：");
+          for (const table of result.tables) {
+            lines.push("", table.title + "（第 " + String(table.page) + " 页，" + table.confidence + "）");
+            lines.push("  " + table.columns.join(" | "));
+            for (const row of table.cells.slice(1, 21)) lines.push("  " + row.join(" | "));
+            for (const warning of table.warnings) lines.push("  ! " + warning);
           }
         }
         if (result.mode === "render" && result.imageFile !== undefined) {
@@ -209,6 +236,13 @@ export function registerPdfTools(ctx: DshContext): void {
         const text = await extractPdfText(ctx.subprocess, located.tools, file, { first, last }, exec.signal);
         if (!text.ok) return { ...base, error: text.error };
         return { ...base, ok: true, pages: text.pages, notes: text.notes };
+      }
+      if (mode === "table") {
+        const first = Math.max(1, Math.floor(args.first ?? 1));
+        const last = Math.min(first + 4, Math.max(first, Math.floor(args.last ?? first)));
+        const result = await extractPdfTables(ctx.subprocess, located.tools, file, { first, last }, exec.signal);
+        if (!result.ok) return { ...base, error: result.error };
+        return { ...base, ok: true, tables: result.tables, notes: result.notes };
       }
       if (mode === "figures") {
         const first = Math.max(1, Math.floor(args.first ?? 1));
