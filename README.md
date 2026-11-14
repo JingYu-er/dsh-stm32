@@ -197,7 +197,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json` |
 | `stm32_ecad_check` | 先补齐工程库表与嘉立创工艺规则（`<工程>.kicad_dru`），再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络、板子尺寸、最细走线、最小孔径与打样成本 |
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
-| `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；缺 3D 模型只报告，不阻断导出 |
+| `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；先按「官方 3D 目录 → `hardware/libs/3d` → 缓存」解析模型并改写路径，缺模型只报告，不阻断导出 |
 | `stm32_ecad_export` | 一次导出 Gerber、钻孔、贴片坐标与 STEP 到 `hardware/out`，按最小可下单集合汇总 |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 

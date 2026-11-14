@@ -1251,7 +1251,7 @@ export async function handleWebApi(input: {
     }
     if (action === "step") {
       const out = join(workspace.outDir, "board.step");
-      const step = await exportStep(input.deps.subprocess, located.toolchain, latest.pcbFile, out);
+      const step = await exportStep(input.deps.subprocess, located.toolchain, latest.pcbFile, out, undefined, { libsDir: workspace.libsDir });
       return ok({
         ecadAction: {
           action: action,

@@ -815,7 +815,7 @@ export function registerEcadTools(ctx: DshContext): void {
       const { findLatestKicadBuild } = await import("../engine/ecad/tsci.js");
       const latest = findLatestKicadBuild(workspace);
       if (!latest.ok) {
-        return { ok: false, error: latest.error, stepFile: "", bytes: 0, durationMs: 0, missingModels: [] };
+        return { ok: false, error: latest.error, stepFile: "", bytes: 0, durationMs: 0, missingModels: [], models3d: null };
       }
       const name = (args.outFile ?? "board.step").replace(/[\\/:*?"<>|]/gu, "_");
       const exported = await exportStep(
@@ -824,6 +824,7 @@ export function registerEcadTools(ctx: DshContext): void {
         latest.pcbFile,
         join(workspace.outDir, name),
         exec.signal,
+        { libsDir: workspace.libsDir },
       );
       return {
         ok: exported.ok,

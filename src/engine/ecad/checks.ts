@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import { ecadEnv, type EcadToolchain } from "./toolchain.js";
+import { prepareModels3d } from "./models3d.js";
 
 export interface KicadFinding {
   readonly rule: string;
@@ -190,6 +191,8 @@ export interface StepExport {
   readonly bytes: number;
   readonly durationMs: number;
   readonly missingModels: readonly string[];
+  /** 3D 模型解析结果：找到几个、缺几个、改写了几处路径。 */
+  readonly models3d: { readonly resolved: number; readonly missing: number; readonly changed: number } | null;
 }
 
 /**
@@ -204,11 +207,18 @@ export async function exportStep(
   pcbFile: string,
   outFile: string,
   signal?: AbortSignal,
+  options: { libsDir?: string } = {},
 ): Promise<StepExport> {
   const started = Date.now();
   if (toolchain.kicadCli === "") {
-    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", stepFile: "", bytes: 0, durationMs: 0, missingModels: [] };
+    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", stepFile: "", bytes: 0, durationMs: 0, missingModels: [], models3d: null };
   }
+  // 先按四级顺序找 3D 模型：官方目录 → 工程 libs/3d → 缓存；找到的改写成 ${KIPRJMOD} 相对路径。
+  const models3d =
+    options.libsDir === undefined
+      ? null
+      : prepareModels3d(pcbFile, { modelRoot: toolchain.model3dDir, libsDir: options.libsDir });
+  const modelSummary = models3d === null ? null : { resolved: models3d.used.filter((item) => item.resolved !== "").length, missing: models3d.missing.length, changed: models3d.changed };
   if (!existsSync(dirname(outFile))) mkdirSync(dirname(outFile), { recursive: true });
   const outcome = await runCapture(subprocess, {
     argv: [toolchain.kicadCli, "pcb", "export", "step", "-o", outFile, pcbFile],
@@ -239,6 +249,7 @@ export async function exportStep(
     bytes,
     durationMs: Date.now() - started,
     missingModels: [...new Set(missing)].slice(0, 20),
+    models3d: modelSummary,
   };
 }
 

@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S115）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S116）
 
 ### 一、目标与约束
 
@@ -7156,7 +7156,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/ecad-units.test.mjs` 增 1 条（源码解析两种引号写法、封装落盘头部改名、库表与 sources.json），该套件 30 条；全量 **83 套件 / 1154 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2035.6 KB / 316 文件 / 16014.1 KB。
 - 教训：**归一化要找「还有出处的那一层」**。PCB 里只剩几何，`circuit.json` 只留 URL，真正写着立创编号的是作者写的那行 JSX——把它读出来，比事后猜强。
 
-### 一百二十四、教训
+### 一百二十四、3D 模型四级解析：先把能找的找到（S116）
+
+- 现象：`.kicad_pcb` 里模型写成 `${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8.step`，变量没定义或本机没装官方 3D 包时，STEP 导出只剩一块光板，stderr 只留一行 `Could not add 3D model for U18`。
+- 解析顺序（从最不需要网络的一级开始）：官方 3D 目录（`toolchain.model3dDir`）→ 工程 `hardware/libs/3d` → tscircuit 的模型缓存（可选）→ 记进缺失清单。找到的改写成 `${KIPRJMOD}/` 相对路径，随工程走，下次导出不再依赖安装位置。
+- `src/engine/ecad/models3d.ts`：`collectModelPaths()` 读全部 `(model "…")`；`resolveModels()` 逐条按四级判来源；`rewriteModelPaths()` 只改找到的那些、返回改了几处；`prepareModels3d()` 一步做完并把报告交回。只改模型路径，不动几何，找不到的照旧留给导出结果报。
+- `exportStep()` 新增可选 `options.libsDir`：给了就先跑 `prepareModels3d`，返回体增 `models3d: {resolved, missing, changed}`；工具与 `/ecad/action` 的 step 分支都传 `workspace.libsDir`。
+- 实测（合成用例）：官方目录命中 1 个、`libs/3d` 命中 1 个、缺失 1 个；改写 2 处为 `${KIPRJMOD}/…`。
+- 验证：`test/ecad-units.test.mjs` 增 1 条（三条路径的三级命中与一处缺失、改写两处、报告一致），该套件 31 条；全量 **83 套件 / 1155 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2037.0 KB / 317 文件 / 16018.9 KB。
+- 教训：**能本地解析的就别留给外部环境**。模型路径本身是确定信息，变量没定义时该由插件把它落到工程里，而不是把问题丢给「用户没装 3D 包」。
+
+### 一百二十五、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

@@ -15,6 +15,7 @@ import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../l
 import { checkDfm, estimateCost, readBoardFacts, renderDru, writeDru } from "../lib/engine/ecad/dfm.js";
 import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootprints } from "../lib/engine/ecad/normalize.js";
 import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/ecad/jlcpcb.js";
+import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
@@ -756,6 +757,44 @@ test("立创封装固化：从源码读编号、从 PCB 抽几何、登记库与
     assert.equal(sources[0].source, "jlcpcb");
     assert.equal(sources[0].code, "25137");
     assert.deepEqual(sources[0].refs, ["R1"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("3D 模型解析：官方目录 → 工程 libs/3d → 缺失，找到的改写成相对路径（S116）", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-models-"));
+  try {
+    const kicadDir = join(root, "kicad");
+    const libsDir = join(root, "libs");
+    const modelRoot = join(root, "official-3d");
+    mkdirSync(join(modelRoot, "Package_SO.3dshapes"), { recursive: true });
+    mkdirSync(join(libsDir, "3d"), { recursive: true });
+    mkdirSync(kicadDir, { recursive: true });
+    writeFileSync(join(modelRoot, "Package_SO.3dshapes", "SOIC-8.step"), "STEP", "utf8");
+    writeFileSync(join(libsDir, "3d", "C25137.step"), "STEP", "utf8");
+    const pcbFile = join(kicadDir, "board.kicad_pcb");
+    const text = "(kicad_pcb\n  (footprint \"a\" (model \"${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8.step\"))\n  (footprint \"b\" (model \"${KICAD10_3DMODEL_DIR}/Nope.3dshapes/C25137.step\"))\n  (footprint \"c\" (model \"${KICAD10_3DMODEL_DIR}/Nope.3dshapes/Missing.step\"))\n)\n";
+    writeFileSync(pcbFile, text, "utf8");
+
+    const paths = collectModelPaths(text);
+    assert.equal(paths.length, 3);
+    const uses = resolveModels(text, { modelRoot, libsDir });
+    assert.equal(uses.filter((item) => item.source === "kicad-official").length, 1);
+    assert.equal(uses.filter((item) => item.source === "project-libs").length, 1);
+    assert.equal(uses.filter((item) => item.source === "missing").length, 1);
+
+    const rewritten = rewriteModelPaths(text, uses, kicadDir);
+    assert.equal(rewritten.changed, 2);
+    assert.match(rewritten.text, /\$\{KIPRJMOD\}\/\.\.\/official-3d\/Package_SO\.3dshapes\/SOIC-8\.step/u);
+    assert.match(rewritten.text, /\$\{KIPRJMOD\}\/\.\.\/libs\/3d\/C25137\.step/u);
+    assert.match(rewritten.text, /Nope\.3dshapes\/Missing\.step/u);
+
+    const report = prepareModels3d(pcbFile, { modelRoot, libsDir });
+    assert.equal(report.ok, true);
+    assert.equal(report.changed, 2);
+    assert.equal(report.missing.length, 1);
+    assert.match(readFileSync(pcbFile, "utf8"), /\$\{KIPRJMOD\}/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
