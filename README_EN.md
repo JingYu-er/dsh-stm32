@@ -194,7 +194,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | Tool | Purpose |
 | --- | --- |
 | `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies are installed there with `npm install` |
-| `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs` |
+| `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs`; JLC footprints (`footprint="jlcpcb:C…"`) are vendored into the library per reference and recorded in `libs/sources.json` |
 | `stm32_ecad_check` | Export the project libraries first, then run `kicad-cli sch erc` and `pcb drc`, collapsing violations into rule, severity and affected items; unnamed nets are reported too |
 | `stm32_ecad_libs` | Extract embedded footprints and symbols into real libraries under `hardware/libs` and fill in `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | Export STEP into `hardware/out`; missing 3D models are reported, not fatal |

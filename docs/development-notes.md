@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S114）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S115）
 
 ### 一、目标与约束
 
@@ -7146,7 +7146,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/schematic-units.test.mjs` 增 1 条断言（PA5 的 `softwareFallbacks` 存在、protocol 为 I2C、tradeoff 含开漏/上拉/100 kHz/CPU）；83 套件 / 1153 pass / 0 fail；ACCEPTANCE OK；`test:size` 2033.2 KB / 315 文件 / 16006.3 KB。
 - 教训：**规范是首选，不是禁令**。把「能不能用软件顶上」与「顶上去的代价」一起交给用户，比替他做决定更有用。
 
-### 一百二十三、教训
+### 一百二十三、立创封装固化：出处只在源码里（S115）
+
+- 问题：`footprint="jlcpcb:C25137"` 构建后会变成 `tscircuit:chip`，几何内嵌进 `.kicad_pcb`，而 `circuit.json` 里**不留编号**（只有 `model_step_url` 指向 easyeda 模块 uuid，和立创编号对不上）。换台机器再打开，既看不出这是什么料，也没法收进自己的库。
+- 唯一保留出处的地方是电路源码本身：`<resistor name="R1" footprint="jlcpcb:C25137" />`。做法是两边对——源码读「位号 → 编号」，PCB 按 `(property "Reference" "R1")` 找到同一块的几何。
+- `src/engine/ecad/jlcpcb.ts`：`parseJlcpcbFootprints(tsx)`（按标签扫，同时要求 `name=` 与 `footprint="jlcpcb:C<数字>"`）、`vendorJlcpcbFootprints()` 写 `hardware/libs/footprints/jlcpcb_<编号>.pretty/<编号>.kicad_mod`（头部换成 `(footprint "<编号>" (version 20240108) (generator "dsh-stm32")`）、登记 `${KIPRJMOD}` 相对表项、并把来源记进 `libs/sources.json`（`{source:"jlcpcb", code, refs, file}`，按编号合并）。
+- 接在 `runTsciBuild()` 的归一化之后；notes 报「立创封装固化：N 个（C25137、C84256）」。
+- 实测（两元件立创样例）：`R1 → C25137`、`D1 → C84256`，两个 `.kicad_mod` 落盘、`fp-lib-table` 两条 `${KIPRJMOD}/../../../libs/footprints/…`、`sources.json` 两条记录。
+- 验证：`test/ecad-units.test.mjs` 增 1 条（源码解析两种引号写法、封装落盘头部改名、库表与 sources.json），该套件 30 条；全量 **83 套件 / 1154 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2035.6 KB / 316 文件 / 16014.1 KB。
+- 教训：**归一化要找「还有出处的那一层」**。PCB 里只剩几何，`circuit.json` 只留 URL，真正写着立创编号的是作者写的那行 JSX——把它读出来，比事后猜强。
+
+### 一百二十四、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

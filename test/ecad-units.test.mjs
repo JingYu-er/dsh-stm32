@@ -14,6 +14,7 @@ import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
 import { checkDfm, estimateCost, readBoardFacts, renderDru, writeDru } from "../lib/engine/ecad/dfm.js";
 import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootprints } from "../lib/engine/ecad/normalize.js";
+import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/ecad/jlcpcb.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
@@ -715,6 +716,46 @@ test("封装名归一化：复制官方封装并登记 fp-lib-table（S111）", 
     const table = readFileSync(join(kicadDir, "fp-lib-table"), "utf8");
     assert.match(table, /\(name "Resistor_SMD"\)/u);
     assert.match(table, /\$\{KIPRJMOD\}/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("立创封装固化：从源码读编号、从 PCB 抽几何、登记库与来源（S115）", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-jlc-"));
+  try {
+    const kicadDir = join(root, "kicad");
+    const libsDir = join(root, "libs");
+    mkdirSync(kicadDir, { recursive: true });
+    const tsx = [
+      "export default () => (",
+      "  <board>",
+      '    <resistor name="R1" resistance="10k" footprint="jlcpcb:C25137" />',
+      '    <led name="D1" footprint=\'jlcpcb:C84256\' />',
+      "  </board>",
+      ");",
+    ].join("\n");
+    const tsxFile = join(root, "index.circuit.tsx");
+    writeFileSync(tsxFile, tsx, "utf8");
+    const usages = parseJlcpcbFootprints(tsx);
+    assert.deepEqual(usages, [{ ref: "R1", code: "25137" }, { ref: "D1", code: "84256" }]);
+
+    const footprint = (ref) => "(footprint\n    \"tscircuit:chip\"\n    (layer \"F.Cu\")\n    (property \"Reference\" \"" + ref + "\")\n    (pad \"1\" smd rect (at 0 0))\n  )";
+    const pcbFile = join(kicadDir, "index.kicad_pcb");
+    writeFileSync(pcbFile, "(kicad_pcb\n  " + footprint("R1") + "\n  " + footprint("D1") + "\n)\n", "utf8");
+    const out = vendorJlcpcbFootprints({ tsxFile, pcbFile, kicadDir, libsDir });
+    assert.equal(out.ok, true);
+    assert.equal(out.vendored.length, 2);
+    const mod = join(libsDir, "footprints", "jlcpcb_25137.pretty", "25137.kicad_mod");
+    assert.ok(existsSync(mod), "封装要落成单文件");
+    assert.match(readFileSync(mod, "utf8"), /\(footprint "25137"/u);
+    const table = readFileSync(join(kicadDir, "fp-lib-table"), "utf8");
+    assert.match(table, /\(name "jlcpcb_25137"\)/u);
+    assert.match(table, /\$\{KIPRJMOD\}\//u);
+    const sources = JSON.parse(readFileSync(join(libsDir, "sources.json"), "utf8"));
+    assert.equal(sources[0].source, "jlcpcb");
+    assert.equal(sources[0].code, "25137");
+    assert.deepEqual(sources[0].refs, ["R1"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

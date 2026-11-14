@@ -18,6 +18,7 @@ import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import { JLC_STANDARD, writeDru } from "./dfm.js";
 import { normalizeKicadProject } from "./normalize.js";
+import { tsxPathOf, vendorJlcpcbFootprints } from "./jlcpcb.js";
 import { ecadEnv, type EcadToolchain } from "./toolchain.js";
 
 export const ECAD_DIRS = ["circuit", "kicad", "libs", "out"] as const;
@@ -218,6 +219,21 @@ export async function runTsciBuild(request: TsciBuildRequest): Promise<TsciBuild
         notes.push(`封装名归一化：${normalized.renamed.length} 个（复制官方封装 ${normalized.copied} 份）`);
       }
       for (const note of normalized.notes) notes.push(note);
+    }
+    // 立创封装固化：出处只在电路源码里，几何在 PCB 里，两边一对才留得下来。
+    const pcbFile = readdirSync(found.kicadDir).find((name) => name.endsWith(".kicad_pcb"));
+    if (pcbFile !== undefined) {
+      const vendored = vendorJlcpcbFootprints({
+        tsxFile: tsxPathOf(workspace.circuitDir, entry),
+        pcbFile: join(found.kicadDir, pcbFile),
+        kicadDir: found.kicadDir,
+        libsDir: workspace.libsDir,
+      });
+      if (vendored.ok && vendored.vendored.length > 0) {
+        notes.push("立创封装固化：" + String(vendored.vendored.length) + " 个（" + vendored.vendored.map((item) => "C" + item.code).join("、") + "）");
+      }
+      for (const note of vendored.notes) notes.push(note);
+      if (!vendored.ok) notes.push("立创封装没固化：" + vendored.error);
     }
     // 把嘉立创工艺写进工程的设计规则：之后跑 kicad-cli pcb drc 用的就是打板判据。
     const dru = writeDru(found.kicadDir);
