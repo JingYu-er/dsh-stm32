@@ -257,6 +257,7 @@ Non-STM32 parts are fetched once and cached:
 
 - `stm32_ds_fetch code=C25137` fetches by LCSC code; `all=true` fetches every `jlcpcb:` part the project uses; `file=` imports a PDF by hand.
 - Cache: `~/.dsh-stm32/datasheets/<code>/` (`meta.json` plus a PDF named after its content sha256); `DSH_STM32_DATASHEETS` relocates it. Cache hits make **no network calls**; failures are remembered for 24 hours and `refresh=true` retries.
+- `stm32_ecad_build` fetches the datasheets the project uses after a successful build; the Circuit design tab shows `datasheets 2/3` in its header and the same logic behind its "fetch datasheets" button.
 - `stm32_ds_list` shows what is cached and how much space it takes.
 - Afterwards `stm32_pdf_read file=C25137` (or the MPN) reads the cached copy directly, so pinout, limits and timing come from the document.
 
