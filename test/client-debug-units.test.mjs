@@ -201,6 +201,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes('paintOrder: "stroke"'), "连线标签要描底色，压线时仍然可读（S101）");
     assert.ok(source.includes("const ringX") && source.includes("const ringY"), "模块要绕主控环形摆放，图不能拉成一条长竖线（S103）");
     assert.ok(source.includes("const mcuHeight") && source.includes("function roundedPath"), "主控框按连线数长高，拐角走圆角（S103）");
+    assert.ok(source.includes("function blockWidth"), "框宽要跟着文字长度走（S104）");
+    assert.ok(source.includes("const sameAxis"), "同一根轴上的两侧要能拉直，不能为了拐弯而拐弯（S104）");
+    assert.ok(source.includes("strokeWidth: 1.5"), "整框用模块色描边，保留一条左侧竖线会让人猜（S104）");
     assert.ok(source.includes("function setApiSessionId(") && source.includes("function withSessionParam("), "请求要带会话 id（S91）");
     assert.ok(source.includes("setApiSessionId(sessionId)"), "面板挂载时写入当前会话 id（S91）");
   } finally {

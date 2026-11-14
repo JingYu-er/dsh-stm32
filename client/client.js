@@ -2366,12 +2366,19 @@ window.__ModuleLoader__.load({
       return dy >= 0 ? "bottom" : "top";
     }
 
-    function portAnchor(point, side, t, boxW, boxH) {
-      const h = typeof point.h === "number" ? point.h : boxH;
-      if (side === "right") return { x: point.x + boxW, y: point.y + h * t };
+    // 框宽跟着文字走：两个字的「主控」不该占一个能放八个字的框，八个字的模块名也不该被截断。
+    function blockWidth(label) {
+      const length = String(label).length;
+      return Math.max(96, Math.min(236, 30 + Math.ceil(length * 13)));
+    }
+
+    function portAnchor(point, side, t) {
+      const w = typeof point.w === "number" ? point.w : 200;
+      const h = typeof point.h === "number" ? point.h : 62;
+      if (side === "right") return { x: point.x + w, y: point.y + h * t };
       if (side === "left") return { x: point.x, y: point.y + h * t };
-      if (side === "top") return { x: point.x + boxW * t, y: point.y };
-      return { x: point.x + boxW * t, y: point.y + h };
+      if (side === "top") return { x: point.x + w * t, y: point.y };
+      return { x: point.x + w * t, y: point.y + h };
     }
 
     function portNormal(side) {
@@ -2418,7 +2425,6 @@ window.__ModuleLoader__.load({
     function layoutSchematic(diagram) {
       const blocks = diagram !== null && Array.isArray(diagram.blocks) ? diagram.blocks : [];
       const links = diagram !== null && Array.isArray(diagram.links) ? diagram.links : [];
-      const boxW = 200;
       const boxH = 62;
       const stub = 18;
       const margin = 26;
@@ -2433,25 +2439,30 @@ window.__ModuleLoader__.load({
       const n = Math.max(others.length, 1);
       // 主控的端口数决定它的高度；其余框固定高度。环半径随模块数增加，框才不会贴在一起。
       const mcuLinkCount = links.filter((link) => mcuBlocks.some((block) => block.id === link.from || block.id === link.to)).length;
+      const mcuWidth = blockWidth(mcuBlocks.length > 0 ? mcuBlocks[0].label : "主控");
       const mcuHeight = Math.max(boxH, mcuLinkCount * 26 + 22);
       const ringX = 290 + Math.max(0, n - 4) * 36;
       const ringY = 190 + Math.max(0, n - 4) * 30;
-      const centerX = ringX + boxW / 2 + margin;
+      const centerX = ringX + mcuWidth / 2 + margin;
       const centerY = ringY + Math.max(mcuHeight, boxH) / 2 + margin;
       const pos = new Map();
       for (const block of mcuBlocks) {
-        pos.set(block.id, { x: centerX - boxW / 2, y: centerY - mcuHeight / 2, h: mcuHeight });
+        pos.set(block.id, { x: centerX - mcuWidth / 2, y: centerY - mcuHeight / 2, w: mcuWidth, h: mcuHeight });
       }
       others.forEach((block, index) => {
         const angle = ((index * 360) / n - 30) * (Math.PI / 180);
         const px = centerX + Math.cos(angle) * ringX;
         const py = centerY + Math.sin(angle) * ringY;
-        pos.set(block.id, { x: px - boxW / 2, y: py - boxH / 2, h: boxH });
+        const w = blockWidth(block.label);
+        pos.set(block.id, { x: px - w / 2, y: py - boxH / 2, w: w, h: boxH });
       });
       const boxes = blocks
         .filter((block) => pos.has(block.id))
         .map((block) => Object.assign({}, pos.get(block.id), { block: block }));
-      const centerOf = (point) => ({ x: point.x + boxW / 2, y: point.y + (typeof point.h === "number" ? point.h : boxH) / 2 });
+      const centerOf = (point) => ({
+        x: point.x + (typeof point.w === "number" ? point.w : 200) / 2,
+        y: point.y + (typeof point.h === "number" ? point.h : boxH) / 2,
+      });
 
       const edges = [];
       for (const link of links) {
@@ -2485,13 +2496,41 @@ window.__ModuleLoader__.load({
         const keyB = edge.link.to + "|" + edge.sideB;
         const tA = tOf.get(keyA + "|" + edge.link.from + "|" + edge.link.to) ?? 0.5;
         const tB = tOf.get(keyB + "|" + edge.link.from + "|" + edge.link.to) ?? 0.5;
-        const start = portAnchor(edge.a, edge.sideA, tA, boxW, boxH);
-        const end = portAnchor(edge.b, edge.sideB, tB, boxW, boxH);
+        let start = portAnchor(edge.a, edge.sideA, tA);
+        let end = portAnchor(edge.b, edge.sideB, tB);
+        // 能直着走就别拐弯：两端高度（或水平位置）本来就落在对方框的范围内时，
+        // 把端口挪到同一水平线/竖线上，线就是一条直的。
+        const horizontal = edge.sideA === "left" || edge.sideA === "right";
+        // 同一根轴上的两个侧面（左/右，或上/下）就能拉直：不必要求完全同侧，
+        // 否则「下出线上进」这种最常见的连法永远会多拐一个弯。
+        const sameAxis = horizontal === (edge.sideB === "left" || edge.sideB === "right");
+        if (horizontal && sameAxis) {
+          const lowB = edge.b.y + Math.min(16, edge.b.h / 2);
+          const highB = edge.b.y + edge.b.h - Math.min(16, edge.b.h / 2);
+          if (start.y >= lowB && start.y <= highB) {
+            end = { x: end.x, y: start.y };
+          } else {
+            const lowA = edge.a.y + Math.min(16, edge.a.h / 2);
+            const highA = edge.a.y + edge.a.h - Math.min(16, edge.a.h / 2);
+            if (end.y >= lowA && end.y <= highA) start = { x: start.x, y: end.y };
+          }
+        }
+        if (!horizontal && sameAxis) {
+          const lowB = edge.b.x + 20;
+          const highB = edge.b.x + edge.b.w - 20;
+          if (start.x >= lowB && start.x <= highB) {
+            end = { x: start.x, y: end.y };
+          } else {
+            const lowA = edge.a.x + 20;
+            const highA = edge.a.x + edge.a.w - 20;
+            if (end.x >= lowA && end.x <= highA) start = { x: end.x, y: start.y };
+          }
+        }
         const normalA = portNormal(edge.sideA);
         const normalB = portNormal(edge.sideB);
         const from = { x: start.x + normalA.x * stub, y: start.y + normalA.y * stub };
         const to = { x: end.x + normalB.x * stub, y: end.y + normalB.y * stub };
-        const horizontalFirst = edge.sideA === "left" || edge.sideA === "right";
+        const horizontalFirst = horizontal;
         const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
         const points = [start, from];
         if (Math.abs(corner.x - from.x) > 0.5 || Math.abs(corner.y - from.y) > 0.5) points.push(corner);
@@ -2520,12 +2559,12 @@ window.__ModuleLoader__.load({
       };
 
       const paths = edges.map(buildPath);
-      const maxX = Math.max(...boxes.map((box) => box.x + boxW), 0);
-      const maxY = Math.max(...boxes.map((box) => box.y + (typeof box.h === "number" ? box.h : boxH)), 0);
+      const maxX = Math.max(...boxes.map((box) => box.x + box.w), 0);
+      const maxY = Math.max(...boxes.map((box) => box.y + box.h), 0);
       return {
         width: Math.max(maxX + margin, 360),
         height: Math.max(maxY + margin, 240),
-        boxW: boxW,
+        boxW: 200,
         boxH: boxH,
         boxes: boxes,
         paths: paths,
@@ -2732,8 +2771,8 @@ window.__ModuleLoader__.load({
                   e(
                     "g",
                     { key: "box-" + box.block.id },
-                    e("rect", { x: box.x, y: box.y, width: layout.boxW, height: box.h ?? layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: "var(--dsw-alias-border-l2)", strokeWidth: 1 }),
-                    e("rect", { x: box.x, y: box.y, width: 3, height: box.h ?? layout.boxH, fill: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other }),
+                    // 整框用模块色描边：只给左边一条彩线时，框和类别的关系要靠猜。
+                    e("rect", { x: box.x, y: box.y, width: typeof box.w === "number" ? box.w : layout.boxW, height: box.h ?? layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other, strokeWidth: 1.5, rx: 2 }),
                     e("text", { x: box.x + 12, y: box.y + 18, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, D32_BLOCK_TAG[box.block.kind] ?? box.block.id.toUpperCase()),
                     e("text", { x: box.x + 12, y: box.y + 38, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 22 ? box.block.label.slice(0, 21) + "…" : box.block.label),
                     e("text", { x: box.x + 12, y: box.y + 54, fill: "var(--dsw-alias-label-tertiary)", fontSize: "11px" }, String(Array.isArray(box.block.refs) ? box.block.refs.length : 0) + " 个元件"),

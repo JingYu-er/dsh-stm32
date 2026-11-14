@@ -156,27 +156,40 @@ const memoHome = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-stm32-units-home-"))
  * 两种 reporter 都认：TAP 的 `not ok N - 名字`，spec 的 `✖ 名字`。
  */
 function failures(out) {
+  // 去掉颜色转义：带颜色的日志里行首是 \u001b[31m，直接 ^not ok 会全部漏掉。
+  const text = out.replace(/\u001b\[[0-9;]*m/gu, "");
   const names = [];
   const tap = /^not ok \d+ - (.+)$/gmu;
-  let match = tap.exec(out);
+  let match = tap.exec(text);
   while (match !== null) {
-    names.push(match[1].trim());
-    match = tap.exec(out);
+    const name = match[1].trim();
+    if (name !== "") names.push(name);
+    match = tap.exec(text);
   }
   if (names.length === 0) {
     const spec = /^\s*\u2716\s+(.+?)(?:\s+\(\d+(?:\.\d+)?ms\))?$/gmu;
-    match = spec.exec(out);
+    match = spec.exec(text);
     while (match !== null) {
-      names.push(match[1].trim());
-      match = spec.exec(out);
+      const name = match[1].trim();
+      if (name !== "" && !names.includes(name)) names.push(name);
+      match = spec.exec(text);
+    }
+  }
+  if (names.length === 0) {
+    // 两种 reporter 都没认出来时，至少把带失败标记的原始行贴出来，不要只剩「失败用例：」这个空标题。
+    const loose = /(?:^|\s)(?:not ok|\u2716|\u2717|AssertionError|cancelled)[^\n]*/gmu;
+    match = loose.exec(text);
+    while (match !== null && names.length < 10) {
+      names.push(match[0].trim().slice(0, 180));
+      match = loose.exec(text);
     }
   }
   const detail = [];
   const assertLine = /^\s{2,}(error|expected|actual|operator|code):\s*(.+)$/gmu;
-  match = assertLine.exec(out);
+  match = assertLine.exec(text);
   while (match !== null && detail.length < 8) {
     detail.push(match[1] + ": " + match[2].slice(0, 200));
-    match = assertLine.exec(out);
+    match = assertLine.exec(text);
   }
   return { names: names.slice(0, 10), detail: detail };
 }
@@ -217,7 +230,7 @@ for (const name of suites) {
   if (bad) {
     const failed = failures(out);
     if (failed.names.length > 0) {
-      console.log("    失败用例：");
+      console.log("    失败用例（" + name + "）：");
       for (const name of failed.names) console.log("      - " + name);
     }
     if (failed.detail.length > 0) {
