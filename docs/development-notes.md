@@ -7216,7 +7216,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/web-api-units.test.mjs` 增「datasheets 在没有器件时也认这个动作」（200、`files: 0`、notes 含「本工程 0 个立创器件」），动作名用例更名「只认七个」；`test/client-debug-units.test.mjs` 增面板断言（`dsMissing`、`["datasheets", "补手册"]`、`ecad.datasheets`）。全量 **88 套件 / 1171 pass / 0 fail**，ACCEPTANCE OK，包体 2059.2 KB / 325 文件 / 解包 16092.7 KB。
 - 教训：**同一个判据只能有一个实现**。构建后补、面板补、工具补三条路径如果各写一份「哪些器件要手册」，迟早出现「面板说缺、构建没补」这种自相矛盾。
 
-### 一百二十九、教训
+### 一百二十九、手册关键页索引与按用途查询（S121）
+
+- 需求：手册几十上百页，设计时真正要看的就四五处。与其每次全文搜索，不如第一次读前 40 页记下「哪类信息在第几页」。
+- `src/engine/datasheet/digest.ts`：`detectSections(pages)` 逐行匹配五类章节标题（引脚、绝对最大额定值、电气特性、时序、封装），允许 `5.2 ` 这类编号前缀；行首匹配、长度 4–90 字，正文里提到关键词不算。`buildDigest()` 用 `pdftotext -layout` 读前 N 页（默认 40）建索引，存 `<编号>/digest.json`（`{pages,textLayer,scanned,sections,builtAt}`）——只存页号与命中行，不存正文。
+- 工具 `stm32_ds_lookup`：`code` + `kind`（`pinout|absolute-maximum|electrical|timing|package|all`），返回每类的页号、标题与该页开头正文（默认 1200 字，最多 4000）。索引不存在时先建索引并把「首次查询，已建立索引：N 页」写进 notes。
+- 真机校验（缓存里的 C25137，厚膜电阻手册）：`textLayer: true`，索引 `sections: []`——这类手册的标题是 `PERFORMANCE` / `CONSTRUCTION`，不在五类里，工具会明说「没有匹配的章节，换 kind 或直接按页号读」。这不是缺陷：**索引宁缺不猜**。
+- 探针踩坑：假 `subprocess` 的 `collected.stdout.readFrom()` 要返回 `{text}` 而不是字符串，否则 `runCapture` 读到的 stdout 恒为空，表现为「PDF 没有文字层」——测试替身要照真实接口的形状写。
+- 验证：`test/datasheet-units.test.mjs` 增 2 条（五种章节各命中一次且页号正确；正文里提到关键词不误报），该套件 8 条；全量 **88 套件 / 1173 pass / 0 fail**，ACCEPTANCE OK，包体 2062.0 KB / 326 文件 / 解包 16102.1 KB。
+- 教训：**索引只记位置，不复制内容**。把 1000 页正文塞进缓存，既撑大磁盘，又会在器件换版本时变成过期事实。
+
+### 一百三十、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { parseLcscPage } from "../lib/engine/datasheet/lcsc.js";
+import { detectSections } from "../lib/engine/datasheet/digest.js";
 import {
   ensureDatasheet,
   importDatasheetFile,
@@ -128,4 +129,31 @@ test("手工导入一份 PDF 也能进缓存", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("关键页索引：从章节标题认引脚/额定/电气/时序/封装（S121）", () => {
+  const pages = [
+    { page: 1, text: "General description\nPin configuration\nPA1  GPIO" },
+    { page: 3, text: "5.2 Absolute Maximum Ratings\nVDD -0.3 to 6.0 V" },
+    { page: 4, text: "7 Electrical Characteristics\nIDD 1.2 mA" },
+    { page: 6, text: "8.1 Timing Characteristics\nSCL 100 kHz" },
+    { page: 9, text: "10 Package Outline\nSOT-23-6" },
+  ];
+  const sections = detectSections(pages);
+  assert.deepEqual(sections.map((item) => item.kind), [
+    "pinout",
+    "absolute-maximum",
+    "electrical",
+    "timing",
+    "package",
+  ]);
+  assert.equal(sections[1].page, 3);
+  assert.match(sections[1].heading, /Absolute Maximum Ratings/u);
+});
+
+test("关键页索引：正文里提到关键词不算章节，不误报", () => {
+  const pages = [
+    { page: 2, text: "The device has a pin configuration that is described below in the following section of this document, please read" },
+  ];
+  assert.deepEqual(detectSections(pages), []);
 });

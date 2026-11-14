@@ -20,11 +20,19 @@ import {
   type DatasheetEntry,
 } from "../engine/datasheet/store.js";
 import { projectJlcpcbCodes } from "../engine/datasheet/auto.js";
+import { buildDigest, readDigest, writeDigest, type DigestKind } from "../engine/datasheet/digest.js";
+import { resolveDatasheetRef } from "../engine/datasheet/store.js";
+import { locatePoppler } from "../engine/pdf/toolchain.js";
+import { extractPdfText } from "../engine/pdf/reader.js";
+import { popplerDirs } from "./pdf.js";
 import { resolveProjectDir } from "./project-dir.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 
 export const DS_FETCH_TOOL = "stm32_ds_fetch";
 export const DS_LIST_TOOL = "stm32_ds_list";
+export const DS_LOOKUP_TOOL = "stm32_ds_lookup";
+
+const LOOKUP_KINDS: DigestKind[] = ["pinout", "absolute-maximum", "electrical", "timing", "package"];
 
 const cacheDirOf = (env: Record<string, string | undefined>): string => datasheetCacheDir(env);
 
@@ -155,6 +163,105 @@ export function registerDatasheetTools(ctx: DshContext): void {
       if (failed.length > 0) notes.push("失败项已记入负缓存，24 小时内不重试；可用 refresh 强制重试，或手工导入 PDF。");
       if (offline) notes.push("离线模式：只查本地缓存，没有发起请求。");
       return { ok: failed.length === 0, error: failed.length === 0 ? "" : "有 " + String(failed.length) + " 个器件未完成", cacheDir, cached, fetched: fetched.map(view), failed, notes };
+    },
+  });
+
+  ctx.tools.register({
+    name: DS_LOOKUP_TOOL,
+    description:
+      "按用途查已缓存的手册：引脚（pinout）、绝对最大额定值（absolute-maximum）、电气特性（electrical）、时序（timing）、封装（package）。返回页号、标题与该页开头正文；索引不存在时会先建索引。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        code: { type: "string", description: "立创商品编号或型号，例如 C25137。" },
+        kind: { type: "string", enum: [...LOOKUP_KINDS, "all"], description: "查哪一类；默认 all。" },
+        excerptChars: { type: "number", description: "每段附带的正文长度，默认 1200，最多 4000。" },
+      },
+      required: ["code"],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          code: { type: "string" },
+          mpn: { type: "string" },
+          pages: { type: "number" },
+          sections: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { type: "string" },
+                page: { type: "number" },
+                heading: { type: "string" },
+                excerpt: { type: "string" },
+              },
+              required: ["kind", "page", "heading", "excerpt"],
+            },
+          },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "code", "mpn", "pages", "sections", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          code: string;
+          mpn: string;
+          pages: number;
+          sections: { kind: string; page: number; heading: string; excerpt: string }[];
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "查询失败：" + result.error }];
+        const lines = [result.code + " · " + result.mpn + " · 索引覆盖前 " + String(result.pages) + " 页"];
+        for (const section of result.sections) {
+          lines.push("", "[" + section.kind + "] 第 " + String(section.page) + " 页 · " + section.heading, section.excerpt);
+        }
+        for (const note of result.notes) lines.push("· " + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    execute: async (args: { code: string; kind?: string; excerptChars?: number }, exec: ToolExec) => {
+      const cacheDir = datasheetCacheDir(process.env);
+      const blank = { ok: false, error: "", code: args.code, mpn: "", pages: 0, sections: [] as unknown[], notes: [] as string[] };
+      const ref = resolveDatasheetRef(cacheDir, args.code);
+      if (ref === null) return { ...blank, error: "本地没有 " + args.code + " 的手册：先跑 stm32_ds_fetch code=" + args.code };
+      const located = locatePoppler(popplerDirs());
+      if (located.tools === null) return { ...blank, error: located.error, mpn: ref.entry.mpn };
+
+      const dir = join(cacheDir, ref.entry.code);
+      let digest = readDigest(dir);
+      const notes: string[] = [];
+      if (digest === null) {
+        const built = await buildDigest(ctx.subprocess, located.tools, ref.file, { signal: exec.signal });
+        if (!built.ok || built.digest === undefined) {
+          return { ...blank, error: built.error ?? "建立索引失败", mpn: ref.entry.mpn };
+        }
+        digest = built.digest;
+        writeDigest(dir, digest);
+        notes.push("首次查询，已建立索引：" + String(digest.scanned) + " 页");
+      }
+
+      const wanted = args.kind === undefined || args.kind === "all" ? digest.sections : digest.sections.filter((item) => item.kind === args.kind);
+      if (!digest.textLayer) notes.push("这份 PDF 没有可读文字层：索引为空，请改用 stm32_pdf_read mode=render 看图");
+      if (wanted.length === 0) notes.push("没有匹配的章节：换 kind，或直接按页号用 stm32_pdf_read mode=text 翻");
+      const excerptChars = Math.min(4000, Math.max(200, Math.floor(args.excerptChars ?? 1200)));
+      const sections: { kind: string; page: number; heading: string; excerpt: string }[] = [];
+      for (const section of wanted) {
+        const pageText = await extractPdfText(ctx.subprocess, located.tools, ref.file, { first: section.page, last: section.page }, exec.signal);
+        const firstPage = pageText.pages[0];
+        const text = pageText.ok && firstPage !== undefined ? firstPage.text : "";
+        sections.push({ kind: section.kind, page: section.page, heading: section.heading, excerpt: text.slice(0, excerptChars) });
+      }
+      return { ok: true, error: "", code: ref.entry.code, mpn: ref.entry.mpn, pages: digest.scanned, sections, notes };
     },
   });
 

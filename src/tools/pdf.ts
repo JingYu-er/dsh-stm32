@@ -101,7 +101,7 @@ const outputSchema: JsonSchema = {
   required: ["ok", "error", "mode", "file", "notes"],
 };
 
-function popplerDirs(): string[] {
+export function popplerDirs(): string[] {
   const config = resolveSearchConfig(process.env);
   const extra = (process.env["DSH_STM32_BIN_DIRS"] ?? "")
     .split(";")

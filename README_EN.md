@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 39 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 40 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -200,6 +200,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_ecad_step` | Export STEP into `hardware/out`; resolves models through official 3D dir → `hardware/libs/3d` → cache and rewrites their paths; missing models are reported, not fatal |
 | `stm32_ecad_export` | Export Gerbers, drill files, pick-and-place coordinates and STEP into `hardware/out` in one go |
 | `stm32_ds_fetch` | Fetch non-STM32 datasheets into the local cache: by LCSC code, for every part used by the project, or from a manually imported PDF |
+| `stm32_ds_lookup` | Look up a cached datasheet by purpose: pinout, absolute maximum ratings, electrical characteristics, timing, package — page number, heading and the start of that page |
 | `stm32_ds_list` | List the local datasheet cache: code, MPN, size, fetch time and source |
 | `stm32_pdf_read` | Read a PDF: `info` for page count and text layer, `text` for page text (layout preserved), `figures` to list figures, `table` to cut parameter tables into rows and columns, `render` to rasterise a page or region into PNG for visual reading |
 | `stm32_ecad_package` | Pack `hardware/` into a deliverable zip (skips `node_modules`, `dist`, `.history`) and read it back to self-check |
@@ -258,6 +259,7 @@ Non-STM32 parts are fetched once and cached:
 - `stm32_ds_fetch code=C25137` fetches by LCSC code; `all=true` fetches every `jlcpcb:` part the project uses; `file=` imports a PDF by hand.
 - Cache: `~/.dsh-stm32/datasheets/<code>/` (`meta.json` plus a PDF named after its content sha256); `DSH_STM32_DATASHEETS` relocates it. Cache hits make **no network calls**; failures are remembered for 24 hours and `refresh=true` retries.
 - `stm32_ecad_build` fetches the datasheets the project uses after a successful build; the Circuit design tab shows `datasheets 2/3` in its header and the same logic behind its "fetch datasheets" button.
+- `stm32_ds_lookup code=C25137 kind=electrical` jumps to the electrical characteristics page: the first 40 pages are indexed once (page numbers only), then text is read per page.
 - `stm32_ds_list` shows what is cached and how much space it takes.
 - Afterwards `stm32_pdf_read file=C25137` (or the MPN) reads the cached copy directly, so pinout, limits and timing come from the document.
 
@@ -448,7 +450,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 39 tools
+  tools/            registration and argument validation for 40 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands
