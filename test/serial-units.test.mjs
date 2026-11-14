@@ -211,6 +211,10 @@ test("hex：按会话编码反解后发送", async () => {
 
 test("transact：until 命中与超时", async () => {
   await call({ action: "open", port: "COM7" });
+  // 先做一次自带超时的往返：CI 上新起进程要一两秒才接得住命令，
+  // 不预热的话下面 300 ms 的超时用例会先在「桥还没回执」上失败，测的就不是 until 逻辑了。
+  const warm = await call({ action: "transact", text: "SYNC", until: "SYNC", timeoutMs: 8000 });
+  assert.equal(warm.ok, true, "预热往返失败：" + warm.errors.join("；"));
   const hit = await call({ action: "transact", text: "PING", until: "PONG", timeoutMs: 3000 });
   assertShape(hit, "transact");
   assert.equal(hit.ok, true, hit.errors.join("；"));
@@ -218,7 +222,7 @@ test("transact：until 命中与超时", async () => {
   assert.equal(hit.matchedLine, "PONG");
   assert.ok(hit.records.some((record) => record.d === "PONG"));
 
-  const miss = await call({ action: "transact", text: "HELLO", until: "NOPE", timeoutMs: 300 });
+  const miss = await call({ action: "transact", text: "HELLO", until: "NOPE", timeoutMs: 1500 });
   assertShape(miss, "transact");
   assert.equal(miss.ok, true, "超时不算失败");
   assert.equal(miss.matched, false);
