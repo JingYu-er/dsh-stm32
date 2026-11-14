@@ -9,7 +9,7 @@
 import { patchUserCode } from "../engine/code-patch.js";
 import type { CodePatchReport } from "../engine/code-patch.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
-import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
+import { resolveFirmwareDir, validateToolArgs } from "./project-dir.js";
 
 export const CODE_PATCH_TOOL = "stm32_code_patch";
 
@@ -115,7 +115,7 @@ export function registerCodePatch(ctx: DshContext): void {
           },
         };
       }
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const report = patchUserCode({
         projectDir: resolution.projectDir,
         file: args.file,

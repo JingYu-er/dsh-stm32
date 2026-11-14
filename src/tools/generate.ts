@@ -14,7 +14,7 @@ import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { GenerateReport } from "../engine/generate.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 import { generationRiskNotes, mcuFromIoc } from "../engine/facts.js";
 import { ensureFacts } from "../engine/facts-acquire.js";
 
@@ -229,7 +229,7 @@ export function registerGenerate(ctx: DshContext): void {
       if (subprocess === undefined) {
         return { mode: "report", jobId: "", message: "宿主缺少 subprocess 服务，无法生成代码" };
       }
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       // R5：生成前把「这块板烧录门禁会怎样」摆出来——CubeMX 跑 3–4 分钟之前，
       // 用户/agent 就该知道 facts 缺不缺、烧录会不会被只读门禁拦。

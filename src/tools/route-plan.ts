@@ -29,7 +29,7 @@ import {
 } from "../engine/route-plan.js";
 import { ensureToolchain, type GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const ROUTE_PLAN_TOOL = "stm32_route_plan";
 
@@ -453,7 +453,7 @@ export function registerRoutePlan(ctx: DshContext): void {
         );
       }
 
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       const notes: string[] = [];
       if (resolution.note !== null) notes.push(resolution.note);

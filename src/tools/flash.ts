@@ -14,7 +14,7 @@ import type { FlashReport } from "../engine/flash.js";
 import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 import { describeFacts, mcuFromIoc } from "../engine/facts.js";
 import { ensureFacts } from "../engine/facts-acquire.js";
 
@@ -158,7 +158,7 @@ export function registerFlash(ctx: DshContext): void {
         const report = emptyReport("宿主缺少 subprocess 服务，无法烧录");
         return { message: report.message, report: flashReportForHost(report) };
       }
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       // 门禁：烧录只需要 openocd。缺件且 envCheck=block 时连 openocd 都不起，
       // 免得"探针被占 / 连不上"这类假象盖住真正的原因。
       const gate = await ensureToolchain(ctx, {

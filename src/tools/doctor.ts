@@ -11,7 +11,7 @@ import type { DoctorProcess, DoctorReport } from "../engine/doctor.js";
 import { describeFacts, mcuFromIoc, readFactsFor } from "../engine/facts.js";
 import type { ProbeResult } from "../engine/probe.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const DOCTOR_TOOL = "stm32_doctor";
 
@@ -230,7 +230,7 @@ export function registerDoctor(ctx: DshContext): void {
           },
         };
       }
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       // 芯片型号 / 启动文件 / 引脚一致性都要设备事实：插件不再内置芯片表，事实来自内置资源。
       // 这里**不硬失败**——体检本来就是用来回答"为什么现在烧不了"，网络不通不该让整张报告消失；
       // 拿不到事实就把原因写进 notes，其余检查（工具链/探针/端口/构建产物）照跑。

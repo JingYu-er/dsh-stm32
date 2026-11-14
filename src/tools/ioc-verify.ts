@@ -15,7 +15,7 @@ import { findIocFile } from "../engine/generate.js";
 import { runIocVerify } from "../engine/ioc-verify.js";
 import type { IocVerifyReport } from "../engine/ioc-verify.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const IOC_VERIFY_TOOL = "stm32_ioc_verify";
 
@@ -230,7 +230,7 @@ export function registerIocVerify(ctx: DshContext): void {
     async execute(rawArgs: IocVerifyArgs | undefined, exec: ToolExec): Promise<IocVerifyReport> {
       const args = rawArgs ?? {};
       const subprocess = ctx.get<SubprocessService>("subprocess");
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const empty: IocVerifyReport = {
         ok: false, projectDir: resolution.projectDir, iocPath: "", snapshotPath: "", durationMs: 0,
         message: "", notes: [], errors: [], diff: {

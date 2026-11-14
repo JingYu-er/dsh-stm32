@@ -16,7 +16,7 @@ import type { IocPlanChange, PeripheralEnableRequest, PinAddRequest } from "../e
 import { formatHz } from "../engine/clock-plan.js";
 import type { ClockPlan, ClockPlanRequest } from "../engine/clock-plan.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const IOC_PLAN_TOOL = "stm32_ioc_plan";
 
@@ -429,7 +429,7 @@ export function registerIocPlan(ctx: DshContext): void {
       // 宿主可能不传 arguments（无参数调用）→ 兜成 {}：缺参数要表现成"报告说没事可做"，
       // 而不是 rawArgs.projectDir 上的 TypeError（审计 A31）。
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const report = planIocChanges({
         projectDir: resolution.projectDir,
         ...(args.iocPath === undefined ? {} : { iocPath: args.iocPath }),

@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S95）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S96）
 
 ### 一、目标与约束
 
@@ -6910,6 +6910,19 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 效果：`resolveProjectLayout("D:/JingYu/Desktop/c8t6_vscode_test/demo")` 返回 `firmwareDir = demo`、`hardwareDir = demo\D_NFC_V1.3_1.1.2`——不改目录结构也能读到原理图；13 项噪音从下拉里消失，只剩真实工程。
 - 验证：新增 `test/project-layout-units.test.mjs`（6 条），登记进 `test/run-units.mjs`；全量 **82 个套件 / 1115 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1976.6 KB / 304 文件 / 解包 15802.0 KB。
 - 教训：**「哪里是工程」是要写进约定的，不能让扫描器猜**。猜的代价不是多列几项，而是用户在正确的工程里看到一个空面板；同时，配置文件名与工作区索引文件同名时，单看文件存在与否一定会误判，必须看它写了什么。
+
+### 一百零四、真实工程改成分层目录，工具层按程序目录解析（S96）
+
+- 现场改造：把 `D:/JingYu/Desktop/c8t6_vscode_test/demo` 从「程序、KiCad、旧探针混在根上」改成三块——`program/`（`CMakeLists.txt`、`CMakePresets.json`、`Core`、`Drivers`、`cmake`、`test`、`demo.ioc`、启动文件与链接脚本、`openocd.cfg`）、`hardware/`（KiCad 工程整目录上提，`.kicad_pro` / `.kicad_sch` / `.kicad_pcb` 直接在 `hardware/` 下）、`.dsh-stm32/`（配置与基线，保持在根）。旧探针工程、日志与打包产物移到工作区外的 `_archive_demo/`，`build/` 删除后重建。
+- 配置文件：工程根 `dsh-stm32.conf` 写 `firmware=program`、`hardware=hardware`、`ioc=program/demo.ioc`、`build=program/build`。工作区根与工程根是同一个目录，索引与工程事实共存于一份文件。
+- 连带修正：
+  - `writeProjectConf()` 改为保留不归它管辖的行。此前每次写工程描述都会整份重写，把工作区 `project=` 索引一起删掉——工程即工作区时这是必然发生的缺陷。
+  - `src/tools/project-dir.ts` 新增 `resolveFirmwareDir()`：先按老规则定工程根，再按约定取程序目录；解析不出程序目录时退回工程根，老工程行为不变。
+  - 14 个固件相关工具（build / flash / generate / debug / debug-session / doctor / ioc-apply / ioc-inspect / ioc-plan / ioc-verify / code-patch / regs / route-plan / rtt）改用它；原理图工具与 `project_export` 仍以工程根为准，前者自己解析硬件目录，后者要打包整棵工程树。
+  - `.vscode/launch.json` 与 `c_cpp_properties.json` 的 `cwd`、`executable`、`compileCommands` 指到 `program/`，VS Code 里 F5 与 Ctrl+F5 仍按原方式可用。
+- 复核：`cmake --preset Debug` + `cmake --build --preset Debug` 在 `program/` 下通过（FLASH 11612/65536、RAM 2128/20480，与搬迁前一致）；`resolveProjectLayout()` 返回 `firmwareDir = demo\program`、`hardwareDir = demo\hardware`；`/pinout`、`/clocks`、`/schematic`、`/artifacts`、`/ioc-sync` 全部 200，`/schematic` 仍读到 43 元件 / 35 网络，`/artifacts` 的 `buildDir` 落在 `program/build/Debug`。
+- 验证：新增 1 条工具层单测（工程根 → 程序目录、老工程保持原样），全量 **82 个套件 / 1116 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1977.3 KB / 304 文件 / 解包 15803.9 KB。
+- 教训：**「工程根」与「程序目录」是两个概念，工具不能默认它们相同**。分层之后，凡是读写源码、`.ioc`、构建产物的入口都必须显式落到程序目录；而唯一知道目录结构的地方应该只有 `resolveProjectLayout()`，其余调用点不要自己拼路径。
 
 ### 一百零二、教训
 

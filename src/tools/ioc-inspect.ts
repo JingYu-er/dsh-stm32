@@ -15,7 +15,7 @@ import { findIocFile } from "../engine/generate.js";
 import { summarizeIoc } from "../engine/ioc.js";
 import type { IocSummary } from "../engine/ioc.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const IOC_INSPECT_TOOL = "stm32_ioc_inspect";
 
@@ -225,7 +225,7 @@ export function registerIocInspect(ctx: DshContext): void {
     },
     async execute(rawArgs: IocInspectArgs | undefined, exec: ToolExec): Promise<IocValue | EmptyValue> {
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       const iocPath = args.iocPath === undefined ? findIocFile(projectDir) : resolve(projectDir, args.iocPath);
       if (iocPath === null) {

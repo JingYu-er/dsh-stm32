@@ -33,7 +33,7 @@ import {
 } from "../data/svd.js";
 import type { SvdDevice, SvdFailure, SvdField, SvdPeripheral } from "../data/svd.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
+import { resolveFirmwareDir, validateToolArgs } from "./project-dir.js";
 
 export const REGS_TOOL = "stm32_regs_read";
 
@@ -594,7 +594,7 @@ export function registerRegsRead(ctx: DshContext): void {
         return { message: invalid, report: failureReport(typeof args.projectDir === "string" ? args.projectDir : "", invalid, [invalid]) };
       }
 
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
 
       // D2：先把符号名/外设名解析成地址（零成本、不占探针）。解析不了就直接失败——
       // 没解析清楚就去借探针，等于白占一次硬件。

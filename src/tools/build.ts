@@ -10,7 +10,7 @@ import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { BuildReport, MemoryUsage } from "../engine/build.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JobHandleForRun, JobsService, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const BUILD_TOOL = "stm32_build";
 
@@ -169,7 +169,7 @@ export function registerBuild(ctx: DshContext): void {
       const args = rawArgs ?? {};
       const subprocess = ctx.get<SubprocessService>("subprocess");
       if (subprocess === undefined) return { mode: "report", jobId: "", message: "宿主缺少 subprocess 服务，无法编译" };
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       // 门禁：编译前先确认这台机器有 gcc / CMake / Ninja。缺件且 envCheck=block 时连 cmake 都不起，
       // 免得用户在一屏 CMake 报错里找原因；warn 档只带一句警告继续。

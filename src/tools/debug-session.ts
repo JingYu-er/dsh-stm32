@@ -17,7 +17,7 @@ import type { EvalReport, SessionReport } from "../engine/debug-session.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const DEBUG_SESSION_TOOL = "stm32_debug_session";
 export const DEBUG_EVAL_TOOL = "stm32_debug_eval";
@@ -214,7 +214,7 @@ export function registerDebugSession(ctx: DshContext): void {
     async execute(rawArgs: SessionArgs | undefined, exec: ToolExec) {
       // 宿主可能不传 arguments（无参数调用）→ 兜成 {}，让"缺参数"表现成正常报告而不是 TypeError（审计 A31）。
       const args = rawArgs ?? {};
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       const projectDir = resolution.projectDir;
       // 门禁：长调试会话同样要 openocd + GDB。开着会话再报"缺 openocd"只会让人以为探针坏了。
       const gate = await ensureToolchain(ctx, {

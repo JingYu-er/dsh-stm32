@@ -30,7 +30,7 @@ import { isPortBusy } from "../engine/debug.js";
 import { ensureSession, release, sessionInfo } from "../engine/probe-session.js";
 import { ensureToolchain, gateReportNotes } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir, validateToolArgs } from "./project-dir.js";
+import { resolveFirmwareDir, validateToolArgs } from "./project-dir.js";
 import { emitChannel } from "../engine/channels.js";
 
 export const RTT_TOOL = "stm32_rtt";
@@ -295,7 +295,7 @@ export function registerRtt(ctx: DshContext): void {
     async execute(rawArgs: unknown, exec: ToolExec): Promise<ToolValue> {
       const args = (rawArgs ?? {}) as Record<string, unknown>;
       const action = typeof args.action === "string" ? args.action.trim() : "";
-      const resolution = await resolveProjectDir(ctx, readString(args.projectDir), exec);
+      const resolution = await resolveFirmwareDir(ctx, readString(args.projectDir), exec);
       const projectDir = resolution.projectDir;
       const notes: string[] = resolution.note === null ? [] : [resolution.note];
 

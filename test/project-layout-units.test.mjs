@@ -14,6 +14,7 @@ import { test } from "node:test";
 
 import { readProjectConf, scanWorkspaceProjects, writeProjectConf } from "../lib/engine/project-conf.js";
 import { resolveProjectLayout } from "../lib/engine/project-layout.js";
+import { resolveFirmwareDir } from "../lib/tools/project-dir.js";
 
 function tempProject(name) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-layout-" + name + "-"));
@@ -86,4 +87,18 @@ test("工作区扫描：约定式工程被认出来，构建产物与 .dsh-stm32
   touch(path.join(root, ".dsh-stm32"), "CMakeLists.txt", "");
   const found = scanWorkspaceProjects(root);
   assert.deepEqual(found.map((item) => item.name), ["nfc"]);
+});
+
+test("工具层把工程根解析成程序目录（S96）", async () => {
+  const root = tempProject("tool-firmware");
+  touch(path.join(root, "program"), "blink.ioc", "");
+  fs.writeFileSync(path.join(root, "CMakeLists.txt"), "project(blink)", "utf8");
+  const ctx = { get: () => undefined };
+  const resolved = await resolveFirmwareDir(ctx, root, undefined);
+  assert.equal(resolved.projectDir, path.join(root, "program"));
+  assert.match(resolved.note ?? "", /程序目录/u);
+  const plain = tempProject("tool-root");
+  touch(plain, "root.ioc", "");
+  const kept = await resolveFirmwareDir({ get: () => undefined }, plain, undefined);
+  assert.equal(kept.projectDir, plain, "程序在根上的老工程保持原样");
 });

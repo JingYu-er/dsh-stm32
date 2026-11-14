@@ -15,6 +15,7 @@
 import type { DshContext, ToolExec, WorkingDirectoryService } from "../types.js";
 import { noteSessionAgent } from "../engine/session-context.js";
 import { rememberWorkspace } from "../engine/workspace-memo.js";
+import { resolveProjectLayout } from "../engine/project-layout.js";
 
 export interface ProjectDirResolution {
   projectDir: string;
@@ -78,6 +79,25 @@ export async function resolveProjectDir(
       "）；如果该目录不是目标工程，请显式传入 projectDir",
     fallbackToProcessCwd: true,
   };
+}
+
+/**
+ * 程序目录（S95/S96）：工程根按约定可能只放 `program/`、`hardware/` 与 `.dsh-stm32/`，
+ * 固件相关的工具（构建、烧录、生成、`.ioc`、调试）要作用在程序目录上，而不是工程根。
+ *
+ * 解析不出程序目录时退回工程根，保持老工程的行为不变。
+ */
+export async function resolveFirmwareDir(
+  ctx: DshContext,
+  explicit: string | undefined,
+  exec?: ToolExec,
+): Promise<ProjectDirResolution> {
+  const root = await resolveProjectDir(ctx, explicit, exec);
+  const layout = resolveProjectLayout(root.projectDir);
+  const firmware = layout.firmwareDir === "" ? root.projectDir : layout.firmwareDir;
+  if (firmware === root.projectDir) return root;
+  const note = root.note === null ? "程序目录：" + firmware : root.note + "；程序目录：" + firmware;
+  return { projectDir: firmware, note, fallbackToProcessCwd: root.fallbackToProcessCwd };
 }
 
 export type ArgKind = "string" | "string[]";

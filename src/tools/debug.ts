@@ -14,7 +14,7 @@ import type { DebugRunReport } from "../engine/debug.js";
 import type { ProbeError } from "../engine/probe-error.js";
 import type { GateResult } from "../engine/toolchain-gate.js";
 import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
-import { resolveProjectDir } from "./project-dir.js";
+import { resolveFirmwareDir } from "./project-dir.js";
 
 export const DEBUG_RUN_TOOL = "stm32_debug_run";
 
@@ -215,7 +215,7 @@ export function registerDebugRun(ctx: DshContext): void {
         const report = emptyReport("宿主缺少 subprocess 服务，无法调试");
         return { message: report.message, report: debugReportForHost(report) };
       }
-      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      const resolution = await resolveFirmwareDir(ctx, args.projectDir, exec);
       // 门禁：调试要 openocd + GDB 两件。缺件且 envCheck=block 时不占探针、不起进程。
       const gate = await ensureToolchain(ctx, {
         capability: "debug",
