@@ -113,14 +113,22 @@ test("PCB 对账：25 个网络比对，24 个连通一致，0 个名字不一�
   assert.deepEqual(check.split.map((item) => item.net), ["GND"]);
 });
 
-test("框图：主控与 ST25DV 之间有一条 I2C 连线", () => {
+test("框图：按功能模块聚合，主控与 NFC 之间是一条 I2C 连线", () => {
   const { report } = loadFixture();
+  const kinds = report.diagram.blocks.map((block) => block.kind);
+  for (const kind of ["mcu", "nfc", "optical", "interface", "keys"]) {
+    assert.ok(kinds.includes(kind), "缺少功能模块：" + kind);
+  }
   const link = report.diagram.links.find(
-    (item) => (item.from === "U18" && item.to === "U17") || (item.from === "U17" && item.to === "U18"),
+    (item) => (item.from === "mcu" && item.to === "nfc") || (item.from === "nfc" && item.to === "mcu"),
   );
-  assert.ok(link !== undefined, "缺少 U18 与 U17 的连线");
+  assert.ok(link !== undefined, "缺少主控与 NFC 的连线");
   assert.equal(link.label, "I2C");
   assert.ok(link.nets.some((net) => /SCL/u.test(net)));
+  // 元件不单独成框：43 个器件聚成 5 个模块，且模块内器件数加起来不超过器件总数。
+  const refs = report.diagram.blocks.reduce((sum, block) => sum + block.refs.length, 0);
+  assert.ok(report.diagram.blocks.length <= 6, "模块数过多：" + String(report.diagram.blocks.length));
+  assert.ok(refs <= 43, "模块内器件数超出器件总数");
 });
 
 test("检查：调试口/BOOT0/电源齐备，无错误；PCB 拆分只算告警", () => {

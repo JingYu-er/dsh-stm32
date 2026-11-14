@@ -2325,10 +2325,28 @@ window.__ModuleLoader__.load({
     /** 框图配色：按元件类型给左侧色条，强调色跟随宿主主题。 */
     const D32_BLOCK_ACCENT = {
       mcu: "var(--d32-accent)",
+      nfc: "var(--dsw-alias-state-success-primary)",
+      optical: "var(--dsw-alias-state-warn-primary)",
+      power: "var(--dsw-alias-state-error-primary)",
+      interface: "var(--dsw-alias-state-business-primary)",
+      keys: "var(--dsw-alias-label-secondary)",
       ic: "var(--dsw-alias-state-success-primary)",
       connector: "var(--dsw-alias-state-warn-primary)",
       passive: "var(--dsw-alias-label-tertiary)",
       other: "var(--dsw-alias-border-l3)",
+    };
+
+    const D32_BLOCK_TAG = {
+      mcu: "MCU",
+      nfc: "NFC",
+      optical: "OPTICAL",
+      power: "POWER",
+      interface: "DEBUG",
+      keys: "KEYS",
+      ic: "IC",
+      connector: "CONN",
+      passive: "PASSIVE",
+      other: "OTHER",
     };
 
     /** 把 diagram 排成两列：主控在左、其余在右；返回画布尺寸与坐标。 */
@@ -2345,18 +2363,20 @@ window.__ModuleLoader__.load({
       const left = blocks.filter((block) => block.kind === "mcu");
       const right = blocks.filter((block) => block.kind !== "mcu");
       const boxW = 212;
-      const boxH = 54;
-      const gapY = 18;
+      const boxH = 62;
+      const gapY = 16;
       const xLeft = 18;
       const top = 22;
       const laneGap = 11;
       const rows = Math.max(left.length, right.length, 1);
       const gutter = 52 + Math.max(links.length, 1) * laneGap;
       const xRight = xLeft + boxW + gutter;
-      // 主控一侧的连线通常最多，把主控框拉高到整列高度，端口就能拉开间距；
-      // 否则所有端口挤在 54px 里，标签必然叠在一起。
+      // 主控框的高度按「挂在它上面的连线数」算，不按整列高度：
+      // 模块框图里主控通常只有四五条连线，拉到整列高会变成一根空竖条；
+      // 连线多时（十几条）才需要跟着长高，端口之间才排得开。
       const columnHeight = rows * (boxH + gapY) - gapY;
-      const mcuHeight = Math.max(columnHeight, boxH);
+      const mcuLinks = links.filter((link) => link.from === "mcu" || link.to === "mcu").length;
+      const mcuHeight = Math.max(rows > 1 ? Math.min(columnHeight, mcuLinks * 26 + 22) : boxH, boxH);
       const pos = new Map();
       left.forEach((block, index) => pos.set(block.id, { x: xLeft, y: top + index * (boxH + gapY), h: mcuHeight }));
       right.forEach((block, index) => pos.set(block.id, { x: xRight, y: top + index * (boxH + gapY), h: boxH }));
@@ -2648,8 +2668,9 @@ window.__ModuleLoader__.load({
                     { key: "box-" + box.block.id },
                     e("rect", { x: box.x, y: box.y, width: layout.boxW, height: box.h ?? layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: "var(--dsw-alias-border-l2)", strokeWidth: 1 }),
                     e("rect", { x: box.x, y: box.y, width: 3, height: box.h ?? layout.boxH, fill: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other }),
-                    e("text", { x: box.x + 12, y: box.y + 20, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, box.block.kind === "passive" ? "PASSIVE" : box.block.id.toUpperCase()),
-                    e("text", { x: box.x + 12, y: box.y + 40, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 24 ? box.block.label.slice(0, 23) + "…" : box.block.label),
+                    e("text", { x: box.x + 12, y: box.y + 18, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, D32_BLOCK_TAG[box.block.kind] ?? box.block.id.toUpperCase()),
+                    e("text", { x: box.x + 12, y: box.y + 38, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 22 ? box.block.label.slice(0, 21) + "…" : box.block.label),
+                    e("text", { x: box.x + 12, y: box.y + 54, fill: "var(--dsw-alias-label-tertiary)", fontSize: "11px" }, String(Array.isArray(box.block.refs) ? box.block.refs.length : 0) + " 个元件"),
                   ),
                 ),
                 ...layout.paths.flatMap((path) =>

@@ -42,7 +42,7 @@ export interface SchNetView {
   readonly pins: readonly { ref: string; number: string; name: string }[];
 }
 
-export type SchBlockKind = "mcu" | "ic" | "connector" | "passive" | "other";
+export type SchBlockKind = "mcu" | "nfc" | "optical" | "power" | "interface" | "keys" | "other";
 
 export interface SchBlock {
   readonly id: string;
@@ -102,17 +102,63 @@ export function findRootSchematic(projectDir: string): string | null {
   return join(projectDir, sch[0] as string);
 }
 
-function classify(ref: string, value: string): SchBlockKind {
-  if (/^STM32/u.test(value)) return "mcu";
-  if (/^(J|CN|P)\d/u.test(ref) || /^(Conn|Connector|Screw|Header|Jack|USB|Terminal)/u.test(value)) return "connector";
-  if (/^U\d/u.test(ref)) return "ic";
-  if (/^(R|C|L|D|FB|Y|X|Q)\d/u.test(ref)) return "passive";
-  return "other";
+interface ModuleSpec {
+  readonly key: SchBlockKind;
+  readonly label: string;
+  readonly match: (component: SchComponent) => boolean;
 }
 
-function humanLabel(component: { ref: string; value: string }): string {
-  const value = component.value === "" ? component.ref : component.value;
-  return value.length > 26 ? `${value.slice(0, 25)}…` : value;
+/**
+ * 模块识别规则（按“这块电路在做什么”归类，不按位号）。
+ *
+ * 先把有明确身份的器件认成种子：主控、NFC 标签与天线、光电与运放、供电、调试接口、
+ * 按键；再把电阻电容等无源器件按连接关系并进种子模块。规则只认器件库与网络语义，
+ * 换一块板子照样能用；认不出的模块单列，不硬塞。
+ */
+const MODULE_SPECS: readonly ModuleSpec[] = [
+  {
+    key: "mcu",
+    label: "主控",
+    match: (c) => /^STM32|^GD32|^ATSAM|^MSP430|^RP2040|^ESP32/u.test(c.value),
+  },
+  {
+    key: "nfc",
+    label: "NFC 天线与标签",
+    match: (c) =>
+      /^RF_NFC:/u.test(c.libId) ||
+      /^NFC_Coil:/u.test(c.libId) ||
+      /^(ST25D|M24SR|NT3H|PN5|FM11)/u.test(c.value),
+  },
+  {
+    key: "optical",
+    label: "光检测",
+    match: (c) =>
+      /^Sensor_Optical:/u.test(c.libId) ||
+      /(Amplifier_Operational|Amplifier:)/u.test(c.libId) ||
+      /^Device:(LED|Photodiode|Phototransistor)$/u.test(c.libId),
+  },
+  {
+    key: "power",
+    label: "供电与接口",
+    match: (c) =>
+      /(Regulator_Linear|Regulator_Switching)/u.test(c.libId) ||
+      /^Device:Battery/u.test(c.libId) ||
+      /(LDO|^AMS1117|^TLV7|^MIC5|^AP2112|^RT9013|^SGM)/iu.test(c.value) ||
+      /(USB|Battery|LiPo|CR2032)/iu.test(c.value),
+  },
+  {
+    key: "keys",
+    label: "按键与复位",
+    match: (c) => /^Switch:/u.test(c.libId) || /^SW_/u.test(c.value),
+  },
+];
+
+function moduleOf(component: SchComponent, swdRefs: ReadonlySet<string>): ModuleSpec | null {
+  for (const spec of MODULE_SPECS) {
+    if (spec.match(component)) return spec;
+  }
+  if (swdRefs.has(component.ref)) return INTERFACE_SPEC;
+  return null;
 }
 
 interface MergedNet {
@@ -121,6 +167,15 @@ interface MergedNet {
   sheets: Set<string>;
   labels: Set<string>;
   pins: { ref: string; number: string; name: string }[];
+}
+
+const INTERFACE_SPEC = { key: "interface", label: "调试接口", match: () => false } as unknown as ModuleSpec;
+
+const PASSIVE_LIB = /^Device:(R|C|L|FB|Ferrite|Crystal|D_TVS|Polyfuse)/u;
+
+function humanLabel(component: { ref: string; value: string }): string {
+  const value = component.value === "" ? component.ref : component.value;
+  return value.length > 26 ? `${value.slice(0, 25)}…` : value;
 }
 
 /**
@@ -271,33 +326,131 @@ function busOf(nets: readonly string[]): string | null {
   return null;
 }
 
-function buildDiagram(components: readonly SchComponent[], nets: readonly SchNetView[]): SchematicDiagram {
-  const blocks = new Map<string, { id: string; label: string; kind: SchBlockKind; refs: string[] }>();
-  for (const component of components) {
-    const kind = classify(component.ref, component.value);
-    if (kind === "passive") continue;
-    blocks.set(component.ref, { id: component.ref, label: humanLabel(component), kind, refs: [component.ref] });
-  }
-  // 无源器件不单独成框：模块框图回答「哪两块电路连在一起、走什么总线」，
-  // 电容电阻只会把图连成一团，具体连接留给元件表与网络表。
-  const blockOfRef = (ref: string): string | null => (blocks.has(ref) ? ref : null);
+/** 把一串网络名归纳成读者先要的信息：总线类型与信号用途，而不是逐个引脚名。 */
+function signalGroups(nets: readonly string[]): string[] {
+  const names = nets.map((name) => name.toUpperCase());
+  const groups: string[] = [];
+  const has = (pattern: RegExp): boolean => names.some((name) => pattern.test(name));
+  if (has(/SCL/u) && has(/SDA/u)) groups.push("I2C");
+  if (has(/MOSI/u) && has(/MISO/u) && has(/SCK/u)) groups.push("SPI");
+  if (has(/TXD?\b/u) && has(/RXD?\b/u)) groups.push("UART");
+  if (has(/ADC/u)) groups.push("ADC");
+  if (has(/^LED|LED\d/u)) groups.push("LED");
+  if (has(/PWM/u)) groups.push("PWM");
+  if (has(/SWD(IO|CLK)/u)) groups.push("SWD");
+  if (has(/^(NRST|BOOT0)$/u)) groups.push("复位与启动");
+  return groups;
+}
 
-  const links = new Map<string, { from: string; to: string; nets: string[] }>();
+function buildDiagram(components: readonly SchComponent[], nets: readonly SchNetView[]): SchematicDiagram {
+  // 先找出带 SWDIO / SWCLK 的器件：调试口多数是 4 脚排针，靠网络名比靠位号可靠。
+  const swdRefs = new Set<string>();
+  for (const net of nets) {
+    if (!/SWD(IO|CLK)/iu.test(net.name)) continue;
+    for (const pin of net.pins) swdRefs.add(pin.ref);
+  }
+
+  const moduleOfRef = new Map<string, SchBlockKind>();
+  for (const component of components) {
+    const spec = moduleOf(component, swdRefs);
+    if (spec === null) continue;
+    moduleOfRef.set(component.ref, spec.key);
+  }
+
+  // 无源器件与认不出的器件按连接关系并进已有模块。两条规则：
+  // 1）两脚器件一脚接电源、一脚接信号 —— 它是去耦或上拉，跟信号那侧走；
+  // 2）其余按「和哪个模块共网最多」投票，只数非电源网络，避免 VCC 把所有器件绑到一处。
+  const isPowerName = (name: string): boolean => /^(VCC|VDD\w*|VBUS|GND\w*|VSS|\+3V3|\+5V|3V3|5V)/iu.test(name);
+  const pinsOfRef = new Map<string, { net: string; kind: "label" | "power" | "unnamed" }[]>();
+  for (const net of nets) {
+    for (const pin of net.pins) {
+      const list = pinsOfRef.get(pin.ref) ?? [];
+      list.push({ net: net.name, kind: net.kind });
+      pinsOfRef.set(pin.ref, list);
+    }
+  }
+  const votes = new Map<string, Map<SchBlockKind, number>>();
+  const bump = (ref: string, kind: SchBlockKind, weight = 1): void => {
+    const bucket = votes.get(ref) ?? new Map<SchBlockKind, number>();
+    bucket.set(kind, (bucket.get(kind) ?? 0) + weight);
+    votes.set(ref, bucket);
+  };
+  for (const net of nets) {
+    if (net.kind === "power" || isPowerName(net.name)) continue;
+    for (const pin of net.pins) {
+      if (moduleOfRef.has(pin.ref)) continue;
+      for (const other of net.pins) {
+        const kind = moduleOfRef.get(other.ref);
+        if (kind !== undefined) bump(pin.ref, kind);
+      }
+    }
+  }
+  // 两脚器件的「一脚电源、一脚信号」规则：信号侧邻居的模块更可信，权重加倍。
+  for (const [ref, pins] of pinsOfRef) {
+    if (moduleOfRef.has(ref) || pins.length !== 2) continue;
+    const powerPins = pins.filter((pin) => pin.kind === "power" || isPowerName(pin.net));
+    if (powerPins.length !== 1) continue;
+    const signal = pins.find((pin) => pin !== powerPins[0]);
+    if (signal === undefined) continue;
+    const net = nets.find((item) => item.name === signal.net);
+    if (net === undefined) continue;
+    for (const other of net.pins) {
+      const kind = moduleOfRef.get(other.ref);
+      if (kind !== undefined) bump(ref, kind, 2);
+    }
+  }
+  for (const [ref, bucket] of votes) {
+    let best: SchBlockKind | null = null;
+    let bestCount = 0;
+    for (const [kind, count] of bucket) {
+      if (count > bestCount) {
+        best = kind;
+        bestCount = count;
+      }
+    }
+    if (best !== null) moduleOfRef.set(ref, best);
+  }
+
+  const blocks = new Map<SchBlockKind, { id: string; label: string; kind: SchBlockKind; refs: string[] }>();
+  const specByKey = new Map<SchBlockKind, ModuleSpec>([...MODULE_SPECS, INTERFACE_SPEC].map((spec) => [spec.key, spec]));
+  for (const component of components) {
+    const kind = moduleOfRef.get(component.ref);
+    if (kind === undefined) continue;
+    const spec = specByKey.get(kind);
+    const existing = blocks.get(kind);
+    if (existing !== undefined) {
+      existing.refs.push(component.ref);
+      continue;
+    }
+    blocks.set(kind, {
+      id: kind,
+      label: spec?.label ?? "其他电路",
+      kind,
+      refs: [component.ref],
+    });
+  }
+  const blockOfRef = (ref: string): SchBlockKind | null => moduleOfRef.get(ref) ?? null;
+  void blockOfRef;
+
+  const links = new Map<string, { from: SchBlockKind; to: SchBlockKind; nets: string[] }>();
   const powerNets = new Set<string>();
-  // 自动网络名（N$12）是解析器的占位：画到图上只会变成噪声，连线只画人起过名字的网络。
   const isAnonymous = (name: string): boolean => /^N\$\d+$/u.test(name);
   for (const net of nets) {
-    if (net.kind !== "power" && isAnonymous(net.name)) continue;
-    const refs = [...new Set(net.pins.map((pin) => blockOfRef(pin.ref)).filter((ref): ref is string => ref !== null))];
+    const refs = [...new Set(net.pins.map((pin) => moduleOfRef.get(pin.ref)).filter((kind): kind is SchBlockKind => kind !== undefined))];
     if (refs.length < 2) continue;
-    if (net.kind === "power" || refs.length > 6) {
+    if (net.kind === "power" || isPowerName(net.name)) {
+      powerNets.add(net.name);
+      continue;
+    }
+    if (refs.length > 6) {
       powerNets.add(net.name);
       continue;
     }
     for (let i = 0; i < refs.length; i += 1) {
       for (let j = i + 1; j < refs.length; j += 1) {
-        const a = refs[i] as string;
-        const b = refs[j] as string;
+        const a = refs[i] as SchBlockKind;
+        const b = refs[j] as SchBlockKind;
+        if (a === b) continue;
         const key = a < b ? `${a}|${b}` : `${b}|${a}`;
         const existing = links.get(key);
         if (existing === undefined) {
@@ -309,7 +462,6 @@ function buildDiagram(components: readonly SchComponent[], nets: readonly SchNet
     }
   }
 
-  // 连接多的块排前面：面板按顺序自上而下摆，读图时先看到与主控关系最密的模块。
   const degree = new Map<string, number>();
   for (const link of links.values()) {
     degree.set(link.from, (degree.get(link.from) ?? 0) + link.nets.length);
@@ -323,13 +475,12 @@ function buildDiagram(components: readonly SchComponent[], nets: readonly SchNet
       .sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.id.localeCompare(b.id)),
   ];
   const linksWithLabel = [...links.values()].map((link) => {
-    const netsOfLink = [...link.nets].sort();
+    const netsOfLink = [...link.nets].filter((name) => !isAnonymous(name)).sort();
+    const groups = signalGroups(netsOfLink);
     const shown = netsOfLink.slice(0, 3).join(" / ");
     const extra = netsOfLink.length > 3 ? ` +${netsOfLink.length - 3}` : "";
-    // 线上文字优先写总线类型（I2C/SPI/UART）：这是读图的人先要的信息，
-    // 具体网络名放进 nets，面板可在悬停时展开。
-    const bus = busOf(netsOfLink);
-    return { from: link.from, to: link.to, label: bus ?? `${shown}${extra}`, nets: netsOfLink };
+    const label = groups.length > 0 ? groups.join(" · ") : shown === "" ? "" : `${shown}${extra}`;
+    return { from: link.from, to: link.to, label, nets: netsOfLink };
   });
   return { blocks: ordered, links: linksWithLabel, powerNets: [...powerNets].sort() };
 }
