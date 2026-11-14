@@ -188,13 +188,13 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 ### 电路设计（tscircuit + KiCad）
 
-在 `hardware/` 下用 tscircuit 写电路，导出真 KiCad 工程，再用 KiCad 自己的检查器验收。
+在 `hardware/` 下用 tscircuit 写电路，导出真 KiCad 工程，再用 KiCad 自己的检查器验收。检查按嘉立创常规工艺进行：线宽与间距 ≥ 0.2 mm、孔径 ≥ 0.3 mm、丝印字高 ≥ 0.8 mm，规则写进工程的 `.kicad_dru`，报出来的是「能不能按这一档打板」，并附打样成本估算。
 
 | 工具 | 用途 |
 | --- | --- |
 | `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖需要在该目录执行 `npm install` |
 | `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb` |
-| `stm32_ecad_check` | 先补齐工程库表，再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络 |
+| `stm32_ecad_check` | 先补齐工程库表与嘉立创工艺规则（`<工程>.kicad_dru`），再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络、板子尺寸、最细走线、最小孔径与打样成本 |
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；缺 3D 模型只报告，不阻断导出 |
 | `stm32_ecad_export` | 一次导出 Gerber、钻孔、贴片坐标与 STEP 到 `hardware/out`，按最小可下单集合汇总 |

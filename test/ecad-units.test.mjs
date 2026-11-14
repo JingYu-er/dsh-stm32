@@ -12,6 +12,7 @@ import { test } from "node:test";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
+import { checkDfm, estimateCost, readBoardFacts, renderDru, writeDru } from "../lib/engine/ecad/dfm.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
@@ -582,4 +583,71 @@ test("没装 KiCad 时的报错要给出安装去向（S108）", () => {
   assert.equal(located.ok, false);
   assert.match(located.error, /KiCad 10/u);
   assert.match(located.error, /stm32_doctor/u);
+});
+
+test("可制造性：设计规则写成嘉立创工艺档（S109）", () => {
+  const dru = renderDru();
+  assert.match(dru, /\(version 1\)/u);
+  assert.match(dru, /track_width \(min 0\.200mm\)/u);
+  assert.match(dru, /hole_size \(min 0\.300mm\)/u);
+  const root = mkdtempSync(join(tmpdir(), "dsh-ecad-dru-"));
+  try {
+    writeFileSync(join(root, "demo.kicad_pro"), "{}", "utf8");
+    const written = writeDru(root);
+    assert.equal(written.ok, true, written.error);
+    assert.ok(written.file.endsWith("demo.kicad_dru"), written.file);
+    assert.match(readFileSync(written.file, "utf8"), /clearance \(min 0\.200mm\)/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("可制造性：从板子里读尺寸、层数、最细走线与最小孔（S109）", () => {
+  const pcb = [
+    "(kicad_pcb (version 20240108) (generator \"dsh-stm32\")",
+    "  (layers \"F.Cu\" \"B.Cu\")",
+    "  (gr_line",
+    "    (start 0 0)",
+    "    (end 50 40)",
+    "    (layer Edge.Cuts)",
+    "  )",
+    "  (segment (start 1 1) (end 9 1) (width 0.15) (layer \"F.Cu\") (net 1))",
+    "  (segment (start 1 2) (end 9 2) (width 0.25) (layer \"F.Cu\") (net 1))",
+    "  (via (at 5 5) (size 0.6) (drill 0.2) (net 1))",
+    ")",
+  ].join("\n");
+  const facts = readBoardFacts(pcb);
+  assert.equal(facts.widthMm, 50);
+  assert.equal(facts.heightMm, 40);
+  assert.equal(facts.layers, 2);
+  assert.equal(facts.minTrackMm, 0.15);
+  assert.equal(facts.minDrillMm, 0.2);
+  assert.equal(facts.viaCount, 1);
+});
+
+test("可制造性：细线与小孔报 error，并给出修法；成本随尺寸与层数上升（S109）", () => {
+  const thin = [
+    "(kicad_pcb (version 20240108) (generator \"dsh-stm32\")",
+    "  (layers \"F.Cu\" \"B.Cu\")",
+    "  (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\"))",
+    "  (segment (start 1 1) (end 9 1) (width 0.15) (layer \"F.Cu\") (net 1))",
+    "  (via (at 5 5) (size 0.6) (drill 0.2) (net 1))",
+    ")",
+  ].join("\n");
+  const report = checkDfm(thin);
+  assert.equal(report.ok, false);
+  const rules = report.findings.map((finding) => finding.rule);
+  assert.ok(rules.includes("dfm.track-width"), rules.join(","));
+  assert.ok(rules.includes("dfm.hole-size"), rules.join(","));
+  for (const finding of report.findings.filter((item) => item.severity === "error")) {
+    assert.ok(finding.fix !== "", finding.rule + " 要给修法");
+  }
+  assert.ok(report.cost.approxCny > 0);
+
+  const small = estimateCost({ widthMm: 40, heightMm: 30, layers: 2, minTrackMm: 0.25, minDrillMm: 0.3, viaCount: 0 });
+  const big = estimateCost({ widthMm: 160, heightMm: 120, layers: 2, minTrackMm: 0.25, minDrillMm: 0.3, viaCount: 0 });
+  const four = estimateCost({ widthMm: 40, heightMm: 30, layers: 4, minTrackMm: 0.25, minDrillMm: 0.3, viaCount: 0 });
+  assert.ok(big.approxCny > small.approxCny, "大板要更贵");
+  assert.ok(four.approxCny > small.approxCny, "四层板要更贵");
+  assert.ok(small.surcharges.length === 0, "常规参数不应有加价项");
 });

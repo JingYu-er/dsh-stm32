@@ -2695,6 +2695,20 @@ window.__ModuleLoader__.load({
               ? e("div", { style: { opacity: 0.85, wordBreak: "break-all" } }, "交付包：" + outcome.file + (typeof outcome.bytes === "number" ? "（" + sizeText(outcome.bytes) + "）" : ""))
               : null,
             outcome.error !== undefined && outcome.error !== "" ? e("div", { style: { color: "var(--dsw-alias-state-error-primary)" } }, outcome.error) : null,
+            outcome.dfm !== undefined && outcome.dfm !== null
+              ? e("div", { key: "dfm-line", style: { opacity: 0.85 } },
+                  "板 " + String(outcome.dfm.widthMm) + "×" + String(outcome.dfm.heightMm) + " mm · " + String(outcome.dfm.layers) + " 层 · 最细走线 " + String(outcome.dfm.minTrackMm) + " mm · 打样约 " + String(outcome.dfm.approxCny) + " 元",
+                  Array.isArray(outcome.dfm.surcharges) && outcome.dfm.surcharges.length > 0 ? "（加价项 " + String(outcome.dfm.surcharges.length) + " 条）" : "")
+              : null,
+            outcome.dfm !== undefined && outcome.dfm !== null && Array.isArray(outcome.dfm.findings)
+              ? [...outcome.dfm.findings.slice(0, 6).map((item, index) =>
+                  e("div", { key: "dfm-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
+                    e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: item.severity === "error" ? "var(--dsw-alias-state-error-primary)" : D32_WARN }) }, item.severity === "error" ? "DFM" : "DFM"),
+                    e("span", { style: { opacity: 0.75 } }, item.rule),
+                    e("span", null, item.message + " → " + item.fix),
+                  ),
+                )]
+              : [],
             ...findings.slice(0, 12).map((item, index) =>
               e("div", { key: "finding-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
                 e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: item.severity === "error" ? "var(--dsw-alias-state-error-primary)" : D32_WARN }) }, item.severity === "error" ? "ERROR" : "WARN"),

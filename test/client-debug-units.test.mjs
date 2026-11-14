@@ -229,3 +229,10 @@ test("电路设计页签：有「打包交付」按钮，动作走同一个端�
   assert.ok(source.includes('["package", "打包交付"]'), "缺少打包交付按钮");
   assert.ok(source.includes("outcome.file"), "结果区要显示交付包路径");
 });
+
+test("电路设计结果区显示可制造性与打样成本（S109）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /outcome\.dfm/u);
+  assert.match(source, /dfm\.approxCny/u);
+  assert.match(source, /最细走线/u);
+});

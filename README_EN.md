@@ -188,7 +188,7 @@ Scope is KiCad 10 (`version 20260306`). Symbol libraries are embedded in the she
 
 ### Circuit design (tscircuit + KiCad)
 
-Author circuits with tscircuit under `hardware/`, export a real KiCad project, then let KiCad's own checkers validate it.
+Write circuits under `hardware/` with tscircuit, export a real KiCad project, then verify it with KiCad's own checkers. Checks follow JLCPCB's standard process: track width and clearance ≥ 0.2 mm, drill ≥ 0.3 mm, silkscreen text height ≥ 0.8 mm. The rules are written into the project's `.kicad_dru`, so the report answers "can this be fabbed in that tier", together with a prototype cost estimate.
 
 | Tool | Purpose |
 | --- | --- |

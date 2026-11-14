@@ -12,10 +12,11 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
+import { JLC_STANDARD, writeDru } from "./dfm.js";
 import { ecadEnv, type EcadToolchain } from "./toolchain.js";
 
 export const ECAD_DIRS = ["circuit", "kicad", "libs", "out"] as const;
@@ -204,6 +205,12 @@ export async function runTsciBuild(request: TsciBuildRequest): Promise<TsciBuild
 
   const distRoot = findDistRoot(workspace.circuitDir);
   const found = findKicadProject(distRoot);
+  if (found.kicadDir !== "") {
+    // 把嘉立创工艺写进工程的设计规则：之后跑 kicad-cli pcb drc 用的就是打板判据。
+    const dru = writeDru(found.kicadDir);
+    if (!dru.ok) notes.push(`设计规则没写进 KiCad 工程：${dru.error}`);
+    else notes.push(`设计规则：${basename(dru.file)}（线宽 ${JLC_STANDARD.minTrackMm} mm、孔径 ${JLC_STANDARD.minDrillMm} mm）`);
+  }
   const ok = outcome.exitCode === 0 && found.kicadDir !== "";
   if (outcome.exitCode === 0 && found.kicadDir === "") {
     notes.push("构建命令成功但没有找到 dist/<name>/kicad/*.kicad_pcb：检查入口文件是否导出 board");

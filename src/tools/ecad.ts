@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
+import { checkDfm, writeDru } from "../engine/ecad/dfm.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { exportFabrication } from "../engine/ecad/fabrication.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
@@ -338,8 +339,39 @@ export function registerEcadTools(ctx: DshContext): void {
           libsFootprints: { type: "number" },
           libsSymbols: { type: "number" },
           unnamedNets: { type: "array", items: { type: "string" } },
+          dfm: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              ok: { type: "boolean" },
+              widthMm: { type: "number" },
+              heightMm: { type: "number" },
+              layers: { type: "number" },
+              minTrackMm: { type: "number" },
+              minDrillMm: { type: "number" },
+              approxCny: { type: "number" },
+              basis: { type: "array", items: { type: "string" } },
+              surcharges: { type: "array", items: { type: "string" } },
+              druFile: { type: "string" },
+              findings: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    rule: { type: "string" },
+                    severity: { type: "string", enum: ["error", "warning", "info"] },
+                    message: { type: "string" },
+                    fix: { type: "string" },
+                  },
+                  required: ["rule", "severity", "message", "fix"],
+                },
+              },
+            },
+            required: ["ok", "widthMm", "heightMm", "layers", "minTrackMm", "minDrillMm", "approxCny", "basis", "surcharges", "druFile", "findings"],
+          },
         },
-        required: ["ok", "error", "kicadDir", "schematicFile", "pcbFile", "erc", "drc", "libsFootprints", "libsSymbols", "unnamedNets"],
+        required: ["ok", "error", "kicadDir", "schematicFile", "pcbFile", "erc", "drc", "libsFootprints", "libsSymbols", "unnamedNets", "dfm"],
       },
       render: (_args, value) => {
         const result = value as {
@@ -353,6 +385,19 @@ export function registerEcadTools(ctx: DshContext): void {
           libsFootprints: number;
           libsSymbols: number;
           unnamedNets: string[];
+          dfm: {
+            ok: boolean;
+            widthMm: number;
+            heightMm: number;
+            layers: number;
+            minTrackMm: number;
+            minDrillMm: number;
+            approxCny: number;
+            basis: string[];
+            surcharges: string[];
+            druFile: string;
+            findings: { rule: string; severity: string; message: string; fix: string }[];
+          };
         };
         if (!result.ok) return [{ type: "text", text: "检查未执行：" + result.error }];
         const erc = result.erc as unknown as KicadReport["summary"];
@@ -366,6 +411,19 @@ export function registerEcadTools(ctx: DshContext): void {
           lines.push("未命名网络 " + String(result.unnamedNets.length) + " 条：" + result.unnamedNets.slice(0, 3).join("；"));
           lines.push("  修法：在 tscircuit 里写 <net name=\"VDD\" />，trace 上加 net=\"VDD\"");
         }
+        const dfm = result.dfm;
+        lines.push(
+          "可制造性：板 " + String(dfm.widthMm) + "×" + String(dfm.heightMm) + " mm、" + String(dfm.layers) + " 层、" +
+            "最细走线 " + String(dfm.minTrackMm) + " mm、最小孔径 " + String(dfm.minDrillMm) + " mm" +
+            (dfm.druFile !== "" ? "（设计规则已写入 " + dfm.druFile + "）" : ""),
+        );
+        for (const finding of dfm.findings.slice(0, 8)) {
+          const tag = finding.severity === "error" ? "错误" : finding.severity === "warning" ? "注意" : "提示";
+          lines.push("  [" + tag + "] " + finding.message);
+          lines.push("    修法：" + finding.fix);
+        }
+        lines.push("打样成本：约 " + String(dfm.approxCny) + " 元（" + dfm.basis.join("；") + "）");
+        if (dfm.surcharges.length > 0) lines.push("加价项：" + dfm.surcharges.join("；"));
         return [{ type: "text", text: lines.join("\n") }];
       },
     },
@@ -384,6 +442,19 @@ export function registerEcadTools(ctx: DshContext): void {
         libsFootprints: 0,
         libsSymbols: 0,
         unnamedNets: [] as string[],
+        dfm: {
+          ok: false,
+          widthMm: 0,
+          heightMm: 0,
+          layers: 0,
+          minTrackMm: 0,
+          minDrillMm: 0,
+          approxCny: 0,
+          basis: [] as string[],
+          surcharges: [] as string[],
+          druFile: "",
+          findings: [] as { rule: string; severity: string; message: string; fix: string }[],
+        },
       };
       const project = await projectDirOf(ctx, args.projectDir, exec);
       if (!project.ok) return { ...blank, error: project.error };
@@ -397,7 +468,10 @@ export function registerEcadTools(ctx: DshContext): void {
       const pcb = latest.pcbFile;
       // 先补齐库表：否则 DRC 会报「封装库 'tscircuit' 不在配置中」，那是在查环境而不是查电路。
       const libs = exportEmbeddedLibraries(workspace, pcb, sch);
-      const unnamedNets = findUnnamedNets(readFileSync(pcb, "utf8"));
+      const pcbText = readFileSync(pcb, "utf8");
+      const unnamedNets = findUnnamedNets(pcbText);
+      const dru = writeDru(latest.kicadDir);
+      const dfm = checkDfm(pcbText);
       const [erc, drc] = await Promise.all([
         runErc(ctx.subprocess, located.toolchain, sch, exec.signal),
         runDrc(ctx.subprocess, located.toolchain, pcb, exec.signal),
@@ -413,6 +487,19 @@ export function registerEcadTools(ctx: DshContext): void {
         libsFootprints: libs.footprintLibs.length,
         libsSymbols: libs.symbolLibs.length,
         unnamedNets,
+        dfm: {
+          ok: dfm.ok,
+          widthMm: dfm.facts.widthMm,
+          heightMm: dfm.facts.heightMm,
+          layers: dfm.facts.layers,
+          minTrackMm: dfm.facts.minTrackMm,
+          minDrillMm: dfm.facts.minDrillMm,
+          approxCny: dfm.cost.approxCny,
+          basis: [...dfm.cost.basis],
+          surcharges: [...dfm.cost.surcharges],
+          druFile: dru.file,
+          findings: dfm.findings.map((finding) => ({ ...finding })),
+        },
       };
     },
   });
