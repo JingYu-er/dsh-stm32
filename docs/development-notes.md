@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S107）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S108）
 
 ### 一、目标与约束
 
@@ -6982,7 +6982,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/ecad-units.test.mjs` 增 2 条（四步顺序与产物统计、无板子时给人话且不跑命令），全量 **83 个套件 / 1135 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1997.0 KB / 310 文件 / 解包 15887.4 KB。
 - 教训：**导出要按「最小可下单集合」一次给全**。Gerber 有二十多个文件，用户真正要的是「这些文件齐了、板子能发出去」，先给数量与落点，再让他去看单个文件。
 
-### 一百零一、流程图：通道 + 端口分槽，页签改名（S101）
+### 一百零九、流程图：通道 + 端口分槽，页签改名（S101）
 
 - 问题：原理图页签画出的框图里，九条连线最后都汇到同一条竖线上，标签叠成一团；主控的十几个端口挤在 54px 的框高里，读不出哪根线接哪里。
 - 取证：参考 `@tt-a1i/archify-dsh` v1.1.0。它的 `lib/index.js` 只有 21 行，布局逻辑在 `skills/archify/bin/archify.mjs` 与 787 KB 的 `template.html` 里，做法是「能自动路由就自动路由，路由不好才显式指定」；没有可直接复用的路由函数，借鉴的是它的三条判断——连线分通道、端口按侧分槽、文字与线分离。
@@ -6998,7 +6998,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node test/run-units.mjs` 83 个套件 / 1135 pass / 0 fail，ACCEPTANCE OK，`test:size` 2002.0 KB / 310 文件 / 解包 15898.0 KB；`client/client.js` 5458 行。
 - 教训：**连线叠在一起不是美观问题，是信息丢失**。三条线走同一段竖线，用户就分不清哪条去了哪个引脚；通道、端口分槽、标签出列，每一步都是在把「线」和「位置」重新绑定回来。
 
-### 一百零二、流程图按功能模块聚合（S102）
+### 一百一十、流程图按功能模块聚合（S102）
 
 - 问题：流程图按「一个器件一个框」画，43 个元件出了 12 个框、9 条线，主控旁边挂着一堆 U19/U20/U21 和连接器；人看不出这块板子是「NFC 读写 + 光检测」，因为信息没有提纯。
 - 做法（`src/engine/schematic/model.ts` 的 `buildDiagram` 重写）：先认种子模块，再让无源器件按连接关系并入，最后按模块画连线。
@@ -7010,7 +7010,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/schematic-units.test.mjs` 的框图用例改断「按功能模块聚合」；`test/run-units.mjs` 83 个套件 / 1135 pass / 0 fail；ACCEPTANCE OK；`test:size` 2004.2 KB / 310 文件 / 解包 15905.2 KB。
 - 教训：**框图画的是「电路在做什么」，不是「板上有哪些元件」**。器件越全，越读不出结构；把 43 个器件压成 5 个功能块，读者第一眼就能说出这块板子是 NFC 读写器加一路光检测。
 
-### 一百零三、流程图改网状布局：四向出线、环形摆放（S103）
+### 一百一十一、流程图改网状布局：四向出线、环形摆放（S103）
 
 - 问题：S102 把元件收成了 5 个模块，但布局仍是「主控一列、外设一列」，所有连线都从左右两侧走，图被拉成 652×332 的细长条；模块一多就变成一条越来越长的竖图。
 - 做法（`client/client.js` 的 `layoutSchematic` 重写为 hub-and-spoke）：
@@ -7024,7 +7024,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 测试：`test/client-debug-units.test.mjs` 的断言从「通道/列外侧」改为「四向出线 + 环形摆放 + 圆角」（`sideToward`/`portAnchor`、`ringX`/`ringY`、`mcuHeight`/`roundedPath`）；全量 83 个套件 / 1135 pass / 0 fail；ACCEPTANCE OK；`test:size` 2006.9 KB / 310 文件 / 解包 15914.0 KB。
 - 教训：**布局的维度决定图的形状**。只在左右两列画线，图的宽度就被锁死、长度随模块数增长；允许四条边进出，才能让模块绕着主控铺开。
 
-### 一百零四、流程图：框宽跟着文字走、整框着色、能直不拐（S104）
+### 一百一十二、流程图：框宽跟着文字走、整框着色、能直不拐（S104）
 
 - 三个观感问题（用户提出）：
   1. 有的框很大但里面只有两个字，有的模块名又贴着边；
@@ -7038,7 +7038,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 顺带加固：`test/run-units.mjs` 的 `failures(out)` 先剥 ANSI 颜色转义（带颜色的日志行首不是 `not ok`，之前会全部漏掉），认不出 reporter 时退化为按 `not ok`/`✖`/`AssertionError` 抓原始行，并在标题里带上套件名。
 - 教训：**框是文字的容器，不是网格单元**。固定宽度会同时造成「小框太空」和「大框塞不下」两种浪费；让尺寸跟着内容走，才谈得上对齐。
 
-### 一百零五、流程图规则写进插件（S105）
+### 一百一十三、流程图规则写进插件（S105）
 
 - 起因：流程图能画对，靠的是引擎里的聚合规则（模块分类、共网投票、总线归纳、电源剔除），但这些规则只存在于代码里；模型读图时看不到口径，用户也无从判断「为什么这两个器件画在一起」。
 - 改法：同一套规则写进三个用户可见的位置，保持一份口径。
@@ -7049,7 +7049,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node test/run-units.mjs` 83 套件 / 1136 pass / 0 fail；ACCEPTANCE OK；`test:size` 2008.2 KB / 310 文件 / 解包 15916.4 KB。
 - 教训：**能画对但说不清，等于只有一半能力**。规则不进说明文本，下一个人（或下一次会话的模型）就得重新从代码里反推，反推出来的版本迟早与实现分叉。
 
-### 一百零六、电路设计页签接上动作（S106）
+### 一百一十四、电路设计页签接上动作（S106）
 
 - 起因：S99 的页签只报状态，构建与检查要用户回到对话里让模型调工具。三件事（构建、检查、导出）都是确定性操作，页签自己就能做，不该占一轮对话。
 - 服务端：新增 `POST /api/ecad/action`（`WEB_API_PATHS` 48 → 49），body `{projectDir, action}`，`action` 只认 `build / check / libs / step / export`，其余 400「action 只能是 build / check / libs / step / export」。五个动作直接调同一批引擎函数（`runTsciBuild`、`exportEmbeddedLibraries`、`runErc`/`runDrc`、`exportStep`、`exportFabrication`），不经过工具层，省掉一次模型往返；`/ecad` 的 GET 另补 `libs`（`hardware/libs` 下的 `.pretty` 与 `.kicad_sym`）与 `artifacts`（`hardware/out` 下的文件，`gerbers/` 只报数量）。
@@ -7059,7 +7059,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node test/run-units.mjs` 83 套件 / 1137 pass / 0 fail；ACCEPTANCE OK；`test:size` 2011.4 KB / 310 文件 / 解包 15931.9 KB；`client/client.js` 5652 行。
 - 教训：**确定性的按钮比对话轮次便宜**。把「能跑起来」的操作留在工具里，把「跑一下看看」放到面板上，模型只在需要判断时出场。
 
-### 一百零七、硬件交付打包：自己写 zip，只为不引依赖（S107）
+### 一百一十五、硬件交付打包：自己写 zip，只为不引依赖（S107）
 
 - 目标：电路画完、检查过、Gerber 出完，最后一步是把 `hardware/` 交给别人（同事、板厂、存档）。要求一个文件、双击能解开、里面看得懂。
 - 为什么不引压缩库：插件至今零运行期依赖，为一个打包功能塞进 `archiver`/`adm-zip`（含若干传递依赖）会让「装在 DSH 里就能用」这个前提变脆。zip 的 STORE 模式（不压缩）只有三段结构——本地文件头、中央目录、结尾记录，字段固定，自己写一百多行就能过 `unzip -t`。
@@ -7070,7 +7070,22 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 打包**不需要** KiCad 与 tscircuit：`POST /ecad/action` 里 `package` 分支必须放在工具链探测之前，否则没装 KiCad 的机器（CI、只做交付的电脑）连包都打不了，还会得到 409 这种与打包无关的错误。
 - 教训：**交付物要能被外部工具验证**。自己写的 zip 只靠自己的读回函数自检，等于自己给自己判卷；`unzip -t` 通过才算数。
 
-### 一百零八、教训
+### 一百一十六、用到的工具链都进探测与安装指引（S108）
+
+- 起因：ECAD 上线后，`kicad-cli` 与 `npm` 是两条硬依赖，但它们既不在 `buildTargets` 的探测列表里，也没有安装指引——用户只会收到一句「没找到 KiCad」，然后自己在网上找。
+- 探测：`src/engine/probe.ts` 的 `buildTargets()` 增两项（都 `required: false`）：
+  - `kicad`：候选 `kicad-cli` 与 `binDirs/kicad-cli.exe`，`versionArgs ["version"]`，说明写清「电路设计：生成 KiCad 工程、ERC/DRC、Gerber/STEP 都调用它自带的 kicad-cli 与 bun」；
+  - `npm`：候选 `npm` 与 `binDirs/npm.cmd`，`versionArgs ["--version"]`，说明写清「首次构建要 npm install 拉 tscircuit（约 730 MB）」。
+  两项都带 `impact`（缺了哪些功能不可用、哪些不受影响）、`install`（三条：装法 / 非默认路径 / 自检）与 `verify`。
+- 能力：`src/engine/toolchain-gate.ts` 的 `ToolchainCapability` 增 `"ecad"`，`CAPABILITY_COMPONENTS.ecad = ["kicad", "npm"]`，`CAPABILITY_PRIMARY.ecad = "kicad"`；`src/commands/register.ts` 的能力表同步加「电路设计」。
+- 安装指引：`src/data/install-guides.ts` 的 `InstallComponent` 增 `kicad`、`npm`（都 `manual`），`guideFor()` 分派到新增的 `kicadGuide()`（官网下载 10.x、非默认目录设 `DSH_STM32_KICAD_ROOT`、自检 `kicad-cli version`、可整目录拷贝）与 `npmGuide()`（`winget install OpenJS.NodeJS.LTS`、自检 `npm --version`）。
+- 报错文案：`src/engine/ecad/toolchain.ts` 找不到 KiCad 时不再只说「没找到」，而是给出「需要 KiCad 10（kicad-cli / bun / pcbnew）+ 装法 + `stm32_doctor` 看缺件」三段。
+- 测试：`test/ecad-units.test.mjs` 增 2 条——探测列表含 `kicad`/`npm` 且两者非必需、有安装步骤与自检，`guidesFor(["kicad","npm"])` 各给一份 manual 指引；`locateEcadToolchain` 指到不存在目录时错误里必须出现 `KiCad 10` 与 `stm32_doctor`。
+- 验证：83 套件 / **1144 pass / 0 fail**、ACCEPTANCE OK、`test:size` 2016.4 KB / 312 文件 / 解包 15952.4 KB。
+- 教训：**能力上线时，它的外部依赖要同时进「探测、安装指引、报错」三处**。只写报错等于把找资料的活推给用户；只写探测等于知道缺了却不知道怎么补。
+
+
+### 一百一十七、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

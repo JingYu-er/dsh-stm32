@@ -14,6 +14,9 @@ import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
+import { buildTargets } from "../lib/engine/probe.js";
+import { resolveSearchConfig } from "../lib/data/search-roots.js";
+import { guidesFor } from "../lib/data/install-guides.js";
 import { collectPackageFiles, packageHardware, verifyPackage } from "../lib/engine/ecad/package.js";
 import { createZip, listZipEntries } from "../lib/engine/ecad/zip.js";
 import { locateEcadToolchain } from "../lib/engine/ecad/toolchain.js";
@@ -550,4 +553,33 @@ test("打包：没有 hardware 目录时给人话，不写文件（S107）", () 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("工具链探测覆盖电路设计的两件套：kicad 与 npm（S108）", () => {
+  const config = resolveSearchConfig({});
+  const targets = buildTargets(config);
+  const kicad = targets.find((item) => item.id === "kicad");
+  const npm = targets.find((item) => item.id === "npm");
+  assert.ok(kicad !== undefined, "探测列表要含 kicad");
+  assert.ok(npm !== undefined, "探测列表要含 npm");
+  for (const target of [kicad, npm]) {
+    assert.equal(target.required, false, target.id + " 不应是必需项");
+    assert.ok(target.install.length >= 2, target.id + " 要给安装步骤");
+    assert.ok(target.verify !== "", target.id + " 要给自检命令");
+  }
+  // 缺件时的指引要能落到「怎么装」：两条都必须是 manual，并自带步骤。
+  const guides = guidesFor(["kicad", "npm"]);
+  assert.equal(guides.length, 2);
+  for (const guide of guides) {
+    assert.equal(guide.installability, "manual");
+    assert.ok(guide.steps.length >= 2 && guide.verify !== "");
+  }
+});
+
+test("没装 KiCad 时的报错要给出安装去向（S108）", () => {
+  const root = tempDir("ecad-nokicad-");
+  const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: join(root, "missing") });
+  assert.equal(located.ok, false);
+  assert.match(located.error, /KiCad 10/u);
+  assert.match(located.error, /stm32_doctor/u);
 });

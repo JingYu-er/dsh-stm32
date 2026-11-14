@@ -25,7 +25,9 @@ export type InstallComponent =
   | "ninja"
   | "cubemx"
   | "cubemx-java"
-  | "firmware";
+  | "firmware"
+  | "kicad"
+  | "npm";
 
 /** 组件 → 安装方式。没列的按 auto 处理（默认乐观：pacman 能补的居多）。 */
 export const COMPONENT_INSTALLABILITY: Record<InstallComponent, Installability> = {
@@ -38,6 +40,10 @@ export const COMPONENT_INSTALLABILITY: Record<InstallComponent, Installability> 
   cubemx: "manual",
   "cubemx-java": "manual",
   firmware: "manual",
+  // KiCad 是独立安装包（1.5 GB，带自有 Python 与 bun），装法与版本都由 ST 之外的厂商管；
+  // npm 随 Node.js 来，可能先有 node 再有 npm，也可能反过来。
+  kicad: "manual",
+  npm: "manual",
 };
 
 export interface InstallStep {
@@ -217,6 +223,8 @@ export function guideFor(
 ): InstallGuide | null {
   if (component === "cubemx" || component === "cubemx-java") return cubeMxGuide();
   if (component === "firmware") return firmwareGuide(firmware);
+  if (component === "kicad") return kicadGuide();
+  if (component === "npm") return npmGuide();
   return null;
 }
 
@@ -248,4 +256,70 @@ export function guideLines(guide: InstallGuide, maxSteps = 4): string[] {
   lines.push("  自检：" + guide.verify);
   if (guide.portable !== undefined && guide.portable !== "") lines.push("  免安装：" + guide.portable);
   return lines;
+}
+
+/**
+ * KiCad 的安装指引。
+ *
+ * 事实依据（2026-11 取证）：电路设计的构建与检查全部落在 KiCad 自带的三件套上——
+ * `bin/kicad-cli.exe`（ERC/DRC/Gerber/STEP）、`bin/bun.exe`（跑 tscircuit 的 TSX 入口，
+ * Node 直接跑会报 `Unknown file extension ".tsx"`）、`bin/python.exe`（3.11，带 pcbnew）。
+ * 所以「装了 tscircuit」不等于能用：必须装 KiCad 10。
+ */
+export function kicadGuide(): InstallGuide {
+  return {
+    component: "kicad",
+    label: "KiCad 10（kicad-cli / bun / pcbnew）",
+    installability: "manual",
+    why: "电路设计的构建、检查与导出调用的是 KiCad 自带的 kicad-cli 与 bun，插件不自带 EDA 内核。",
+    sizeHint: "约 1.5 GB（含符号库、封装库与 3D 模型）",
+    needsAccount: false,
+    steps: [
+      {
+        title: "官网下载 10.x 安装包",
+        detail: "kicad.org/download 选 Windows 安装包；装到默认目录即可被自动发现。",
+        command: "https://www.kicad.org/download/windows/",
+      },
+      {
+        title: "非默认目录时指路径",
+        detail: "把安装根目录（含 bin/ 与 share/kicad/）写进配置项 DSH_STM32_KICAD_ROOT。",
+        command: 'setx DSH_STM32_KICAD_ROOT "D:/app/KiCad/10.0"',
+      },
+      {
+        title: "确认版本是 10.x",
+        detail: "原理图读取只认 KiCad 10 的文件格式（version 20260306），9 及更早的工程会明确拒绝。",
+      },
+    ],
+    verify: "kicad-cli version（应输出 10.x）",
+    portable: "把已有 KiCad 目录整个拷过来，设置 DSH_STM32_KICAD_ROOT 指向它即可。",
+  };
+}
+
+/**
+ * npm 的安装指引。
+ *
+ * tscircuit 的依赖（约 730 MB）由 `npm install` 拉进 hardware/circuit/node_modules；
+ * 构建本身用 KiCad 的 bun 跑，不依赖 node 的模块解析，但装依赖这一步绕不开 npm。
+ */
+export function npmGuide(): InstallGuide {
+  return {
+    component: "npm",
+    label: "Node.js 的 npm（安装 tscircuit 依赖）",
+    installability: "manual",
+    why: "首次构建要在 hardware/circuit 下执行 npm install 拉 tscircuit 及其 259 个依赖。",
+    sizeHint: "Node.js 约 30 MB；依赖下载约 730 MB",
+    needsAccount: false,
+    steps: [
+      {
+        title: "安装 Node.js LTS",
+        detail: "npm 随 Node.js 一起安装；装完新开终端确认 PATH 生效。",
+        command: "winget install OpenJS.NodeJS.LTS",
+      },
+      {
+        title: "已有 Node.js 时确认 npm 在 PATH",
+        detail: "插件通过 PATH 找 npm；nvm 等多版本管理器需要先切到有 npm 的版本。",
+      },
+    ],
+    verify: "npm --version",
+  };
 }

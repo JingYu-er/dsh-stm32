@@ -34,7 +34,7 @@ import {
 } from "./probe.js";
 
 /** 能力的粒度按"用户想干的事"分，不按工具分：编译/烧录/调试/代码生成。 */
-export type ToolchainCapability = "build" | "flash" | "debug" | "generate";
+export type ToolchainCapability = "build" | "flash" | "debug" | "generate" | "ecad";
 
 /** 门禁档位：block 拒绝、warn 照做但写警告、off 完全不查。 */
 export type EnvCheckMode = "block" | "warn" | "off";
@@ -45,6 +45,8 @@ export const CAPABILITY_COMPONENTS: Record<ToolchainCapability, readonly string[
   flash: ["openocd"],
   debug: ["openocd", "gdb"],
   generate: ["cubemx", "cubemx-java"],
+  // 电路设计：KiCad 提供构建/检查/导出内核，npm 负责拉 tscircuit 依赖。
+  ecad: ["kicad", "npm"],
 };
 
 const CAPABILITY_LABEL: Record<ToolchainCapability, string> = {
@@ -52,6 +54,7 @@ const CAPABILITY_LABEL: Record<ToolchainCapability, string> = {
   flash: "烧录",
   debug: "调试",
   generate: "生成代码",
+  ecad: "电路设计",
 };
 
 export interface GateMissing {
@@ -135,6 +138,7 @@ const CAPABILITY_PRIMARY: Record<ToolchainCapability, string> = {
   flash: "openocd",
   debug: "gdb",
   generate: "cubemx-java",
+  ecad: "kicad",
 };
 
 /** 单测 / 换机器后清缓存。 */
