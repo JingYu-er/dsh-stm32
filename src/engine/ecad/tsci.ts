@@ -269,7 +269,9 @@ function newestKicadProject(roots: readonly string[]): { kicadDir: string; pcbFi
       } catch {
         continue;
       }
-      if (best !== null && mtimeMs <= best.mtimeMs) continue;
+      // 同一毫秒内写完的两份产物在 Windows 上时间戳可能相等；相等时按路径字典序定胜负，
+      // 否则遍历顺序（readdir 的实现细节）会让「取最新」变成不确定的行为。
+      if (best !== null && (mtimeMs < best.mtimeMs || (mtimeMs === best.mtimeMs && path <= best.pcbFile))) continue;
       const schematicFile = readdirSync(current)
         .filter((name) => name.endsWith(".kicad_sch"))
         .map((name) => join(current, name))

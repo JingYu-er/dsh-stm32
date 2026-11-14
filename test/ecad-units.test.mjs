@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -231,6 +231,8 @@ test("产物：多份构建里取最新的一份，并带上同目录的原理�
     writeFileSync(join(old, "old.kicad_pcb"), "x", "utf8");
     writeFileSync(join(fresh, "new.kicad_pcb"), "y", "utf8");
     writeFileSync(join(fresh, "new.kicad_sch"), "z", "utf8");
+    // Windows 的文件时间精度只到毫秒，两次写入可能落在同一毫秒；显式拉开时间戳，避免断言随机失败。
+    utimesSync(join(old, "old.kicad_pcb"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
     const latest = findLatestKicadBuild(workspace);
     assert.equal(latest.ok, true);
     assert.equal(latest.kicadDir, fresh);
