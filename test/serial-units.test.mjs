@@ -321,9 +321,14 @@ test("ack 超时：桥活着但没回执 → bridge-start-timeout", async () => 
 });
 
 test("idle：bridge 按 idleTimeoutMs 自行退出，之后 read 报 no-session", async () => {
-  const opened = await call({ action: "open", port: "COM7", idleTimeoutMs: 400 });
-  assert.equal(opened.ok, true, opened.errors.join("；"));
-  const deadline = Date.now() + 6000;
+  // 空闲窗口要比「桥启动 + 回执」长：CI 上光起 PowerShell 桥就要一秒多，
+  // 400 ms 会在 ack 之前就把桥饿死，open 直接失败（曾因此红过一次）。
+  const idleTimeoutMs = 2500;
+  const opened = await call({ action: "open", port: "COM7", idleTimeoutMs: idleTimeoutMs });
+  assert.equal(opened.ok, true, "open 应成功：" + opened.errors.join("；"));
+  // 等桥自己走到空闲上限，不再用读请求去探——读可能刷新桥的空闲计时。
+  await new Promise((resolve) => setTimeout(resolve, idleTimeoutMs + 600));
+  const deadline = Date.now() + 8000;
   let last = null;
   while (Date.now() < deadline) {
     last = await call({ action: "read" });
