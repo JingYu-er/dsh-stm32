@@ -36,6 +36,7 @@ import {
 } from "./event-bus.js";
 import { evidencePolicy, evidenceRoot, pruneEvidence } from "./event-log.js";
 import { readProjectConf, readWorkspaceIndex, scanWorkspaceProjects } from "./project-conf.js";
+import { resolveProjectLayout } from "./project-layout.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
@@ -705,6 +706,16 @@ export async function handleWebApi(input: {
     if (trimmed !== "") return trimmed;
     return sessionDir;
   };
+  /**
+   * 程序目录（S95）：工程根可能把程序放在 `program/` 或 `firmware/` 下。
+   *
+   * 读 `.ioc`、跑构建、烧录都应以程序目录为准；工程根仍用于「选工程」与原理图。
+   */
+  const firmwareProject = (raw: string): string => {
+    const root = withProject(raw);
+    if (root === "") return "";
+    return resolveProjectLayout(root).firmwareDir;
+  };
   const query = input.query ?? {};
   const needsBody =
     path !== WEB_API_PREFIX + "/config" &&
@@ -936,7 +947,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-sync") {
     // .ioc 与生成代码是否同步：只比修改时间，不读内容、不跑 CubeMX。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readIocSync(projectDir);
     if (!read.ok) return fail(409, read.error);
@@ -957,7 +968,7 @@ export async function handleWebApi(input: {
     if (names.length === 0) return fail(400, "names 不能为空（要改的中断名数组）");
     const preempt = typeof parsed.value.preempt === "number" ? parsed.value.preempt : Number.NaN;
     const sub = typeof parsed.value.sub === "number" ? parsed.value.sub : Number.NaN;
-    const dir = withProject(requested);
+    const dir = firmwareProject(requested);
     if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const written = setInterruptPriorities(dir, names, preempt, sub);
     if (!written.ok) return fail(409, written.error);
@@ -970,7 +981,7 @@ export async function handleWebApi(input: {
     if (name.trim() === "") return fail(400, "name 不能为空（例如 USART1）");
     const preempt = typeof parsed.value.preempt === "number" ? parsed.value.preempt : Number.NaN;
     const sub = typeof parsed.value.sub === "number" ? parsed.value.sub : Number.NaN;
-    const dir = withProject(requested);
+    const dir = firmwareProject(requested);
     if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const written = setInterruptPriority(dir, name, preempt, sub);
     if (!written.ok) return fail(409, written.error);
@@ -987,7 +998,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/pinout") {
     // 引脚面板：读工程 .ioc，按外设分组。只读文件，不跑 CubeMX、不碰探针。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readPinout(projectDir, env);
     if (!read.ok) return fail(409, read.error);
@@ -998,8 +1009,13 @@ export async function handleWebApi(input: {
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
     const projectDir = withProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
-    const rootFile = findRootSchematic(projectDir);
-    if (rootFile === null || rootFile === "") return fail(404, "工程里没有 .kicad_sch：先选择包含 KiCad 工程的目录");
+    const layout = resolveProjectLayout(projectDir);
+    const hardwareDir = layout.hardwareDir;
+    if (hardwareDir === "") {
+      return fail(404, "工程里没有 KiCad 原理图：把 KiCad 工程放到 hardware/ 下，或在 dsh-stm32.conf 里写 hardware=目录名");
+    }
+    const rootFile = findRootSchematic(hardwareDir);
+    if (rootFile === null || rootFile === "") return fail(404, `硬件目录里没有 .kicad_sch：${hardwareDir}`);
     let schematic: ReturnType<typeof readSchematic>;
     try {
       schematic = readSchematic(rootFile);
@@ -1008,10 +1024,10 @@ export async function handleWebApi(input: {
     }
     const report = schematic.report;
     // PCB 对账跟着工程走：目录里有 .kicad_pcb 就一起对，没有就只查原理图本身。
-    const pcbName = (await readdir(projectDir)).find((name) => name.endsWith(".kicad_pcb")) ?? "";
-    const iocFile = findIocFile(projectDir);
+    const pcbName = (await readdir(hardwareDir)).find((name) => name.endsWith(".kicad_pcb")) ?? "";
+    const iocFile = findIocFile(layout.firmwareDir);
     const check = checkSchematic(report, {
-      ...(pcbName === "" ? {} : { pcbFile: join(projectDir, pcbName) }),
+      ...(pcbName === "" ? {} : { pcbFile: join(hardwareDir, pcbName) }),
       ...(iocFile === null ? {} : { iocFile }),
     });
     return ok({
@@ -1028,13 +1044,14 @@ export async function handleWebApi(input: {
         findings: check.findings,
         summary: check.summary,
         pcb: check.pcb,
+        layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },
     });
   }
   if (path === WEB_API_PREFIX + "/clocks") {
     // 时钟页：读工程 .ioc 里 CubeMX 已经写下的各路频率，只读不改。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readClockTree(projectDir);
     if (!read.ok) return fail(409, read.error);
@@ -1064,7 +1081,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-diff") {
     // 变更页：当前 .ioc 与上次基线逐键比较。只读工程文件。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readIocDiff(projectDir, env);
     if (!read.ok) return fail(409, read.error);
@@ -1073,7 +1090,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-diff/save") {
     // 记录基线：把当前 .ioc 复制到用户目录。只写自己的基线文件，不动工程。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const saved = saveIocSnapshot(projectDir, env);
     if (!saved.ok) return fail(409, saved.error);
@@ -1084,7 +1101,7 @@ export async function handleWebApi(input: {
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
     const key = typeof parsed.value.key === "string" ? parsed.value.key : "";
     if (key.trim() === "") return fail(400, "key 不能为空");
-    const dir = withProject(requested);
+    const dir = firmwareProject(requested);
     if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const restored = restoreIocKey(dir, key, env);
     if (!restored.ok) return fail(409, restored.error);
@@ -1095,7 +1112,7 @@ export async function handleWebApi(input: {
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
     const pin = typeof query["pin"] === "string" ? query["pin"] : "";
     if (pin.trim() === "") return fail(400, "pin 不能为空");
-    const dir = withProject(requested);
+    const dir = firmwareProject(requested);
     if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const keys = readIocKeysForPin(dir, pin, env);
     if (!keys.ok) return fail(409, keys.error);
@@ -1104,7 +1121,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/ioc-diff/restore-all") {
     // 一次性把改动/删除的键恢复成基线值，整批只备份一次。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
-    const dir = withProject(requested);
+    const dir = firmwareProject(requested);
     if (dir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const restored = restoreAllIocKeys(dir, env);
     if (!restored.ok) return fail(409, restored.error);
@@ -1146,7 +1163,7 @@ export async function handleWebApi(input: {
   if (path === WEB_API_PREFIX + "/artifacts") {
     // 产物页：elf / hex / bin 的文件信息与芯片容量。只读文件属性，不起子进程。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
-    const projectDir = withProject(requested);
+    const projectDir = firmwareProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readArtifacts(projectDir, env);
     if (!read.ok) return fail(409, read.error);

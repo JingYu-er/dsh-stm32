@@ -46,6 +46,10 @@ export interface ProjectConf {
   readonly mcu: string;
   readonly ioc: string;
   readonly build: string;
+  /** 程序目录（相对工程根）；空串表示「按约定自动找」（S95）。 */
+  readonly firmware: string;
+  /** KiCad 目录（相对工程根）；空串表示「按约定自动找」（S95）。 */
+  readonly hardware: string;
 }
 
 /** 把文本解析成 `key=value` 文档；非法行跳过，不抛。 */
@@ -141,6 +145,8 @@ export function readProjectConf(projectDir: string): ProjectConf {
     mcu: doc.single.get("mcu") ?? "",
     ioc: doc.single.get("ioc") ?? "",
     build: doc.single.get("build") ?? "",
+    firmware: doc.single.get("firmware") ?? "",
+    hardware: doc.single.get("hardware") ?? "",
   };
 }
 
@@ -151,7 +157,7 @@ export function readProjectConf(projectDir: string): ProjectConf {
  */
 export function writeProjectConf(
   projectDir: string,
-  facts: { name?: string; mcu?: string; ioc?: string; build?: string },
+  facts: { name?: string; mcu?: string; ioc?: string; build?: string; firmware?: string; hardware?: string },
 ): boolean {
   const dir = resolve(projectDir.trim() === "" ? "." : projectDir);
   const existing = readConf(join(dir, CONF_FILE_NAME));
@@ -163,6 +169,8 @@ export function writeProjectConf(
     "mcu=" + (facts.mcu ?? existing.single.get("mcu") ?? ""),
     "ioc=" + (facts.ioc ?? existing.single.get("ioc") ?? ""),
     "build=" + (facts.build ?? existing.single.get("build") ?? ""),
+    "firmware=" + (facts.firmware ?? existing.single.get("firmware") ?? ""),
+    "hardware=" + (facts.hardware ?? existing.single.get("hardware") ?? ""),
     "createdAt=" + createdAt,
   ];
   try {
@@ -182,47 +190,63 @@ export function writeProjectConf(
 export function scanWorkspaceProjects(workspaceRoot: string, maxDepth = 2): WorkspaceProject[] {
   const root = resolveWorkspaceRoot(workspaceRoot);
   const found: WorkspaceProject[] = [];
-  // 工作区根自己就是工程时也要列出来（S84）：宿主把会话工作目录当工作区根，通常正是工程目录。
-  let rootIsProject = false;
-  try {
-    rootIsProject = readdirSync(root, { withFileTypes: true }).some(
-      (item) => item.isFile() && (item.name.endsWith(".ioc") || item.name === "CMakeLists.txt"),
-    );
-  } catch {
-    /* 根不存在就只报扫描结果 */
-  }
-  if (rootIsProject) {
-    // 根已经是工程就不再往下扫：工程内部的 cmake/、build/、Drivers/ 也会命中标记，
-    // 扫出来全是噪音（S84 真机验证时出现过 stm32cubemx/user 这类假工程）。
-    return [{ name: basename(root), dir: root, exists: true }];
-  }
+
+  /** 目录是不是一个工程：认四种标记里的任意一种（S95）。 */
+  const isProjectDir = (dir: string): boolean => {
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir, { withFileTypes: true })
+        .filter((item) => item.isFile())
+        .map((item) => item.name);
+    } catch {
+      return false;
+    }
+    if (names.some((name) => name.endsWith(".ioc") || name === "CMakeLists.txt")) return true;
+    if (names.some((name) => name.endsWith(".kicad_pro"))) return true;
+    // 单有 conf 不算工程：工作区根也用同名文件，它记的是索引而不是工程事实。
+    // 只有写了工程字段（mcu= / firmware= / hardware=）的 conf 才算。
+    if (names.includes(CONF_FILE_NAME)) {
+      try {
+        const text = readFileSync(join(dir, CONF_FILE_NAME), "utf8");
+        if (/^(mcu|firmware|hardware)=/mu.test(text)) return true;
+      } catch {
+        /* 读不了就按「不是工程」处理 */
+      }
+    }
+    // 约定式工程：根上没有标记，但程序与硬件各在一个子目录里。
+    try {
+      const dirs = readdirSync(dir, { withFileTypes: true })
+        .filter((item) => item.isDirectory())
+        .map((item) => item.name.toLowerCase());
+      return dirs.includes("program") || dirs.includes("firmware") || dirs.includes("hardware");
+    } catch {
+      return false;
+    }
+  };
+
+  /** 往下扫时跳过的目录：构建产物、工具链源码、插件自有数据。 */
+  const skip = new Set(["build", "drivers", "node_modules", ".dsh-stm32", "cmake", "gerber", "bom", "core"]);
+
+  // 工作区根自己就是工程时只列它一个：再往下扫必然扫到工程内部构件（S84 的教训）。
+  if (isProjectDir(root)) return [{ name: basename(root), dir: root, exists: true }];
+
   const walk = (dir: string, depth: number): void => {
     if (depth > maxDepth) return;
-    let entries: string[];
+    let entries: string[] = [];
     try {
       entries = readdirSync(dir, { withFileTypes: true })
-        .filter((item) => item.isDirectory() && !item.name.startsWith(".") && item.name !== "node_modules")
+        .filter((item) => item.isDirectory() && !item.name.startsWith(".") && !skip.has(item.name.toLowerCase()))
         .map((item) => item.name);
     } catch {
       return;
     }
     for (const name of entries) {
       const child = join(dir, name);
-      let hasMarker = false;
-      try {
-        for (const file of readdirSync(child, { withFileTypes: true })) {
-          if (!file.isFile()) continue;
-          if (file.name.endsWith(".ioc") || file.name === "CMakeLists.txt") {
-            hasMarker = true;
-            break;
-          }
-        }
-        // CMakeLists.txt 可能只在 build 之外存在，stat 一次目录本身确认可读。
-        if (!hasMarker) statSync(child);
-      } catch {
+      if (isProjectDir(child)) {
+        found.push({ name, dir: child, exists: true });
+        // 工程内部不再下钻：里面的 program/、hardware/ 是它的组成部分，不是兄弟工程。
         continue;
       }
-      if (hasMarker) found.push({ name, dir: child, exists: true });
       walk(child, depth + 1);
     }
   };

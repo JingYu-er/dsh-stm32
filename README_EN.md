@@ -239,6 +239,8 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Artifacts | elf / hex / bin, size, checksum, capacity, build-to-build comparison | Copy checksums |
 | Changes | `.ioc` differences against a baseline | Record a baseline, restore one key, restore all |
 
+Project directories are resolved by convention, and the locations can be set explicitly: firmware lives in `program/`, `firmware/`, `app/`, `user/`, or the project root; the KiCad project lives in `hardware/`, `kicad/`, `hw/`, or `pcb/` (otherwise `*.kicad_pro` is scanned two levels deep); configuration and baselines stay in `.dsh-stm32/` at the project root. Both locations can be written to `dsh-stm32.conf` (`firmware=` / `hardware=`), removing the need to rely on directory names.
+
 Opening the panel first loads the most recent records for the session, then appends live. Events are written every 30 seconds to `~/.dsh-stm32/evidence/<date>/<session>/` for replay and export, retained for 7 days and the last 20 sessions by default, all configurable. The panel shows only this plugin's own tool calls. The panel shows only this session's project and debug session: in a session from another workspace, the panel stays empty instead of borrowing another session's project or debug output.
 
 ## Serial (Windows)

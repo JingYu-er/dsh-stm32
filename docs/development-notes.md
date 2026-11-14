@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S94）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S95）
 
 ### 一、目标与约束
 
@@ -6900,6 +6900,16 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 效果：进程启动后 agent 一创建就有「会话 → 工作目录」，面板第一次打开即可给出默认工程；工具调用路径保持原样，两条来源互不覆盖。
 - 验证：`test/session-context-units.test.mjs` 增 2 条（三种写法命中且不串会话、`agentIdOf` 形状校验），全量 **82 个套件 / 1109 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1974.1 KB / 303 文件 / 解包 15802.9 KB。
 - 教训：**「第一次用的时候顺手登记」在进程重启后会变成「永远登记不上」**。凡是面板强依赖的索引，都要在对象创建时主动填充，而不是指望某条业务路径顺带完成。
+
+### 一百零三、工程目录约定：程序、硬件与配置各归其位（S95）
+
+- 起因：两件事同时暴露。工程下拉里出现 `probe-c0`、`_rich_hal`、`a5`、`blink`、`m6` 等十几项——旧扫描器把「含 `CMakeLists.txt` 的目录」都当工程；而原理图页在真实工程上报「工程里没有 `.kicad_sch`」——`demo.ioc` 在根、KiCad 工程在 `D_NFC_V1.3_1.1.2/`，两者不在同一层，只按工程根找图纸必然落空。
+- 约定：一个工程由三块组成，位置可以显式写进 `dsh-stm32.conf`，也可以按名字自动识别。程序目录候选 `program` / `firmware` / `app` / `user` / 工程根；硬件目录候选 `hardware` / `kicad` / `hw` / `pcb`；配置与基线固定放 `<工程>/.dsh-stm32`（与 `.vscode` 同级）。两者都没命中时，按深度 ≤2 扫 `*.kicad_pro` / `*.kicad_sch`，跳过 `.history`、`build`、`node_modules`、`Gerber`、`bom`。
+- 改法：新增 `src/engine/project-layout.ts` 的 `resolveProjectLayout()`，一次算出三块目录并附 `notes`（判定依据）；`ProjectConf` 增 `firmware` / `hardware` 两个键；读 `.ioc` 的接口一律走 `firmwareDir`，`/schematic` 与原理图工具走 `hardwareDir`；面板原理图页的汇总行显示当前硬件目录名。
+- 扫描器：标记收敛为 `.ioc`、`CMakeLists.txt`、`*.kicad_pro`、约定子目录（`program`/`firmware`/`hardware`），以及「写了 `mcu=` / `firmware=` / `hardware=` 的 `dsh-stm32.conf`」。单有同名 conf 不再算工程——工作区根用的也是这个文件名，早期实现因此把父目录也列成工程。命中工程后不再下钻，工程根只列它自己。
+- 效果：`resolveProjectLayout("D:/JingYu/Desktop/c8t6_vscode_test/demo")` 返回 `firmwareDir = demo`、`hardwareDir = demo\D_NFC_V1.3_1.1.2`——不改目录结构也能读到原理图；13 项噪音从下拉里消失，只剩真实工程。
+- 验证：新增 `test/project-layout-units.test.mjs`（6 条），登记进 `test/run-units.mjs`；全量 **82 个套件 / 1115 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1976.6 KB / 304 文件 / 解包 15802.0 KB。
+- 教训：**「哪里是工程」是要写进约定的，不能让扫描器猜**。猜的代价不是多列几项，而是用户在正确的工程里看到一个空面板；同时，配置文件名与工作区索引文件同名时，单看文件存在与否一定会误判，必须看它写了什么。
 
 ### 一百零二、教训
 

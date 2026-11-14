@@ -173,7 +173,7 @@ test("工具参数错误：目录里没有原理图时给人话，不抛栈", as
   const tools = makeToolContext(empty);
   const value = await tools.get("stm32_sch_read").execute({ projectDir: empty }, { signal: new AbortController().signal });
   assert.equal(value.ok, false);
-  assert.match(value.message, /没有 \.kicad_sch/u);
+  assert.match(value.message, /没有 KiCad 原理图|没有 \.kicad_sch/u);
 });
 
 test("工具 stm32_sch_read：没传 projectDir 时按 exec.agent 解析会话工作目录（S93）", async () => {

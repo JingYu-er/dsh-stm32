@@ -17,6 +17,7 @@ import { checkSchematic } from "../engine/schematic/checks.js";
 import { findRootSchematic, readSchematic, type SchematicReport } from "../engine/schematic/model.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
+import { resolveProjectLayout } from "../engine/project-layout.js";
 
 export const SCH_READ_TOOL = "stm32_sch_read";
 export const SCH_PINS_TOOL = "stm32_sch_pins";
@@ -45,13 +46,25 @@ export interface SchLoad {
   readonly error: string;
 }
 
-/** 按 rootFile 或工程目录找入口图纸并解析。 */
+/**
+ * 按 rootFile 或工程目录找入口图纸并解析。
+ *
+ * 传进来的是**工程根**（S95 约定）：KiCad 工程可能在 `hardware/` 下，也可能与程序同级。
+ * 具体在哪儿由 `resolveProjectLayout()` 判断，这里只负责「取到目录 → 找入口 → 解析」。
+ */
 export function loadSchematic(projectDir: string, rootFile: string): SchLoad {
   let root = rootFile;
   if (root === "") {
-    const found = findRootSchematic(projectDir);
+    const hardwareDir = resolveProjectLayout(projectDir).hardwareDir;
+    if (hardwareDir === "") {
+      return {
+        report: null,
+        error: "工程里没有 KiCad 原理图：把 KiCad 工程放到 hardware/ 下，或在 dsh-stm32.conf 里写 hardware=目录名",
+      };
+    }
+    const found = findRootSchematic(hardwareDir);
     if (found === null || found === "") {
-      return { report: null, error: `工程目录里没有 .kicad_sch：${projectDir}` };
+      return { report: null, error: `硬件目录里没有 .kicad_sch：${hardwareDir}` };
     }
     root = found;
   }
