@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S112）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S113）
 
 ### 一、目标与约束
 
@@ -7125,7 +7125,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 这个画法是插件里的真实实现（`client/client.js` 的 `PinBox`），不是设计稿；README 的引脚页说明同步写清「芯片型号 + 封装名 + 四边引脚小长条 + 1 脚圆点」，后续改动不应退回表格样式。
 - 测试：`test/client-debug-units.test.mjs` 增 2 条（`function chipIdentity(`、`chip: chipIdentity(pinout)`）；全量 83 套件 / 1151 pass。
 
-### 一百二十一、教训
+### 一百二十一、原理图到 .ioc 的配置草案（S113）
+
+- 目标：原理图已经能读出「哪个脚接了什么网络」，下一步是「`.ioc` 该把它配成什么」。这一层只出草案，不落盘——写 `.ioc` 要过 `stm32_ioc_plan` 的事务，信号名必须与 CubeMX 器件库一致。
+- `src/engine/schematic/to-ioc.ts`：`draftIoc(schematic, facts)` 逐脚给出 `signal / confidence / candidates / note`，并归纳 `peripherals`（`I2C1:PA4` 这种前缀）与 `gpioPins`（键、灯这类纯 GPIO 网络的输入/输出建议）。没有器件库时直接给「先装 CubeMX 或取器件包」的下一步，不返回空表。
+- 匹配规则（三条都是踩过才加的）：① 网络名与脚名相同（`PA4` 这类默认名）不算连接，跳过并计数；② 引脚名本身不参与词元匹配（否则 `PB1` 会把 `SYS_VREF_OUT_PB1` 顶上来）；③ 只有词元真的重合才算匹配，`best` 非空但零重合按「对不上」处理。
+- 实测（D_NFC 的 U18 / STM32L021F4Ux，CubeMX db `DB.6.0.181`）：`PA13 SYS_SWDIO → SYS_SWDIO`（high）、`PA14 SYS_SWCLK → SYS_SWCLK`（high）、`PA6/PA7 → ADC_IN6/ADC_IN7`（high）、`PA4 PA4/SCL → I2C1_SCL`（medium）、`PB9 BOOT0` 判为专用脚；`PA5` 的网络名是 `SDA`，但这颗芯片的 PA5 只有 SPI1_SCK / TIM2_CH1，落进待确认——**这正是不该硬配的地方**。
+- 工具：`stm32_sch_to_ioc`，输出同上，render 逐脚列「脚 → 信号 [置信度]」与待确认清单。工具共 36 个。
+- 验证：`test/schematic-units.test.mjs` 增 2 条（用合成器件库断言匹配与待确认、没有器件库时报下一步）；全量 **83 套件 / 1153 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2032.1 KB / 315 文件 / 16003.1 KB。
+- 教训：**把连接读出来只是第一步，能不能配成还得问器件库**。同一个网络名在别的封装上可能是合法复用，在手上这颗芯片上未必——草案里把候选摆全，比直接生成一份看起来正确的 `.ioc` 有用。
+
+### 一百二十二、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

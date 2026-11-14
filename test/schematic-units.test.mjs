@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { checkSchematic, readIocPins } from "../lib/engine/schematic/checks.js";
 import { findRootSchematic, readSchematic } from "../lib/engine/schematic/model.js";
+import { draftIoc } from "../lib/engine/schematic/to-ioc.js";
 import { crossCheckPcb, readPcb } from "../lib/engine/schematic/pcb.js";
 import { parseSexpr } from "../lib/engine/schematic/sexpr.js";
 import { agentOfSession, resetSessionAgents } from "../lib/engine/session-context.js";
@@ -205,4 +206,52 @@ test("流程图规则同时出现在工具说明与技能文本里", () => {
   assert.match(SKILL_CONTENT, /流程图怎么看/u);
   assert.match(SKILL_CONTENT, /按功能聚合/u);
   assert.match(SKILL_CONTENT, /电源不上线/u);
+});
+
+test("配置草案：把网络名对到器件库信号，对不上的进待确认（S113）", () => {
+  const root = findRootSchematic(FIXTURE);
+  const { report } = readSchematic(root);
+  const pinFact = (...signals) => ({ name: "", position: 0, signals: new Map(signals.map((signal) => [signal, []])) });
+  const facts = {
+    name: "STM32L021F4Ux",
+    packageName: "ST_UFQFPN-20",
+    frequencyMhz: 32,
+    family: "STM32L0",
+    line: "STM32L021",
+    core: "ARM Cortex-M0+",
+    ramKb: 6,
+    flashKb: [16],
+    ioNb: 20,
+    clockTree: "",
+    pins: new Map([
+      ["PA4", pinFact("I2C1_SCL", "GPIO")],
+      ["PA5", pinFact("SPI1_SCK", "GPIO")],
+      ["PA13", pinFact("SYS_SWDIO", "GPIO")],
+      ["PA14", pinFact("SYS_SWCLK", "GPIO")],
+      ["PA9", pinFact("GPIO")],
+      ["PB9-BOOT0", pinFact("BOOT0")],
+    ]),
+    ips: new Map(),
+  };
+  const draft = draftIoc(report, facts);
+  assert.equal(draft.ok, true);
+  const byName = new Map(draft.pins.map((pin) => [pin.name, pin]));
+  assert.equal(byName.get("PA13")?.signal, "SYS_SWDIO");
+  assert.equal(byName.get("PA13")?.confidence, "high");
+  assert.equal(byName.get("PA4")?.signal, "I2C1_SCL");
+  const pa5 = byName.get("PA5");
+  assert.equal(pa5?.signal, "");
+  assert.ok(draft.unresolved.some((pin) => pin.name === "PA5"), "PA5 只能做 SPI，网络名 SDA 对不上");
+  assert.ok(draft.gpioPins.some((pin) => pin.pin === "PA9" && pin.signal === "output"), "LED 网络按 GPIO 输出");
+  assert.ok(draft.peripherals.some((pin) => pin.name === "I2C1" && pin.pins.includes("PA4")), "外设按信号前缀归纳");
+  assert.ok(draft.notes.some((note) => note.includes("待确认") || note.includes("对不上")), "要在说明里提示待确认");
+});
+
+test("配置草案：没有器件库时给出下一步而不是空结果（S113）", () => {
+  const root = findRootSchematic(FIXTURE);
+  const { report } = readSchematic(root);
+  const draft = draftIoc(report, null);
+  assert.equal(draft.ok, false);
+  assert.match(draft.error, /CubeMX 器件库/u);
+  assert.equal(draft.pins.length, 0);
 });
