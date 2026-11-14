@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：36 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：37 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -199,6 +199,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；先按「官方 3D 目录 → `hardware/libs/3d` → 缓存」解析模型并改写路径，缺模型只报告，不阻断导出 |
 | `stm32_ecad_export` | 一次导出 Gerber、钻孔、贴片坐标与 STEP 到 `hardware/out`，按最小可下单集合汇总 |
+| `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`render` 把页面或局部渲染成 PNG 交给视觉读图 |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 
 写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，插件只读。tscircuit 把符号与封装内嵌在工程里、名字归到 `tscircuit` 之类的生成名，检查前会先导出成 `hardware/libs` 下的真库并补齐库表，否则报告里只剩「库不在配置中」这类环境噪音；未命名网络（`.R1 > .pin1 to .C1 > .pin1`）会单独列出并给出 `<net name="VDD" />` 的修法。构建要求 KiCad 10 与其自带的 `bun.exe`；首次 `npm install` 约 730 MB，之后构建一般 15–40 秒。板子上的元件优先用 KiCad 官方库（`footprint="kicad:..."`），需要时再用立创编号兜底。
@@ -237,6 +238,19 @@ static void rtt_init(void) {
 ```
 
 完整实现见 `templates/` 内的 RTT 模板；通道数与环大小由 `RTT_UP_CHANNELS` / `RTT_BUF_SIZE` 控制（默认 3×1 KB = 3 KB `.bss`，C8T6 只有 20 KB RAM）。
+
+### PDF 读取（数据手册与原理图）
+
+依赖 poppler（`pdftotext` / `pdfinfo` / `pdftoppm`）：`pacman -S --needed mingw-w64-ucrt-x86_64-poppler` 装进 MSYS2，`stm32_doctor` 会显示版本。
+
+| 用途 | 调法 | 得到什么 |
+| --- | --- | --- |
+| 判断这份 PDF 能不能读文字 | `mode=info` | 页数、纸张、有无文字层；描边字体的 PDF 会明确提示只能看图 |
+| 查参数、读表格 | `mode=text` + `first`/`last` | 保版面的文字，表格按列对齐 |
+| 找「第几页有什么图」 | `mode=figures` | 图注清单与页号 |
+| 看曲线、框图 | `mode=render` + `page`/`dpi`/`crop` | PNG 路径，交给视觉读图；抠数字用 300–400 dpi 并收紧裁切 |
+
+读图得到的是形态与量级（约 ±0.5 个最小刻度），不是精确数值；精确参数优先查同页表格。
 
 ## 斜杠命令
 
@@ -425,7 +439,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            36 个工具的注册与参数校验
+  tools/            37 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

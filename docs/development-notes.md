@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S116）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S117）
 
 ### 一、目标与约束
 
@@ -7166,7 +7166,22 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/ecad-units.test.mjs` 增 1 条（三条路径的三级命中与一处缺失、改写两处、报告一致），该套件 31 条；全量 **83 套件 / 1155 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2037.0 KB / 317 文件 / 16018.9 KB。
 - 教训：**能本地解析的就别留给外部环境**。模型路径本身是确定信息，变量没定义时该由插件把它落到工程里，而不是把问题丢给「用户没装 3D 包」。
 
-### 一百二十五、教训
+### 一百二十五、PDF 读取：poppler 一包装三种内容（S117）
+
+- 需求：读数据手册与原理图 PDF。用户明确「这类文件没有扫描件，但可能有图表」——所以 OCR 不在考虑范围，问题变成「文字/表格怎么取、图怎么看」。
+- 取证（RM0490 1023 页、DS14721 110 页、KiCad 导出的原理图 PDF 2 页）：
+  - `pdftotext -layout` 把第 58 页三张 Flash 组织表完整还原成对齐文本（地址、大小、类型逐行正确）；
+  - `pdftoppm -r 130` 渲染的页面里，表格线框、粗体表头、页脚都清晰；
+  - `pdfimages -list` 在 50–60 页查不到任何位图——ST 手册的图表是矢量绘制的，**不需要 OCR**；
+  - `pdftocairo -svg` 一页 88 KB、127 个 `<path>`，但 `<text>` 为 0：文字被转成字形轮廓。
+- 结论与分工：文字/表格走 `pdftotext`（真实字符，精确）；曲线与框图走 `pdftoppm` 渲染后读图（估读，误差约 ±0.5 个最小刻度）；原理图的线段走 `pdftocairo`。三者都来自 poppler 一个 pacman 包，不引入 pymupdf。
+- 支持度检测：KiCad 默认导出的 PDF 用 Type3「KiCadStroke」描边字体，正文是 `(\001) Tj` 字形码，`pdftotext` 取不出可读文本。所以 `readPdfInfo()` 先抽第一页判断文字层，描边字体时明确写「只能按图看」，不输出瞎猜结果；导出时加 `--default-font Arial` 可让文字可提取。
+- 实现：`src/engine/pdf/toolchain.ts`（定位三个 CLI，缺失时给 pacman 命令）、`src/engine/pdf/reader.ts`（`readPdfInfo` / `extractPdfText` / `listFigures` / `renderPdfPage`，渲染落盘到临时目录并读回 PNG 尺寸）、`src/tools/pdf.ts` 的 `stm32_pdf_read`（mode = info / text / figures / render，render 支持 dpi 与像素级 crop）。
+- 工具链：poppler 进 `probe.buildTargets()`（`pdftotext -v` 自检，影响写清「PDF 读取不可用，其余功能不受影响」）、`install-guides.ts` 的 `popplerGuide()`、能力标签 `pdf`（`CAPABILITY_COMPONENTS.pdf = ["poppler"]`）。
+- 验证：`test/pdf-units.test.mjs` 6 条（定位、文字层判定、分页切分、图注解析、crop 参数透传、能力只依赖 poppler）；全量 **87 个套件 / 1161 pass / 0 fail**；真机 `readPdfInfo` 报 110 页 A4、文字层 true，`extractPdfText` 第 44 页 2300 字，`listFigures` 认出 Figure 14，`renderPdfPage` 200 dpi 出 1654×2339 PNG。
+- 教训：**读 PDF 的关键不是解析器，而是分清「哪部分是字符、哪部分是像素」**。字符能精确引用，像素只能描述形态与量级；两者混着说，就会出现「看起来精确、其实估的」答案。
+
+### 一百二十六、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

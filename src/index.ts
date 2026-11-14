@@ -25,6 +25,7 @@ import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
 import { registerDownload } from "./tools/download.js";
 import { registerEcadTools } from "./tools/ecad.js";
+import { registerPdfTools } from "./tools/pdf.js";
 import { registerEnvInstall } from "./tools/env-install.js";
 import { registerFirmwareInstall } from "./tools/firmware-install.js";
 import { registerFlash } from "./tools/flash.js";
@@ -125,6 +126,7 @@ export function apply(ctx: DshContext): void {
   registerRoutePlan(toolsCtx);
   registerSchematicTools(toolsCtx);
   registerEcadTools(toolsCtx);
+  registerPdfTools(toolsCtx);
   registerRtt(toolsCtx);
   registerWatchTool(toolsCtx);
   registerAssets(toolsCtx);

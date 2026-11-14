@@ -216,6 +216,7 @@ const ENV_CAPABILITY_LABEL: Record<ToolchainCapability, string> = {
   debug: "调试",
   generate: "生成代码",
   ecad: "电路设计",
+  pdf: "PDF 读取",
 };
 
 /** 组件 id → 卡片上写的名字（齐全时点名用；缺的时候用门禁给的 label，那里写得更细）。 */

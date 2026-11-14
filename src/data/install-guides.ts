@@ -27,7 +27,8 @@ export type InstallComponent =
   | "cubemx-java"
   | "firmware"
   | "kicad"
-  | "npm";
+  | "npm"
+  | "poppler";
 
 /** 组件 → 安装方式。没列的按 auto 处理（默认乐观：pacman 能补的居多）。 */
 export const COMPONENT_INSTALLABILITY: Record<InstallComponent, Installability> = {
@@ -44,6 +45,8 @@ export const COMPONENT_INSTALLABILITY: Record<InstallComponent, Installability> 
   // npm 随 Node.js 来，可能先有 node 再有 npm，也可能反过来。
   kicad: "manual",
   npm: "manual",
+  // poppler 在 MSYS2 的仓库里，一条 pacman 就能补；插件不代装，但能给准确命令。
+  poppler: "auto",
 };
 
 export interface InstallStep {
@@ -225,6 +228,7 @@ export function guideFor(
   if (component === "firmware") return firmwareGuide(firmware);
   if (component === "kicad") return kicadGuide();
   if (component === "npm") return npmGuide();
+  if (component === "poppler") return popplerGuide();
   return null;
 }
 
@@ -321,5 +325,40 @@ export function npmGuide(): InstallGuide {
       },
     ],
     verify: "npm --version",
+  };
+}
+
+/**
+ * poppler（S117）：PDF 的文字、页面渲染与图内位图。
+ *
+ * 选 poppler 而不是 pymupdf：一个 pacman 包同时给出 pdftotext / pdfinfo / pdftoppm /
+ * pdftocairo，都是独立可执行文件，不需要往任何 Python 环境里装库。
+ */
+export function popplerGuide(): InstallGuide {
+  return {
+    component: "poppler",
+    label: "poppler（PDF 文字与页面渲染）",
+    installability: "auto",
+    why: "读数据手册与原理图 PDF 时，文字与表格交给 pdftotext，曲线与控制框图交给 pdftoppm 渲染成图像。",
+    sizeHint: "约 11 MB（含 poppler-data）",
+    needsAccount: false,
+    steps: [
+      {
+        title: "在 MSYS2 里装",
+        detail: "打开 MSYS2 UCRT64 终端执行下面的命令；装到 ucrt64/bin，插件默认会检索这个目录。",
+        command: "pacman -S --needed mingw-w64-ucrt-x86_64-poppler",
+      },
+      {
+        title: "确认三个命令都在",
+        detail: "pdftotext、pdfinfo、pdftoppm 都要能找到；缺一个就重装整包（poppler-data 一并装上）。",
+        command: "pdftotext -v && pdfinfo -v && pdftoppm -v",
+      },
+      {
+        title: "不在默认目录时指路径",
+        detail: "把 bin 目录写进配置项 binDirs，或在会话里设 DSH_STM32_BIN_DIRS。",
+        command: 'setx DSH_STM32_BIN_DIRS "C:/msys64/ucrt64/bin"',
+      },
+    ],
+    verify: "stm32_doctor（poppler 一行应显示版本号）",
   };
 }
