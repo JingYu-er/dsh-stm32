@@ -203,3 +203,13 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     globalThis.document = previousDocument;
   }
 });
+
+test("电路设计页签：读 /ecad 并给出下一步动作（S99）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.equal(source.includes("function useEcad("), true);
+  assert.equal(source.includes("function EcadPanel("), true);
+  assert.equal(source.includes('callApi("GET", "ecad?projectDir="'), true);
+  assert.equal(source.includes('tabButton("ecad", DEBUG_LABELS.ecad)'), true);
+  assert.equal(source.includes('tab === "ecad"'), true);
+  assert.match(source, /stm32_ecad_init/u);
+});

@@ -21,7 +21,7 @@ import {
   updateToolchainConfig,
   type ToolchainConfig,
 } from "../data/toolchain-config.js";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -58,6 +58,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
 import { findRootSchematic, readSchematic } from "./schematic/model.js";
 import { checkSchematic } from "./schematic/checks.js";
+import { findLatestKicadBuild, listCircuitEntries, planEcadWorkspace } from "./ecad/tsci.js";
 import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
 
@@ -534,6 +535,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/serial/open",
   WEB_API_PREFIX + "/serial/close",
   WEB_API_PREFIX + "/schematic",
+  WEB_API_PREFIX + "/ecad",
 ];
 
 /** 证据文件最多列这么多条，面板只用来挑一个回放。 */
@@ -739,6 +741,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/serial" &&
     path !== WEB_API_PREFIX + "/serial/ports" &&
     path !== WEB_API_PREFIX + "/schematic" &&
+    path !== WEB_API_PREFIX + "/ecad" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
   if (path === WEB_API_PREFIX + "/watch") {
@@ -1044,6 +1047,49 @@ export async function handleWebApi(input: {
         findings: check.findings,
         summary: check.summary,
         pcb: check.pcb,
+        layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
+      },
+    });
+  }
+  if (path === WEB_API_PREFIX + "/ecad") {
+    // 电路设计页：只报工作区状态（有没有初始化、依赖装没装、最近一次构建、导出的 STEP）。
+    // 构建与检查要跑子进程，留在工具里由模型显式触发，面板不替用户做决定。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const layout = resolveProjectLayout(projectDir);
+    const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
+    const installed = existsSync(join(workspace.circuitDir, "node_modules", "tscircuit"));
+    const latest = findLatestKicadBuild(workspace);
+    const steps: Array<{ name: string; bytes: number; mtimeMs: number }> = [];
+    try {
+      const names = await readdir(workspace.outDir);
+      for (const name of names) {
+        if (!name.toLowerCase().endsWith(".step")) continue;
+        const info = await stat(join(workspace.outDir, name));
+        steps.push({ name, bytes: info.size, mtimeMs: info.mtimeMs });
+      }
+    } catch {
+      // 还没导出过 STEP：空列表就是正确状态。
+    }
+    steps.sort((left, right) => right.mtimeMs - left.mtimeMs);
+    return ok({
+      ecad: {
+        workspace: {
+          projectDir: workspace.projectDir,
+          root: workspace.root,
+          circuitDir: workspace.circuitDir,
+          kicadDir: workspace.kicadDir,
+          libsDir: workspace.libsDir,
+          outDir: workspace.outDir,
+        },
+        initialized: existsSync(join(workspace.circuitDir, "package.json")),
+        installed,
+        entries: listCircuitEntries(workspace.circuitDir),
+        latest: latest.ok
+          ? { ok: true, error: "", kicadDir: latest.kicadDir, pcbFile: latest.pcbFile, schematicFile: latest.schematicFile }
+          : { ok: false, error: latest.error, kicadDir: "", pcbFile: "", schematicFile: "" },
+        steps: steps.slice(0, 20),
         layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },
     });

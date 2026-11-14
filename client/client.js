@@ -934,7 +934,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "原理图", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "原理图", ecad: "电路设计", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
     /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
     function eventRefLine(event) {
@@ -2373,6 +2373,112 @@ window.__ModuleLoader__.load({
     }
 
     /** 原理图页签（S90）：只读 KiCad 工程，画模块框图并列出检查结论。 */
+    /** 电路设计：只读硬件工作区状态（有没有初始化、依赖、最近构建、导出的 STEP）。 */
+    function useEcad(projectDir, intervalMs) {
+      const [ecad, setEcad] = useState(null);
+      const [error, setError] = useState("");
+      const [tick, setTick] = useState(0);
+      useEffect(() => {
+        let closed = false;
+        if (typeof projectDir !== "string" || projectDir === "") {
+          setEcad(null);
+          setError("");
+          return () => {
+            closed = true;
+          };
+        }
+        const load = async () => {
+          const result = await callApi("GET", "ecad?projectDir=" + encodeURIComponent(projectDir));
+          if (closed) return;
+          if (result.ok) {
+            setEcad(result.value.ecad);
+            setError("");
+          } else {
+            setError(result.error);
+          }
+        };
+        load();
+        const timer = setInterval(load, intervalMs);
+        return () => {
+          closed = true;
+          clearInterval(timer);
+        };
+      }, [projectDir, tick]);
+      return { ecad, error, reload: () => setTick((value) => value + 1) };
+    }
+
+    function EcadPanel(props) {
+      const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
+      const state = useEcad(projectDir, 20000);
+      const ecad = state.ecad;
+      const sizeText = (bytes) => (typeof bytes !== "number" || bytes <= 0 ? "-" : bytes >= 1048576 ? String(Math.round(bytes / 104857.6) / 10) + " MB" : String(Math.round(bytes / 102.4) / 10) + " KB");
+      const steps = ecad === null || !Array.isArray(ecad.steps) ? [] : ecad.steps;
+      const entries = ecad === null || !Array.isArray(ecad.entries) ? [] : ecad.entries;
+      const latest = ecad === null || ecad.latest === undefined ? null : ecad.latest;
+      const head = [];
+      if (projectDir === "") {
+        head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录：在工具栏「工程」里选一个，或先打开调试会话。"));
+      } else if (state.error !== "") {
+        head.push(e("div", { key: "error", style: { padding: "6px 0", opacity: 0.75 } }, state.error));
+      } else if (ecad === null) {
+        head.push(e("div", { key: "loading", style: { padding: "6px 0", opacity: 0.6 } }, "读取硬件工作区…"));
+      } else {
+        head.push(
+          e(
+            "div",
+            { key: "head", style: { padding: "4px 0 6px", display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", opacity: 0.85 } },
+            e("span", null, ecad.initialized ? "工作区已初始化" : "工作区未初始化"),
+            e("span", { style: ecad.installed ? {} : { color: D32_WARN } }, ecad.installed ? "依赖已安装" : "依赖未安装"),
+            e("span", null, latest !== null && latest.ok ? "最近构建可用" : "还没有构建产物"),
+            e("span", null, "STEP " + String(steps.length)),
+            e("span", { style: { opacity: 0.55 } }, "只读：构建与检查用工具触发"),
+          ),
+        );
+      }
+      const rows = [];
+      if (ecad !== null) {
+        rows.push(
+          e(
+            "div",
+            { key: "paths", style: { padding: "2px 0 8px", fontSize: "11.5px", opacity: 0.8, display: "grid", gap: "2px" } },
+            e("div", null, "tscircuit：" + ecad.workspace.circuitDir),
+            e("div", null, "KiCad 工程：" + ecad.workspace.kicadDir),
+            e("div", null, "库：" + ecad.workspace.libsDir),
+            e("div", null, "导出：" + ecad.workspace.outDir),
+          ),
+        );
+        if (!ecad.initialized) {
+          rows.push(e("div", { key: "hint-init", style: { padding: "4px 0", fontSize: "12px" } }, "下一步：调用 stm32_ecad_init 建工作区，再在 circuit/ 里写 .circuit.tsx。"));
+        } else if (!ecad.installed) {
+          rows.push(e("div", { key: "hint-install", style: { padding: "4px 0", fontSize: "12px" } }, "下一步：在 " + ecad.workspace.circuitDir + " 执行 npm install（约 730 MB），之后调用 stm32_ecad_build。"));
+        } else if (entries.length === 0) {
+          rows.push(e("div", { key: "hint-entry", style: { padding: "4px 0", fontSize: "12px" } }, "下一步：在 circuit/ 里新建 .circuit.tsx，再调用 stm32_ecad_build。"));
+        }
+        if (entries.length > 0) {
+          rows.push(e("div", { key: "entries", style: { padding: "2px 0 6px", fontSize: "12px" } }, "入口：" + entries.join("、")));
+        }
+        rows.push(
+          e(
+            "div",
+            { key: "latest", style: { padding: "2px 0 6px", fontSize: "12px" } },
+            latest !== null && latest.ok
+              ? "KiCad 工程：" + (typeof latest.schematicFile === "string" ? latest.schematicFile.split(/[\\/]/u).pop() : "") + " / " + (typeof latest.pcbFile === "string" ? latest.pcbFile.split(/[\\/]/u).pop() : "")
+              : "最近构建：" + (latest !== null && typeof latest.error === "string" && latest.error !== "" ? latest.error : "无"),
+          ),
+        );
+        rows.push(
+          e(
+            "div",
+            { key: "steps", style: { padding: "2px 0 0", fontSize: "12px", display: "grid", gap: "2px" } },
+            ...(steps.length === 0
+              ? [e("div", { key: "no-step", style: { opacity: 0.6 } }, "还没有导出 STEP：调用 stm32_ecad_step 生成。")]
+              : steps.map((item, index) => e("div", { key: "step-" + String(index) }, item.name + "（" + sizeText(item.bytes) + "）"))),
+          ),
+        );
+      }
+      return e("div", { style: debugStyles.page }, head.concat(rows));
+    }
+
     function SchematicPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useSchematic(projectDir, 15000);
@@ -4375,6 +4481,7 @@ window.__ModuleLoader__.load({
         tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
         tabButton("schematic", DEBUG_LABELS.schematic),
+        tabButton("ecad", DEBUG_LABELS.ecad),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("interrupts", DEBUG_LABELS.interrupts),
         tabButton("faults", DEBUG_LABELS.faults, unseenFails),
@@ -4410,6 +4517,8 @@ window.__ModuleLoader__.load({
             ]
           : tab === "schematic"
           ? [e(SchematicPanel, { key: "schematic", projectDir: projectDir })]
+          : tab === "ecad"
+          ? [e(EcadPanel, { key: "ecad", projectDir: projectDir })]
           : tab === "pinout"
           ? [e(PinoutPanel, { key: "pinout", projectDir: projectDir })]
           : tab === "clocks"

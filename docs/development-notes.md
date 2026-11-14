@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S98）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S99）
 
 ### 一、目标与约束
 
@@ -6962,6 +6962,15 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 过程中修掉的自身缺陷：符号名改写时把 `nameAfterHead()` 返回的**相对 body 的绝对偏移**当成相对块起点的偏移，导出的 `(symbol "Device:R_Sma"R_Small"` 是坏名字；切片前先减掉块起点。
 - 验证：`test/ecad-units.test.mjs` 增 3 条（封装头换行与字符串里的括号、`lib_symbols` 按库分组并去前缀、库导出落盘 + 库表只追加 + 未命名网络识别），全量 **83 个套件 / 1132 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1992.0 KB / 309 文件 / 解包 15863.6 KB。
 - 教训：**生成器内嵌什么东西，检查器就要先把它们还原成「外部的东西」再检查**。内嵌库在编译器眼里合法，在 `kicad-cli` 眼里是缺库；先把库落到工程里、补好库表，报告才会只剩真正的电路问题。
+
+### 一百零七、电路设计页签：只报状态，动作留给工具（S99）
+
+- 分工：面板不跑 `tsci build`、不跑 `kicad-cli`。构建要 15–40 秒、检查要几秒，放在按钮后面会让「看一眼状态」变成「等一个后台任务」；这些动作留在工具里，由模型在需要时显式触发，面板只回答「现在能不能构建、产物在哪、导出了什么」。
+- 数据面：新增 `GET /ecad`（路由 47 → 48），返回 `{workspace:{projectDir,root,circuitDir,kicadDir,libsDir,outDir}, initialized, installed, entries, latest:{ok,kicadDir,pcbFile,schematicFile}|{ok:false,error}, steps:[{name,bytes,mtimeMs}], layout}`。`initialized` 看 `circuit/package.json` 是否存在、`installed` 看 `circuit/node_modules/tscircuit`、`latest` 直接复用 `findLatestKicadBuild()`——与工具层同一套判据，不另写一份。
+- 面板：`useEcad(projectDir, 20000)` + `EcadPanel`，页签排在「原理图」之后。头部一行给「工作区已/未初始化 · 依赖已/未安装 · 最近构建 · STEP 数 · 只读」；四个路径逐行列出；按状态给唯一的下一条动作（`stm32_ecad_init` → 在该目录 `npm install` → 写 `.circuit.tsx` 后 `stm32_ecad_build`）；底部列入口文件与已导出的 STEP（带体积）。
+- 取舍：没有状态就显示「工作区未初始化」，而不是先替用户建目录——初始化会写 `package.json`，属于用户的决定；STEP 列表只在 `hardware/out` 存在时读，读失败就当空列表（还没导出过是正常状态）。
+- 验证：`test/web-api-units.test.mjs` 的路由数断言 47 → 48，并加 `/ecad` 必须在表内的断言；`test/client-debug-units.test.mjs` 加 6 条（`useEcad`、`EcadPanel`、`ecad?projectDir=`、`tabButton("ecad", …)`、`tab === "ecad"`、`stm32_ecad_init` 提示）；全量 **83 个套件 / 1133 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1994.7 KB / 309 文件 / 解包 15878.7 KB。
+- 教训：**面板的第一职责是让人知道下一步做什么**。状态页把「为什么现在不能构建」写清楚（没初始化 / 没依赖 / 没入口），比给一个按不动的按钮有用。
 
 ### 一百零二、教训
 
