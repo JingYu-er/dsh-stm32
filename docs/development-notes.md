@@ -7067,6 +7067,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 实现 `src/engine/ecad/package.ts`：`PACKAGE_SKIP_DIRS` 跳过 `node_modules`、`dist`、`.history`、`.git`、`__pycache__`、`.hq`，文件级再跳过 `*.zip` 与 `*.kicad_prl`（这些要么可重建、要么是本机界面状态）；单文件 >60 MB、总量 >240 MB 直接报错，不生成半成品；`packageHardware()` 在包里追加一份 `README.md`（写明目录结构、哪些是生成物），产物落 `hardware/out/<name>-hardware-<时间戳>.zip`；`verifyPackage()` 打完立刻读回条目数。
 - 工具与面板：`stm32_ecad_package`；`POST /ecad/action` 的 `package` 动作（不要求先有构建产物），面板按钮「打包交付」，结果显示路径、体积、文件数与跳过清单。
 - 实测（D_NFC 硬件目录）：6,625,883 B、61 个文件，跳过 `.history/`、`.hq/`、`*.kicad_prl` 与 `D_NFC-backups/*.zip`；`verifyPackage` 61/61 一致；MSYS `unzip -t` 报 `No errors detected`——外部工具认这个格式，才敢说「能交付」。
+- 打包**不需要** KiCad 与 tscircuit：`POST /ecad/action` 里 `package` 分支必须放在工具链探测之前，否则没装 KiCad 的机器（CI、只做交付的电脑）连包都打不了，还会得到 409 这种与打包无关的错误。
 - 教训：**交付物要能被外部工具验证**。自己写的 zip 只靠自己的读回函数自检，等于自己给自己判卷；`unzip -t` 通过才算数。
 
 ### 一百零八、教训

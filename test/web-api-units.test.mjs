@@ -1341,7 +1341,8 @@ test("POST /ecad/action：动作名只认六个，其余直接 400", async () =>
 
 test("POST /ecad/action：package 在没有硬件目录时也认这个动作，只报人话（S107）", async () => {
   const { dir, env } = tempEnv("ecad-package");
-  const deps = { subprocess: fakeSubprocess, env: env };
+  // 打包只读 hardware/：故意把 KiCad 指到一个不存在的目录，动作仍要能返回（CI 上没有 KiCad）。
+  const deps = { subprocess: fakeSubprocess, env: { ...env, DSH_STM32_KICAD_ROOT: path.join(dir, "no-such-kicad") } };
   const packed = await handleWebApi({
     method: "POST",
     path: WEB_API_PREFIX + "/ecad/action",

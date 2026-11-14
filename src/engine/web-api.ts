@@ -1150,7 +1150,7 @@ export async function handleWebApi(input: {
     });
   }
   if (path === WEB_API_PREFIX + "/ecad/action") {
-    // 面板上的五个动作：都对应一个工具在做的事，只是不必让用户去对话里敲一遍。
+    // 面板上的六个动作：都对应一个工具在做的事，只是不必让用户去对话里敲一遍。
     // 构建与检查要几十秒，面板在请求返回前只显示「执行中」，不做乐观更新。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
     const projectDir = withProject(requested);
@@ -1161,9 +1161,28 @@ export async function handleWebApi(input: {
     }
     const layout = resolveProjectLayout(projectDir);
     const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
+    const started = Date.now();
+    // 打包只读 hardware/ 目录，不需要 KiCad 与 tscircuit：先处理，免得没装工具链的机器连包都打不了。
+    if (action === "package") {
+      const packed = packageHardware(workspace.root, basename(projectDir));
+      const check = packed.ok ? verifyPackage(packed.file) : { ok: false, error: packed.error, files: 0 };
+      return ok({
+        ecadAction: {
+          action: action,
+          ok: packed.ok && check.ok,
+          error: packed.ok ? check.error : packed.error,
+          durationMs: Date.now() - started,
+          file: packed.file,
+          bytes: packed.bytes,
+          files: packed.files,
+          skipped: packed.skipped,
+          notes: packed.notes,
+        },
+      });
+    }
+
     const located = locateEcadToolchain(envOf(input.deps));
     if (located.toolchain === null) return fail(409, located.error);
-    const started = Date.now();
     const latestForCheck = () => findLatestKicadBuild(workspace);
     const runLibs = async (pcbFile: string, schFile: string) => {
       const libs = exportEmbeddedLibraries(workspace, pcbFile, schFile);
@@ -1185,23 +1204,6 @@ export async function handleWebApi(input: {
           durationMs: Date.now() - started,
           kicadDir: latest.ok ? latest.kicadDir : "",
           notes: build.notes,
-        },
-      });
-    }
-    if (action === "package") {
-      const packed = packageHardware(workspace.root, basename(projectDir));
-      const check = packed.ok ? verifyPackage(packed.file) : { ok: false, error: packed.error, files: 0 };
-      return ok({
-        ecadAction: {
-          action: action,
-          ok: packed.ok && check.ok,
-          error: packed.ok ? check.error : packed.error,
-          durationMs: Date.now() - started,
-          file: packed.file,
-          bytes: packed.bytes,
-          files: packed.files,
-          skipped: packed.skipped,
-          notes: packed.notes,
         },
       });
     }
