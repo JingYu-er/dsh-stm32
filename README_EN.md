@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 28 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 32 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -174,6 +174,19 @@ Boundaries are listed under [Known limitations](#known-limitations): HAL scaffol
 | `stm32_sch_check` | Check the schematic itself and reconcile it with `.ioc` and `.kicad_pcb`: missing values, missing footprints, missing SWD / BOOT0 / power, split nets |
 
 Scope is KiCad 10 (`version 20260306`). Symbol libraries are embedded in the sheets, so KiCad does not need to be installed and `sym-lib-table` is not read; only sheets referenced from the root sheet are parsed, and `.history/` plus other historical versions are ignored. Reconciliation is based on connectivity: pads on one PCB net must belong to one schematic net, and name differences are reported as hints only. The tools are read-only: the schematic and the project configuration are never modified.
+
+### Circuit design (tscircuit + KiCad)
+
+Author circuits with tscircuit under `hardware/`, export a real KiCad project, then let KiCad's own checkers validate it.
+
+| Tool | Purpose |
+| --- | --- |
+| `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies are installed there with `npm install` |
+| `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb` |
+| `stm32_ecad_check` | Run `kicad-cli sch erc` and `pcb drc`, collapsing violations into rule, severity and affected items |
+| `stm32_ecad_step` | Export STEP into `hardware/out`; missing 3D models are reported, not fatal |
+
+There is exactly one writer: `.kicad_sch` / `.kicad_pcb` are produced by tscircuit and only read by the plugin. Building requires KiCad 10 and its bundled `bun.exe`; the first `npm install` is about 730 MB and later builds usually take 15–40 seconds. Prefer KiCad's own libraries (`footprint="kicad:..."`) and fall back to JLCPCB part numbers only when needed.
 
 ### Code and build
 
@@ -396,7 +409,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 28 tools
+  tools/            registration and argument validation for 32 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

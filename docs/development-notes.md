@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S96）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S97）
 
 ### 一、目标与约束
 
@@ -6923,6 +6923,24 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 复核：`cmake --preset Debug` + `cmake --build --preset Debug` 在 `program/` 下通过（FLASH 11612/65536、RAM 2128/20480，与搬迁前一致）；`resolveProjectLayout()` 返回 `firmwareDir = demo\program`、`hardwareDir = demo\hardware`；`/pinout`、`/clocks`、`/schematic`、`/artifacts`、`/ioc-sync` 全部 200，`/schematic` 仍读到 43 元件 / 35 网络，`/artifacts` 的 `buildDir` 落在 `program/build/Debug`。
 - 验证：新增 1 条工具层单测（工程根 → 程序目录、老工程保持原样），全量 **82 个套件 / 1116 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1977.3 KB / 304 文件 / 解包 15803.9 KB。
 - 教训：**「工程根」与「程序目录」是两个概念，工具不能默认它们相同**。分层之后，凡是读写源码、`.ioc`、构建产物的入口都必须显式落到程序目录；而唯一知道目录结构的地方应该只有 `resolveProjectLayout()`，其余调用点不要自己拼路径。
+
+### 一百零五、电路设计：tscircuit 写板、kicad-cli 验收（S97）
+
+- 目标：让插件能画原理图与 PCB、导出 STEP，并且画出来的板子要能被 KiCad 自己认。写者只保留一个——tscircuit 生成 `.kicad_sch` / `.kicad_pcb`，插件不直接改 KiCad 文件；验收交给 `kicad-cli` 的 ERC 与 DRC。
+- 取证（决定了架构）：
+  - 本机 KiCad 10.0.7 的 `kicad-cli` 支持 `sch erc --format json`、`pcb drc --format json`、`pcb export step`，全部无头可用；报告键为 ERC `sheets[].violations[]`、DRC `violations[]` / `unconnected_items[]` / `schematic_parity[]`。
+  - `tsci build --kicad-project --svgs` 能一次产出 `circuit.json`、原理图/PCB 的 SVG 与真 KiCad 工程；但 Node 直接跑 `.tsx` 报 `Unknown file extension ".tsx"`，**必须用 KiCad 自带的 bun**（`<KiCad>/bin/bun.exe`）。
+  - 五个社区的 KiCad MCP 都是 Python + KiCad IPC/GUI，要求编辑器正在运行；本插件是零运行期依赖的 TS 进程，直连 `kicad-cli` 更短、更可测，MCP 只留作「GUI 在环」的可选后端。
+  - 真机 STEP 导出会因缺 3D 模型打印 `Could not add 3D model for <Ref>. File not found`，模型缺失不阻断导出——这属于「要报告，不要失败」。
+- 分层：`src/engine/ecad/toolchain.ts` 定位 KiCad 与 bun、拼 `KICAD10_3DMODEL_DIR` 等环境；`tsci.ts` 定义 `hardware/{circuit,kicad,libs,out}` 工作区、写最小 `package.json`、拼 `tsci build` 参数、找最近一次产物；`checks.ts` 跑 ERC/DRC 并收敛成 `rule/severity/message/items`，外加 STEP 导出；`src/tools/ecad.ts` 提供 `stm32_ecad_init` / `build` / `check` / `step` 四个工具。
+- 实测（`hardware/circuit` 下一个 5 元件样例）：构建 16 s 出 `dist/index/kicad/{index.kicad_sch,index.kicad_pcb}`；ERC 2 error（`pin_not_connected`）+ 6 warning；DRC 1 error（走线 0.15 mm 低于 0.2 mm 约束）+ 4 warning；STEP 50702 B / 507 ms。
+- 过程中修掉的自身缺陷：
+  - **快照会过期**：`planEcadWorkspace()` 把 `initialized` 算在对象里，初始化之后立刻构建仍报「工作区还没初始化」；改成构建时现场看 `circuit/package.json`。
+  - **漏传 ctx 会静默降级**：`projectDirOf()` 第一版写成 `resolveProjectDir(undefined, …)`，拿不到会话工作目录就落到插件进程的 cwd；改成显式传 `ctx`。
+  - **显式覆盖必须唯一**：`DSH_STM32_KICAD_ROOT` 指到不存在的目录时，旧逻辑会悄悄回落到默认安装，问题被藏起来；改成「指了就用它，找不到就报错」。
+  - **正则别把解释一起吃进去**：缺失模型的第一版正则把 `U18. File not found` 整段当成引用号；收敛为 `[^\s.:]+`。
+- 验证：新增 `test/ecad-units.test.mjs` 13 条（工具链定位与报错、工作区路径、初始化幂等、构建的三种失败提示与 argv 拼装、产物择新、ERC/DRC 解析、STEP 缺失模型），登记进 `test/run-units.mjs`；全量 **83 个套件 / 1129 pass / 0 fail**，ACCEPTANCE OK，`test:size` 1987.7 KB / 308 文件 / 解包 15846.1 KB。
+- 教训：**跨进程工具要把「下一步怎么做」写进返回值**。缺 bun、缺依赖、缺 `node_modules`、没有构建产物这几种情况，报一句「失败」用户无法行动；报「在哪个目录执行哪条命令，再重试」才有用。
 
 ### 一百零二、教训
 

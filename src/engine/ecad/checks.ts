@@ -1,0 +1,243 @@
+/**
+ * ECAD 检查与导出（S97）：把 kicad-cli 的 ERC / DRC / STEP 包成结构化结果。
+ *
+ * 为什么用 kicad-cli 而不是 KiCad 的 Python 或 MCP：它随 KiCad 安装、
+ * 无需 GUI、无需 IPC、JSON 报告有稳定 schema；本插件已经在用 runCapture
+ * 管子进程，不需要再引入一层 MCP 协议。
+ */
+
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import type { SubprocessService } from "../../types.js";
+import { runCapture } from "../subprocess-runner.js";
+import { ecadEnv, type EcadToolchain } from "./toolchain.js";
+
+export interface KicadFinding {
+  readonly rule: string;
+  readonly severity: string;
+  readonly message: string;
+  /** 涉及的元件/网络描述，最多几项。 */
+  readonly items: readonly string[];
+}
+
+export interface ReportSummary {
+  readonly errors: number;
+  readonly warnings: number;
+  readonly findings: readonly KicadFinding[];
+}
+
+export interface KicadReport {
+  readonly ok: boolean;
+  readonly error: string;
+  readonly file: string;
+  readonly reportPath: string;
+  readonly summary: ReportSummary;
+  readonly raw: string;
+}
+
+interface ErcViolation {
+  type?: string;
+  severity?: string;
+  description?: string;
+  items?: { description?: string }[];
+}
+
+interface DrcReport {
+  violations?: ErcViolation[];
+  unconnected_items?: ErcViolation[];
+  schematic_parity?: ErcViolation[];
+}
+
+interface ErcReport {
+  sheets?: { violations?: ErcViolation[] }[];
+}
+
+function pushFindings(target: KicadFinding[], violation: ErcViolation, fallbackRule: string): void {
+  const severity = (violation.severity ?? "error").toLowerCase();
+  const items = (violation.items ?? [])
+    .map((item) => item.description ?? "")
+    .filter((text) => text !== "")
+    .slice(0, 3);
+  target.push({
+    rule: violation.type ?? fallbackRule,
+    severity,
+    message: violation.description ?? "",
+    items,
+  });
+}
+
+function summarize(findings: readonly KicadFinding[]): ReportSummary {
+  let errors = 0;
+  let warnings = 0;
+  for (const finding of findings) {
+    if (finding.severity === "error") errors += 1;
+    else warnings += 1;
+  }
+  return { errors, warnings, findings };
+}
+
+function tail(text: string, limit = 1200): string {
+  return text.length <= limit ? text : text.slice(text.length - limit);
+}
+
+/**
+ * 跑 `kicad-cli sch erc`。
+ *
+ * 报告文件名用固定的 `drc/erc.json` 形式落在 `<kicadDir>/checks/`，方便面板与
+ * 下一次构建对比；`--severity-error` 只收 error，warning 用 `all` 再跑一次。
+ */
+export async function runErc(
+  subprocess: SubprocessService,
+  toolchain: EcadToolchain,
+  schematicFile: string,
+  signal?: AbortSignal,
+): Promise<KicadReport> {
+  return runReport(subprocess, toolchain, "sch", "erc", schematicFile, signal);
+}
+
+export async function runDrc(
+  subprocess: SubprocessService,
+  toolchain: EcadToolchain,
+  pcbFile: string,
+  signal?: AbortSignal,
+): Promise<KicadReport> {
+  return runReport(subprocess, toolchain, "pcb", "drc", pcbFile, signal);
+}
+
+async function runReport(
+  subprocess: SubprocessService,
+  toolchain: EcadToolchain,
+  kind: "sch" | "pcb",
+  command: "erc" | "drc",
+  file: string,
+  signal?: AbortSignal,
+): Promise<KicadReport> {
+  const empty = { errors: 0, warnings: 0, findings: [] as KicadFinding[] };
+  if (toolchain.kicadCli === "") {
+    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", file, reportPath: "", summary: empty, raw: "" };
+  }
+  const checksDir = join(dirname(file), "checks");
+  if (!existsSync(checksDir)) mkdirSync(checksDir, { recursive: true });
+  const reportPath = join(checksDir, command + ".json");
+
+  const argv = [
+    toolchain.kicadCli,
+    kind,
+    command,
+    "--format",
+    "json",
+    "--severity-all",
+    "-o",
+    reportPath,
+    file,
+  ];
+  const outcome = await runCapture(subprocess, {
+    argv,
+    cwd: dirname(file),
+    env: ecadEnv(toolchain),
+    timeoutMs: 120_000,
+    maxBytes: 1024 * 1024,
+    ...(signal === undefined ? {} : { signal }),
+  });
+
+  let raw = "";
+  let findings: KicadFinding[] = [];
+  try {
+    raw = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : "";
+    if (raw !== "") {
+      if (command === "erc") {
+        const parsed = JSON.parse(raw) as ErcReport;
+        for (const sheet of parsed.sheets ?? []) {
+          for (const violation of sheet.violations ?? []) pushFindings(findings, violation, "erc");
+        }
+      } else {
+        const parsed = JSON.parse(raw) as DrcReport;
+        for (const violation of parsed.violations ?? []) pushFindings(findings, violation, "drc");
+        for (const violation of parsed.unconnected_items ?? []) pushFindings(findings, violation, "unconnected");
+        for (const violation of parsed.schematic_parity ?? []) pushFindings(findings, violation, "parity");
+      }
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: "解析 " + command.toUpperCase() + " 报告失败：" + (error instanceof Error ? error.message : String(error)),
+      file,
+      reportPath,
+      summary: empty,
+      raw: "",
+    };
+  }
+
+  if (outcome.spawnError !== null) {
+    return { ok: false, error: outcome.spawnError, file, reportPath, summary: empty, raw };
+  }
+  const ok = outcome.exitCode === 0;
+  return {
+    ok,
+    error: ok ? "" : tail(outcome.stdout + "\n" + outcome.stderr),
+    file,
+    reportPath,
+    summary: summarize(findings),
+    raw,
+  };
+}
+
+export interface StepExport {
+  readonly ok: boolean;
+  readonly error: string;
+  readonly stepFile: string;
+  readonly bytes: number;
+  readonly durationMs: number;
+  readonly missingModels: readonly string[];
+}
+
+/**
+ * 导 STEP：`kicad-cli pcb export step`。
+ *
+ * 3D 模型缺失不阻断导出（KiCad 只警告），所以把 `Could not add 3D model for X`
+ * 抽成清单，交给面板提示，而不是当失败。
+ */
+export async function exportStep(
+  subprocess: SubprocessService,
+  toolchain: EcadToolchain,
+  pcbFile: string,
+  outFile: string,
+  signal?: AbortSignal,
+): Promise<StepExport> {
+  const started = Date.now();
+  if (toolchain.kicadCli === "") {
+    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", stepFile: "", bytes: 0, durationMs: 0, missingModels: [] };
+  }
+  if (!existsSync(dirname(outFile))) mkdirSync(dirname(outFile), { recursive: true });
+  const outcome = await runCapture(subprocess, {
+    argv: [toolchain.kicadCli, "pcb", "export", "step", "-o", outFile, pcbFile],
+    cwd: dirname(pcbFile),
+    env: ecadEnv(toolchain),
+    timeoutMs: 300_000,
+    maxBytes: 512 * 1024,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  const missing: string[] = [];
+  for (const line of (outcome.stdout + "\n" + outcome.stderr).split(/\r?\n/u)) {
+    const match = /Could not add 3D model for ([^\s.:]+)/u.exec(line);
+    if (match !== null) missing.push(match[1] ?? "");
+  }
+  const ok = outcome.exitCode === 0 && existsSync(outFile);
+  let bytes = 0;
+  if (ok) {
+    try {
+      bytes = statSync(outFile).size;
+    } catch {
+      bytes = 0;
+    }
+  }
+  return {
+    ok,
+    error: ok ? "" : tail(outcome.stdout + "\n" + outcome.stderr) || "STEP 导出失败",
+    stepFile: ok ? outFile : "",
+    bytes,
+    durationMs: Date.now() - started,
+    missingModels: [...new Set(missing)].slice(0, 20),
+  };
+}
