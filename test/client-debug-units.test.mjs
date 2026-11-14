@@ -168,6 +168,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes('e("rect", Object.assign({}, common'), "引脚要画成小长条（S110）");
     assert.ok(source.includes("const pitch = 13;"), "引脚按等距排布（S110）");
     assert.ok(source.includes('e("circle", {'), "1 脚要有圆点标记（S110）");
+    // S112：方框里要写芯片型号，而不是只写封装名。
+    assert.ok(source.includes("function chipIdentity("), "要有型号取值助手（S112）");
+    assert.ok(source.includes("chip: chipIdentity(pinout)"), "方框要拿到芯片型号（S112）");
     assert.ok(source.includes("批量应用"), "中断页要能批量改优先级");
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
     assert.ok(source.includes("CompileWarnings"), "编译警告要能在详情里列出");

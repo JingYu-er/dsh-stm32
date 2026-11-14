@@ -2195,6 +2195,18 @@ window.__ModuleLoader__.load({
      * 画法照芯片封装：中间是本体，四边各排一串小长条当引脚，1 脚在左上、逆时针。
      * 悬停看脚号与 .ioc 名字，点击复制引用；没用上的脚画得淡一些。
      */
+    /** 芯片型号：优先订货型号（CPN），退回 .ioc 里的型号值。 */
+    function chipIdentity(pinout) {
+      if (pinout === null || typeof pinout !== "object") return "";
+      const mcu = pinout.mcu;
+      if (mcu === null || typeof mcu !== "object") return "";
+      for (const key of ["cpn", "value", "name"]) {
+        const value = mcu[key];
+        if (typeof value === "string" && value !== "") return value;
+      }
+      return "";
+    }
+
     function PinBox(props) {
       const physical = props.physical;
       if (physical === null || physical === undefined || physical.available !== true) {
@@ -2206,11 +2218,16 @@ window.__ModuleLoader__.load({
         );
       }
       const sides = pinBoxSides(physical);
+      const chip = typeof props.chip === "string" ? props.chip : "";
+      const chipLabel = chip !== "" ? chip : physical.packageName || "MCU";
       const pitch = 13;
       const pinW = 8;
       const pinLen = 14;
       const margin = 26;
-      const bodyW = Math.max(120, Math.max(sides.left.length, sides.right.length) * pitch + 28);
+      // 本体至少要装得下「封装名」这一行，否则字会压到边框外。
+      const packageName = typeof physical.packageName === "string" && physical.packageName !== "" ? physical.packageName : "封装未知";
+      const textRoom = Math.max(chipLabel.length, packageName.length) * 6.6 + 26;
+      const bodyW = Math.max(120, Math.max(sides.left.length, sides.right.length) * pitch + 28, textRoom);
       const bodyH = Math.max(84, Math.max(sides.top.length, sides.bottom.length) * pitch + 28);
       const ox = margin + pinLen;
       const oy = margin + pinLen;
@@ -2264,7 +2281,7 @@ window.__ModuleLoader__.load({
         ...sides.bottom.map((item, index) => pinNode(item, "bottom", index, sides.bottom.length)),
       ];
       const caption =
-        (physical.packageName || "封装未知") + " · " + String(physical.pinCount) + " 脚 · 1 脚在左上，逆时针 · 悬停看脚名，点击复制";
+        (chip !== "" ? chip + " · " : "") + (physical.packageName || "封装未知") + " · " + String(physical.pinCount) + " 脚 · 1 脚在左上，逆时针 · 悬停看脚名，点击复制";
       return e(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "6px", padding: "6px 0 10px" } },
@@ -2298,25 +2315,25 @@ window.__ModuleLoader__.load({
             "text",
             {
               x: ox + bodyW / 2,
-              y: oy + bodyH / 2 - 7,
+              y: oy + bodyH / 2 - 10,
               textAnchor: "middle",
               dominantBaseline: "middle",
-              fill: "color-mix(in srgb, var(--dsw-alias-label-secondary) 75%, transparent)",
-              style: { fontFamily: D32_FONT_CODE, fontSize: "9px", letterSpacing: "0.04em" },
+              fill: "color-mix(in srgb, var(--dsw-alias-label-primary) 88%, transparent)",
+              style: { fontFamily: D32_FONT_CODE, fontSize: "10.5px", letterSpacing: "0.06em" },
             },
-            physical.packageName || "MCU",
+            chipLabel,
           ),
           e(
             "text",
             {
               x: ox + bodyW / 2,
-              y: oy + bodyH / 2 + 8,
+              y: oy + bodyH / 2 + 6,
               textAnchor: "middle",
               dominantBaseline: "middle",
               fill: "color-mix(in srgb, var(--dsw-alias-label-tertiary) 90%, transparent)",
               style: { fontFamily: D32_FONT_CODE, fontSize: "9px", letterSpacing: "0.04em" },
             },
-            String(physical.pinCount) + " 脚",
+            packageName,
           ),
           ...pins,
         ),
@@ -3075,7 +3092,14 @@ window.__ModuleLoader__.load({
         mode === "map"
           ? e(PinMap, { key: "map", pins: (pinout === null ? [] : (pinout.pins ?? [])).filter(pinMatches), onCopy: copyPin })
           : null,
-        mode === "box" ? e(PinBox, { key: "box", physical: pinout === null ? null : pinout.physical, onCopy: copyPin }) : null,
+        mode === "box"
+          ? e(PinBox, {
+              key: "box",
+              physical: pinout === null ? null : pinout.physical,
+              chip: chipIdentity(pinout),
+              onCopy: copyPin,
+            })
+          : null,
         mode === "map" || mode === "box"
           ? null
           : groups.length === 0 && needle.trim() !== ""
