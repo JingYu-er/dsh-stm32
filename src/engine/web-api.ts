@@ -54,7 +54,7 @@ import { readArtifacts } from "./artifacts.js";
 import { decodeFault, groupFaults } from "./fault-hints.js";
 import { readIocDiff, readIocKeysForPin, restoreAllIocKeys, restoreIocKey, saveIocSnapshot } from "./ioc-diff.js";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { readPinout } from "./pinout.js";
 import { findRootSchematic, readSchematic } from "./schematic/model.js";
 import { checkSchematic } from "./schematic/checks.js";
@@ -62,6 +62,7 @@ import { findLatestKicadBuild, listCircuitEntries, planEcadWorkspace, runTsciBui
 import { exportEmbeddedLibraries } from "./ecad/libs.js";
 import { exportStep, runDrc, runErc } from "./ecad/checks.js";
 import { exportFabrication } from "./ecad/fabrication.js";
+import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
@@ -1155,8 +1156,8 @@ export async function handleWebApi(input: {
     const projectDir = withProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const action = typeof parsed.value.action === "string" ? parsed.value.action : "";
-    if (!["build", "check", "libs", "step", "export"].includes(action)) {
-      return fail(400, "action 只能是 build / check / libs / step / export");
+    if (!["build", "check", "libs", "step", "export", "package"].includes(action)) {
+      return fail(400, "action 只能是 build / check / libs / step / export / package");
     }
     const layout = resolveProjectLayout(projectDir);
     const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
@@ -1184,6 +1185,23 @@ export async function handleWebApi(input: {
           durationMs: Date.now() - started,
           kicadDir: latest.ok ? latest.kicadDir : "",
           notes: build.notes,
+        },
+      });
+    }
+    if (action === "package") {
+      const packed = packageHardware(workspace.root, basename(projectDir));
+      const check = packed.ok ? verifyPackage(packed.file) : { ok: false, error: packed.error, files: 0 };
+      return ok({
+        ecadAction: {
+          action: action,
+          ok: packed.ok && check.ok,
+          error: packed.ok ? check.error : packed.error,
+          durationMs: Date.now() - started,
+          file: packed.file,
+          bytes: packed.bytes,
+          files: packed.files,
+          skipped: packed.skipped,
+          notes: packed.notes,
         },
       });
     }

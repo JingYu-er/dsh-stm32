@@ -1318,7 +1318,7 @@ test("没有会话目录时不再退到「最近用过的工程」（S91 撤掉�
   assert.match(String(res.body.error), /projectDir 不能为空/u);
 });
 
-test("POST /ecad/action：动作名只认五个，其余直接 400", async () => {
+test("POST /ecad/action：动作名只认六个，其余直接 400", async () => {
   const { dir, env } = tempEnv("ecad-action");
   const deps = { subprocess: fakeSubprocess, env: env };
   const wrong = await handleWebApi({
@@ -1337,4 +1337,20 @@ test("POST /ecad/action：动作名只认五个，其余直接 400", async () =>
     deps: deps,
   });
   assert.equal(empty.status, 400);
+});
+
+test("POST /ecad/action：package 在没有硬件目录时也认这个动作，只报人话（S107）", async () => {
+  const { dir, env } = tempEnv("ecad-package");
+  const deps = { subprocess: fakeSubprocess, env: env };
+  const packed = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ecad/action",
+    body: JSON.stringify({ projectDir: dir, action: "package" }),
+    deps: deps,
+  });
+  assert.equal(packed.status, 200);
+  assert.equal(packed.body.ok, true);
+  const action = packed.body.ecadAction;
+  assert.equal(action.ok, false);
+  assert.match(action.error, /还没有硬件目录/u);
 });

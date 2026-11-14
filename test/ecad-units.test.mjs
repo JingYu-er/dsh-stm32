@@ -14,6 +14,8 @@ import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
+import { collectPackageFiles, packageHardware, verifyPackage } from "../lib/engine/ecad/package.js";
+import { createZip, listZipEntries } from "../lib/engine/ecad/zip.js";
 import { locateEcadToolchain } from "../lib/engine/ecad/toolchain.js";
 import {
   findLatestKicadBuild,
@@ -483,6 +485,68 @@ test("制造文件导出：没有板子时给人话，不跑 kicad-cli（S100）
     assert.equal(exported.ok, false);
     assert.match(exported.error, /还没有 \.kicad_pcb/u);
     assert.equal(subprocess.calls.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("zip：STORE 打包的条目能读回，中文名与 CRC 路径都成立（S107）", () => {
+  const buffer = createZip([
+    { name: "a/b.txt", data: Buffer.from("hello", "utf8") },
+    { name: "中文/说明.md", data: Buffer.from("# 说明", "utf8") },
+  ], new Date("2026-11-14T08:00:00Z"));
+  assert.equal(buffer.readUInt32LE(0), 0x04034b50, "本地头签名");
+  const entries = listZipEntries(buffer);
+  assert.deepEqual(entries.map((item) => item.name), ["a/b.txt", "中文/说明.md"]);
+  assert.equal(entries[0].size, 5);
+  // 中央目录与结尾记录都要在：结尾签名固定在最后 22 字节。
+  assert.equal(buffer.readUInt32LE(buffer.length - 22), 0x06054b50);
+});
+
+test("打包：跳过 node_modules 与 dist，写出 zip 并能读回自检（S107）", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-ecad-pack-"));
+  const hardware = join(root, "hardware");
+  try {
+    mkdirSync(join(hardware, "circuit"), { recursive: true });
+    mkdirSync(join(hardware, "circuit", "node_modules"), { recursive: true });
+    mkdirSync(join(hardware, "dist", "index"), { recursive: true });
+    mkdirSync(join(hardware, ".hq", "cache"), { recursive: true });
+    writeFileSync(join(hardware, ".hq", "cache", "edge.db"), "cache");
+    writeFileSync(join(hardware, "D_NFC.kicad_prl"), "{}");
+    writeFileSync(join(hardware, "circuit", "index.circuit.tsx"), "export default null;\n");
+    writeFileSync(join(hardware, "circuit", "node_modules", "huge.js"), "x".repeat(1024));
+    writeFileSync(join(hardware, "dist", "index", "old.svg"), "<svg/>");
+    writeFileSync(join(hardware, "old.zip"), "zip");
+    const collected = collectPackageFiles(hardware);
+    assert.equal(collected.ok, true);
+    assert.deepEqual(collected.entries.map((item) => item.name), ["circuit/index.circuit.tsx"]);
+    assert.ok(collected.skipped.some((item) => item.startsWith("circuit/node_modules/")), JSON.stringify(collected.skipped));
+    assert.ok(collected.skipped.includes("dist/"), JSON.stringify(collected.skipped));
+    assert.ok(collected.skipped.includes(".hq/"), JSON.stringify(collected.skipped));
+    assert.ok(collected.skipped.includes("D_NFC.kicad_prl"), JSON.stringify(collected.skipped));
+
+    const packed = packageHardware(hardware, "demo");
+    assert.equal(packed.ok, true, packed.error);
+    assert.ok(packed.files >= 2, "至少要有电路源码与 README");
+    assert.ok(packed.file.endsWith(".zip"));
+    const check = verifyPackage(packed.file);
+    assert.equal(check.ok, true, check.error);
+    assert.equal(check.files, packed.files);
+    const names = listZipEntries(readFileSync(packed.file)).map((item) => item.name);
+    assert.ok(names.includes("README.md"));
+    assert.ok(!names.some((name) => name.startsWith("dist/")), "dist 不该进交付包");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("打包：没有 hardware 目录时给人话，不写文件（S107）", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-ecad-pack-missing-"));
+  try {
+    const packed = packageHardware(join(root, "hardware"), "demo");
+    assert.equal(packed.ok, false);
+    assert.match(packed.error, /还没有硬件目录/u);
+    assert.equal(packed.file, "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

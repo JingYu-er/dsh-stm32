@@ -223,3 +223,9 @@ test("电路设计页签：读 /ecad 并给出下一步动作（S99）", () => {
   assert.match(source, /ecad\/action/u);
   assert.match(source, /const runAction/u);
 });
+
+test("电路设计页签：有「打包交付」按钮，动作走同一个端点（S107）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes('["package", "打包交付"]'), "缺少打包交付按钮");
+  assert.ok(source.includes("outcome.file"), "结果区要显示交付包路径");
+});

@@ -78,7 +78,12 @@ async function withEnv(vars, fn) {
 }
 
 async function call(args) {
-  const value = await tool.execute(args, exec);
+  // CI 的 Windows runner 上，整套单测并行跑时起桥会慢一个档；
+  // 交互类动作没显式给超时的话统一放宽到 4 s。open 不参与：它要断言
+  // 「report.settings.timeoutMs 是默认 1000」，注入会把这个断言变成自证。
+  const interactive = args.action !== "open" && args.action !== "close";
+  const widened = interactive ? { timeoutMs: 4000, ...args } : args;
+  const value = await tool.execute(widened, exec);
   assert.ok(value && typeof value.message === "string", "工具必须返回 {message, report}");
   return value.report;
 }

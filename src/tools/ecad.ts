@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
@@ -34,6 +34,8 @@ export const ECAD_CHECK_TOOL = "stm32_ecad_check";
 export const ECAD_STEP_TOOL = "stm32_ecad_step";
 export const ECAD_LIBS_TOOL = "stm32_ecad_libs";
 export const ECAD_EXPORT_TOOL = "stm32_ecad_export";
+
+export const ECAD_PACKAGE_TOOL = "stm32_ecad_package";
 
 const fileSizeSchema: JsonSchema = {
   type: "object",
@@ -598,6 +600,70 @@ export function registerEcadTools(ctx: DshContext): void {
         posFile: exported.posFile,
         drillFiles: exported.drillFiles.map((item) => ({ name: item.name, bytes: item.bytes })),
         notes: [...exported.notes],
+      };
+    },
+  });
+
+  ctx.tools.register({
+    name: ECAD_PACKAGE_TOOL,
+    description:
+      "打包硬件交付物：把 hardware/ 下的电路源码、生成的 KiCad 工程、抽出的库与 out/ 制造文件打成一个 zip 写到 hardware/out，跳过 node_modules 与 dist，写完读回自检。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          file: { type: "string" },
+          bytes: { type: "number" },
+          files: { type: "number" },
+          skipped: { type: "array", items: { type: "string" } },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "file", "bytes", "files", "skipped", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as { ok: boolean; error: string; file: string; bytes: number; files: number; notes: string[] };
+        if (!result.ok) return [{ type: "text", text: "打包失败：" + result.error }];
+        const lines = [
+          "交付包：" + result.file,
+          "大小：" + String(Math.round(result.bytes / 1024)) + " KB，文件 " + String(result.files) + " 个",
+        ];
+        for (const note of result.notes) lines.push("- " + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    execute: async (args: { projectDir?: string }, exec: ToolExec) => {
+      void exec;
+      const project = await projectDirOf(ctx, args.projectDir, exec);
+      if (!project.ok) return { ok: false, error: project.error, file: "", bytes: 0, files: 0, skipped: [], notes: [] };
+      const workspace = workspaceOf(project.dir);
+      const { packageHardware, verifyPackage } = await import("../engine/ecad/package.js");
+      const projectName = basename(dirname(workspace.root));
+      const packed = packageHardware(workspace.root, projectName);
+      if (!packed.ok) {
+        return { ok: false, error: packed.error, file: "", bytes: 0, files: 0, skipped: packed.skipped, notes: [] };
+      }
+      const check = verifyPackage(packed.file);
+      return {
+        ok: check.ok,
+        error: check.ok ? "" : check.error,
+        file: packed.file,
+        bytes: packed.bytes,
+        files: packed.files,
+        skipped: packed.skipped,
+        notes: check.ok ? packed.notes : [...packed.notes, "读回自检失败，交付包可能损坏"],
       };
     },
   });
