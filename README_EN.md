@@ -241,6 +241,25 @@ static void rtt_init(void) {
 
 The full implementation ships in `templates/`; channel count and ring size are controlled by `RTT_UP_CHANNELS` / `RTT_BUF_SIZE` (default 3×1 KB = 3 KB `.bss`; C8T6 has 20 KB RAM).
 
+## PDF reading and the datasheet cache
+
+`stm32_pdf_read` needs poppler (`pdftotext` / `pdfinfo` / `pdftoppm`):
+
+```
+pacman -S --needed mingw-w64-ucrt-x86_64-poppler
+```
+
+`stm32_doctor` reports the version. Modes: `info` (pages, paper, text layer), `text` (page text with layout preserved), `figures` (figure and table captions with page numbers), `table` (parameter tables cut into rows and columns) and `render` (page or region as PNG for visual reading, 300–400 dpi when you need to read numbers off a chart).
+
+Charts are read as images: shape and order of magnitude (about ±0.5 of a minor tick), not exact values. For exact numbers use a table on the same page.
+
+Non-STM32 parts are fetched once and cached:
+
+- `stm32_ds_fetch code=C25137` fetches by LCSC code; `all=true` fetches every `jlcpcb:` part the project uses; `file=` imports a PDF by hand.
+- Cache: `~/.dsh-stm32/datasheets/<code>/` (`meta.json` plus a PDF named after its content sha256); `DSH_STM32_DATASHEETS` relocates it. Cache hits make **no network calls**; failures are remembered for 24 hours and `refresh=true` retries.
+- `stm32_ds_list` shows what is cached and how much space it takes.
+- Afterwards `stm32_pdf_read file=C25137` (or the MPN) reads the cached copy directly, so pinout, limits and timing come from the document.
+
 ## Slash commands
 
 | Command | Description |
