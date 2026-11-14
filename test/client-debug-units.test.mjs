@@ -220,4 +220,6 @@ test("电路设计页签：读 /ecad 并给出下一步动作（S99）", () => {
   assert.equal(source.includes('tabButton("ecad", DEBUG_LABELS.ecad)'), true);
   assert.equal(source.includes('tab === "ecad"'), true);
   assert.match(source, /stm32_ecad_init/u);
+  assert.match(source, /ecad\/action/u);
+  assert.match(source, /const runAction/u);
 });

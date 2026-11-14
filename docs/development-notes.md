@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S105）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S106）
 
 ### 一、目标与约束
 
@@ -7049,7 +7049,17 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`node test/run-units.mjs` 83 套件 / 1136 pass / 0 fail；ACCEPTANCE OK；`test:size` 2008.2 KB / 310 文件 / 解包 15916.4 KB。
 - 教训：**能画对但说不清，等于只有一半能力**。规则不进说明文本，下一个人（或下一次会话的模型）就得重新从代码里反推，反推出来的版本迟早与实现分叉。
 
-### 一百零六、教训
+### 一百零六、电路设计页签接上动作（S106）
+
+- 起因：S99 的页签只报状态，构建与检查要用户回到对话里让模型调工具。三件事（构建、检查、导出）都是确定性操作，页签自己就能做，不该占一轮对话。
+- 服务端：新增 `POST /api/ecad/action`（`WEB_API_PATHS` 48 → 49），body `{projectDir, action}`，`action` 只认 `build / check / libs / step / export`，其余 400「action 只能是 build / check / libs / step / export」。五个动作直接调同一批引擎函数（`runTsciBuild`、`exportEmbeddedLibraries`、`runErc`/`runDrc`、`exportStep`、`exportFabrication`），不经过工具层，省掉一次模型往返；`/ecad` 的 GET 另补 `libs`（`hardware/libs` 下的 `.pretty` 与 `.kicad_sym`）与 `artifacts`（`hardware/out` 下的文件，`gerbers/` 只报数量）。
+- 面板：`EcadPanel` 增五个按钮（构建 / 检查 / 导出库 / 导出 STEP / 打包 Gerber），执行中按钮显示「执行中…」并禁用，返回后渲染「成功/有错误 · 耗时 · 错误数与警告数 · 库数量」、ERC/DRC 发现（前 12 条，ERROR/WARN 分色）与产物清单；完成后自动 `state.reload()` 刷新工作区状态。
+- 取舍：不做乐观更新、不做后台任务队列——几十秒的请求保持在页面里，用户看得见「还在跑」，比先返回任务号再去轮询更简单；真要并行，工具层随时可用。
+- 测试：`test/web-api-units.test.mjs` 增「动作名只认五个，其余 400」与「缺 projectDir 400」；`test/client-debug-units.test.mjs` 增 `ecad/action` + `const runAction` 断言；路由数断言 48 → 49 并加 `/ecad/action`。真机核验：`GET /ecad` 返回 `libs`/`artifacts` 两个新字段（空工程下都是空数组），`POST /ecad/action` 传非法动作得到 400。
+- 验证：`node test/run-units.mjs` 83 套件 / 1137 pass / 0 fail；ACCEPTANCE OK；`test:size` 2011.4 KB / 310 文件 / 解包 15931.9 KB；`client/client.js` 5652 行。
+- 教训：**确定性的按钮比对话轮次便宜**。把「能跑起来」的操作留在工具里，把「跑一下看看」放到面板上，模型只在需要判断时出场。
+
+### 一百零七、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

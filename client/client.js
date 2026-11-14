@@ -2607,9 +2607,23 @@ window.__ModuleLoader__.load({
       return { ecad, error, reload: () => setTick((value) => value + 1) };
     }
 
+    // 面板上的五个动作与工具一一对应：构建、检查、导出库、导出 STEP、打包制造文件。
+    // 请求在服务端同步执行（构建几十秒），面板只显示「执行中」，回来后一次性渲染结果。
     function EcadPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useEcad(projectDir, 20000);
+      const [job, setJob] = useState({ name: "", running: false, result: null, error: "" });
+      const runAction = async (name) => {
+        if (job.running || projectDir === "") return;
+        setJob({ name: name, running: true, result: null, error: "" });
+        const result = await callApi("POST", "ecad/action", { projectDir: projectDir, action: name });
+        if (result.ok) {
+          setJob({ name: name, running: false, result: result.value.ecadAction, error: "" });
+          state.reload();
+        } else {
+          setJob({ name: name, running: false, result: null, error: result.error });
+        }
+      };
       const ecad = state.ecad;
       const sizeText = (bytes) => (typeof bytes !== "number" || bytes <= 0 ? "-" : bytes >= 1048576 ? String(Math.round(bytes / 104857.6) / 10) + " MB" : String(Math.round(bytes / 102.4) / 10) + " KB");
       const steps = ecad === null || !Array.isArray(ecad.steps) ? [] : ecad.steps;
@@ -2636,6 +2650,60 @@ window.__ModuleLoader__.load({
         );
       }
       const rows = [];
+      const actionRow = projectDir === "" ? null : e(
+        "div",
+        { key: "actions", style: { display: "flex", flexWrap: "wrap", gap: "6px", padding: "4px 0 8px" } },
+        ...[
+          ["build", "构建"],
+          ["check", "检查"],
+          ["libs", "导出库"],
+          ["step", "导出 STEP"],
+          ["export", "打包 Gerber"],
+        ].map((pair) =>
+          e(
+            "button",
+            {
+              key: "act-" + pair[0],
+              type: "button",
+              disabled: job.running,
+              onClick: () => runAction(pair[0]),
+              style: Object.assign({}, debugStyles.button, job.running ? { opacity: 0.5, cursor: "default" } : {}, job.name === pair[0] && job.running ? { borderColor: D32_ACCENT } : {}),
+            },
+            job.name === pair[0] && job.running ? "执行中…" : pair[1],
+          ),
+        ),
+      );
+      if (actionRow !== null) rows.push(actionRow);
+      if (job.error !== "") rows.push(e("div", { key: "job-error", style: { padding: "2px 0 6px", fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, job.error));
+      if (job.result !== null) {
+        const outcome = job.result;
+        const findings = Array.isArray(outcome.findings) ? outcome.findings : [];
+        const artifacts = Array.isArray(outcome.artifacts) ? outcome.artifacts : [];
+        rows.push(
+          e(
+            "div",
+            { key: "job-result", style: { padding: "4px 0 8px", fontSize: "12px", display: "grid", gap: "4px" } },
+            e("div", { style: { opacity: 0.85 } }, [
+              outcome.ok ? "成功" : "有错误",
+              typeof outcome.durationMs === "number" ? " · " + (Math.round(outcome.durationMs / 100) / 10) + " s" : "",
+              outcome.summary !== undefined ? " · 错误 " + String(outcome.summary.errors) + " / 警告 " + String(outcome.summary.warnings) : "",
+              outcome.libs !== undefined ? " · 封装库 " + String(outcome.libs.footprints.length) + " / 符号库 " + String(outcome.libs.symbols.length) : "",
+            ].join("")),
+            outcome.error !== undefined && outcome.error !== "" ? e("div", { style: { color: "var(--dsw-alias-state-error-primary)" } }, outcome.error) : null,
+            ...findings.slice(0, 12).map((item, index) =>
+              e("div", { key: "finding-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
+                e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: item.severity === "error" ? "var(--dsw-alias-state-error-primary)" : D32_WARN }) }, item.severity === "error" ? "ERROR" : "WARN"),
+                e("span", { style: { opacity: 0.75 } }, item.rule),
+                e("span", null, item.message),
+              ),
+            ),
+            ...artifacts.slice(0, 12).map((item, index) =>
+              e("div", { key: "artifact-" + String(index), style: { opacity: 0.8 } }, item.name + (item.bytes > 0 ? " · " + sizeText(item.bytes) : "")),
+            ),
+            ...(Array.isArray(outcome.notes) ? outcome.notes.slice(0, 4).map((text, index) => e("div", { key: "note-" + String(index), style: { opacity: 0.7 } }, text)) : []),
+          ),
+        );
+      }
       if (ecad !== null) {
         rows.push(
           e(

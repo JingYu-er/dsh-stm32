@@ -225,10 +225,11 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十八条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 48);
-  assert.equal(new Set(WEB_API_PATHS).size, 48);
+test("WEB_API_PATHS：四十九条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 49);
+  assert.equal(new Set(WEB_API_PATHS).size, 49);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
+  assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/action"), true);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }
@@ -1315,4 +1316,25 @@ test("没有会话目录时不再退到「最近用过的工程」（S91 撤掉�
   const res = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/pinout", query: {}, deps: { subprocess: fakeSubprocess, env: { DSH_STM32_HOME: home } } });
   assert.equal(res.status, 400, "备忘文件属于上一轮工作区，不能当成本会话的工程");
   assert.match(String(res.body.error), /projectDir 不能为空/u);
+});
+
+test("POST /ecad/action：动作名只认五个，其余直接 400", async () => {
+  const { dir, env } = tempEnv("ecad-action");
+  const deps = { subprocess: fakeSubprocess, env: env };
+  const wrong = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ecad/action",
+    body: JSON.stringify({ projectDir: dir, action: "deploy" }),
+    deps: deps,
+  });
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.body.ok, false);
+  assert.match(wrong.body.error, /action 只能是/u);
+  const empty = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/ecad/action",
+    body: JSON.stringify({ action: "build" }),
+    deps: deps,
+  });
+  assert.equal(empty.status, 400);
 });

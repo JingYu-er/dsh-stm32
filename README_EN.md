@@ -259,7 +259,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Live channels | Serial / RTT / watch output | Pause, clear, keyword filter, RTT level filter, send a serial line, persistent capture, export |
 | Pins | Grouped by peripheral, by port, or as a package outline | Filter, copy references, inspect `.ioc` keys, CSV export |
 | Diagram | Hub-and-spoke flow diagram grouped by function (MCU in the centre, NFC antenna and tag, light sensing, power, debug port and keys around it); links leave any of the four sides and are labelled by bus and signal purpose, with check results | Read-only; parts are not boxes of their own; power nets are listed separately |
-| Circuit design | tscircuit workspace state: initialised, dependencies, entries, latest build, exported STEP | read-only; suggests the next tool action |
+| Circuit design | tscircuit workspace state: initialisation, dependencies, entries, latest build, libraries, exported artifacts | trigger build, check, library export, STEP export and Gerber packaging from the tab; a build takes tens of seconds |
 | Clocks | Tree and flow views, per-node frequency and divider | Over-limit markers and "change to ÷N" advice computed from the parent clock |
 | Interrupts | NVIC enablement, preemption and sub-priority | Filter, sort, edit in place, bulk edit |
 | Faults | Raw failure events, rule decoding, grouping by rule | Category filter, copy group hint, CSV export |
