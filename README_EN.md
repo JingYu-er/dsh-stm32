@@ -183,7 +183,7 @@ The same rules ship in the plugin skill text, so reading and drawing the diagram
 | `stm32_sch_read` | Read a KiCad project: sheet tree, components, nets, power nets and a block diagram (which circuits connect, over which bus) |
 | `stm32_sch_pins` | MCU pin matrix: net name, pin type, whether the pin is left open, plus reusable signal candidates from the CubeMX database |
 | `stm32_sch_check` | Check the schematic itself and reconcile it with `.ioc` and `.kicad_pcb`: missing values, missing footprints, missing SWD / BOOT0 / power, split nets |
-| `stm32_sch_to_ioc` | Turn pin connections into a `.ioc` draft: suggested signal, confidence and candidates per pin, input/output hints for plain GPIO nets; read-only, never writes `.ioc` |
+| `stm32_sch_to_ioc` | Turn pin connections into a `.ioc` draft: suggested signal, confidence and candidates per pin, input/output hints for plain GPIO nets, plus a software-emulation fallback with its cost when no hardware function fits; read-only, never writes `.ioc` |
 
 Scope is KiCad 10 (`version 20260306`). Symbol libraries are embedded in the sheets, so KiCad does not need to be installed and `sym-lib-table` is not read; only sheets referenced from the root sheet are parsed, and `.history/` plus other historical versions are ignored. Reconciliation is based on connectivity: pads on one PCB net must belong to one schematic net, and name differences are reported as hints only. The tools are read-only: the schematic and the project configuration are never modified. A draft from `stm32_sch_to_ioc` only lands on disk through `stm32_ioc_plan`, and pins that match no library signal are listed for confirmation.
 

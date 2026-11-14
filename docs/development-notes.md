@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S113）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S114）
 
 ### 一、目标与约束
 
@@ -7135,7 +7135,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 验证：`test/schematic-units.test.mjs` 增 2 条（用合成器件库断言匹配与待确认、没有器件库时报下一步）；全量 **83 套件 / 1153 pass / 0 fail**；ACCEPTANCE OK；`test:size` 2032.1 KB / 315 文件 / 16003.1 KB。
 - 教训：**把连接读出来只是第一步，能不能配成还得问器件库**。同一个网络名在别的封装上可能是合法复用，在手上这颗芯片上未必——草案里把候选摆全，比直接生成一份看起来正确的 `.ioc` 有用。
 
-### 一百二十二、教训
+### 一百二十二、硬件优先，软件模拟作为退路（S114）
+
+- 起因：D_NFC 的 PA5 网络名是 `SDA`，但这颗 STM32L021 的 PA5 没有 I2C 复用。规范上不是绝路——两个 GPIO 开漏也能模拟 I2C，只要满足客户需求就该给出这条路；但硬件外设始终是首选，软件模拟必须带来代价说明。
+- `src/engine/schematic/to-ioc.ts`：新增 `protocolOf(net)`（`SCL/SDA → I2C`、`MOSI/MISO/SCK/CS → SPI`、`TX/RX → UART`）与 `softwareTradeoff(protocol)`；匹配失败且有协议可模拟时，往 `softwareFallbacks` 里加一条 `{pin, net, protocol, suggestion, tradeoff}`，同时仍进 `unresolved`。
+- 文案口径：I2C 写「两个 GPIO 开漏 + 上拉，速率通常 100 kHz 以内，占 CPU，时序受中断影响」；SPI 写「GPIO 逐位翻转，速率与稳定性都低于硬件 SPI」；UART 写「GPIO + 定时器采样，波特率误差与 CPU 占用都要算清楚」。
+- 工具 `stm32_sch_to_ioc` 输出增 `softwareFallbacks`，render 多一行「软件模拟：PA5 PA5/SDA（I2C）— …」；说明里加「先按协议换脚更稳」。
+- 技能文本「## 一、方案先行」的风险与备选一条改为：先给硬件方案（换脚、换外设实例、加外部器件），再给软件模拟作为退路，并写清速率上限、CPU 占用、时序受中断影响的程度。
+- 实测：D_NFC 的 PA5 现在同时出现在 `unresolved` 与 `softwareFallbacks`（protocol `I2C`），`pa5.signal` 仍为空——不把软件模拟伪装成硬件配置。
+- 验证：`test/schematic-units.test.mjs` 增 1 条断言（PA5 的 `softwareFallbacks` 存在、protocol 为 I2C、tradeoff 含开漏/上拉/100 kHz/CPU）；83 套件 / 1153 pass / 0 fail；ACCEPTANCE OK；`test:size` 2033.2 KB / 315 文件 / 16006.3 KB。
+- 教训：**规范是首选，不是禁令**。把「能不能用软件顶上」与「顶上去的代价」一起交给用户，比替他做决定更有用。
+
+### 一百二十三、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

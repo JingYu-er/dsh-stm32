@@ -623,6 +623,21 @@ export function registerSchematicTools(ctx: DshContext): void {
               required: ["pin", "signal", "label"],
             },
           },
+          softwareFallbacks: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                pin: { type: "string" },
+                net: { type: "string" },
+                protocol: { type: "string" },
+                suggestion: { type: "string" },
+                tradeoff: { type: "string" },
+              },
+              required: ["pin", "net", "protocol", "suggestion", "tradeoff"],
+            },
+          },
           unresolved: {
             type: "array",
             items: {
@@ -639,7 +654,7 @@ export function registerSchematicTools(ctx: DshContext): void {
           },
           notes: { type: "array", items: { type: "string" } },
         },
-        required: ["ok", "message", "mcu", "dbVersion", "pins", "peripherals", "gpioPins", "unresolved", "notes"],
+        required: ["ok", "message", "mcu", "dbVersion", "pins", "peripherals", "gpioPins", "softwareFallbacks", "unresolved", "notes"],
       },
       render: (_args, value) => {
         const result = value as {
@@ -648,6 +663,7 @@ export function registerSchematicTools(ctx: DshContext): void {
           mcu: string;
           pins: { name: string; net: string; signal: string; confidence: string }[];
           gpioPins: { pin: string; signal: string; label: string }[];
+          softwareFallbacks: { pin: string; net: string; protocol: string; tradeoff: string }[];
           unresolved: { name: string; net: string }[];
           notes: string[];
         };
@@ -657,6 +673,7 @@ export function registerSchematicTools(ctx: DshContext): void {
           lines.push("  " + pin.name.padEnd(6) + " " + pin.net.padEnd(14) + " → " + (pin.signal === "" ? "（未匹配）" : pin.signal) + " [" + pin.confidence + "]");
         }
         for (const pin of result.gpioPins) lines.push("  GPIO：" + pin.pin + " 配成 " + pin.signal + "，标签 " + pin.label);
+        for (const fallback of result.softwareFallbacks) lines.push("  软件模拟：" + fallback.pin + " " + fallback.net + "（" + fallback.protocol + "）— " + fallback.tradeoff);
         if (result.unresolved.length > 0) lines.push("  待确认：" + result.unresolved.map((pin) => pin.name + "/" + pin.net).join("、"));
         for (const note of result.notes) lines.push("  ! " + note);
         return [{ type: "text", text: lines.join("\n") }];
@@ -674,7 +691,7 @@ export function registerSchematicTools(ctx: DshContext): void {
       const notes: string[] = [];
       if (resolution.note !== null) notes.push(resolution.note);
       if (loaded.report === null) {
-        return { ok: false, message: loaded.error, mcu: "", dbVersion: "", pins: [], peripherals: [], gpioPins: [], unresolved: [], notes };
+        return { ok: false, message: loaded.error, mcu: "", dbVersion: "", pins: [], peripherals: [], gpioPins: [], softwareFallbacks: [], unresolved: [], notes };
       }
       const config = resolveSearchConfig(process.env, args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots });
       const db = locateCubemxDb(config.cubeMxRoots);
@@ -689,6 +706,7 @@ export function registerSchematicTools(ctx: DshContext): void {
         pins: draft.pins,
         peripherals: draft.peripherals,
         gpioPins: draft.gpioPins,
+        softwareFallbacks: draft.softwareFallbacks,
         unresolved: draft.unresolved,
         notes: [...notes, ...draft.notes],
       };

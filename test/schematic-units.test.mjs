@@ -244,6 +244,10 @@ test("配置草案：把网络名对到器件库信号，对不上的进待确�
   assert.ok(draft.unresolved.some((pin) => pin.name === "PA5"), "PA5 只能做 SPI，网络名 SDA 对不上");
   assert.ok(draft.gpioPins.some((pin) => pin.pin === "PA9" && pin.signal === "output"), "LED 网络按 GPIO 输出");
   assert.ok(draft.peripherals.some((pin) => pin.name === "I2C1" && pin.pins.includes("PA4")), "外设按信号前缀归纳");
+  const fallback = draft.softwareFallbacks.find((item) => item.pin === "PA5");
+  assert.ok(fallback !== undefined, "PA5 做不了硬件 I2C，应给出软件模拟退路");
+  assert.equal(fallback?.protocol, "I2C");
+  assert.match(fallback?.tradeoff ?? "", /开漏|上拉|100 kHz|CPU/u);
   assert.ok(draft.notes.some((note) => note.includes("待确认") || note.includes("对不上")), "要在说明里提示待确认");
 });
 

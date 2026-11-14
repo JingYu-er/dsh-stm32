@@ -37,6 +37,8 @@ export interface IocDraft {
   peripherals: { name: string; signals: string[]; pins: string[] }[];
   /** 直接可用的 GPIO 配置（只覆盖键、灯这类纯 GPIO 网络）。 */
   gpioPins: { pin: string; signal: "input" | "output"; label: string }[];
+  /** 硬件复用对不上、但可以用软件模拟顶上的连接。 */
+  softwareFallbacks: { pin: string; net: string; protocol: string; suggestion: string; tradeoff: string }[];
   notes: string[];
 }
 
@@ -81,6 +83,22 @@ function isUnnamedNet(pinName: string, net: string): boolean {
   return net.toUpperCase() === pinName.toUpperCase();
 }
 
+/** 从网络名看出协议（只认最常见的三组）。 */
+function protocolOf(net: string): string {
+  const upper = net.toUpperCase();
+  if (/\bSCL\b|\bSDA\b/u.test(upper)) return "I2C";
+  if (/\bMOSI\b|\bMISO\b|\bSCK\b|\bCS\b/u.test(upper)) return "SPI";
+  if (/\bTX\b|\bRX\b/u.test(upper)) return "UART";
+  return "";
+}
+
+/** 软件模拟的代价：说清楚，不当作等价方案。 */
+function softwareTradeoff(protocol: string): string {
+  if (protocol === "I2C") return "软件模拟 I2C：两个 GPIO 开漏 + 上拉，速率通常 100 kHz 以内，占 CPU，时序受中断影响";
+  if (protocol === "SPI") return "软件模拟 SPI：GPIO 逐位翻转，速率与稳定性都低于硬件 SPI";
+  return "软件模拟 UART：GPIO + 定时器采样，波特率误差与 CPU 占用都要算清楚";
+}
+
 function peripheralOf(signal: string): string {
   const head = signal.split("_")[0] ?? "";
   return /[0-9]/u.test(head) && head !== "" ? head : "";
@@ -107,6 +125,7 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
       unresolved: [],
       peripherals: [],
       gpioPins: [],
+      softwareFallbacks: [],
       notes: [],
     };
   }
@@ -120,6 +139,7 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
       unresolved: [],
       peripherals: [],
       gpioPins: [],
+      softwareFallbacks: [],
       notes: [],
     };
   }
@@ -127,6 +147,7 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
   const pins: IocPinDraft[] = [];
   const unresolved: IocDraft["unresolved"] = [];
   const gpioPins: IocDraft["gpioPins"] = [];
+  const softwareFallbacks: IocDraft["softwareFallbacks"] = [];
   const notes: string[] = [];
   let unnamed = 0;
 
@@ -153,8 +174,19 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
       if (gpio !== null && NON_GPIO.test(pin.name)) gpioPins.push({ pin: pin.name, signal: gpio, label: net.replace(/[^A-Za-z0-9_]/gu, "_") });
       continue;
     }
+    const protocol = matched ? "" : protocolOf(net);
+    const softwareOk = protocol !== "" && NON_GPIO.test(pin.name);
     if (!matched) {
       unresolved.push({ number: pin.number, name: pin.name, net, candidates: candidates.slice(0, 6) });
+      if (softwareOk) {
+        softwareFallbacks.push({
+          pin: pin.name,
+          net,
+          protocol,
+          suggestion: pin.name + " 配成 GPIO（" + protocol + " 模拟）",
+          tradeoff: softwareTradeoff(protocol),
+        });
+      }
     }
     pins.push({ number: pin.number, name: pin.name, net, signal: matched ? best : "", confidence, candidates: candidates.slice(0, 6), note });
     if (gpio !== null && NON_GPIO.test(pin.name)) gpioPins.push({ pin: pin.name, signal: gpio, label: net.replace(/[^A-Za-z0-9_]/gu, "_") });
@@ -171,6 +203,7 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
     byPeripheral.set(name, entry);
   }
 
+  if (softwareFallbacks.length > 0) notes.push("有 " + String(softwareFallbacks.length) + " 处硬件复用对不上，可用软件模拟顶上；先按协议换脚更稳");
   if (unnamed > 0) notes.push("有 " + String(unnamed) + " 个脚的网络名与脚名相同（PA4 这类默认名），未计入草案");
   if (unresolved.length > 0) notes.push("有 " + String(unresolved.length) + " 个脚对不上库信号，已列在 unresolved，需按外设手册确认后再落 .ioc");
   if (gpioPins.length > 0) notes.push("gpioPins 可直接作为 stm32_ioc_plan 的 pins 入参；外设信号用 peripherals 预设");
@@ -183,6 +216,7 @@ export function draftIoc(schematic: SchematicReport, facts: CubemxMcuFacts | nul
     unresolved,
     peripherals: [...byPeripheral.entries()].map(([name, entry]) => ({ name, signals: [...entry.signals], pins: [...entry.pins] })),
     gpioPins,
+    softwareFallbacks,
     notes,
   };
 }
