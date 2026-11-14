@@ -164,6 +164,10 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("function pinBoxSides("), "方框视图按封装脚位排布（S77）");
     assert.ok(source.includes("只看分类") && source.includes("只看规则"), "分类与规则同时生效时要能一键退回单条件");
     assert.ok(source.includes("function PinBox("), "方框视图组件要在（S77）");
+    // S110：改成芯片封装画法——本体 + 四边小长条引脚，不是一圈方块格子。
+    assert.ok(source.includes('e("rect", Object.assign({}, common'), "引脚要画成小长条（S110）");
+    assert.ok(source.includes("const pitch = 13;"), "引脚按等距排布（S110）");
+    assert.ok(source.includes('e("circle", {'), "1 脚要有圆点标记（S110）");
     assert.ok(source.includes("批量应用"), "中断页要能批量改优先级");
     assert.ok(source.includes("summaryMarkdown"), "操作记录要能整理成 Markdown");
     assert.ok(source.includes("CompileWarnings"), "编译警告要能在详情里列出");

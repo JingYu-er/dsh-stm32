@@ -2189,7 +2189,12 @@ window.__ModuleLoader__.load({
       return sides;
     }
 
-    /** 物理引脚方框：四边是脚号，格子里是该脚在 .ioc 里的名字；点格子复制引用。 */
+    /**
+     * 物理引脚方框（S77 / S110）。
+     *
+     * 画法照芯片封装：中间是本体，四边各排一串小长条当引脚，1 脚在左上、逆时针。
+     * 悬停看脚号与 .ioc 名字，点击复制引用；没用上的脚画得淡一些。
+     */
     function PinBox(props) {
       const physical = props.physical;
       if (physical === null || physical === undefined || physical.available !== true) {
@@ -2201,72 +2206,121 @@ window.__ModuleLoader__.load({
         );
       }
       const sides = pinBoxSides(physical);
-      const cellView = (item) =>
-        e(
-          "button",
-          {
-            key: String(item.position),
-            type: "button",
-            title: item.pin === null ? "第 " + String(item.position) + " 脚：.ioc 里没有用这个脚" : "第 " + String(item.position) + " 脚 " + item.pin + "（点击复制引用）",
-            style: {
-              minWidth: "46px",
-              padding: "1px 3px",
-              fontSize: "9px",
-              lineHeight: "1.2",
-              textAlign: "center",
-              border: "1px solid color-mix(in srgb, currentColor " + (item.pin === null ? "8%" : "22%") + ", transparent)",
-              borderRadius: "3px",
-              background: item.pin === null ? "transparent" : "color-mix(in srgb, currentColor 6%, transparent)",
-              opacity: item.pin === null ? 0.45 : 1,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            },
-            disabled: item.pin === null,
-            onClick: item.pin === null ? undefined : () => props.onCopy(item.pin),
-          },
-          e("div", { style: { opacity: 0.55, fontSize: "8px" } }, String(item.position)),
-          e("div", {}, item.pin === null ? "—" : item.pin),
-        );
-      const sideRow = (items, key, vertical) =>
-        e(
-          "div",
-          { key: key, style: { display: "flex", flexDirection: vertical ? "column" : "row", gap: "2px", flex: vertical ? "0 0 auto" : "1 1 auto", justifyContent: "center" } },
-          items.map(cellView),
-        );
+      const pitch = 13;
+      const pinW = 8;
+      const pinLen = 14;
+      const margin = 26;
+      const bodyW = Math.max(120, Math.max(sides.left.length, sides.right.length) * pitch + 28);
+      const bodyH = Math.max(84, Math.max(sides.top.length, sides.bottom.length) * pitch + 28);
+      const ox = margin + pinLen;
+      const oy = margin + pinLen;
+      const width = ox * 2 + bodyW;
+      const height = oy * 2 + bodyH;
+      const used = (item) => item.pin !== null;
+      const pinFill = (item) =>
+        used(item) ? "color-mix(in srgb, var(--dsw-alias-label-secondary) 55%, transparent)" : "color-mix(in srgb, var(--dsw-alias-label-secondary) 12%, transparent)";
+      const pinStroke = (item) =>
+        used(item) ? "color-mix(in srgb, var(--dsw-alias-label-secondary) 70%, transparent)" : "transparent";
+      const tooltip = (item) =>
+        (item.pin === null ? "第 " + String(item.position) + " 脚：.ioc 里没有用这个脚" : "第 " + String(item.position) + " 脚 " + item.pin + "（点击复制引用）");
+      const pinNode = (item, side, index, total) => {
+        const along = (total <= 1 ? 0 : (index - (total - 1) / 2) * pitch);
+        const common = {
+          key: side + "-" + String(item.position),
+          fill: pinFill(item),
+          stroke: pinStroke(item),
+          strokeWidth: 0.6,
+          rx: 1,
+          style: { cursor: used(item) ? "pointer" : "default" },
+          onClick: used(item) ? () => props.onCopy(item.pin) : undefined,
+        };
+        let x = 0;
+        let y = 0;
+        let w = pinW;
+        let h = pinLen;
+        if (side === "left") {
+          x = ox - pinLen;
+          y = oy + bodyH / 2 + along - pinW / 2;
+          w = pinLen;
+          h = pinW;
+        } else if (side === "right") {
+          x = ox + bodyW;
+          y = oy + bodyH / 2 + along - pinW / 2;
+          w = pinLen;
+          h = pinW;
+        } else if (side === "top") {
+          x = ox + bodyW / 2 + along - pinW / 2;
+          y = oy - pinLen;
+        } else {
+          x = ox + bodyW / 2 + along - pinW / 2;
+          y = oy + bodyH;
+        }
+        return e("rect", Object.assign({}, common, { x: x, y: y, width: w, height: h }), e("title", {}, tooltip(item)));
+      };
+      const pins = [
+        ...sides.left.map((item, index) => pinNode(item, "left", index, sides.left.length)),
+        ...sides.right.map((item, index) => pinNode(item, "right", index, sides.right.length)),
+        ...sides.top.map((item, index) => pinNode(item, "top", index, sides.top.length)),
+        ...sides.bottom.map((item, index) => pinNode(item, "bottom", index, sides.bottom.length)),
+      ];
+      const caption =
+        (physical.packageName || "封装未知") + " · " + String(physical.pinCount) + " 脚 · 1 脚在左上，逆时针 · 悬停看脚名，点击复制";
       return e(
         "div",
-        { style: { display: "flex", flexDirection: "column", gap: "4px", padding: "4px 0 8px", fontSize: "11px" } },
-        e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-          e("span", { style: { opacity: 0.6, flex: "0 0 auto" } }, physical.packageName || "封装未知"),
-          sideRow(sides.top, "top", false),
-        ),
-        e("div", { style: { display: "flex", alignItems: "stretch", gap: "6px" } },
-          sideRow(sides.left, "left", true),
+        { style: { display: "flex", flexDirection: "column", gap: "6px", padding: "6px 0 10px" } },
+        e(
+          "svg",
+          {
+            viewBox: "0 0 " + String(width) + " " + String(height),
+            style: { width: "100%", maxWidth: "520px", height: "auto", display: "block" },
+            role: "img",
+            "aria-label": caption,
+          },
+          e("rect", {
+            x: ox,
+            y: oy,
+            width: bodyW,
+            height: bodyH,
+            rx: 3,
+            fill: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 92%, transparent)",
+            stroke: "color-mix(in srgb, var(--dsw-alias-label-secondary) 45%, transparent)",
+            strokeWidth: 1,
+          }),
+          e("circle", {
+            cx: ox + 9,
+            cy: oy + 9,
+            r: 2.6,
+            fill: "none",
+            stroke: "color-mix(in srgb, var(--dsw-alias-label-secondary) 70%, transparent)",
+            strokeWidth: 1,
+          }),
           e(
-            "div",
+            "text",
             {
-              style: {
-                flex: "1 1 auto",
-                minHeight: "90px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "1px solid color-mix(in srgb, currentColor 22%, transparent)",
-                borderRadius: "4px",
-                fontSize: "10px",
-                opacity: 0.7,
-                textAlign: "center",
-              },
+              x: ox + bodyW / 2,
+              y: oy + bodyH / 2 - 7,
+              textAnchor: "middle",
+              dominantBaseline: "middle",
+              fill: "color-mix(in srgb, var(--dsw-alias-label-secondary) 75%, transparent)",
+              style: { fontFamily: D32_FONT_CODE, fontSize: "9px", letterSpacing: "0.04em" },
             },
-            physical.packageName + " · " + String(physical.pinCount) + " 脚",
+            physical.packageName || "MCU",
           ),
-          sideRow(sides.right, "right", true),
+          e(
+            "text",
+            {
+              x: ox + bodyW / 2,
+              y: oy + bodyH / 2 + 8,
+              textAnchor: "middle",
+              dominantBaseline: "middle",
+              fill: "color-mix(in srgb, var(--dsw-alias-label-tertiary) 90%, transparent)",
+              style: { fontFamily: D32_FONT_CODE, fontSize: "9px", letterSpacing: "0.04em" },
+            },
+            String(physical.pinCount) + " 脚",
+          ),
+          ...pins,
         ),
-        e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-          e("span", { style: { opacity: 0.6, flex: "0 0 auto" } }, "1 脚在左上，逆时针"),
-          sideRow(sides.bottom, "bottom", false),
-        ),
+        e("div", { style: { ...D32_LABEL_MONO, color: "var(--dsw-alias-label-tertiary)" } }, caption),
       );
     }
 
