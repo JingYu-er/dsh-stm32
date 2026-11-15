@@ -47,6 +47,7 @@ const suites = [
     "schematic-units.test.mjs",
   "ecad-autobuild-units.test.mjs",
     "ecad-units.test.mjs",
+  "pcb-units.test.mjs",
   "pdf-units.test.mjs",
   "datasheet-units.test.mjs",
     "project-layout-units.test.mjs",

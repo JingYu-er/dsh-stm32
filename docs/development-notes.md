@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S137）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S138）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,16 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十六、PCB 放置引擎：先算坐标，再落板（S138）
+
+- 起点：`pcbnew` 能在 Windows 上无头改板（已实测 `ExportSpecctraDSN`/`ZONE_FILLER`/`FootprintLoad`），但"放哪儿"得自己算。放置不解决，布线解得再漂亮也没用。
+- 数据来源定在 `circuit.json` 而不是 `.kicad_sch`：`pcb_component` 给外部尺寸与层、`pcb_courtyard_rect` 给 courtyard、`pcb_port` 给引脚相对坐标、`source_trace` 给网络归属，四样一次拿全；`.kicad_sch` 既没有 courtyard，也拿不到可靠封装尺寸。
+- `src/engine/ecad/pcb/netlist.ts`：`readCircuitNetlist()` 合并成 `{board, parts, nets}`；位号取 `source_component.name`，立创编号取 `supplier_part_numbers.jlcpcb[0]`；板框缺失按元件面积估算（`sqrt(area*2.2)` 向上取 5 mm）并在 notes 说明，不猜一个看起来像真的数字。
+- `src/engine/ecad/pcb/placement.ts`：分类（`U` 且脚数 ≥24 → mcu、`U` → ic、`J/CN/P` → 接口、`SW/S` → 按键、`R/C/L/D…` → 小件）；主控居中、接口与按键沿板边环形取位、其余大件绕主控、小件贴"连接最多的大件"（复用网络邻接统计，不靠坐标猜）；碰撞用 courtyard + 0.6 mm 间隙做矩形判定，放不下就沿黄金角螺旋外扩（最多 120 步），最终仍放不下的进 `unplaced` 并写说明。
+- 真机（`tetris-handheld` 的 `circuit.json`）：41 个元件 / 115 个网络 / 板框 62×104 mm；分类 mcu 1、ic 2、接口 5、按键 7、小件 23、其他 3；放置 41 个、`unplaced` 0、无重叠告警。
+- 测试：`test/pcb-units.test.mjs` 4 条——模型字段（位号/封装/立创编号/网络引脚）、板框缺失时估算并说明、主控落板心且小件在 20 mm 内、板子过小时元件进 `unplaced` 而不是静默丢失。
+- 取舍：**放置算法只输出坐标，不写文件**。落板交给 pcbnew 脚本，这样策略可单测、可替换（人工微调、模板、优化器），不必每次碰文件系统。
 
 ### 一百四十五、导出只等用户点头（S137）
 

@@ -488,6 +488,22 @@ docs/               开发笔记、精读指南、规格书、图表
 - 发布说明：按版本随发布页提供，历史见 git 历史与开发笔记
 - 可视化：[架构总览](docs/diagrams/dsh-stm32-architecture.html) / [主线旅程](docs/diagrams/dsh-stm32-journey.html)（单文件 HTML，离线可开）
 
+## 致谢
+
+电路设计与 PCB 能力的部分设计参考了以下两个开源项目（只借鉴设计思路与流程，代码按各自许可使用）：
+
+- [oh-my-embedded](https://github.com/captainluzik/oh-my-embedded)（MIT）：把专家经验固化成可调用的小工具（功耗预算、去耦建议、引脚映射、阻抗计算），本插件的去耦与放置建议参照了这一思路。
+- [PCB-Agent-Teams](https://github.com/Zane456/PCB-Agent-Teams)（PolyForm Noncommercial 1.0.0）：分阶段流水线与"门禁不通过就回滚、每个结论双路校验、资产未落盘不许画板"的工程纪律；本插件借鉴其流程设计，未复制其代码。
+
+同时致谢其依赖的上游项目，本插件以依赖或思路借鉴方式使用：
+
+- [KiCad](https://www.kicad.org/)：原理图与 PCB 的读写、`kicad-cli` 与 `pcbnew` Python API。
+- [kicad-happy](https://github.com/aklofas/kicad-happy)（MIT）：EMC、热与生命周期分析的规则来源。
+- [KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools)（MIT）：网格自动布线的实现参考。
+- [ngspice](https://ngspice.sourceforge.io/)：SPICE 复核。
+- [poppler](https://poppler.freedesktop.org/)：PDF 文字、表格与渲染。
+- [tscircuit](https://tscircuit.com/)：电路源码到 KiCad 工程的生成。
+
 ## 许可证
 
 [MIT](LICENSE)

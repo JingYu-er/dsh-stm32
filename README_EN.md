@@ -483,6 +483,22 @@ docs/               development notes, reading guide, spec, diagrams
 - Release notes: provided per release on the release page; history lives in git and the development notes
 - Visuals: [architecture](docs/diagrams/dsh-stm32-architecture.html) / [main journey](docs/diagrams/dsh-stm32-journey.html) — single-file HTML, opens offline
 
+## Acknowledgements
+
+Parts of the circuit-design and PCB design are modelled on these two open-source projects (design ideas only; any code is used under its own licence):
+
+- [oh-my-embedded](https://github.com/captainluzik/oh-my-embedded) (MIT): expert knowledge packaged as small callable tools (power budget, decoupling advice, pin mapping, impedance). The decoupling and placement advice here follows that idea.
+- [PCB-Agent-Teams](https://github.com/Zane456/PCB-Agent-Teams) (PolyForm Noncommercial 1.0.0): a phased pipeline with "roll back when a gate fails, verify every conclusion twice, never draw before assets exist" discipline. The workflow design is borrowed; no code is copied.
+
+Thanks also to the upstream projects this plugin depends on or follows:
+
+- [KiCad](https://www.kicad.org/): schematic and PCB access, `kicad-cli` and the `pcbnew` Python API.
+- [kicad-happy](https://github.com/aklofas/kicad-happy) (MIT): source of the EMC, thermal and lifecycle rules.
+- [KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools) (MIT): reference implementation for grid autorouting.
+- [ngspice](https://ngspice.sourceforge.io/): SPICE verification.
+- [poppler](https://poppler.freedesktop.org/): PDF text, tables and rendering.
+- [tscircuit](https://tscircuit.com/): circuit source to KiCad project generation.
+
 ## License
 
 [MIT](LICENSE)
