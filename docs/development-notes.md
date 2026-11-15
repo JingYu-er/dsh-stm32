@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S138）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S139）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,16 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十七、落板：搬元件、清旧线（S139）
+
+- 不新建板、不加载封装：直接改构建产物的 `.kicad_pcb`。理由是封装与网络已经由 tscircuit 写对了，自己再造一块板只会多一处"与原理图不一致"。
+- `src/engine/ecad/pcb/apply.ts` 只生成一段 python：按位号 `SetPosition`/`SetOrientationDegrees`，按需 `Remove` 旧走线，`SaveBoard` 存盘；坐标与板文件走 argv 的 JSON，脚本里不写死路径。
+- 真机（`tetris-handheld` 的板子副本）：41 个元件全部搬到位、`missing` 0、清掉 888 条旧走线（重新放置后它们指向旧位置，留着只会误导 DRC 与渲染）。
+- 坑：结果**不能靠 stdout**。`pcbnew` 的 `Remove` 会往 stdout 打一堆 `swig/python detected a memory leak` 警告，`print` 的 JSON 被冲掉、`execFileSync` 里表现为「脚本成功但读不到结果」。改成写到 argv[2] 指定的结果文件，工具读文件。
+- 工具 `stm32_pcb_place`：`projectDir? / boardFile? / keepTracks?`；写盘前先存 `<板>.bak`；`missing` 非空时提示「构建产物与 circuit.json 不同步，重跑构建」。
+- 测试：`test/pcb-units.test.mjs` 增 2 条——脚本含 `SetPosition`/`GetTracks`/结果写文件且不含 `print(`；`parseApplyOutput` 认 JSON、拒非 JSON；`keepTracks` 时不进清理分支。
+- 取舍：**保留 `.bak`、不吞异常**。放错位置比放不下更糟，所以每次改板都留回退点，失败时把 python 的 stderr 尾部原样给出。
 
 ### 一百四十六、PCB 放置引擎：先算坐标，再落板（S138）
 

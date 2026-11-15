@@ -25,6 +25,7 @@ import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
 import { registerDownload } from "./tools/download.js";
 import { registerEcadTools } from "./tools/ecad.js";
+import { registerPcbTools } from "./tools/pcb.js";
 import { registerPdfTools } from "./tools/pdf.js";
 import { registerEnvInstall } from "./tools/env-install.js";
 import { registerFirmwareInstall } from "./tools/firmware-install.js";
@@ -134,6 +135,7 @@ export function apply(ctx: DshContext): void {
   registerLayoutTools(toolsCtx);
   registerDatasheetTools(toolsCtx);
   registerEcadTools(toolsCtx);
+  registerPcbTools(toolsCtx);
   registerPdfTools(toolsCtx);
   registerRtt(toolsCtx);
   registerWatchTool(toolsCtx);

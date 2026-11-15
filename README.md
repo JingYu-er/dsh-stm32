@@ -206,6 +206,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_ds_lookup` | 按用途查手册：引脚、绝对最大额定值、电气特性、时序、封装——给页号、标题与该页开头正文 |
 | `stm32_ds_list` | 列出本地手册缓存：编号、型号、占用、抓取时间与来源 |
 | `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`table` 把参数表切成行列、`render` 把页面或局部渲染成 PNG 交给视觉读图、`curve` 把曲线图数字化成可复核的 (x, y) 序列、`schematic` 列原理图的元件与网络标签（只给清单，不出网表） |
+| `stm32_pcb_place` | 按 circuit.json 的元件与网络计算落位，再改 `.kicad_pcb` 把元件搬到位（默认清掉旧走线，写盘前留 `.bak`）|
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 
 写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，插件只读。tscircuit 把符号与封装内嵌在工程里、名字归到 `tscircuit` 之类的生成名，检查前会先导出成 `hardware/libs` 下的真库并补齐库表，否则报告里只剩「库不在配置中」这类环境噪音；未命名网络（`.R1 > .pin1 to .C1 > .pin1`）会单独列出并给出 `<net name="VDD" />` 的修法。构建要求 KiCad 10 与其自带的 `bun.exe`。

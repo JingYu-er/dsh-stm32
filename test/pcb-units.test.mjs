@@ -81,3 +81,33 @@ test("放置：板子装不下时进 unplaced 并给说明，而不是静默丢�
   assert.ok(plan.unplaced.length > 0, "应当有放不下的元件");
   assert.match(plan.notes.join(" "), /没放下/u);
 });
+
+test("落板脚本：只搬位号、清旧走线，结果写文件而不是靠 stdout", async () => {
+  const { buildApplyScript, parseApplyOutput } = await import("../lib/engine/ecad/pcb/apply.js");
+  const script = buildApplyScript({
+    boardFile: "C:/tmp/board.kicad_pcb",
+    keepTracks: false,
+    plan: {
+      ok: true, error: "", board: { width: 40, height: 40 },
+      items: [{ ref: "U1", x: 20, y: 20, rotation: 0, kind: "mcu" }],
+      unplaced: [], notes: [],
+    },
+  });
+  assert.match(script, /SetPosition/u);
+  assert.match(script, /GetTracks/u);
+  assert.match(script, /sys\.argv\[2\]/u);
+  assert.match(script, /json\.dump/u);
+  assert.ok(!script.includes("print("), "结果不靠 stdout：pcbnew 会吞掉它");
+
+  assert.deepEqual(parseApplyOutput('{"moved":3,"missing":[],"removedTracks":8}'), { ok: true, moved: 3, missing: [], removedTracks: 8 });
+  assert.equal(parseApplyOutput("not json").ok, false);
+});
+
+test("落板脚本：keepTracks 时不清走线", async () => {
+  const { buildApplyScript } = await import("../lib/engine/ecad/pcb/apply.js");
+  const script = buildApplyScript({
+    boardFile: "b.kicad_pcb", keepTracks: true,
+    plan: { ok: true, error: "", board: { width: 10, height: 10 }, items: [], unplaced: [], notes: [] },
+  });
+  assert.match(script, /if not payload\['keepTracks'\]/u);
+});
