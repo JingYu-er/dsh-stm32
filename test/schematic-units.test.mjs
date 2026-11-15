@@ -51,6 +51,18 @@ function makeToolContext(workdir) {
   return tools;
 }
 
+test("tscircuit 导出的原理图没有 Value：主控按封装脚数推断，连接器单独成块（S132）", () => {
+  const file = new URL("./fixtures/kicad10-tscircuit/tetris.kicad_sch", import.meta.url).pathname;
+  const read = readSchematic(decodeURIComponent(file).replace(/^\/([A-Za-z]:)/u, "$1"));
+  assert.equal(read.report.mcu?.ref, "U1");
+  assert.ok((read.report.mcu?.pins.length ?? 0) >= 20);
+  const kinds = read.report.diagram.blocks.map((block) => block.kind);
+  assert.ok(kinds.includes("mcu"));
+  assert.ok(kinds.includes("interface"));
+  assert.ok(read.report.diagram.links.length >= 1);
+  assert.ok(read.report.warnings.some((line) => /主控按封装脚数与位号推断/u.test(line)));
+});
+
 test("S-expression：字符串转义与嵌套列表", () => {
   // parseSexpr 返回最外层列表的子项（不是包一层的数组），调用方直接在其上取子列表。
   const doc = parseSexpr('(root (a "x\\"y") (b 1 (c 2)))');

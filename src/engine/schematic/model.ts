@@ -119,7 +119,10 @@ const MODULE_SPECS: readonly ModuleSpec[] = [
   {
     key: "mcu",
     label: "主控",
-    match: (c) => /^STM32|^GD32|^ATSAM|^MSP430|^RP2040|^ESP32/u.test(c.value),
+    match: (c) =>
+      /^STM32|^GD32|^ATSAM|^MSP430|^RP2040|^ESP32/u.test(c.value) ||
+      // tscircuit 导出的原理图不写 Value，只剩封装线索（U_chip_qfp48 这种）（S132）。
+      /(U_chip|MCU|QFP|LQFP|BGA|WLCSP)/iu.test(c.libId),
   },
   {
     key: "nfc",
@@ -157,6 +160,7 @@ function moduleOf(component: SchComponent, swdRefs: ReadonlySet<string>): Module
   for (const spec of MODULE_SPECS) {
     if (spec.match(component)) return spec;
   }
+  if (INTERFACE_SPEC.match(component)) return INTERFACE_SPEC;
   if (swdRefs.has(component.ref)) return INTERFACE_SPEC;
   return null;
 }
@@ -169,7 +173,27 @@ interface MergedNet {
   pins: { ref: string; number: string; name: string }[];
 }
 
-const INTERFACE_SPEC = { key: "interface", label: "调试接口", match: () => false } as unknown as ModuleSpec;
+const INTERFACE_SPEC = {
+  key: "interface",
+  label: "接口与调试口",
+  match: (c: SchComponent) => /(J_connector|Connector:)/iu.test(c.libId),
+} as unknown as ModuleSpec;
+
+
+/**
+ * 在主控没有被写出型号时，按「脚数最多、位号以 U 开头」推断（S132）。
+ *
+ * tscircuit 导出的原理图只保留封装形状（`Device:U_chip_qfp48_…`）与位号，Value 为空；
+ * 按脚数推断比按型号名可靠：一个 48 脚的 U 只有主控这一种可能。
+ */
+function inferMcu(components: readonly SchComponent[]): SchComponent | null {
+  const named = components.find((component) => /^STM32|^GD32|^ATSAM|^MSP430|^RP2040|^ESP32/u.test(component.value));
+  if (named !== undefined) return named;
+  const candidates = components
+    .filter((component) => /^U\d/u.test(component.ref) && component.pins.length >= 24)
+    .sort((a, b) => b.pins.length - a.pins.length);
+  return candidates[0] ?? null;
+}
 
 const PASSIVE_LIB = /^Device:(R|C|L|FB|Ferrite|Crystal|D_TVS|Polyfuse)/u;
 
@@ -257,8 +281,14 @@ export function readSchematic(rootFile: string): ReadSchematicResult {
     }))
     .sort((a, b) => b.pins.length - a.pins.length || a.name.localeCompare(b.name));
 
-  const mcuComponent = components.find((component) => /^STM32/u.test(component.value));
-  if (mcuComponent === undefined) warnings.push("没有识别到 STM32 主控：框图只按普通元件分组");
+  const mcuComponent = inferMcu(components);
+  if (mcuComponent === null) {
+    warnings.push("没有识别到主控：框图只按普通元件分组");
+  } else if (!/^STM32|^GD32|^ATSAM|^MSP430|^RP2040|^ESP32/u.test(mcuComponent.value)) {
+    warnings.push(
+      "主控按封装脚数与位号推断为 " + mcuComponent.ref + "（原理图里没有写型号）；可在电路源码里补 name 或 mpn 提高准确度",
+    );
+  }
   const multiUnit = new Map<string, number>();
   for (const sheet of tree.sheets) {
     for (const symbol of sheet.symbols) {
@@ -291,7 +321,7 @@ export function readSchematic(rootFile: string): ReadSchematicResult {
     }),
     components,
     nets,
-    mcu: mcuComponent === undefined ? null : { ref: mcuComponent.ref, value: mcuComponent.value, pins: mcuComponent.pins },
+    mcu: mcuComponent === null ? null : { ref: mcuComponent.ref, value: mcuComponent.value, pins: mcuComponent.pins },
     diagram,
     warnings,
   };

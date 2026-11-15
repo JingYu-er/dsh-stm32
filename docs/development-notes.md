@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S131）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S132）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,17 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十、tscircuit 原理图没有型号：按脚数认主控（S132）
+
+- 现象：`hardware/kicad/tetris.kicad_sch`（generator `circuit-json-to-kicad`）在流程图页只显示「未识别主控 / 元件 41 / 网络 125」，没有框图。
+- 根因：tscuit 导出的符号里 `(property "Value" "")` 为空，`Device:U_chip_qfp48_w7_5mm_p0_5mm` 只留在 `lib_id`；主控识别只认 `/^STM32/` 的 Value，于是 `mcu === null`，模块种子全落空，`diagram.blocks` 为空。
+- 改法（`src/engine/schematic/model.ts`）：`inferMcu()` 先按 Value 认，认不出再取「位号 `U*` 且脚数 ≥24、脚数最多」的那个，并写一条 warning 说明「按封装脚数与位号推断」；`MODULE_SPECS` 的主控匹配补上 `lib_id` 线索（`U_chip|MCU|QFP|LQFP|BGA|WLCSP`）。
+- 顺带修一处：连接器（`Device:J_connector_*`）原本只靠「网络里有 SWD」才归到接口块，现改为 `INTERFACE_SPEC.match` 直接认 `J_connector|Connector:`，块名改「接口与调试口」，否则 FPC 排线会被当成主控的从属器件并进主控块。
+- 实测该板：主控推断为 `U1`，块变 `主控(20) / 接口与调试口(9)`，连线 `interface→mcu`，warning 提示可补 `name`/`mpn` 提高准确度。
+- 夹具与测试：`test/fixtures/kicad10-tscircuit/tetris.kicad_sch`（303 KB）＋一条用例断言「主控 U1、脚数 ≥20、块含 mcu 与 interface、至少一条连线、warning 文案」。
+- 验证：全量 **88 套件 / 1198 pass / 0 fail**、ACCEPTANCE OK、包体 2087.1 KB / 334 文件。
+- 教训：**符号里没有的信息要去封装与位号里找**，但找回来的结论要写进 warnings，让人知道这是推断而不是事实。
 
 ### 一百三十九、合并焊盘：tscircuit 层做不了，导出后做（S131）
 
