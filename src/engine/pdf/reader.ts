@@ -20,6 +20,7 @@ import type { PopplerTools } from "./toolchain.js";
 import { extractTablesFromWords, parseBboxXml, type PdfTable } from "./tables.js";
 import { decodePng } from "./png.js";
 import { calibrateFromWords, chromaBounds, digitizeCurves, legendLabels } from "./curve.js";
+import { readPdfSchematicWords, type PdfSchematic } from "./schematic.js";
 
 export interface PdfInfo {
   ok: boolean;
@@ -415,4 +416,34 @@ export async function readPdfCurves(
     series: digitized.series,
     notes: [...calibrated.calibration.notes, ...digitized.notes],
   };
+}
+
+/**
+ * 原理图 PDF 的元件与标签清单（S125）。
+ *
+ * 只做清单：PDF 里没有「谁连谁」，网表从 KiCad 工程读。
+ */
+export async function readPdfSchematic(
+  subprocess: SubprocessService,
+  tools: PopplerTools,
+  file: string,
+  options: { first?: number; last?: number } = {},
+  signal?: AbortSignal,
+): Promise<PdfSchematic> {
+  const first = Math.max(1, Math.floor(options.first ?? 1));
+  const last = Math.max(first, Math.floor(options.last ?? first));
+  const blank: PdfSchematic = { ok: false, error: "", file, pages: 0, components: [], labels: [], words: 0, notes: [] };
+  if (!existsSync(file)) return { ...blank, error: "PDF 不存在：" + file };
+  const run = await runCapture(subprocess, {
+    argv: [tools.pdftotext, "-bbox", "-f", String(first), "-l", String(last), file, "-"],
+    timeoutMs: 120_000,
+    maxBytes: 16 * 1024 * 1024,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (run.exitCode !== 0) {
+    return { ...blank, error: "取不到文字：" + (run.stderr || run.spawnError || "pdftotext 失败") };
+  }
+  const parsed = parseBboxXml(run.stdout);
+  const report = readPdfSchematicWords(parsed.map((page, index) => ({ page: first + index, words: page.words })));
+  return { ...report, file, pages: parsed.length };
 }

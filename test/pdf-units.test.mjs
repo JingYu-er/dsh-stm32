@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 import { locatePoppler } from "../lib/engine/pdf/toolchain.js";
 import { extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../lib/engine/pdf/reader.js";
+import { readPdfSchematicWords } from "../lib/engine/pdf/schematic.js";
 import { extractTablesFromWords, parseBboxXml } from "../lib/engine/pdf/tables.js";
 import { calibrateFromWords, chromaBounds, digitizeCurves, legendLabels } from "../lib/engine/pdf/curve.js";
 import { decodePng } from "../lib/engine/pdf/png.js";
@@ -318,4 +319,37 @@ test("曲线：同页两张图时，刻度按图区范围筛选（S124）", () =
   const right = calibrateFromWords(words, { scale: 1, bounds: { x0: 900, y0: 90, x1: 1240, y1: 400 } });
   assert.equal(right.ok, true);
   assert.ok(right.calibration.x.ticks.every((tick) => tick.value >= 200), "右图取到 200 起的刻度");
+});
+
+test("原理图 PDF：位号、型号与网络标签按行聚合（S125）", () => {
+  const page = {
+    page: 1,
+    words: [
+      { text: "U18", x0: 100, y0: 100, x1: 118, y1: 108 },
+      { text: "STM32F103C8T6", x0: 122, y0: 100, x1: 190, y1: 108 },
+      { text: "VDD", x0: 60, y0: 140, x1: 76, y1: 148 },
+      { text: "SDA", x0: 200, y0: 160, x1: 214, y1: 168 },
+      { text: "This", x0: 20, y0: 200, x1: 34, y1: 208 },
+      { text: "is", x0: 38, y0: 200, x1: 44, y1: 208 },
+      { text: "a", x0: 48, y0: 200, x1: 52, y1: 208 },
+      { text: "note", x0: 56, y0: 200, x1: 74, y1: 208 },
+    ],
+  };
+  const report = readPdfSchematicWords([page]);
+  assert.equal(report.ok, true);
+  assert.equal(report.words, 8);
+  const mcu = report.components.find((item) => item.ref === "U18");
+  assert.equal(mcu?.value, "STM32F103C8T6");
+  assert.equal(mcu?.page, 1);
+  const labels = report.labels.map((label) => label.name);
+  assert.ok(labels.includes("VDD"));
+  assert.ok(labels.includes("SDA"));
+  assert.ok(!labels.includes("note"));
+  assert.ok(report.notes.some((note) => note.includes("连通性")));
+});
+
+test("原理图 PDF：没有文字层时给出重导出的办法（S125）", () => {
+  const report = readPdfSchematicWords([{ page: 1, words: [] }]);
+  assert.equal(report.ok, false);
+  assert.ok(report.notes.some((note) => note.includes("--default-font Arial")));
 });

@@ -18,6 +18,8 @@ export interface PdfWord {
 }
 
 export interface PdfPageWords {
+  /** PDF 里的物理页码（1 起）；`pdftotext -f/-l` 限定范围时也按真实页号回填。 */
+  page: number;
   width: number;
   height: number;
   words: PdfWord[];
@@ -64,7 +66,7 @@ export function parseBboxXml(xml: string): PdfPageWords[] {
         text: decodeXml(word[5] ?? ""),
       });
     }
-    pages.push({ width: Number(match[1]), height: Number(match[2]), words });
+    pages.push({ page: index + 1, width: Number(match[1]), height: Number(match[2]), words });
   }
   return pages;
 }
