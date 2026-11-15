@@ -17,6 +17,7 @@ import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootpri
 import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/ecad/jlcpcb.js";
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
+import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
 import { resolveSearchConfig } from "../lib/data/search-roots.js";
@@ -212,9 +213,61 @@ test("构建：argv 用 KiCad 自带的 bun 跑本地 cli.mjs，并带 --kicad-p
     assert.equal(argv[3], "board.circuit.tsx");
     assert.ok(argv.includes("--kicad-project"));
     assert.ok(argv.includes("--svgs"));
+    assert.ok(!argv.includes("--routing-disabled"));
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("封装预检：同坐标焊盘按 A1/B12 这类成对列出，并驱动降级参数（S130）", async () => {
+  const dir = tempDir("padprecheck-");
+  try {
+    const tsx = join(dir, "board.circuit.tsx");
+    writeFileSync(tsx, [
+      "export default () => (",
+      '  <board width="30mm" height="20mm">',
+      '    <connector name="J1" footprint="kicad:Connector_USB/USB_C_Receptacle_HRO_TYPE-C-31-M-12" />',
+      '    <resistor name="R1" resistance="1k" footprint="0402" />',
+      "  </board>",
+      ");",
+      "",
+    ].join("\n"), "utf8");
+    assert.deepEqual(collectKicadFootprintRefs(readFileSync(tsx, "utf8")), [
+      "Connector_USB/USB_C_Receptacle_HRO_TYPE-C-31-M-12",
+    ]);
+    const mod = [
+      '(footprint "USB_C"',
+      '  (pad "A1" smd roundrect (at -3.25 -4.04) (size 0.3 1.1))',
+      '  (pad "B12" smd roundrect (at -3.25 -4.04) (size 0.3 1.1))',
+      '  (pad "A4" smd roundrect (at -2.45 -4.04) (size 0.3 1.1))',
+      '  (pad "B9" smd roundrect (at -2.45 -4.04) (size 0.3 1.1))',
+      '  (pad "1" smd roundrect (at 0 0) (size 0.3 1.1))',
+      ")",
+      "",
+    ].join("\n");
+    const pads = parseKicadModPads(mod);
+    assert.equal(pads.length, 5);
+    assert.deepEqual(coincidentGroups(pads), [["A1", "B12"], ["A4", "B9"]]);
+
+    const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: fakeKicadRoot() });
+    const workspace = planEcadWorkspace(dir, "");
+    initEcadWorkspace(workspace);
+    mkdirSync(join(workspace.circuitDir, "node_modules", "tscircuit"), { recursive: true });
+    writeFileSync(join(workspace.circuitDir, "node_modules", "tscircuit", "cli.mjs"), "export {};\n", "utf8");
+    const subprocess = fakeSubprocess({ exitCode: 1 });
+    await runTsciBuild({
+      subprocess,
+      toolchain: located.toolchain,
+      workspace,
+      entry: "board.circuit.tsx",
+      routingDisabled: true,
+    });
+    const argv = subprocess.calls[0].argv;
+    assert.ok(argv.includes("--routing-disabled"));
+    assert.ok(argv.includes("--ignore-placement-drc"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

@@ -195,7 +195,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | Tool | Purpose |
 | --- | --- |
 | `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies are installed there with `npm install` |
-| `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs`; JLC footprints (`footprint="jlcpcb:C…"`) are vendored into the library per reference and recorded in `libs/sources.json` |
+| `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs`; JLC footprints (`footprint="jlcpcb:C…"`) are vendored into the library per reference and recorded in `libs/sources.json`; before building it pre-checks the footprint for coincident pads (the A1/B12 pair of a 16P USB-C), and when found it skips autorouting and ignores the placement-clearance warning while still producing the board |
 | `stm32_ecad_check` | Export the project libraries first, then run `kicad-cli sch erc` and `pcb drc`, collapsing violations into rule, severity and affected items; unnamed nets are reported too |
 | `stm32_ecad_libs` | Extract embedded footprints and symbols into real libraries under `hardware/libs` and fill in `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | Export STEP into `hardware/out`; resolves models through official 3D dir → `hardware/libs/3d` → cache and rewrites their paths; missing models are reported, not fatal |
@@ -260,6 +260,7 @@ Non-STM32 parts are fetched once and cached:
 - `stm32_ds_fetch code=C25137` fetches by LCSC code; `all=true` fetches every `jlcpcb:` part the project uses; `file=` imports a PDF by hand.
 - Cache: `~/.dsh-stm32/datasheets/<code>/` (`meta.json` plus a PDF named after its content sha256); `DSH_STM32_DATASHEETS` relocates it. Cache hits make **no network calls**; failures are remembered for 24 hours and `refresh=true` retries.
 - `stm32_ecad_build` fetches the datasheets the project uses after a successful build; the Circuit design tab shows `datasheets 2/3` in its header and the same logic behind its "fetch datasheets" button.
+- A 16P USB-C footprint splits one piece of copper into two pads (A1/B12); the autorouter cannot pick a unique pad and drops the whole board. When the pre-check finds such a pair, the build skips routing and ignores the placement-clearance warning, leaving routing to KiCad.
 - `stm32_ds_lookup code=C25137 kind=electrical` jumps to the electrical characteristics page: the first 40 pages are indexed once (page numbers only), then text is read per page.
 - `stm32_ds_list` shows what is cached and how much space it takes.
 - The datasheet pin table can back `stm32_sch_to_ioc`: pass `datasheet=C25137` and pins whose signals are missing from the CubeMX database get candidates from the "Pin name / Alternate functions" columns, marked `(datasheet)`.

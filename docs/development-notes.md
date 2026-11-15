@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S129）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S130）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,16 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百三十八、同坐标焊盘：预检、降级与「别把假象当缺线」（S130）
+
+- 现象：16P USB-C（KiCad 官方 `Connector_USB/USB_C_Receptacle_HRO_TYPE-C-31-M-12`）把 A/B 两排触点拆成同坐标的两个脚（实测 `A1/B12`、`A4/B9`、`A9/B4`、`A12/B1` 四组，坐标 `-3.25,-4.04` 等）。tscircuit 的自动布线器无法把同坐标的两个 port 归到唯一焊盘，抛 `Routes contain a junction or endpoint that cannot select a unique PCB port` 后**整板放弃布线**；再加上「同坐标焊盘间距 0 mm」触发的摆放检查，构建直接失败。作者看到的是「112 个焊盘未连、29 条走线缺失」，实际一条线都没布。
+- 为什么改本地库没用：`footprint="kicad:Lib/Name"` 是 tscircuit 的远端取件语法，按 `https://kicad-mod-cache.tscircuit.com/<Lib>/<Name>.kicad_mod` 拉，不读工程的 `fp-lib-table`，也不看 `hardware/libs`。
+- 实现 `src/engine/ecad/padprecheck.ts`：`collectKicadFootprintRefs(tsx)`、`parseKicadModPads(text)`（只取脚号与 `(at x y)`）、`coincidentGroups(pads, 0.01)`（按 0.01 mm 网格分桶，只返回 ≥2 脚的组）、`precheckFootprints(tsxFile, {fetchImpl, cacheDir})`（封装落 `~/.dsh-stm32/kicad-mod-cache/<sha1>.kicad_mod`；单个取不到只记 note，不阻断）。
+- 构建降级：`runTsciBuild({ routingDisabled: true })` 追加 `--routing-disabled` 与 `--ignore-placement-drc`——前者跳过布线、后者忽略「同坐标焊盘间距 0」这种封装物理结构带来的摆放告警；notes 写明「布线需在 KiCad 里手工完成」。`stm32_ecad_build` 先预检、命中再降级，预检 notes 一并回给用户。
+- 实测（`C:/Users/Admin/AppData/Local/Temp/usbc-e2e`）：预检出上述四组；不加参数时构建失败于 `Pads J1.pin1 and J1.pin16 are too close (clearance: 0mm, minimum: 0.1mm)`；加两个参数后 `ok:true`，`dist/index/kicad/` 里原理图、PCB、`fp-lib-table`、`index.kicad_dru` 齐全。
+- 取舍：不自动生成「合并焊盘」封装——那要改 `footprint` 传对象（`pads[].name` 允许多编号），并用一次实验证明布线器认；在证明之前，降级比伪造一张「看起来自动布好、实际没连」的板更可靠。
+- 教训：**布线器抛异常时，它已经回滚了整板**；报告里的「未连数量」是回滚后的状态，不是设计缺陷的数量。判断一块板真没连，看 `unconnected_items`，不看焊盘计数。
 
 ### 一百三十七、读 `.ioc` 的接口要走程序目录（S129）
 

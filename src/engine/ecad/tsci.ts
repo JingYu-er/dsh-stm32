@@ -105,6 +105,8 @@ export interface TsciBuildRequest {
   /** 入口文件（相对 circuit/）；空串表示交给 tsci 按配置找。 */
   readonly entry?: string;
   readonly svgs?: boolean;
+  /** 跳过自动布线（S130）：封装有同坐标焊盘时用，板子仍会产出。 */
+  readonly routingDisabled?: boolean;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -195,6 +197,14 @@ export async function runTsciBuild(request: TsciBuildRequest): Promise<TsciBuild
   if (entry !== "") argv.push(entry);
   argv.push("--kicad-project");
   if (request.svgs !== false) argv.push("--svgs");
+  if (request.routingDisabled === true) {
+    // 同坐标焊盘（USB-C 16P 的 A1/B12 这类）会让自动布线器放弃整板布线（S130），
+    // 这里降级为「只摆件不布线」，板子与原理图照样产出。
+    argv.push("--routing-disabled");
+    // 同坐标焊盘必然触发「间距 0 mm」的摆放检查；这不是设计错误，是封装的物理结构。
+    argv.push("--ignore-placement-drc");
+    notes.push("已跳过自动布线并忽略摆放间距检查：封装里有同坐标焊盘，布线需在 KiCad 里手工完成");
+  }
 
   const outcome = await runCapture(subprocess, {
     argv,

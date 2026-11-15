@@ -17,6 +17,7 @@ import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from ".
 import { checkDfm, writeDru } from "../engine/ecad/dfm.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { exportFabrication } from "../engine/ecad/fabrication.js";
+import { precheckFootprints } from "../engine/ecad/padprecheck.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
 import { ensureProjectDatasheets } from "../engine/datasheet/auto.js";
 import {
@@ -285,15 +286,24 @@ export function registerEcadTools(ctx: DshContext): void {
         };
       }
       const workspace = workspaceOf(project.dir);
+      // 布线前先看封装：同坐标焊盘会让自动布线器放弃整板，降级为只摆件（S130）。
+      const entryName = (args.entry ?? "").trim() === "" ? "" : (args.entry ?? "").trim();
+      const entries = listCircuitEntries(workspace.circuitDir);
+      const tsxFile = join(workspace.circuitDir, entryName === "" ? (entries[0] ?? "") : entryName);
+      const precheck = entryName === "" && entries.length === 0
+        ? { ok: true, error: "", checked: 0, blockers: [], notes: [] }
+        : await precheckFootprints(tsxFile, { signal: exec.signal });
+      const routingDisabled = precheck.blockers.length > 0;
       const built = await runTsciBuild({
         subprocess: ctx.subprocess,
         toolchain: located.toolchain,
         workspace,
         ...(args.entry === undefined ? {} : { entry: args.entry }),
         ...(args.svgs === undefined ? {} : { svgs: args.svgs }),
+        ...(routingDisabled ? { routingDisabled: true } : {}),
         signal: exec.signal,
       });
-      const notes = [...built.notes];
+      const notes = [...precheck.notes, ...built.notes];
       // 构建成功就把本次用到的器件手册补齐：后面读引脚、电气参数、时序都要靠它（S120）。
       if (built.ok) {
         const ds = await ensureProjectDatasheets(project.dir, {

@@ -195,7 +195,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 用途 |
 | --- | --- |
 | `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖需要在该目录执行 `npm install` |
-| `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json` |
+| `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json`；构建前预检封装里同坐标的焊盘（USB-C 16P 的 A1/B12 这类），命中就跳过自动布线并忽略摆放间距告警，板子照常产出 |
 | `stm32_ecad_check` | 先补齐工程库表与嘉立创工艺规则（`<工程>.kicad_dru`），再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络、板子尺寸、最细走线、最小孔径与打样成本 |
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |
 | `stm32_ecad_step` | 导出 STEP 到 `hardware/out`；先按「官方 3D 目录 → `hardware/libs/3d` → 缓存」解析模型并改写路径，缺模型只报告，不阻断导出 |
@@ -264,6 +264,7 @@ static void rtt_init(void) {
 - `stm32_ds_fetch code=C25137` 按立创编号抓；`all=true` 抓本工程 `circuit` 源码里出现的全部 `jlcpcb:` 器件；`file=` 手工导入 PDF（反爬或没有编号时的退路）。
 - 缓存位置 `~/.dsh-stm32/datasheets/<编号>/`（`meta.json` + 以内容 sha256 命名的 PDF），可用 `DSH_STM32_DATASHEETS` 改目录。命中缓存时**不联网**；抓取失败记 24 小时负缓存，`refresh=true` 可强制重试。
 - `stm32_ecad_build` 成功后会自动补齐本工程用到的手册；面板「电路设计」头部显示「手册 2/3」，缺的标黄，点「补手册」走同一套逻辑。
+- 16P USB-C 这类封装把同一块铜拆成两个脚（A1/B12），自动布线器选不出唯一焊盘会整板放弃；预检命中时构建会跳过布线并忽略摆放间距告警，布线在 KiCad 里手工完成。
 - `stm32_ds_lookup code=C25137 kind=electrical` 直接翻到电气特性那一页：先读前 40 页建一次索引（只记页号），之后按页取正文。
 - `stm32_ds_list` 看已缓存哪几份、占多少空间。
 - 手册的引脚表可兜底 `stm32_sch_to_ioc`：`stm32_sch_to_ioc datasheet=C25137`，器件库没有这个脚的信号时，用手册「Pin name / Alternate functions」两列补候选，结果标 `（手册）`。
