@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S128）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S129）
 
 ### 一、目标与约束
 
@@ -7389,3 +7389,11 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百三十七、读 `.ioc` 的接口要走程序目录（S129）
+
+- 现象：工程结构归位后，引脚、时钟都正常，中断页仍报「工程里没有 .ioc：先建工程，或确认 CubeMX 配置已保存」。
+- 根因：`GET /interrupts` 用 `withProject()`（工程根）而不是 `firmwareProject()`（程序目录）。`.ioc` 在 `fw/` 里，工程根上没有，于是中断页读不到；同一页签里引脚与时钟走的是程序目录，所以看起来「一半正常一半不正常」。
+- 同类漏网三处一并改掉：`/source`（源码在程序目录下）、`/build`（cmake 在程序目录里跑）、`/flash`（elf 在程序目录的 build 下）。判据很简单：**要读写程序目录里的文件，就必须走 `firmwareProject()`**；`/schematic`、`/ecad` 这类自己再解析 layout 的路由才用工程根。
+- 验证：用户工程（`.ioc` 在 `fw/`）从 `dsh-test` 与 `tetris-handheld` 两个入口都读出 9/9 条 NVIC；新增一条回归单测（临时工程 + `firmware=fw` + `GET /interrupts` 两个入口都 200），全量 88 套件 / 1195 pass / 0 fail。
+- 教训：**同一个页面里不同页签走不同的基准目录，是这类 bug 的温床**。改布局时要把「所有读 `.ioc` 的入口」列一遍，接口层与工具层分别核对。

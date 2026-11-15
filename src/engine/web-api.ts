@@ -892,7 +892,8 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/source") {
     // 源码片段：只读工程目录内的文件，给「文件:行」补上下文。
-    const projectDir = withProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
+    // 源码在程序目录下（program/Core、fw/Core），不是工程根（S129）。
+    const projectDir = firmwareProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const file = typeof query["file"] === "string" ? query["file"] : "";
     const line = Number.parseInt(typeof query["line"] === "string" ? query["line"] : "", 10);
@@ -927,7 +928,8 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/build") {
     // 人在面板上点构建：不经过模型，但结果按同一种事件写进时间线。
-    const projectDir = withProject(typeof parsed.value.projectDir === "string"
+    // cmake 在程序目录里跑，工程根上没有 CMakeLists.txt（S129）。
+    const projectDir = firmwareProject(typeof parsed.value.projectDir === "string"
       ? parsed.value.projectDir
       : "");
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
@@ -948,7 +950,7 @@ export async function handleWebApi(input: {
     return ok({ build: report });
   }
   if (path === WEB_API_PREFIX + "/flash") {
-    const projectDir = withProject(typeof parsed.value.projectDir === "string"
+    const projectDir = firmwareProject(typeof parsed.value.projectDir === "string"
       ? parsed.value.projectDir
       : "");
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
@@ -1050,7 +1052,8 @@ export async function handleWebApi(input: {
   }
   if (path === WEB_API_PREFIX + "/interrupts") {
     // 中断页：只读 .ioc 的 NVIC.*，不启动 CubeMX、不改配置。
-    const projectDir = withProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
+    // 读的是 .ioc，所以要走程序目录而不是工程根——.ioc 常放在 fw/、program/ 之下（S129）。
+    const projectDir = firmwareProject(typeof query["projectDir"] === "string" ? query["projectDir"] : "");
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const read = readInterrupts(projectDir);
     if (!read.ok) return fail(409, read.error);

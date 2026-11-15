@@ -1372,3 +1372,27 @@ test("POST /ecad/action：datasheets 在没有器件时也认这个动作（S120
   assert.equal(result.body.ecadAction.files, 0);
   assert.match(result.body.ecadAction.notes.join("\n"), /本工程 0 个立创器件/u);
 });
+
+test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s129-irq-"));
+  const fw = path.join(root, "fw");
+  fs.mkdirSync(fw, { recursive: true });
+  fs.writeFileSync(
+    path.join(fw, "board.ioc"),
+    "Mcu.CPN=STM32F303CCT6\nMcu.PinsNb=1\nMcu.Pin0=PC13-TAMPER-RTC\nNVIC.USART1_IRQn=true\\:1\\:0\\:false\\:false\\:true\\:false\\:false\\:false\n",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(root, "dsh-stm32.conf"), "version=1\nname=board\nmcu=STM32F303CCT6\nioc=fw/board.ioc\nfirmware=fw\n", "utf8");
+
+  for (const projectDir of [root, fw]) {
+    const response = await handleWebApi({
+      method: "GET",
+      path: WEB_API_PREFIX + "/interrupts",
+      query: { projectDir },
+      deps: { subprocess: fakeSubprocess, env: {} },
+    });
+    assert.equal(response.status, 200, "工程根与程序目录两个入口都应成功：" + projectDir);
+    assert.equal(response.body.interrupts.enabledCount, 1);
+    assert.equal(response.body.interrupts.entries[0].name, "USART1");
+  }
+});
