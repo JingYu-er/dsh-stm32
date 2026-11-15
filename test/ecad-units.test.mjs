@@ -241,6 +241,17 @@ test("合并焊盘：同封装同坐标同网络并成多编号焊盘，网络�
   assert.match(result.text, /\(pad "15"/u);
 });
 
+test("硬件目录只到 hardware/kicad 时，电路工作区仍落在 hardware（S133）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-ecad-root-"));
+  mkdirSync(join(dir, "hardware", "circuit"), { recursive: true });
+  mkdirSync(join(dir, "hardware", "kicad"), { recursive: true });
+  writeFileSync(join(dir, "hardware", "circuit", "package.json"), "{}", "utf8");
+  const workspace = planEcadWorkspace(dir, join(dir, "hardware", "kicad"));
+  assert.equal(workspace.root, join(dir, "hardware"));
+  assert.equal(workspace.circuitDir, join(dir, "hardware", "circuit"));
+  assert.equal(workspace.initialized, true);
+});
+
 test("封装预检：同坐标焊盘按 A1/B12 这类成对列出，并驱动降级参数（S130）", async () => {
   const dir = tempDir("padprecheck-");
   try {

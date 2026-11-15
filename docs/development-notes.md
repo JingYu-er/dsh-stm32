@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S132）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S133）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,16 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十一、电路设计页说「工作区未初始化」：hardware 目录有两种形态（S133）
+
+- 现象：工程 `hardware/` 下已经有 `circuit/`（含 `package.json`、`node_modules`、`tetris.circuit.tsx`）与 `kicad/`，电路设计页仍报「工作区未初始化 / 依赖未安装 / 还没有构建产物」，STEP 0、手册 0/0。
+- 根因：`resolveProjectLayout()` 的硬件候选里 `hardware/kicad` 也会命中，返回的 `hardwareDir` 是 `hardware/kicad`；而 `planEcadWorkspace()` 直接把它当工作区根，算出 `circuit/` 在 `hardware/kicad/circuit`——那里当然什么都没有。
+- 改法：`planEcadWorkspace()` 先看 `hardwareDir` 的末级名字，是 `kicad`/`pcb`/`hw` 就回到上一级；`hardware/` 形态不受影响。
+- 实测该工程：`circuitDir = hardware/circuit`、`initialized: true`、`installed: true`；`resolveProjectLayout` 的硬件目录仍是 `hardware/kicad`（原理图读取用它，正确）。
+- 测试：`test/ecad-units.test.mjs` 增 1 条（只建 `hardware/{circuit,kicad}`，传 `hardware/kicad` 时根必须回到 `hardware`，且 `initialized` 为真）。
+- 验证：全量 **88 套件 / 1199 pass / 0 fail**、ACCEPTANCE OK、包体 2087.3 KB / 334 文件。
+- 教训：**同一个概念（hardware 目录）在不同函数里含义不同**——读原理图要的是 KiCad 子目录，跑 tscircuit 要的是它的父目录；名字上区分不开时，让拿到路径的函数自己收口，而不是让每个调用方记住。
 
 ### 一百四十、tscircuit 原理图没有型号：按脚数认主控（S132）
 

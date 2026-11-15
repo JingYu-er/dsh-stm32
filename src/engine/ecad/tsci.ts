@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
@@ -38,8 +38,14 @@ export interface EcadWorkspace {
 }
 
 /** 在 `hardware/` 下规划四个子目录；不建目录（初始化由 initEcadWorkspace 负责）。 */
+const KICAD_SUBDIR_NAMES = new Set(["kicad", "pcb", "hw"]);
+
 export function planEcadWorkspace(projectDir: string, hardwareDir: string): EcadWorkspace {
-  const root = hardwareDir !== "" ? hardwareDir : join(projectDir, "hardware");
+  // hardwareDir 有两种形态：`hardware/`（工程自带子目录）或 `hardware/kicad`（只有 KiCad 子目录）。
+  // 后一种要回到它的上一级，否则 circuit/ 会被算成 hardware/kicad/circuit（S133）。
+  const root = hardwareDir !== ""
+    ? (KICAD_SUBDIR_NAMES.has(basename(hardwareDir)) ? dirname(hardwareDir) : hardwareDir)
+    : join(projectDir, "hardware");
   return {
     projectDir,
     root,
