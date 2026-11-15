@@ -14,8 +14,11 @@ import { planEcadWorkspace } from "../engine/ecad/tsci.js";
 import { readCircuitNetlist } from "../engine/ecad/pcb/netlist.js";
 import { planPlacement } from "../engine/ecad/pcb/placement.js";
 import { buildApplyScript, parseApplyOutput } from "../engine/ecad/pcb/apply.js";
-import { appendGroundZone, buildRouteScript, DEFAULT_POWER_NETS, parseRouteOutput } from "../engine/ecad/pcb/route.js";
-import { readBoardFacts } from "../engine/ecad/dfm.js";
+import { appendGroundZone, DEFAULT_POWER_NETS } from "../engine/ecad/pcb/route.js";
+import { buildGeometryScript, parseGeometry } from "../engine/ecad/pcb/geometry.js";
+import { planRouting } from "../engine/ecad/pcb/router.js";
+import { buildTrackScript, parseTrackReport } from "../engine/ecad/pcb/tracks.js";
+import { readBoardBox, readBoardFacts } from "../engine/ecad/dfm.js";
 import { resolveProjectDir } from "./project-dir.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
@@ -123,8 +126,20 @@ export function registerPcbTools(ctx: DshContext): void {
       const boardFile = args.boardFile !== undefined && args.boardFile !== "" ? args.boardFile : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
       if (boardFile === "" || !existsSync(boardFile)) return { ...empty, error: "还没有 .kicad_pcb：先跑一次构建，或传 boardFile 指定板子" };
 
-      const plan = planPlacement(model);
+      // 板框以 KiCad 画的那块为准：circuit.json 里的尺寸可能与实际板框不一致。
+      const box = readBoardBox(readFileSync(boardFile, "utf8"));
+      const plan = planPlacement(model, box === null ? {} : { widthMm: box.x1 - box.x0, heightMm: box.y1 - box.y0 });
       if (!plan.ok) return { ...empty, error: plan.error };
+
+      // 落位按「板子左上角为 0」算，写板前要平移到板框原点，否则元件会落到板外。
+      if (box !== null) {
+        for (const item of plan.items) {
+          item.x = Math.round((item.x + box.x0) * 1000) / 1000;
+          item.y = Math.round((item.y + box.y0) * 1000) / 1000;
+        }
+      } else {
+        plan.notes.push("板上没有 Edge.Cuts 板框：按原点 0,0 落位，可能落在板外");
+      }
 
       copyFileSync(boardFile, boardFile + ".bak");
       const script = buildApplyScript({ plan, boardFile, keepTracks: args.keepTracks === true });
@@ -222,38 +237,59 @@ export function registerPcbTools(ctx: DshContext): void {
       if (boardFile === "" || !existsSync(boardFile)) return { ...empty, error: "还没有可用的 .kicad_pcb：先跑 stm32_ecad_build 或 stm32_pcb_place" };
 
       const notes: string[] = [];
-      const nets = args.nets ?? [...DEFAULT_POWER_NETS];
-      copyFileSync(boardFile, boardFile + ".bak");
-      const facts = readBoardFacts(readFileSync(boardFile, "utf8"));
-      const zone = appendGroundZone(readFileSync(boardFile, "utf8"), { x0: 0, y0: 0, x1: facts.widthMm, y1: facts.heightMm });
-      if (zone.ok) writeFileSync(boardFile, zone.text);
-      else notes.push(zone.error);
-
-      const payload = JSON.stringify({ boardFile, powerNets: nets, powerWidthMm: 0.5, planeNet: zone.ok ? "GND" : "", planeLayer: "B.Cu", planeClearanceMm: 0.5, keepTracks: args.keepTracks === true, dryRun: args.apply !== true });
-      const scriptFile = join(tmpdir(), "dsh-stm32-route-" + String(Date.now()) + ".py");
-      writeFileSync(scriptFile, buildRouteScript({ boardFile, powerNets: nets, powerWidthMm: 0.5, planeNet: zone.ok ? "GND" : "", planeLayer: "B.Cu", planeClearanceMm: 0.5, keepTracks: args.keepTracks === true, dryRun: args.apply !== true }), "utf8");
-      const resultFile = join(tmpdir(), "dsh-stm32-route-" + String(Date.now()) + ".json");
-      const run = await runCapture(ctx.subprocess, {
-        argv: [located.toolchain.python, scriptFile, payload, resultFile],
+      const geometryScript = join(tmpdir(), "dsh-stm32-geo-" + String(Date.now()) + ".py");
+      writeFileSync(geometryScript, buildGeometryScript(boardFile), "utf8");
+      const geoRun = await runCapture(ctx.subprocess, {
+        argv: [located.toolchain.python, geometryScript],
         cwd: resolved.projectDir,
-        timeoutMs: 120_000,
-        maxBytes: 1 << 20,
+        timeoutMs: 60_000,
+        maxBytes: 64 << 20,
         signal: exec.signal,
       });
-      if (run.exitCode !== 0) {
-        return { ...empty, boardFile, error: "KiCad python 执行失败：" + (run.stderr === "" ? run.stdout : run.stderr).slice(-400) };
+      if (geoRun.exitCode !== 0) return { ...empty, boardFile, error: "读取板子几何失败：" + (geoRun.stderr === "" ? geoRun.stdout : geoRun.stderr).slice(-300) };
+      const geometry = parseGeometry(geoRun.stdout);
+      if (!geometry.ok) return { ...empty, boardFile, error: geometry.error };
+
+      const wanted = args.nets ?? [];
+      const plan = planRouting(geometry, {
+        resolutionMm: 0.5,
+        onlyPower: wanted.length === 0,
+        maxPadsPerNet: 24,
+      });
+      if (!plan.ok) return { ...empty, boardFile, error: plan.error };
+      const keep = wanted.length === 0 ? plan.segments : plan.segments.filter((segment) => wanted.includes(segment.net));
+
+      if (args.apply === true && keep.length > 0) {
+        copyFileSync(boardFile, boardFile + ".bak");
+        const trackScript = join(tmpdir(), "dsh-stm32-tracks-" + String(Date.now()) + ".py");
+        writeFileSync(trackScript, buildTrackScript(boardFile, keep, false), "utf8");
+        const trackResult = join(tmpdir(), "dsh-stm32-tracks-" + String(Date.now()) + ".json");
+        const trackRun = await runCapture(ctx.subprocess, {
+          argv: [located.toolchain.python, trackScript, JSON.stringify({ boardFile, segments: keep, dryRun: false }), trackResult],
+          cwd: resolved.projectDir,
+          timeoutMs: 120_000,
+          maxBytes: 1 << 20,
+          signal: exec.signal,
+        });
+        if (trackRun.exitCode !== 0) return { ...empty, boardFile, error: "写走线失败：" + (trackRun.stderr === "" ? trackRun.stdout : trackRun.stderr).slice(-300) };
+        const report = parseTrackReport(existsSync(trackResult) ? readFileSync(trackResult, "utf8") : "");
+        if (!report.ok) return { ...empty, boardFile, error: report.error };
+        notes.push("已写入 " + String(report.added) + " 段走线（原文件留 .bak）");
+        notes.push("写完请跑 stm32_ecad_check：栅格布线仍有短接风险，必须过 DRC 才算数");
+      } else {
+        notes.push("预览模式：只算路径不写板；确认无误后传 apply: true");
       }
-      const parsed = parseRouteOutput(existsSync(resultFile) ? readFileSync(resultFile, "utf8") : "");
-      if (!parsed.ok) return { ...empty, boardFile, error: parsed.error };
+      for (const item of plan.notes) notes.push(item);
+      const nets = plan.nets.map((item) => ({ net: item.net, pads: item.pads, segments: item.segments }));
       return {
         ok: true,
         error: "",
         boardFile,
-        tracks: parsed.tracks,
-        vias: parsed.vias,
-        nets: parsed.nets,
-        plane: parsed.plane === null ? "" : parsed.plane.net + "@" + parsed.plane.layer,
-        notes: [...notes, ...parsed.notes],
+        tracks: keep.length,
+        vias: 0,
+        nets,
+        plane: "",
+        notes: [...notes, ...(plan.unrouted.length > 0 ? ["未布通：" + plan.unrouted.join("、")] : [])],
       };
     },
   };

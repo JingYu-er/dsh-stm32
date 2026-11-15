@@ -31,6 +31,10 @@ export interface PlacementOptions {
   gap?: number;
   /** 板框留边（mm），默认 3。 */
   margin?: number;
+  /** 覆盖板宽（mm）：板框实际尺寸比 circuit.json 里的估计更准时用它。 */
+  widthMm?: number;
+  /** 覆盖板高（mm）。 */
+  heightMm?: number;
 }
 
 interface Box {
@@ -114,7 +118,7 @@ function spiral(part: CircuitPart, start: { x: number; y: number }, boxes: Box[]
 export function planPlacement(model: CircuitModel, options: PlacementOptions = {}): PlacementPlan {
   const gap = options.gap ?? DEFAULT_GAP;
   const margin = options.margin ?? DEFAULT_MARGIN;
-  const board = { width: model.board.width, height: model.board.height };
+  const board = { width: options.widthMm ?? model.board.width, height: options.heightMm ?? model.board.height };
   const notes: string[] = [];
   if (!model.ok) return { ok: false, error: model.error, board, items: [], unplaced: [], notes };
   if (model.parts.length === 0) return { ok: false, error: "板上没有元件：先完成原理图并构建", board, items: [], unplaced: [], notes };

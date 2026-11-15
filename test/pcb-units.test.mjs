@@ -147,3 +147,35 @@ test("布线结果解析：认 JSON，拒空与非 JSON", async () => {
   assert.equal(parseRouteOutput("").ok, false);
   assert.equal(parseRouteOutput("oops").ok, false);
 });
+
+test("网格布线器：两焊盘一根线、不穿墙", async () => {
+  const { planRouting } = await import("../lib/engine/ecad/pcb/router.js");
+  const geo = {
+    ok: true, error: "", widthMm: 20, heightMm: 20, x0: 0, y0: 0, notes: [],
+    pads: [
+      { ref: "U1", number: "1", net: "VCC", x: 2, y: 2, width: 1, height: 1 },
+      { ref: "U2", number: "1", net: "VCC", x: 18, y: 18, width: 1, height: 1 },
+    ],
+    tracks: [],
+  };
+  const plan = planRouting(geo, { resolutionMm: 0.5 });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.nets[0].net, "VCC");
+  assert.ok(plan.segments.length >= 1, "应该布出至少一段");
+  assert.equal(plan.nets[0].connected, true);
+});
+
+test("板子几何解析：认 JSON、算范围", async () => {
+  const { parseGeometry } = await import("../lib/engine/ecad/pcb/geometry.js");
+  const geo = parseGeometry('noise {"x0":1,"y0":2,"widthMm":10,"heightMm":20,"pads":[{"ref":"U1","number":"1","net":"GND","x":3,"y":4,"width":1,"height":2}],"tracks":[]} tail');
+  assert.equal(geo.ok, true);
+  assert.equal(geo.widthMm, 10);
+  assert.equal(geo.pads[0].net, "GND");
+  assert.equal(parseGeometry("no json").ok, false);
+});
+
+test("走线写入结果解析", async () => {
+  const { parseTrackReport } = await import("../lib/engine/ecad/pcb/tracks.js");
+  assert.deepEqual(parseTrackReport('{"added":12,"skipped":1}'), { ok: true, error: "", added: 12, skipped: 1 });
+  assert.equal(parseTrackReport("").ok, false);
+});

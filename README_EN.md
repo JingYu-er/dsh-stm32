@@ -207,7 +207,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_ds_list` | List the local datasheet cache: code, MPN, size, fetch time and source |
 | `stm32_pdf_read` | Read a PDF: `info` for page count and text layer, `text` for page text (layout preserved), `figures` to list figures, `table` to cut parameter tables into rows and columns, `render` to rasterise a page or region into PNG for visual reading, `curve` to digitize a curve figure into an auditable (x, y) series |
 | `stm32_pcb_place` | Plan component placement from `circuit.json` and move the footprints in `.kicad_pcb` (drops stale tracks by default, keeps a `.bak`) |
-| `stm32_pcb_route` | Preview of power/ground routing: chains pads per net and reports segment counts; writes only with `apply: true` |
+| `stm32_pcb_route` | Grid A* routing (0.5 mm grid) that avoids pads and existing tracks; preview by default, writes only with `apply: true` (run DRC after) |
 | `stm32_ecad_package` | Pack `hardware/` into a deliverable zip (skips `node_modules`, `dist`, `.history`) and read it back to self-check |
 
 There is exactly one writer: `.kicad_sch` / `.kicad_pcb` are produced by tscircuit and only read by the plugin. tscircuit embeds symbols and footprints in the project under generated names such as `tscircuit`, so checks first export them into real libraries under `hardware/libs` and complete the library tables; otherwise the report is dominated by "library not in configuration" noise. Unnamed nets (`.R1 > .pin1 to .C1 > .pin1`) are listed separately with the `<net name="VDD" />` fix. Building requires KiCad 10 and its bundled `bun.exe`.

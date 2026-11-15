@@ -191,6 +191,35 @@ export function readBoardFacts(pcbText: string): BoardFacts {
   return { widthMm, heightMm, layers, minTrackMm: minTrack, minDrillMm: minDrill, viaCount };
 }
 
+/** 板框外接矩形，原点就是 KiCad 里画的那块板的左上角。 */
+export interface BoardBox {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+export function readBoardBox(pcbText: string): BoardBox | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  const grow = (x: number, y: number): void => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const block of blocksOnLayer(pcbText, "Edge.Cuts")) {
+    for (const match of block.matchAll(/\((?:start|end|center|xy)\s+(-?[\d.]+)\s+(-?[\d.]+)\)/gu)) {
+      grow(MM(match[1] ?? "0"), MM(match[2] ?? "0"));
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+  return { x0: minX, y0: minY, x1: maxX, y1: maxY };
+}
+
 export interface DfmFinding {
   readonly rule: string;
   readonly severity: "error" | "warning" | "info";
