@@ -176,7 +176,8 @@ test("板子几何解析：认 JSON、算范围", async () => {
 
 test("走线写入结果解析", async () => {
   const { parseTrackReport } = await import("../lib/engine/ecad/pcb/tracks.js");
-  assert.deepEqual(parseTrackReport('{"added":12,"skipped":1}'), { ok: true, error: "", added: 12, skipped: 1 });
+  assert.deepEqual(parseTrackReport('{"added":12,"skipped":1,"vias":3}'), { ok: true, error: "", added: 12, skipped: 1, vias: 3 });
+  assert.equal(parseTrackReport('{"added":1,"skipped":0}').vias, 0);
   assert.equal(parseTrackReport("").ok, false);
 });
 

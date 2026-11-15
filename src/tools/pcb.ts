@@ -224,7 +224,7 @@ export function registerPcbTools(ctx: DshContext): void {
     },
     timeoutMs: 180_000,
     isConcurrencySafe: () => false,
-    execute: async (args: { projectDir?: string; boardFile?: string; keepTracks?: boolean; nets?: string[]; apply?: boolean }, exec: ToolExec) => {
+    execute: async (args: { projectDir?: string; boardFile?: string; keepTracks?: boolean; nets?: string[]; apply?: boolean; singleLayer?: boolean }, exec: ToolExec) => {
       const empty = { ok: false, error: "", boardFile: "", tracks: 0, vias: 0, nets: [] as { net: string; pads: number; segments: number }[], plane: "", notes: [] as string[] };
       const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
       if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
@@ -252,20 +252,24 @@ export function registerPcbTools(ctx: DshContext): void {
 
       const wanted = args.nets ?? [];
       const plan = planRouting(geometry, {
-        resolutionMm: 0.5,
+        resolutionMm: 0.25,
         onlyPower: wanted.length === 0,
         maxPadsPerNet: 24,
+        singleLayer: args.singleLayer === true,
       });
       if (!plan.ok) return { ...empty, boardFile, error: plan.error };
       const keep = wanted.length === 0 ? plan.segments : plan.segments.filter((segment) => wanted.includes(segment.net));
+      const keepVias = wanted.length === 0 ? plan.vias : plan.vias.filter((via) => wanted.includes(via.net));
 
       if (args.apply === true && keep.length > 0) {
         copyFileSync(boardFile, boardFile + ".bak");
         const trackScript = join(tmpdir(), "dsh-stm32-tracks-" + String(Date.now()) + ".py");
-        writeFileSync(trackScript, buildTrackScript(boardFile, keep, false), "utf8");
+        writeFileSync(trackScript, buildTrackScript(boardFile, keep, false, keepVias), "utf8");
         const trackResult = join(tmpdir(), "dsh-stm32-tracks-" + String(Date.now()) + ".json");
+        const trackPayload = join(tmpdir(), "dsh-stm32-tracks-" + String(Date.now()) + ".payload.json");
+        writeFileSync(trackPayload, JSON.stringify({ boardFile, segments: keep, vias: keepVias, dryRun: false }), "utf8");
         const trackRun = await runCapture(ctx.subprocess, {
-          argv: [located.toolchain.python, trackScript, JSON.stringify({ boardFile, segments: keep, dryRun: false }), trackResult],
+          argv: [located.toolchain.python, trackScript, trackPayload, trackResult],
           cwd: resolved.projectDir,
           timeoutMs: 120_000,
           maxBytes: 1 << 20,
@@ -274,7 +278,7 @@ export function registerPcbTools(ctx: DshContext): void {
         if (trackRun.exitCode !== 0) return { ...empty, boardFile, error: "写走线失败：" + (trackRun.stderr === "" ? trackRun.stdout : trackRun.stderr).slice(-300) };
         const report = parseTrackReport(existsSync(trackResult) ? readFileSync(trackResult, "utf8") : "");
         if (!report.ok) return { ...empty, boardFile, error: report.error };
-        notes.push("已写入 " + String(report.added) + " 段走线（原文件留 .bak）");
+        notes.push("已写入 " + String(report.added) + " 段走线、" + String(report.vias) + " 个过孔（原文件留 .bak）");
         notes.push("写完请跑 stm32_ecad_check：栅格布线仍有短接风险，必须过 DRC 才算数");
       } else {
         notes.push("预览模式：只算路径不写板；确认无误后传 apply: true");
@@ -286,7 +290,7 @@ export function registerPcbTools(ctx: DshContext): void {
         error: "",
         boardFile,
         tracks: keep.length,
-        vias: 0,
+        vias: keepVias.length,
         nets,
         plane: "",
         notes: [...notes, ...(plan.unrouted.length > 0 ? ["未布通：" + plan.unrouted.join("、")] : [])],
