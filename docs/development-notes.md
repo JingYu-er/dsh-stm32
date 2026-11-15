@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S145）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S146）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,14 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百五十四、一键设计可选带布线（S146）
+
+- `runEcadDesign` 增 `pcb` 开关：构建完、导库后调 KiCadRoutingTools 的 `autoroute.py`，再跑 `check_connected.py` 取未连接数，把结果作为「布线」一步记进流水线报告。
+- 关键取舍：**缺引擎时这一步记「跳过」而非「失败」**。理由是一键设计的判据是「电路能不能用」，装了布线器才谈得上布线；没装就退回未布线板，其余步骤照常。
+- 归一化（层名补引号）在布线前做，因为 tscircuit 导出的板子 `(layer F.Cu)` 不带引号，KiCad 认、KRT 不认，不补会让布线器当成空板从铜箔中间穿过。
+- 工具参数 `pcb` 默认 false：布线要两分半钟，不该混在「我只是想看看有没有错」的流程里。
+- 验证：`test/ecad-units.test.mjs` 增一条源码级断言（参数存在、缺引擎文案、`request.pcb === true` 分支），该套件 35 条；全量 88 套件 / 1227 pass。
 
 ### 一百五十三、换引擎：KiCadRoutingTools 让短接归零（S145）
 

@@ -1214,6 +1214,7 @@ export async function handleWebApi(input: {
         toolchain: located.toolchain,
         workspace,
         mergePads: parsed.value.mergePads !== false,
+        pcb: parsed.value.pcb === true,
         artifacts: parsed.value.artifacts !== false,
       });
       return ok({

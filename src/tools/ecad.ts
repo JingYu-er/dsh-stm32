@@ -906,6 +906,7 @@ export function registerEcadTools(ctx: DshContext): void {
         projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
         entry: { type: "string", description: "入口文件（相对 hardware/circuit）；缺省取第一个 *.circuit.tsx。" },
         mergePads: { type: "boolean", description: "把同一封装内同坐标、同网络的焊盘合并成一个多编号焊盘；一键设计默认合并，传 false 可关。" },
+        pcb: { type: "boolean", description: "构建后自动布线（需要预装 KiCadRoutingTools）；默认 false，缺引擎时该步跳过而不是失败。" },
         artifacts: { type: "boolean", description: "是否顺带导出 STEP 与 Gerber/钻孔/坐标；默认导出。" },
       },
       required: [],
@@ -959,7 +960,7 @@ export function registerEcadTools(ctx: DshContext): void {
     timeoutMs: 600_000,
     isConcurrencySafe: () => false,
     execute: async (
-      args: { projectDir?: string; entry?: string; mergePads?: boolean; artifacts?: boolean },
+      args: { projectDir?: string; entry?: string; mergePads?: boolean; artifacts?: boolean; pcb?: boolean },
       exec: ToolExec,
     ) => {
       const empty = { ok: false, error: "", kicadDir: "", pcbFile: "", schematicFile: "", steps: [], notes: [] };
@@ -976,6 +977,7 @@ export function registerEcadTools(ctx: DshContext): void {
         workspace,
         ...(args.entry === undefined ? {} : { entry: args.entry }),
         mergePads: args.mergePads !== false,
+        pcb: args.pcb === true,
         ...(args.artifacts === undefined ? {} : { artifacts: args.artifacts }),
         signal: exec.signal,
       });

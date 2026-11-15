@@ -884,3 +884,12 @@ test("3D 模型解析：官方目录 → 工程 libs/3d → 缺失，找到的�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("一键设计支持 pcb 参数：默认关，缺引擎时跳过布线而不是失败（S146）", () => {
+  const src = readFileSync(new URL("../src/tools/ecad.ts", import.meta.url), "utf8");
+  assert.match(src, /pcb: \{ type: "boolean"/u);
+  assert.match(src, /pcb: args\.pcb === true/u);
+  const design = readFileSync(new URL("../src/engine/ecad/design.ts", import.meta.url), "utf8");
+  assert.match(design, /跳过：KiCadRoutingTools 未安装/u);
+  assert.match(design, /request\.pcb === true/u);
+});

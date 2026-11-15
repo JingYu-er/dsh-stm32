@@ -15,6 +15,7 @@ import { checkDfm } from "./dfm.js";
 import { exportEmbeddedLibraries } from "./libs.js";
 import { mergeCoincidentPads } from "./padmerge.js";
 import { precheckFootprints } from "./padprecheck.js";
+import { krtRoot, krtStatus, quoteLayerNames, runKrtAutoroute, runKrtConnectedCheck } from "./pcb/krt.js";
 import type { EcadToolchain } from "./toolchain.js";
 import { runTsciBuild, type EcadWorkspace } from "./tsci.js";
 
@@ -43,6 +44,8 @@ export interface DesignRequest {
   /** 默认合并同坐标焊盘（S135）；传 false 可关。 */
   readonly mergePads?: boolean;
   readonly artifacts?: boolean;
+  /** 构建前先放元件、构建后布线（S146）：默认关，开了才动板子。 */
+  readonly pcb?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -123,6 +126,40 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
       : libs.error,
     started,
   );
+
+  // 4.5 布线（S146）：外部引擎自带的平面/扇出/去耦/布线四步，缺引擎就跳过而不是失败。
+  if (request.pcb === true && pcbFile !== "") {
+    started = Date.now();
+    const root = krtRoot();
+    const status = krtStatus(root);
+    if (!status.ok) {
+      record("布线", true, "跳过：KiCadRoutingTools 未安装（" + status.error + "）", started);
+      notes.push("没有布线器：板子保持未布线状态，可在 KiCad 里手工布线或按 README 装 KiCadRoutingTools");
+    } else {
+      const quoted = quoteLayerNames(readFileSync(pcbFile, "utf8"));
+      if (quoted.quoted > 0) writeFileSync(pcbFile, quoted.text, "utf8");
+      const routed = await runKrtAutoroute({
+        subprocess,
+        runtime: { root, python: toolchain.python },
+        inputPcb: pcbFile,
+        outputPcb: pcbFile,
+        dryRun: false,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const check = routed.ok
+        ? await runKrtConnectedCheck({ subprocess: subprocess, runtime: { root, python: toolchain.python }, pcbFile: pcbFile })
+        : { unconnected: null };
+      record(
+        "布线",
+        routed.ok,
+        routed.ok
+          ? String(routed.seconds) + " s、" + String(routed.steps.length) + " 步、未连接 " + (check.unconnected === null ? "未知" : String(check.unconnected))
+          : routed.error,
+        started,
+      );
+      notes.push(...routed.warnings);
+    }
+  }
 
   // 5. ERC / DRC：只读检查，失败也继续（结果本身就是产物）。
   started = Date.now();
