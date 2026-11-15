@@ -340,6 +340,7 @@ export function registerPcbTools(ctx: DshContext): void {
         boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取 hardware/kicad 下最新的一份。" },
         dryRun: { type: "boolean", description: "只出计划、不写板；默认 true。" },
         normalize: { type: "boolean", description: "先给层名补引号（tscircuit 导出的板子需要）；默认 true。" },
+        apply: { type: "boolean", description: "把布好的板子写回原文件（先备份 .bak）；默认 false 只写到 <板名>.auto.kicad_pcb。" },
       },
       required: [],
     },
@@ -360,7 +361,7 @@ export function registerPcbTools(ctx: DshContext): void {
     },
     timeoutMs: 1_900_000,
     isConcurrencySafe: () => false,
-    execute: async (args: { projectDir?: string; boardFile?: string; dryRun?: boolean; normalize?: boolean }, exec: ToolExec) => {
+    execute: async (args: { projectDir?: string; boardFile?: string; dryRun?: boolean; normalize?: boolean; apply?: boolean }, exec: ToolExec) => {
       const empty = { ok: false, error: "", dryRun: args.dryRun !== false, boardFile: "", output: "", engine: "", seconds: 0, openNets: -1, steps: [] as { tag: string; what: string; why: string; optional: boolean }[], warnings: [] as string[], notes: [] as string[] };
       const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
       if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
@@ -392,16 +393,23 @@ export function registerPcbTools(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (!report.ok) return { ...empty, boardFile: board, error: report.error, steps: report.steps, warnings: report.warnings, notes };
+      let output = report.output;
       if (!report.dryRun) {
         const check = await runKrtConnectedCheck({ subprocess: ctx.subprocess, runtime: { root, python: located.toolchain.python }, pcbFile: outFile, signal: exec.signal });
         notes.push(check.unconnected === null ? "连通性检查未给出数字" : "连通性检查：未连接 " + String(check.unconnected) + " 条");
+        if (args.apply === true) {
+          copyFileSync(board, board + ".bak");
+          copyFileSync(outFile, board);
+          output = board;
+          notes.push("已写回原板（备份：" + board + ".bak）");
+        }
       }
       return {
         ok: true,
         error: "",
         dryRun: report.dryRun,
         boardFile: board,
-        output: report.output,
+        output,
         engine: "KiCadRoutingTools " + krtVersion(root),
         seconds: report.seconds,
         openNets: report.openNets === null ? -1 : report.openNets,
