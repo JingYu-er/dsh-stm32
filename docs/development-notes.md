@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S125）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S126）
 
 ### 一、目标与约束
 
@@ -7268,7 +7268,19 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 实测（`kicad-cli sch export pdf --default-font Arial` 导出的 D_NFC，2 页）：354 个词、43 个元件、41 个标签；`U18=STM32L021F4Ux`、`R30/R35/R36=6.8k`、`C37…C50=47uf`；标签里 `VCC×14`、`GND×12`、`SDA×3`、`SCL×3`。
 - 教训：**读不了的东西要说读不了**。PDF 原理图能给的只是清单，把它当成网表用，比没有这个功能更危险。
 
-### 一百三十四、教训
+### 一百三十四、F4 固件包也能自动组装（S126）
+
+- 现场问题（用户实测）：想用 STM32F411，`stm32_firmware_install` 装不下来——ST 官网的固件包需要账号登录，而 CubeMX 的包管理器同理；换 F303 就顺利，因为 F3 在插件的自动组装清单里。
+- 根因：自动组装是一张白名单（`FIRMWARE_FAMILIES`），当时只有 F1/F2/F3/F7/G0/L1/L4/U0/C0/H5/U5/WBA/L5/WB/WL/H7/U3。F4 不在表里，计划阶段直接返回「插件还不会给 STM32F411CEU6 自动组装固件包」，与网络、账号都无关——**用户看到的「ST 要账号」只是他在 CubeMX 里手动装时的遭遇**。
+- 修法：补一条 F4 清单（HAL 驱动 `stm32f4xx-hal-driver` + CMSIS 设备 `cmsis-device-f4` + `STM32CubeF4` 主仓库的 5 个内核头），默认版本 1.28.0；两个归档与 5 个内核头都钉了 sha256 与字节数（codeload tar.gz 的哈希，见 `src/data/firmware-pins.ts`）。
+- 端到端验证（本机真跑，非计划）：
+  1. `stm32_firmware_install` 装到 `dsh-firmware/STM32Cube_FW_F4_V1.28.0`：下载 7 个文件 / 4325 KB，解包 198 + 141 个文件，落盘 36 MB，三条判据（目录、package.xml、启动文件）全过。
+  2. `createProjectScaffold(mcu=STM32F411CEU6)`：15 个工程文件 + 344 个固件文件，芯片 STM32F411CEUx / UFQFPN48，启动文件 `startup_stm32f411xe.s`、设备宏 `STM32F411xE`、链接脚本 `STM32F411CEUx_FLASH.ld`。
+  3. `runGenerate` 成功（6 个文件落位），`runBuild` **1.3 s / 0 error / 0 warning**。
+- 记录一个探针坑：`firmwareInstallPlan({mcu})` 不传 `cubeMxRoots` 会抛 `TypeError: cubeMxRoots is not iterable`——计划函数的入口参数是可选的，但内部决定落点时假定它已归一化，直接调要显式给根。
+- 教训：**支持清单就是能力边界**。用户报告「装不下来」时，先看清单里有没有这一代，再谈网络与账号；不然会在错误的方向上查一整轮。
+
+### 一百三十五、教训
 
 - **面板不要自己留第二份账本**：时间线、详情、证据目录都从同一个 seq 序列来，重连逻辑与回放逻辑只需要写一遍。
 - **落盘必须能表达缺口**：只写成功批次会让证据看起来连续；先写一条缺口事件，复盘时才不会把「丢了 5 条」当成「只有这些」。

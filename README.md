@@ -357,6 +357,7 @@ DSH 设置内的「STM32 工具链」页提供三张卡片：
 
 - 寄存器版 CMSIS 模板首次使用时下载到缓存（默认 `%LOCALAPPDATA%\dsh-stm32\cache`），之后复用；逐文件校验，变更即拒收。`stm32_cache` 可查看、校验、拉取与清理。
 - HAL 路线使用本机 CubeMX 固件包：F1 默认 `STM32Cube_FW_F1_V1.8.7`，其他族取已安装的最高版本；可用 `firmwarePackage` 指定。缺失时先在 CubeMX 包管理器中安装，或用 `stm32_firmware_install` 下载组装。
+- 可自动组装的族：F1 / F2 / F3 / F4 / F7 / G0 / L1 / L4 / L5 / H5 / H7 / U0 / U3 / U5 / WB / WL / WBA / C0。F4 默认 `STM32Cube_FW_F4_V1.28.0`；不在清单里的族只给手动安装步骤。
 - `stm32_download` 只下载或校验安装包（默认目录 `%LOCALAPPDATA%\dsh-stm32\downloads`），不执行安装器，不请求管理员权限。
 
 ### 环境变量（可选）

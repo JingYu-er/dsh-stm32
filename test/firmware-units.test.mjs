@@ -1349,3 +1349,19 @@ test("installFirmware 官网直取成功：下载→CRC→swmgr→自检五步 d
   rmSync(root, { recursive: true, force: true });
   rmSync(cache, { recursive: true, force: true });
 });
+
+test("F4 也能自动组装固件包（S126）", () => {
+  const plan = firmwarePlanFor({ mcu: "STM32F411CEU6" });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.family, "F4");
+  assert.equal(plan.dirName, "STM32Cube_FW_F4_V1.28.0");
+  assert.equal(plan.archives.length, 2);
+  for (const archive of plan.archives) assert.match(archive.sha256, /^[0-9a-f]{64}$/u);
+  assert.equal(plan.coreTargets.length, 5);
+});
+
+test("不认识的族仍给出可执行的下一步（S126）", () => {
+  const plan = firmwarePlanFor({ family: "N6" });
+  assert.equal(plan.ok, false);
+  assert.match(plan.error, /CubeMX 的包管理器/u);
+});

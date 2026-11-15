@@ -138,6 +138,41 @@ export const FIRMWARE_FAMILIES: Readonly<Record<string, FirmwareFamilySpec>> = {
       },
     ],
   },
+  F4: {
+    family: "F4",
+    packageBase: "STM32Cube_FW_F4",
+    defaultVersion: "1.28.0",
+    halDir: "Drivers/STM32F4xx_HAL_Driver",
+    deviceDir: "Drivers/CMSIS/Device/ST/STM32F4xx",
+    coreRepo: "STM32CubeF4",
+    coreRef: "master",
+    coreIncludeDir: "Drivers/CMSIS/Include",
+    coreHeaders: ["cmsis_compiler.h", "cmsis_gcc.h", "cmsis_version.h", "mpu_armv7.h", "core_cm4.h"],
+    archives: [
+      {
+        id: "hal",
+        label: "HAL 驱动（stm32f4xx-hal-driver）",
+        repo: "stm32f4xx-hal-driver",
+        ref: "master",
+        dirs: [
+          { from: "Inc", to: "Drivers/STM32F4xx_HAL_Driver/Inc" },
+          { from: "Src", to: "Drivers/STM32F4xx_HAL_Driver/Src" },
+        ],
+        urls: archiveUrls("stm32f4xx-hal-driver", "master"),
+      },
+      {
+        id: "device",
+        label: "CMSIS 设备支持（cmsis-device-f4）",
+        repo: "cmsis-device-f4",
+        ref: "master",
+        dirs: [
+          { from: "Include", to: "Drivers/CMSIS/Device/ST/STM32F4xx/Include" },
+          { from: "Source", to: "Drivers/CMSIS/Device/ST/STM32F4xx/Source" },
+        ],
+        urls: archiveUrls("cmsis-device-f4", "master"),
+      },
+    ],
+  },
   F3: {
     family: "F3",
     packageBase: "STM32Cube_FW_F3",
