@@ -250,7 +250,8 @@ function routePair(
     const rest = current.key - layer * grid.cols * grid.rows;
     const col = rest % grid.cols;
     const row = Math.floor(rest / grid.cols);
-    if (col === goalCol && row === goalRow) {
+    // 终点必须在焊盘所在的层：SMD 焊盘只有 F.Cu 有铜，从 B.Cu 到达会「悬空」。
+    if (col === goalCol && row === goalRow && layer === LAYER_F) {
       goalKey = current.key;
       break;
     }
@@ -441,6 +442,9 @@ export function planRouting(geometry: BoardGeometry, options: RouterOptions = {}
     let netVias = 0;
     let failed = false;
     let reason = "";
+    // 一张网要么整条留下，要么整条丢掉：半截线只会制造悬空与假连接。
+    const netSegs: RoutedSegment[] = [];
+    const netViasList: RoutedVia[] = [];
     for (let step = 1; step < order.length; step += 1) {
       const fromPad = capped[order[step - 1] ?? 0];
       const toPad = capped[order[step] ?? 0];
@@ -458,13 +462,20 @@ export function planRouting(geometry: BoardGeometry, options: RouterOptions = {}
         reason = result.reason;
         continue;
       }
-      segments.push(...result.segments);
-      vias.push(...result.vias);
+      netSegs.push(...result.segments);
+      netViasList.push(...result.vias);
       netSegments += result.segments.length;
       netVias += result.vias.length;
     }
+    if (!failed) {
+      segments.push(...netSegs);
+      vias.push(...netViasList);
+    } else {
+      netSegments = 0;
+      netVias = 0;
+      unrouted.push(net);
+    }
     reports.push({ net, pads: capped.length, segments: netSegments, vias: netVias, connected: !failed, reason: failed ? reason : "" });
-    if (failed) unrouted.push(net);
   }
   const checked = validateSegments(geometry, segments, clearance, vias);
   if (checked.rejected.length > 0) {
