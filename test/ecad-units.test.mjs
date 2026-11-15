@@ -343,7 +343,7 @@ test("ERC：把 sheets[].violations 收敛成 rule/severity/条数", async () =>
   try {
     const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: root });
     const schematic = join(project, "board.kicad_sch");
-    writeFileSync(schematic, "sch", "utf8");
+    writeFileSync(schematic, "(kicad_sch (wire (pts (xy 1 1) (xy 2 2))))", "utf8");
     const subprocess = fakeSubprocess({
       report: {
         sheets: [
@@ -892,4 +892,33 @@ test("一键设计支持 pcb 参数：默认关，缺引擎时跳过布线而不
   const design = readFileSync(new URL("../src/engine/ecad/design.ts", import.meta.url), "utf8");
   assert.match(design, /跳过：KiCadRoutingTools 未安装/u);
   assert.match(design, /request\.pcb === true/u);
+});
+
+test("没有导线的原理图：未连接类规则降级为提醒并说明（S148）", async () => {
+  const root = fakeKicadRoot();
+  const project = tempDir("ecad-erc-nowire-");
+  try {
+    const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: root });
+    const schematic = join(project, "board.kicad_sch");
+    writeFileSync(schematic, "(kicad_sch (symbol (lib_id \"Device:R\")))", "utf8");
+    const subprocess = fakeSubprocess({
+      report: {
+        sheets: [
+          {
+            violations: [
+              { type: "pin_not_connected", severity: "error", description: "Pin not connected", items: [] },
+              { type: "lib_symbol_issues", severity: "warning", description: "找不到符号", items: [] },
+            ],
+          },
+        ],
+      },
+    });
+    const erc = await runErc(subprocess, located.toolchain, schematic);
+    assert.equal(erc.summary.errors, 0);
+    assert.equal(erc.summary.warnings, 2);
+    assert.match(erc.notes.join(" "), /没有导线/u);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
 });

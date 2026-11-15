@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S147）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S148）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,14 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百五十六、没有导线的原理图：ERC 两类规则不可信（S148）
+
+- 现象：真机跑一键设计，ERC 报 58 错误 / 485 警告，其中 52 条 `pin_not_connected`、6 条 `power_pin_not_driven`。查原理图：`(wire` 出现 **0 次**，只有 22 个全局标签与 1 个本地标签。
+- 原因：tscircuit 导出的 `.kicad_sch` 只放符号与标签，不画导线。KiCad 的 ERC 按「引脚有没有接导线」判定，于是几乎每个脚都被判成未连接——这是导出器的表达方式，不是电路错。
+- 改法：`runErc` 先数 `(wire`。为 0 时把 `pin_not_connected` 与 `power_pin_not_driven` 降级为 warning，并在 `KicadReport.notes` 写一句「原理图里没有导线（tscircuit 只导出符号与标签），N 条已按提醒处理」；一键设计把这些 notes 带进报告。
+- 边界：这条降级只作用于「零导线」的原理图。真实手画原理图有导线，规则照旧是 error——不放松判据，只拒绝让导出器的表达方式冒充电路错误。
+- 验证：`test/ecad-units.test.mjs` 原用例改为含一条导线（保持原断言），另加一条「没有导线时降级并说明」→ 36 条；全量 88 套件 / 1230 pass / 0 fail。
 
 ### 一百五十五、面板上的布线引擎状态与「含布线」勾选（S147）
 

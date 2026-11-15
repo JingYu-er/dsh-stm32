@@ -35,6 +35,8 @@ export interface KicadReport {
   readonly reportPath: string;
   readonly summary: ReportSummary;
   readonly raw: string;
+  /** 判据层面的提醒（例如：tscircuit 导出的原理图不画导线，未连接类规则不可信）。 */
+  readonly notes: readonly string[];
 }
 
 interface ErcViolation {
@@ -116,8 +118,9 @@ async function runReport(
 ): Promise<KicadReport> {
   const empty = { errors: 0, warnings: 0, findings: [] as KicadFinding[] };
   if (toolchain.kicadCli === "") {
-    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", file, reportPath: "", summary: empty, raw: "" };
+    return { ok: false, error: "没有 kicad-cli：装一个 KiCad 10", file, reportPath: "", summary: empty, raw: "", notes: [] };
   }
+  const notes: string[] = [];
   const checksDir = join(dirname(file), "checks");
   if (!existsSync(checksDir)) mkdirSync(checksDir, { recursive: true });
   const reportPath = join(checksDir, command + ".json");
@@ -167,11 +170,26 @@ async function runReport(
       reportPath,
       summary: empty,
       raw: "",
+      notes: [],
     };
   }
 
+  // tscircuit 导出的原理图只放符号与全局标签、不画导线，KiCad 会把「引脚没接线」
+  // 判成错误。这类规则在这种原理图上没有意义，降级成提醒并说明原因（S148）。
+  if (command === "erc" && findings.length > 0 && !schematicHasWires(file)) {
+    const relaxed = new Set(["pin_not_connected", "power_pin_not_driven"]);
+    let relaxedCount = 0;
+    findings = findings.map((finding) => {
+      if (!relaxed.has(finding.rule)) return finding;
+      relaxedCount += 1;
+      return { ...finding, severity: "warning" as const };
+    });
+    if (relaxedCount > 0) {
+      notes.push("原理图里没有导线（tscircuit 只导出符号与标签），" + String(relaxedCount) + " 条「引脚未连接/电源未驱动」已按提醒处理");
+    }
+  }
   if (outcome.spawnError !== null) {
-    return { ok: false, error: outcome.spawnError, file, reportPath, summary: empty, raw };
+    return { ok: false, error: outcome.spawnError, file, reportPath, summary: empty, raw, notes };
   }
   const ok = outcome.exitCode === 0;
   return {
@@ -181,7 +199,17 @@ async function runReport(
     reportPath,
     summary: summarize(findings),
     raw,
+    notes,
   };
+}
+
+/** 原理图里有没有导线（`(wire ...)`）。tscircuit 导出的是「符号 + 标签」，没有导线。 */
+function schematicHasWires(file: string): boolean {
+  try {
+    return /\(wire\s/u.test(readFileSync(file, "utf8"));
+  } catch {
+    return true;
+  }
 }
 
 export interface StepExport {
