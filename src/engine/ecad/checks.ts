@@ -176,7 +176,8 @@ async function runReport(
 
   // tscircuit 导出的原理图只放符号与全局标签、不画导线，KiCad 会把「引脚没接线」
   // 判成错误。这类规则在这种原理图上没有意义，降级成提醒并说明原因（S148）。
-  if (command === "erc" && findings.length > 0 && !schematicHasWires(file)) {
+  const machineSchematic = command === "erc" ? schematicOrigin(file) : "";
+  if (command === "erc" && findings.length > 0 && (!schematicHasWires(file) || machineSchematic !== "")) {
     const relaxed = new Set(["pin_not_connected", "power_pin_not_driven"]);
     let relaxedCount = 0;
     findings = findings.map((finding) => {
@@ -185,7 +186,12 @@ async function runReport(
       return { ...finding, severity: "warning" as const };
     });
     if (relaxedCount > 0) {
-      notes.push("原理图里没有导线（tscircuit 只导出符号与标签），" + String(relaxedCount) + " 条「引脚未连接/电源未驱动」已按提醒处理");
+      notes.push(
+        (machineSchematic === ""
+          ? "原理图里没有导线（只有符号与标签）"
+          : "原理图由 " + machineSchematic + " 生成（不写 no_connect / 电源标志）") +
+          "，" + String(relaxedCount) + " 条「引脚未连接/电源未驱动」已按提醒处理",
+      );
     }
   }
   if (outcome.spawnError !== null) {
@@ -203,7 +209,18 @@ async function runReport(
   };
 }
 
-/** 原理图里有没有导线（`(wire ...)`）。tscircuit 导出的是「符号 + 标签」，没有导线。 */
+/** 生成器名字（手画原理图里通常没有 `generator`，或有 eeschema）。 */
+function schematicOrigin(file: string): string {
+  try {
+    const text = readFileSync(file, "utf8");
+    if (!/\(generator\s+circuit-json-to-kicad\)/u.test(text)) return "";
+    return "circuit-json-to-kicad";
+  } catch {
+    return "";
+  }
+}
+
+/** 原理图里有没有导线（`(wire ...)`）。旧版 tscircuit 导出的是「符号 + 标签」，没有导线。 */
 function schematicHasWires(file: string): boolean {
   try {
     return /\(wire\s/u.test(readFileSync(file, "utf8"));

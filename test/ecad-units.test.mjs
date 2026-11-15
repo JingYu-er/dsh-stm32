@@ -922,3 +922,34 @@ test("没有导线的原理图：未连接类规则降级为提醒并说明（S1
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("机器生成的原理图：未连接类规则降级并注明生成器（S148）", async () => {
+  const root = fakeKicadRoot();
+  const project = tempDir("ecad-erc-gen-");
+  try {
+    const located = locateEcadToolchain({ DSH_STM32_KICAD_ROOT: root });
+    const schematic = join(project, "board.kicad_sch");
+    writeFileSync(
+      schematic,
+      "(kicad_sch (generator circuit-json-to-kicad) (wire (pts (xy 1 1) (xy 2 2))))",
+      "utf8",
+    );
+    const subprocess = fakeSubprocess({
+      report: {
+        sheets: [
+          {
+            violations: [
+              { type: "pin_not_connected", severity: "error", description: "Pin not connected", items: [] },
+            ],
+          },
+        ],
+      },
+    });
+    const erc = await runErc(subprocess, located.toolchain, schematic);
+    assert.equal(erc.summary.errors, 0);
+    assert.match(erc.notes.join(" "), /circuit-json-to-kicad/u);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

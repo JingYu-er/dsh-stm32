@@ -153,11 +153,14 @@ export function parseAutorouteLog(text: string): {
     }
     const summary = parseJsonLine(line, "AUTOROUTE_SUMMARY:") as {
       open_nets?: number | null;
+      open?: number | null;
       drc_items?: number | null;
       error?: string | null;
     } | null;
     if (summary !== null) {
+      // 不同版本里这个字段叫 open_nets 或 open，两个都认。
       if (typeof summary.open_nets === "number") openNets = summary.open_nets;
+      else if (typeof summary.open === "number") openNets = summary.open;
       if (typeof summary.drc_items === "number") drc = summary.drc_items;
       if (typeof summary.error === "string" && summary.error !== "") error = summary.error;
       continue;

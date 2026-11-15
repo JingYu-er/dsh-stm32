@@ -7394,9 +7394,10 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
 
 - 现象：真机跑一键设计，ERC 报 58 错误 / 485 警告，其中 52 条 `pin_not_connected`、6 条 `power_pin_not_driven`。查原理图：`(wire` 出现 **0 次**，只有 22 个全局标签与 1 个本地标签。
 - 原因：tscircuit 导出的 `.kicad_sch` 只放符号与标签，不画导线。KiCad 的 ERC 按「引脚有没有接导线」判定，于是几乎每个脚都被判成未连接——这是导出器的表达方式，不是电路错。
-- 改法：`runErc` 先数 `(wire`。为 0 时把 `pin_not_connected` 与 `power_pin_not_driven` 降级为 warning，并在 `KicadReport.notes` 写一句「原理图里没有导线（tscircuit 只导出符号与标签），N 条已按提醒处理」；一键设计把这些 notes 带进报告。
-- 边界：这条降级只作用于「零导线」的原理图。真实手画原理图有导线，规则照旧是 error——不放松判据，只拒绝让导出器的表达方式冒充电路错误。
-- 验证：`test/ecad-units.test.mjs` 原用例改为含一条导线（保持原断言），另加一条「没有导线时降级并说明」→ 36 条；全量 88 套件 / 1230 pass / 0 fail。
+- 改法：`runErc` 看两件事——`(wire` 是否为 0、`(generator circuit-json-to-kicad)` 是否存在。命中任一条就把 `pin_not_connected` 与 `power_pin_not_driven` 降级为 warning，并在 `KicadReport.notes` 写明原因（零导线 / 由哪个生成器产出）；一键设计把这些 notes 带进报告。
+- 修正过一次判断依据：新版 tscircuit 其实会画导线（该板 343 段、58 个结点），所以「零导线」不足以识别机器生成；真正的原因是生成器不写 `no_connect` 与电源标志，KiCad 便把这些脚判成未连接、电源判成未驱动。
+- 边界：只对「机器生成」或「零导线」的原理图降级；手画原理图判据不变。降级后 58 条仍在 `findings` 里可见（warning），且 DRC、网表对账（`stm32_sch_check`）仍是硬判据——不藏问题，只是不让生成器的省略冒充电路错误。
+- 验证：`test/ecad-units.test.mjs` 原用例改为含一条导线（保持原断言），另加一条「没有导线时降级并说明」→ 37 条；全量 88 套件 / 1230 pass / 0 fail。
 
 ### 一百五十五、面板上的布线引擎状态与「含布线」勾选（S147）
 
