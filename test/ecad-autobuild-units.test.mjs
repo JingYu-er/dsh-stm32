@@ -82,7 +82,8 @@ test("依赖联接：只在工程里造出指向共享运行时的 node_modules"
     const first = linkRuntimeIntoProject(circuitDir, runtime);
     assert.equal(first.ok, true);
     assert.equal(first.kind, "created");
-    assert.equal(runtimeReady(join(circuitDir, "node_modules")), true);
+    // 联接指向运行时的 node_modules，所以判定要落在工程目录上（它有 node_modules/tscircuit）。
+    assert.equal(runtimeReady(circuitDir), true);
     const second = linkRuntimeIntoProject(circuitDir, runtime);
     assert.equal(second.kind, "exists");
   } finally {

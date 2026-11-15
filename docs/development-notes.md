@@ -7397,6 +7397,7 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 运行时目录 `~/.dsh-stm32/ecad-runtime`（`DSH_STM32_ECAD_RUNTIME` 可覆盖），里面只有一个 `package.json` 与一份 `node_modules`（`tscircuit` + `typescript`）。
   - `ensureEcadRuntime()` 三种模式：`auto` 真跑 `npm install`、`ask` 只回「缺什么、怎么装」、`off` 一律不装；默认 `ask`——730 MB 的下载不能藏在一次点击里。
   - `linkRuntimeIntoProject()` 用 Windows 目录联接（`fs.symlinkSync(target, path, "junction")`，不需要管理员权限）把运行时挂成工程的 `hardware/circuit/node_modules`：ESM 解析要求 `node_modules` 出现在工程树里，联接让它「看起来像」本地安装，磁盘只占一份。
+  - 第一版把联接指向运行时**根目录**（`~/.dsh-stm32/ecad-runtime`），于是工程里的 `node_modules/tscircuit` 根本不存在——运行时自己还有一层 `node_modules/`。联接必须指向 `runtime/node_modules`；真机表现为「联接建成了、构建仍报依赖未安装」，靠 `realpath + readdir` 才看清。
   - `ensureProjectRuntime()` 是构建前的唯一入口：工程内已装就用工程的，否则确保运行时并建联接。`stm32_ecad_build` / `stm32_ecad_design` 都先走它，缺依赖时给的是「怎么装」而不是 bun 的半路报错。
 - 回合末自动构建（`src/engine/ecad/autobuild.ts`）：
   - 判脏：`circuit/**/*.circuit.tsx` 与 `libs/**/*.kicad_mod|sym` 的最新 mtime 与 `kicad/**/*.kicad_pcb|sch` 比；产物缺失也算脏。
