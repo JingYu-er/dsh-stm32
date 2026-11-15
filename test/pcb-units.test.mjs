@@ -179,3 +179,18 @@ test("走线写入结果解析", async () => {
   assert.deepEqual(parseTrackReport('{"added":12,"skipped":1}'), { ok: true, error: "", added: 12, skipped: 1 });
   assert.equal(parseTrackReport("").ok, false);
 });
+
+test("落盘前自检：压到别网焊盘的走线被丢掉", async () => {
+  const { validateSegments } = await import("../lib/engine/ecad/pcb/router.js");
+  const geo = {
+    ok: true, error: "", widthMm: 10, heightMm: 10, x0: 0, y0: 0, notes: [],
+    pads: [{ ref: "U1", number: "1", net: "VCC", x: 5, y: 5, width: 1, height: 1 }],
+    tracks: [],
+  };
+  const crossed = { net: "GND", layer: "F.Cu", widthMm: 0.25, x1: 1, y1: 5, x2: 9, y2: 5 };
+  const clear = { net: "GND", layer: "F.Cu", widthMm: 0.25, x1: 1, y1: 8, x2: 9, y2: 8 };
+  const checked = validateSegments(geo, [crossed, clear], 0.2);
+  assert.equal(checked.rejected.length, 1);
+  assert.equal(checked.accepted.length, 1);
+  assert.equal(checked.accepted[0].y1, 8);
+});
