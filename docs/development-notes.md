@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S130）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S131）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,15 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百三十九、合并焊盘：tscircuit 层做不了，导出后做（S131）
+
+- 实验一（对象注入）：把同坐标焊盘并成 `A1,B12` 的单焊盘对象，用 `footprint={obj}` 传给 `<connector>` 与 `<chip>`。**两个元件都得到 0 个 port**——tscuit 的 port 是按封装引脚数生成的，对象注入不产生 port，`<trace from=".J1 > .pin1" />` 直接报 `Could not find port for selector`。此路不通。
+- 实验二（同网络再布线）：把成对脚（1/16、2/15）都接到同一网络，并在 `<board>` 上关掉摆放检查（`placementDrcChecksDisabled`）。布线器仍报 `Routes contain a junction or endpoint that cannot select a unique PCB port`——它是按 pcb_port 选唯一焊盘的，同坐标两个 port 无论网络是否相同都选不出。
+- 实验三（导出后合并）：在 `.kicad_pcb` 里把同封装内、坐标与尺寸相同、**网络也相同**的焊盘改名成 `(pad "1,16" …)` 并删掉重复块。KiCad 接受这种多编号焊盘，`kicad-cli pcb drc` 不再报「间距 0」，未连接项 0；剩下的 22 条违规全是 tscircuit 默认走线/孔径参数，与合并无关。
+- 结论：能合并，但只能在导出后。工具 `stm32_ecad_build` 新增 `mergePads=true`，在这一步做合并；网络不同的焊盘**拒绝合并**并写进 notes——那是网表本身的冲突，合并只会把它藏起来。
+- 用法建议：双触点封装先把成对的脚接到同一网络（或都留空），再 `mergePads=true`；否则工具会告诉你「未合并：2/15——同坐标焊盘的网络不同」。
+- 教训：**同一个问题在不同层有不同的解**。布线器的限制在 tscircuit 层解不掉（它没有「一个焊盘多编号」的概念），但在 KiCad 文件层是合法结构，于是把修复点放到导出之后，而不是硬改上游。
 
 ### 一百三十八、同坐标焊盘：预检、降级与「别把假象当缺线」（S130）
 

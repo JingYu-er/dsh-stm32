@@ -10,7 +10,7 @@
  * 写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，本层不直接改它们。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
@@ -19,6 +19,7 @@ import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { exportFabrication } from "../engine/ecad/fabrication.js";
 import { precheckFootprints } from "../engine/ecad/padprecheck.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
+import { mergeCoincidentPads } from "../engine/ecad/padmerge.js";
 import { ensureProjectDatasheets } from "../engine/datasheet/auto.js";
 import {
   dirSizeBytes,
@@ -254,7 +255,7 @@ export function registerEcadTools(ctx: DshContext): void {
     },
     timeoutMs: 330_000,
     isConcurrencySafe: () => false,
-    execute: async (args: { projectDir?: string; entry?: string; svgs?: boolean }, exec: ToolExec) => {
+    execute: async (args: { projectDir?: string; entry?: string; svgs?: boolean; mergePads?: boolean }, exec: ToolExec) => {
       const project = await projectDirOf(ctx, args.projectDir, exec);
       if (!project.ok) {
         return {
@@ -304,6 +305,24 @@ export function registerEcadTools(ctx: DshContext): void {
         signal: exec.signal,
       });
       const notes = [...precheck.notes, ...built.notes];
+      // 合并焊盘要在导出之后做：tscircuit 的 footprint 对象不生成 port，布线器也不认多编号
+      // 焊盘，所以只能在 .kicad_pcb 里把同坐标、同网络的焊盘并成一个（S131）。
+      if (built.ok && args.mergePads === true && built.kicadProjectDir !== "") {
+        const pcbName = readdirSync(built.kicadProjectDir).find((name) => name.endsWith(".kicad_pcb"));
+        if (pcbName !== undefined) {
+          const pcbFile = join(built.kicadProjectDir, pcbName);
+          const merged = mergeCoincidentPads(readFileSync(pcbFile, "utf8"));
+          if (merged.merged.length > 0) writeFileSync(pcbFile, merged.text, "utf8");
+          for (const group of merged.merged) {
+            notes.push("合并焊盘：" + group.names.join("/") + "（" + group.footprint + "）");
+          }
+          for (const skip of merged.skipped) {
+            notes.push(
+              "未合并：" + skip.names.join("/") + "（" + skip.footprint + "）——" + skip.reason,
+            );
+          }
+        }
+      }
       // 构建成功就把本次用到的器件手册补齐：后面读引脚、电气参数、时序都要靠它（S120）。
       if (built.ok) {
         const ds = await ensureProjectDatasheets(project.dir, {

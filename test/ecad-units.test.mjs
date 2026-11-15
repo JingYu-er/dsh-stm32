@@ -18,6 +18,7 @@ import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/eca
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
+import { mergeCoincidentPads } from "../lib/engine/ecad/padmerge.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { buildTargets } from "../lib/engine/probe.js";
 import { resolveSearchConfig } from "../lib/data/search-roots.js";
@@ -218,6 +219,26 @@ test("构建：argv 用 KiCad 自带的 bun 跑本地 cli.mjs，并带 --kicad-p
     rmSync(project, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("合并焊盘：同封装同坐标同网络并成多编号焊盘，网络不同时拒绝（S131）", () => {
+  const pcb = [
+    '(footprint "Lib:USB_C"',
+    '  (pad "1" smd roundrect (at -3.25 -4.045) (size 0.3 1.1) (layers "F.Cu") (net 1 "VBUS"))',
+    '  (pad "16" smd roundrect (at -3.25 -4.045) (size 0.3 1.1) (layers "F.Cu") (net 1 "VBUS"))',
+    '  (pad "2" smd roundrect (at -2.45 -4.045) (size 0.3 1.1) (layers "F.Cu") (net 2 "D-"))',
+    '  (pad "15" smd roundrect (at -2.45 -4.045) (size 0.3 1.1) (layers "F.Cu") (net 3 "D+"))',
+    ")",
+    "",
+  ].join("\n");
+  const result = mergeCoincidentPads(pcb);
+  assert.deepEqual(result.merged.map((group) => group.names), [["1", "16"]]);
+  assert.equal(result.skipped.length, 1);
+  assert.deepEqual(result.skipped[0].names, ["2", "15"]);
+  assert.match(result.skipped[0].reason, /网络不同/u);
+  assert.match(result.text, /\(pad "1,16"/u);
+  assert.ok(!result.text.includes('(pad "16"'));
+  assert.match(result.text, /\(pad "15"/u);
 });
 
 test("封装预检：同坐标焊盘按 A1/B12 这类成对列出，并驱动降级参数（S130）", async () => {
