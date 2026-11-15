@@ -11,13 +11,15 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import type { PopplerTools } from "./toolchain.js";
 import { extractTablesFromWords, parseBboxXml, type PdfTable } from "./tables.js";
+import { decodePng } from "./png.js";
+import { calibrateFromWords, digitizeCurves } from "./curve.js";
 
 export interface PdfInfo {
   ok: boolean;
@@ -327,5 +329,81 @@ export async function renderPdfPage(
     height,
     bytes: statSync(imageFile).size,
     notes: options.crop === undefined ? [] : ["已按 crop 裁切：坐标按该 dpi 渲染后的像素计"],
+  };
+}
+
+export interface PdfCurves {
+  ok: boolean;
+  error: string;
+  file: string;
+  page: number;
+  dpi: number;
+  imageFile: string;
+  calibration: import("./curve.js").Calibration | null;
+  series: import("./curve.js").CurveSeries[];
+  notes: string[];
+}
+
+/** 取一页曲线图并数字化：渲染位图 → 认刻度 → 按色相采样每条曲线（S122）。 */
+export async function readPdfCurves(
+  subprocess: SubprocessService,
+  tools: PopplerTools,
+  file: string,
+  options: { page: number; dpi?: number; maxPoints?: number; signal?: AbortSignal },
+): Promise<PdfCurves> {
+  const dpi = options.dpi ?? 200;
+  const empty: PdfCurves = {
+    ok: false,
+    error: "",
+    file,
+    page: options.page,
+    dpi,
+    imageFile: "",
+    calibration: null,
+    series: [],
+    notes: [],
+  };
+  const rendered = await renderPdfPage(
+    subprocess,
+    tools,
+    file,
+    { page: options.page, dpi },
+    options.signal,
+  );
+  if (!rendered.ok) return { ...empty, error: rendered.error };
+  const image = decodePng(readFileSync(rendered.imageFile));
+  if (!image.ok) return { ...empty, error: "渲染图无法解码：" + image.error, imageFile: rendered.imageFile };
+  const boxed = await runCapture(
+    subprocess,
+    {
+      argv: [tools.pdftotext, "-bbox", "-f", String(options.page), "-l", String(options.page), file, "-"],
+      cwd: dirname(file),
+      env: {},
+      timeoutMs: 60_000,
+      maxBytes: 16 * 1024 * 1024,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+  );
+  if (boxed.exitCode !== 0) {
+    return { ...empty, error: "取不到刻度文字：" + (boxed.stderr || boxed.spawnError || "pdftotext 失败"), imageFile: rendered.imageFile };
+  }
+  const pages = parseBboxXml(boxed.stdout);
+  const words = pages[0]?.words ?? [];
+  const scale = dpi / 72;
+  const calibrated = calibrateFromWords(words, { scale });
+  if (!calibrated.ok) {
+    return { ...empty, error: calibrated.error, imageFile: rendered.imageFile };
+  }
+  const digitized = digitizeCurves(image.image, calibrated.calibration, options.maxPoints === undefined ? {} : { maxPoints: options.maxPoints });
+  return {
+    ok: digitized.series.length > 0,
+    error: digitized.series.length > 0 ? "" : "没有采样到曲线像素",
+    file,
+    page: options.page,
+    dpi,
+    imageFile: rendered.imageFile,
+    calibration: calibrated.calibration,
+    series: digitized.series,
+    notes: [...calibrated.calibration.notes, ...digitized.notes],
   };
 }

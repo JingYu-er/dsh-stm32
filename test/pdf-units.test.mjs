@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { locatePoppler } from "../lib/engine/pdf/toolchain.js";
 import { extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../lib/engine/pdf/reader.js";
 import { extractTablesFromWords, parseBboxXml } from "../lib/engine/pdf/tables.js";
+import { calibrateFromWords, digitizeCurves } from "../lib/engine/pdf/curve.js";
+import { decodePng } from "../lib/engine/pdf/png.js";
 import { CAPABILITY_COMPONENTS } from "../lib/engine/toolchain-gate.js";
 
 function fakeSubprocess(respond) {
@@ -179,4 +181,83 @@ test("两列参数表能切出来，句子段落被丢掉", () => {
   assert.equal(found.cells[1][0], "≤ 24");
   assert.equal(found.cells[2][1], "001 (2 cycles)");
   assert.ok(!found.cells.some((row) => row.join(" ").includes("FLASH_ACR")));
+});
+
+test("曲线标定：成列纵轴 + 成行横轴各自拟合（S122）", () => {
+  const words = [];
+  // 纵轴 1.235 … 1.185，每格 0.005，向下像素递增
+  for (let index = 0; index < 11; index += 1) {
+    words.push({ text: (1.235 - index * 0.005).toFixed(3), x0: 100, y0: 200 + index * 40, x1: 130, y1: 210 + index * 40 });
+  }
+  // 横轴 −40 … 120，每格 20，向右像素递增
+  for (let index = 0; index < 9; index += 1) {
+    words.push({ text: String(-40 + index * 20), x0: 200 + index * 50, y0: 700, x1: 220 + index * 50, y1: 712 });
+  }
+  const calibrated = calibrateFromWords(words);
+  assert.equal(calibrated.ok, true);
+  const x = calibrated.calibration.x;
+  const y = calibrated.calibration.y;
+  assert.equal(x.ticks.length, 9);
+  assert.equal(y.ticks.length, 11);
+  // pixel 200 → 值 1.235；pixel 240 → 1.230
+  assert.ok(Math.abs(y.a * 205 + y.b - 1.235) < 0.0001);
+  assert.ok(Math.abs(y.a * 245 + y.b - 1.23) < 0.0001);
+});
+
+test("曲线标定：数字太少或纵轴刻度全相同则明确失败（S122）", () => {
+  const few = calibrateFromWords([{ text: "1.2", x0: 0, y0: 0, x1: 10, y1: 10 }]);
+  assert.equal(few.ok, false);
+  const flat = [];
+  for (let index = 0; index < 5; index += 1) {
+    flat.push({ text: "3.3", x0: 50, y0: 100 + index * 20, x1: 70, y1: 110 + index * 20 });
+  }
+  for (let index = 0; index < 5; index += 1) {
+    flat.push({ text: String(index), x0: 100 + index * 20, y0: 500, x1: 110 + index * 20, y1: 510 });
+  }
+  assert.equal(calibrateFromWords(flat).ok, false);
+});
+
+test("曲线采样：按色相取每条线的中位数，坐标轴范围外的装饰被丢弃（S122）", () => {
+  const width = 200;
+  const height = 80;
+  const rgba = new Uint8Array(width * height * 4).fill(255);
+  const paint = (x, y, r, g, b) => {
+    const index = (y * width + x) * 4;
+    rgba[index] = r;
+    rgba[index + 1] = g;
+    rgba[index + 2] = b;
+    rgba[index + 3] = 255;
+  };
+  for (let x = 5; x < 195; x += 1) {
+    paint(x, 30, 255, 0, 170); // 品红曲线
+    paint(x, 50, 0, 224, 224); // 青色曲线
+    paint(x, 78, 51, 153, 255); // 蓝色：轴外装饰
+  }
+  const calibration = {
+    x: { a: 1, b: 0, ticks: [{ value: 0, pixel: 10 }, { value: 100, pixel: 110 }], unit: "" },
+    y: { a: -1, b: 60, ticks: [{ value: 10, pixel: 50 }, { value: 40, pixel: 20 }], unit: "" },
+    notes: [],
+  };
+  const result = digitizeCurves({ width, height, rgba }, calibration, { maxPoints: 8 });
+  const hues = result.series.map((item) => item.hue).sort();
+  assert.deepEqual(hues, ["cyan", "magenta"]);
+  const magenta = result.series.find((item) => item.hue === "magenta");
+  assert.ok(magenta.points.length > 2);
+  assert.ok(magenta.points.every((point) => Math.abs(point.y - 30) < 0.001));
+});
+
+test("PNG 解码：拒绝非 PNG 与 16 位图（S122）", () => {
+  const bad = decodePng(Buffer.from("not a png"));
+  assert.equal(bad.ok, false);
+  const png = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    Buffer.from([0, 0, 0, 13]),
+    Buffer.from("IHDR", "latin1"),
+    Buffer.from([0, 0, 0, 4, 0, 0, 0, 4, 16, 2, 0, 0, 0]),
+    Buffer.from([0, 0, 0, 0]),
+    Buffer.from("IEND", "latin1"),
+    Buffer.from([0, 0, 0, 0]),
+  ]);
+  const sixteen = decodePng(png);
+  assert.equal(sixteen.ok, false);
 });

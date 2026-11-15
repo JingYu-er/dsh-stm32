@@ -15,13 +15,13 @@ import { extname, isAbsolute, resolve } from "node:path";
 
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveSearchConfig } from "../data/search-roots.js";
-import { extractPdfTables, extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../engine/pdf/reader.js";
+import { extractPdfTables, extractPdfText, listFigures, readPdfCurves, readPdfInfo, renderPdfPage } from "../engine/pdf/reader.js";
 import { locatePoppler } from "../engine/pdf/toolchain.js";
 import { datasheetCacheDir, resolveDatasheetRef } from "../engine/datasheet/store.js";
 
 export const PDF_READ_TOOL = "stm32_pdf_read";
 
-const MODES = ["info", "text", "figures", "table", "render"] as const;
+const MODES = ["info", "text", "figures", "table", "render", "curve"] as const;
 
 const noteSchema: JsonSchema = {
   type: "array",
@@ -61,6 +61,38 @@ const outputSchema: JsonSchema = {
         },
         required: ["page", "text"],
       },
+    },
+    curves: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        page: { type: "number" },
+        series: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              hue: { type: "string" },
+              color: { type: "string" },
+              pixels: { type: "number" },
+              points: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { x: { type: "number" }, y: { type: "number" } },
+                  required: ["x", "y"],
+                },
+              },
+            },
+            required: ["hue", "color", "pixels", "points"],
+          },
+        },
+        xTicks: { type: "array", items: { type: "number" } },
+        yTicks: { type: "array", items: { type: "number" } },
+      },
+      required: ["page", "series", "xTicks", "yTicks"],
     },
     figures: {
       type: "array",
@@ -124,7 +156,7 @@ export function registerPdfTools(ctx: DshContext): void {
         additionalProperties: false,
         properties: {
           file: { type: "string", description: "PDF 路径；相对工程根或当前目录。" },
-          mode: { type: "string", enum: [...MODES], description: "info（默认）/ text / figures / table / render。" },
+          mode: { type: "string", enum: [...MODES], description: "info（默认）/ text / figures / table / render / curve。" },
           first: { type: "number", description: "text 与 figures 的起始页（默认 1）。" },
           last: { type: "number", description: "text / figures / table 的结束页（默认同 first；text 最多 20 页）。" },
           page: { type: "number", description: "render 的页码（从 1 开始）。" },
@@ -156,6 +188,12 @@ export function registerPdfTools(ctx: DshContext): void {
           pages?: { page: number; text: string }[];
           figures?: { number: string; title: string; page: number }[];
           tables?: { title: string; page: number; rows: number; columns: string[]; cells: string[][]; confidence: string; warnings: string[] }[];
+          curves?: {
+            page: number;
+            series: { hue: string; color: string; pixels: number; points: { x: number; y: number }[] }[];
+            xTicks: number[];
+            yTicks: number[];
+          };
           imageFile?: string;
           imageWidth?: number;
           imageHeight?: number;
@@ -180,6 +218,23 @@ export function registerPdfTools(ctx: DshContext): void {
           for (const figure of result.figures) {
             lines.push("  Figure " + figure.number + " · " + figure.title + (figure.page > 0 ? "（第 " + String(figure.page) + " 页）" : ""));
           }
+        }
+        if (result.mode === "curve" && result.curves !== undefined) {
+          const lines = [
+            "曲线：" + String(result.curves.series.length) + " 条（第 " + String(result.curves.page) + " 页，" + String(result.dpi ?? 0) + " dpi）",
+            "纵轴刻度：" + result.curves.yTicks.join(" / "),
+            "横轴刻度：" + result.curves.xTicks.join(" / "),
+          ];
+          for (const item of result.curves.series) {
+            const first = item.points[0];
+            const last = item.points[item.points.length - 1];
+            lines.push(
+              "- " + item.hue + "：" + String(item.points.length) + " 点，" +
+                (first === undefined ? "?" : String(first.x) + " → " + String(first.y)) + " … " +
+                (last === undefined ? "?" : String(last.x) + " → " + String(last.y)),
+            );
+          }
+          return [{ type: "text", text: lines.join("\n") }];
         }
         if (result.mode === "table" && result.tables !== undefined) {
           lines.push("表 " + String(result.tables.length) + " 张：");
@@ -211,7 +266,21 @@ export function registerPdfTools(ctx: DshContext): void {
       const cached = resolveDatasheetRef(datasheetCacheDir(), args.file);
       const file = cached === null ? absoluteFile(args.file) : cached.file;
       const located = locatePoppler(popplerDirs());
-      const base = { ok: false, error: "", mode, file, notes: [] as string[] };
+      const base = {
+        ok: false,
+        error: "",
+        mode,
+        file,
+        notes: [] as string[],
+        curves: undefined as
+          | {
+              page: number;
+              series: { hue: string; color: string; pixels: number; points: { x: number; y: number }[] }[];
+              xTicks: number[];
+              yTicks: number[];
+            }
+          | undefined,
+      };
       if (cached !== null) base.notes.push("手册来自本地缓存：" + cached.entry.code + " · " + cached.entry.mpn);
       if (located.tools === null) return { ...base, error: located.error };
       if (mode === "info") {
@@ -262,6 +331,37 @@ export function registerPdfTools(ctx: DshContext): void {
           notes: [
             "第 " + String(first) + "–" + String(last) + " 页里找到 " + String(figures.length) + " 条图注；目录页会给出页号，正文图注只有标题。",
             figures.length === 0 ? "这一段没有图注行：换个页范围，或直接 render 该页看。" : "用 render 打开带页号的那一页，即可读图。",
+          ],
+        };
+      }
+      if (mode === "curve") {
+        const page = Math.max(1, Math.floor(args.page ?? 1));
+        const result = await readPdfCurves(ctx.subprocess, located.tools, file, {
+          page,
+          dpi: args.dpi ?? 200,
+          signal: exec.signal,
+        });
+        if (!result.ok) return { ...base, error: result.error };
+        return {
+          ...base,
+          ok: true,
+          imageFile: result.imageFile,
+          dpi: result.dpi,
+          curves: {
+            page: result.page,
+            series: result.series.map((item) => ({
+              hue: item.hue,
+              color: item.color,
+              pixels: item.pixels,
+              points: item.points,
+            })),
+            yTicks: (result.calibration?.y.ticks ?? []).map((tick) => tick.value),
+            xTicks: (result.calibration?.x.ticks ?? []).map((tick) => tick.value),
+          },
+          notes: [
+            ...result.notes,
+            "序列按色相命名（图上没有可直接读取的图例文字）：先用 render 看一眼确认哪种颜色是哪条线。",
+            "刻度由页面上最近的一列/一行数字拟合，若同页有多张图，page 要指定到那一页。",
           ],
         };
       }
