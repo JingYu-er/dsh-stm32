@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 41 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 42 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -195,6 +195,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | Tool | Purpose |
 | --- | --- |
 | `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies are installed there with `npm install` |
+| `stm32_sch_review` | One-shot schematic review: read, rule check, `.ioc` draft and the pins that need a human decision; read-only |
 | `stm32_ecad_design` | One-shot design: build → merge pads (optional) → export libs → ERC/DRC → manufacturability and cost → STEP and fabrication files, reported step by step |
 | `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs`; JLC footprints (`footprint="jlcpcb:C…"`) are vendored into the library per reference and recorded in `libs/sources.json`; before building it pre-checks the footprint for coincident pads (the A1/B12 pair of a 16P USB-C), and when found it skips autorouting and ignores the placement-clearance warning while still producing the board; pass `mergePads=true` to merge coincident same-net pads into one multi-number pad |
 | `stm32_ecad_check` | Export the project libraries first, then run `kicad-cli sch erc` and `pcb drc`, collapsing violations into rule, severity and affected items; unnamed nets are reported too |
@@ -291,7 +292,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Events | Call start and end, duration, slow-call marker, argument summary | Failures only, filter by tool, sort by duration, bulk quoting, JSONL export, event deep links |
 | Live channels | Serial / RTT / watch output | Pause, clear, keyword filter, RTT level filter, send a serial line, persistent capture, export |
 | Pins | Grouped by peripheral, by port, or drawn as the package (chip part number, package name, four sides of pin bars, pin-1 dot) | Filter, copy references, inspect `.ioc` keys, CSV export |
-| Diagram | Hub-and-spoke flow diagram grouped by function (MCU in the centre, NFC antenna and tag, light sensing, power, debug port and keys around it; when the schematic carries no part numbers the MCU is inferred from pad count and refdes, and the footer says so); links leave any of the four sides and are labelled by bus and signal purpose, with check results | Read-only; parts are not boxes of their own; power nets are listed separately |
+| Diagram | Hub-and-spoke flow diagram grouped by function (MCU in the centre, NFC antenna and tag, light sensing, power, debug port and keys around it; when the schematic carries no part numbers the MCU is inferred from pad count and refdes, and the footer says so); links leave any of the four sides and are labelled by bus and signal purpose, with check results | Read-only; parts are not boxes of their own; power nets are listed separately; the "Review" button runs read + rule check + `.ioc` draft and lists pins that need a human decision |
 | Circuit design | tscircuit workspace state: initialisation, dependencies, entries, latest build, libraries, exported artifacts | trigger build, check, library export, STEP export, Gerber packaging, deliverable packaging and datasheet fetching from the tab; a build takes tens of seconds |
 | Clocks | Tree and flow views, per-node frequency and divider | Over-limit markers and "change to ÷N" advice computed from the parent clock |
 | Interrupts | NVIC enablement, preemption and sub-priority | Filter, sort, edit in place, bulk edit |
@@ -456,7 +457,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 41 tools
+  tools/            registration and argument validation for 42 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

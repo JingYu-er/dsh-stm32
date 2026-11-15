@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：41 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：42 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -195,6 +195,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 用途 |
 | --- | --- |
 | `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖需要在该目录执行 `npm install` |
+| `stm32_sch_review` | 原理图一键评审：读图、规则检查、配置草案与「需要人决策的脚」，只给结论不写盘 |
 | `stm32_ecad_design` | 一键设计：构建 → 合并焊盘（可选）→ 导库 → ERC/DRC → 可制造性与成本 → STEP 与制造文件，逐步报告 |
 | `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json`；构建前预检封装里同坐标的焊盘（USB-C 16P 的 A1/B12 这类），命中就跳过自动布线并忽略摆放间距告警，板子照常产出；需要把同坐标焊盘并成一个时，构建时传 `mergePads=true` |
 | `stm32_ecad_check` | 先补齐工程库表与嘉立创工艺规则（`<工程>.kicad_dru`），再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络、板子尺寸、最细走线、最小孔径与打样成本 |
@@ -295,7 +296,7 @@ static void rtt_init(void) {
 | 事件 | 调用起止、耗时、慢调用标记、参数摘要 | 只看失败、按工具筛选、按耗时排序、批量引用、导出 JSONL、事件深链 |
 | 实时通道 | 串口 / RTT / 监视输出 | 暂停、清空、关键字过滤、RTT 级别过滤、发送串口行、常驻采集、导出 |
 | 引脚 | 按外设分组、按端口排布、按封装画法（芯片型号 + 封装名 + 四边引脚小长条，1 脚圆点） | 筛选、复制引用、查看 `.ioc` 键、导出 CSV |
-| 流程图 | 按功能模块聚合的网状框图（主控居中，NFC 天线与标签、光检测、供电、调试口、按键环绕摆放；原理图没写型号时按封装脚数与位号推断主控，并在页脚说明），连线从框的四个方向进出，按总线与信号用途标注，附检查结论 | 只读；元件不单独成框，电源网络单独列出 |
+| 流程图 | 按功能模块聚合的网状框图（主控居中，NFC 天线与标签、光检测、供电、调试口、按键环绕摆放；原理图没写型号时按封装脚数与位号推断主控，并在页脚说明），连线从框的四个方向进出，按总线与信号用途标注，附检查结论 | 只读；元件不单独成框，电源网络单独列出；页签上的「一键评审」会跑读图 + 规则检查 + `.ioc` 草案并列出需要人决策的脚 |
 | 电路设计 | tscircuit 工作区状态：初始化、依赖、入口、最近构建、库、导出产物 | 可在页签里直接触发构建、检查、导出库、导出 STEP、打包 Gerber、打包交付、补数据手册；构建与打包要几十秒 |
 | 时钟 | 树与流向两种视图、各节点频率与分频 | 超限标记与「改为 ÷N」建议（按父时钟计算） |
 | 中断 | NVIC 使能、抢占与子优先级 | 筛选、排序、就地修改、批量修改 |
@@ -461,7 +462,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            41 个工具的注册与参数校验
+  tools/            42 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

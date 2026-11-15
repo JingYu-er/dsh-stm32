@@ -16,6 +16,7 @@ import { resolveSearchConfig } from "../data/search-roots.js";
 import { checkSchematic } from "../engine/schematic/checks.js";
 import { findRootSchematic, readSchematic, type SchematicReport } from "../engine/schematic/model.js";
 import { draftIoc } from "../engine/schematic/to-ioc.js";
+import { runSchematicReview } from "../engine/schematic/review.js";
 import { locatePoppler } from "../engine/pdf/toolchain.js";
 import { datasheetCacheDir, resolveDatasheetRef } from "../engine/datasheet/store.js";
 import { pinFunctionIndex, readDatasheetPinout } from "../engine/datasheet/pinout.js";
@@ -28,6 +29,8 @@ export const SCH_READ_TOOL = "stm32_sch_read";
 export const SCH_PINS_TOOL = "stm32_sch_pins";
 export const SCH_CHECK_TOOL = "stm32_sch_check";
 export const SCH_TO_IOC_TOOL = "stm32_sch_to_ioc";
+
+export const SCH_REVIEW_TOOL = "stm32_sch_review";
 
 /** 一次最多列出多少个元件/网络；超出部分只给计数，避免报告压垮上下文。 */
 const LIST_LIMIT = 200;
@@ -740,6 +743,144 @@ export function registerSchematicTools(ctx: DshContext): void {
     },
   });
 
+  ctx.tools.register({
+    name: SCH_REVIEW_TOOL,
+    description:
+      "一键评审原理图：读图 → 规则检查 → 与 .ioc 对账 → 生成 .ioc 配置草案，给出一个总判据（有 error 即不通过）与需要人决策的清单。只读。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+        rootFile: { type: "string", description: "显式指定 .kicad_sch；缺省按工程约定在 hardware/ 下找。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          rootFile: { type: "string" },
+          components: { type: "number" },
+          nets: { type: "number" },
+          errors: { type: "number" },
+          warnings: { type: "number" },
+          mcu: {
+            type: "object",
+            additionalProperties: false,
+            properties: { ref: { type: "string" }, value: { type: "string" } },
+            required: ["ref", "value"],
+          },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                step: { type: "string" },
+                ok: { type: "boolean" },
+                detail: { type: "string" },
+                ms: { type: "number" },
+              },
+              required: ["step", "ok", "detail", "ms"],
+            },
+          },
+          decisions: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                pin: { type: "string" },
+                net: { type: "string" },
+                reason: { type: "string" },
+              },
+              required: ["pin", "net", "reason"],
+            },
+          },
+          findings: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                rule: { type: "string" },
+                severity: { type: "string" },
+                message: { type: "string" },
+              },
+              required: ["rule", "severity", "message"],
+            },
+          },
+          ioc: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              pins: { type: "number" },
+              unresolved: { type: "array", items: { type: "string" } },
+              softwareFallbacks: { type: "array", items: { type: "string" } },
+            },
+            required: ["pins", "unresolved", "softwareFallbacks"],
+          },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "rootFile", "components", "nets", "errors", "warnings", "steps", "decisions", "findings", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          components: number;
+          nets: number;
+          errors: number;
+          warnings: number;
+          steps: { step: string; ok: boolean; detail: string; ms: number }[];
+          decisions: { pin: string; net: string; reason: string }[];
+          ioc: { pins: number; unresolved: string[] } | null;
+          notes: string[];
+        };
+        const lines = [
+          (result.ok ? "评审通过" : "评审未通过：") + (result.error === "" ? "" : " " + result.error),
+          "元件 " + String(result.components) + " / 网络 " + String(result.nets) + " / 错误 " + String(result.errors) + " / 警告 " + String(result.warnings),
+        ];
+        for (const step of result.steps) lines.push("  " + (step.ok ? "OK  " : "FAIL") + " " + step.step + "：" + step.detail + "（" + String(step.ms) + " ms）");
+        if (result.ioc !== null) lines.push("  配置草案：" + String(result.ioc.pins) + " 个脚，待确认 " + String(result.ioc.unresolved.length) + " 个");
+        for (const item of result.decisions.slice(0, 12)) lines.push("  ? " + item.pin + "（" + item.net + "）：" + item.reason);
+        for (const note of result.notes) lines.push("  ! " + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; rootFile?: string }, exec: ToolExec) => {
+      const resolution = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolution.projectDir === "") {
+        return {
+          ok: false,
+          error: resolution.note ?? "projectDir 不能为空",
+          rootFile: "",
+          components: 0,
+          nets: 0,
+          errors: 0,
+          warnings: 0,
+          mcu: null,
+          steps: [],
+          decisions: [],
+          findings: [],
+          ioc: null,
+          notes: [],
+        };
+      }
+      return runSchematicReview({
+        projectDir: resolution.projectDir,
+        ...(args.rootFile === undefined ? {} : { rootFile: args.rootFile }),
+        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+      });
+    },
+  });
+
 }
 
 function formatPins(value: SchPinsValue): string[] {
@@ -761,4 +902,6 @@ function formatCheck(value: SchCheckValue): string[] {
   for (const finding of value.findings) lines.push(`  [${finding.severity}] ${finding.rule}：${finding.message}（${finding.evidence}）`);
   for (const note of value.notes) lines.push(`  ! ${note}`);
   return lines;
+
+
 }

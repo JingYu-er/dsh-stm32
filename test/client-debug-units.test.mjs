@@ -263,3 +263,10 @@ test("电路设计页签：手册占用与补手册按钮（S124）", () => {
   assert.match(source, /dsSizeText\(datasheets\)/u);
   assert.match(source, /ecad\.datasheets/u);
 });
+
+test("流程图页有一键评审按钮，请求走 /schematic/review（S135）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.equal(source.includes("\"一键评审\""), true);
+  assert.equal(source.includes("schematic/review?projectDir="), true);
+  assert.equal(source.includes("...reviewRows"), true);
+});

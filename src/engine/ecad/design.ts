@@ -40,6 +40,7 @@ export interface DesignRequest {
   readonly toolchain: EcadToolchain;
   readonly workspace: EcadWorkspace;
   readonly entry?: string;
+  /** 默认合并同坐标焊盘（S135）；传 false 可关。 */
   readonly mergePads?: boolean;
   readonly artifacts?: boolean;
   readonly signal?: AbortSignal;
@@ -100,7 +101,7 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
   const schematicFile = schOf(kicadDir);
 
   // 3. 合并焊盘（可选）：同坐标、同网络的焊盘并成一个多编号焊盘。
-  if (request.mergePads === true && pcbFile !== "") {
+  if (request.mergePads !== false && pcbFile !== "") {
     started = Date.now();
     const merged = mergeCoincidentPads(readFileSync(pcbFile, "utf8"));
     if (merged.merged.length > 0) writeFileSync(pcbFile, merged.text, "utf8");

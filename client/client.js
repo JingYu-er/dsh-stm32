@@ -2692,6 +2692,7 @@ function EcadPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useEcad(projectDir, 20000);
       const [job, setJob] = useState({ name: "", running: false, result: null, error: "" });
+      const [autoTried, setAutoTried] = useState(false);
       const runAction = async (name) => {
         if (job.running || projectDir === "") return;
         setJob({ name: name, running: true, result: null, error: "" });
@@ -2736,6 +2737,16 @@ function EcadPanel(props) {
           ),
         );
       }
+      // 装配好了却还没有产物时，打开页签就先构建一次，人不必先点一遍（S135）。
+      useEffect(() => {
+        if (autoTried || job.running || projectDir === "") return;
+        const ecad = state.ecad;
+        if (ecad === null || ecad.installed !== true) return;
+        const hasBuild = ecad.latest !== null && ecad.latest !== undefined && ecad.latest.ok === true;
+        setAutoTried(true);
+        if (!hasBuild) void runAction("build");
+      }, [autoTried, job.running, projectDir, state.ecad]);
+
       const rows = [];
       const actionRow = projectDir === "" ? null : e(
         "div",
@@ -2877,6 +2888,14 @@ function EcadPanel(props) {
     function SchematicPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useSchematic(projectDir, 15000);
+      const [review, setReview] = useState({ running: false, result: null, error: "" });
+      const runReview = async () => {
+        if (review.running || projectDir === "") return;
+        setReview({ running: true, result: null, error: "" });
+        const result = await callApi("GET", "schematic/review?projectDir=" + encodeURIComponent(projectDir));
+        if (result.ok) setReview({ running: false, result: result.value.review, error: "" });
+        else setReview({ running: false, result: null, error: result.error });
+      };
       const schematic = state.schematic;
       const countOf = (value) => (typeof value === "number" ? value : Array.isArray(value) ? value.length : 0);
       const hardwareNameOf = (layoutInfo) => {
@@ -2892,6 +2911,39 @@ function EcadPanel(props) {
       const warnings = findings.filter((item) => item.severity === "warning");
       const shown = findings.slice(0, 12);
       const powerNets = schematic === null || schematic.diagram === undefined || !Array.isArray(schematic.diagram.powerNets) ? [] : schematic.diagram.powerNets;
+      const reviewRows = [];
+      if (projectDir !== "") {
+        reviewRows.push(
+          e(
+            "div",
+            { key: "review-btn", style: { display: "flex", gap: "8px", alignItems: "center", padding: "4px 0 6px" } },
+            e("button", { type: "button", disabled: review.running, onClick: () => runReview(), style: Object.assign({}, debugStyles.button, review.running ? { opacity: 0.5, cursor: "default" } : {}) }, review.running ? "评审中…" : "一键评审"),
+            review.result !== null
+              ? e("span", { style: { fontSize: "12px", color: review.result.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" } }, (review.result.ok ? "评审通过" : "评审未通过") + (review.result.error === "" ? "" : "：" + review.result.error))
+              : null,
+          ),
+        );
+        if (review.error !== "") reviewRows.push(e("div", { key: "review-err", style: { fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, review.error));
+        if (review.result !== null) {
+          reviewRows.push(
+            e(
+              "div",
+              { key: "review-body", style: { display: "grid", gap: "2px", padding: "0 0 8px", fontSize: "12px" } },
+              ...review.result.steps.map((step, index) =>
+                e("div", { key: "rv-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
+                  e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: step.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" }) }, step.ok ? "OK" : "FAIL"),
+                  e("span", { style: { minWidth: "72px", opacity: 0.85 } }, step.step),
+                  e("span", { style: { opacity: 0.75 } }, step.detail),
+                ),
+              ),
+              ...review.result.decisions.slice(0, 8).map((item, index) =>
+                e("div", { key: "rvd-" + String(index), style: { opacity: 0.8 } }, "? " + item.pin + "（" + item.net + "）：" + item.reason),
+              ),
+              ...review.result.notes.map((note, index) => e("div", { key: "rvn-" + String(index), style: { opacity: 0.6 } }, "! " + note)),
+            ),
+          );
+        }
+      }
       const head = [];
       if (projectDir === "") {
         head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录：在工具栏「工程」里选一个，或先打开调试会话。"));
@@ -3018,7 +3070,7 @@ function EcadPanel(props) {
           notes.push(e("div", { key: "warn", style: { paddingTop: "6px", fontSize: "11.5px", opacity: 0.65 } }, warnList.join("；")));
         }
       }
-      return e("div", { className: "d32-page", style: { display: "flex", flexDirection: "column", gap: "4px" } }, head, diagram, ...notes);
+      return e("div", { className: "d32-page", style: { display: "flex", flexDirection: "column", gap: "4px" } }, head, ...reviewRows, diagram, ...notes);
     }
 
     function PinoutPanel(props) {

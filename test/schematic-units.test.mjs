@@ -329,3 +329,15 @@ test("配置草案：器件库缺信号时用手册引脚表兜底，并标出�
   const pa13 = new Map(enriched.pins.map((pin) => [pin.name, pin])).get("PA13");
   assert.equal(pa13?.source, "cubemx", "器件库能解析的脚不受手册影响");
 });
+
+test("一键评审：读图、规则检查与配置草案三步都跑通（S135）", async () => {
+  const { runSchematicReview } = await import("../lib/engine/schematic/review.js");
+  const fixture = new URL("./fixtures/kicad-10-d-nfc", import.meta.url).pathname;
+  const result = await runSchematicReview({ projectDir: decodeURIComponent(fixture).replace(/^\/([A-Za-z]:)/u, "$1") });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.steps.length, 3);
+  assert.deepEqual(result.steps.map((step) => step.step), ["读图", "规则检查", "配置草案"]);
+  assert.equal(result.errors, 0);
+  assert.equal(result.components, 43);
+  assert.ok(result.mcu !== null && result.mcu.ref === "U18");
+});

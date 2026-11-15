@@ -67,6 +67,7 @@ import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { runEcadDesign } from "./ecad/design.js";
+import { runSchematicReview } from "./schematic/review.js";
 import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
 import { cacheBytes, datasheetCacheDir } from "./datasheet/store.js";
 import { findIocFile } from "./generate.js";
@@ -545,6 +546,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/serial/open",
   WEB_API_PREFIX + "/serial/close",
   WEB_API_PREFIX + "/schematic",
+  WEB_API_PREFIX + "/schematic/review",
   WEB_API_PREFIX + "/ecad",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
@@ -1069,6 +1071,15 @@ export async function handleWebApi(input: {
     if (!read.ok) return fail(409, read.error);
     return ok({ pinout: read.report });
   }
+  if (path === WEB_API_PREFIX + "/schematic/review") {
+    // 原理图一键评审：读图 → 规则检查 → 配置草案，只读不写盘（S135）。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const rootFile = typeof query["rootFile"] === "string" ? query["rootFile"].trim() : "";
+    return ok({ review: runSchematicReview({ projectDir, ...(rootFile === "" ? {} : { rootFile }) }) });
+  }
+
   if (path === WEB_API_PREFIX + "/schematic") {
     // 原理图页：读 KiCad 工程，给模块框图与检查结果；只读文件，不碰探针。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
@@ -1193,7 +1204,7 @@ export async function handleWebApi(input: {
         subprocess: input.deps.subprocess,
         toolchain: located.toolchain,
         workspace,
-        mergePads: parsed.value.mergePads === true,
+        mergePads: parsed.value.mergePads !== false,
         artifacts: parsed.value.artifacts !== false,
       });
       return ok({
