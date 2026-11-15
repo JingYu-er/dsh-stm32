@@ -14,9 +14,12 @@ import { planEcadWorkspace } from "../engine/ecad/tsci.js";
 import { readCircuitNetlist } from "../engine/ecad/pcb/netlist.js";
 import { planPlacement } from "../engine/ecad/pcb/placement.js";
 import { buildApplyScript, parseApplyOutput } from "../engine/ecad/pcb/apply.js";
+import { appendGroundZone, buildRouteScript, DEFAULT_POWER_NETS, parseRouteOutput } from "../engine/ecad/pcb/route.js";
+import { readBoardFacts } from "../engine/ecad/dfm.js";
 import { resolveProjectDir } from "./project-dir.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
+export const PCB_ROUTE_TOOL = "stm32_pcb_route";
 
 const output: JsonSchema = {
   type: "object",
@@ -161,4 +164,99 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
   ctx.tools.register(tool);
+
+  const routeTool: ToolDefinition = {
+    name: PCB_ROUTE_TOOL,
+    description:
+      "在已放置的板上布电源与地：按网络把焊盘用最近邻链连起来（F.Cu，0.5 mm），并尝试补一块 GND 铺铜区后填充；不处理信号线。默认保留既有走线。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+        boardFile: { type: "string", description: "显式指定 .kicad_pcb；缺省取最近一次构建产物。" },
+        keepTracks: { type: "boolean", description: "保留板上的既有走线；默认清掉（重新布线前它们多半已失效）。" },
+        nets: { type: "array", items: { type: "string" }, description: "要布的网络名；缺省用 GND/VCC/3V3/5V/VBUS 这些常见电源网。" },
+        apply: { type: "boolean", description: "真的写进板子；默认只预览（先算段数与走向，不改文件）。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          boardFile: { type: "string" },
+          tracks: { type: "number" },
+          vias: { type: "number" },
+          nets: { type: "array", items: { type: "object", additionalProperties: false, properties: { net: { type: "string" }, pads: { type: "number" }, segments: { type: "number" } }, required: ["net", "pads", "segments"] } },
+          plane: { type: "string" },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "boardFile", "tracks", "vias", "nets", "plane", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as { ok: boolean; error: string; tracks: number; vias: number; nets: { net: string; segments: number }[]; plane: string; notes: string[] };
+        if (!result.ok) return [{ type: "text", text: "布线未执行：" + result.error }];
+        const lines = ["已布 " + String(result.tracks) + " 段电源与地，过孔 " + String(result.vias) + " 个"];
+        for (const item of result.nets) lines.push("- " + item.net + "：" + String(item.segments) + " 段");
+        lines.push(result.plane === "" ? "铺铜：未写入（见提示）" : "铺铜：" + result.plane);
+        for (const note of result.notes) lines.push("· " + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    execute: async (args: { projectDir?: string; boardFile?: string; keepTracks?: boolean; nets?: string[]; apply?: boolean }, exec: ToolExec) => {
+      const empty = { ok: false, error: "", boardFile: "", tracks: 0, vias: 0, nets: [] as { net: string; pads: number; segments: number }[], plane: "", notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const located = locateEcadToolchain();
+      if (located.toolchain === null) return { ...empty, error: located.error };
+      const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+      const boardFile = args.boardFile !== undefined && args.boardFile !== ""
+        ? args.boardFile
+        : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+      if (boardFile === "" || !existsSync(boardFile)) return { ...empty, error: "还没有可用的 .kicad_pcb：先跑 stm32_ecad_build 或 stm32_pcb_place" };
+
+      const notes: string[] = [];
+      const nets = args.nets ?? [...DEFAULT_POWER_NETS];
+      copyFileSync(boardFile, boardFile + ".bak");
+      const facts = readBoardFacts(readFileSync(boardFile, "utf8"));
+      const zone = appendGroundZone(readFileSync(boardFile, "utf8"), { x0: 0, y0: 0, x1: facts.widthMm, y1: facts.heightMm });
+      if (zone.ok) writeFileSync(boardFile, zone.text);
+      else notes.push(zone.error);
+
+      const payload = JSON.stringify({ boardFile, powerNets: nets, powerWidthMm: 0.5, planeNet: zone.ok ? "GND" : "", planeLayer: "B.Cu", planeClearanceMm: 0.5, keepTracks: args.keepTracks === true, dryRun: args.apply !== true });
+      const scriptFile = join(tmpdir(), "dsh-stm32-route-" + String(Date.now()) + ".py");
+      writeFileSync(scriptFile, buildRouteScript({ boardFile, powerNets: nets, powerWidthMm: 0.5, planeNet: zone.ok ? "GND" : "", planeLayer: "B.Cu", planeClearanceMm: 0.5, keepTracks: args.keepTracks === true, dryRun: args.apply !== true }), "utf8");
+      const resultFile = join(tmpdir(), "dsh-stm32-route-" + String(Date.now()) + ".json");
+      const run = await runCapture(ctx.subprocess, {
+        argv: [located.toolchain.python, scriptFile, payload, resultFile],
+        cwd: resolved.projectDir,
+        timeoutMs: 120_000,
+        maxBytes: 1 << 20,
+        signal: exec.signal,
+      });
+      if (run.exitCode !== 0) {
+        return { ...empty, boardFile, error: "KiCad python 执行失败：" + (run.stderr === "" ? run.stdout : run.stderr).slice(-400) };
+      }
+      const parsed = parseRouteOutput(existsSync(resultFile) ? readFileSync(resultFile, "utf8") : "");
+      if (!parsed.ok) return { ...empty, boardFile, error: parsed.error };
+      return {
+        ok: true,
+        error: "",
+        boardFile,
+        tracks: parsed.tracks,
+        vias: parsed.vias,
+        nets: parsed.nets,
+        plane: parsed.plane === null ? "" : parsed.plane.net + "@" + parsed.plane.layer,
+        notes: [...notes, ...parsed.notes],
+      };
+    },
+  };
+  ctx.tools.register(routeTool);
 }
+

@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S139）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S140）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,17 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十八、电源与地布线：先只算不写（S140）
+
+- 目标：先让板子有「电源连通」，信号布线另说。几何在 `pcbnew` 里算——焊盘坐标只有 KiCad 知道，搬回 TS 等于重写一遍封装几何。
+- `src/engine/ecad/pcb/route.ts`：`buildRouteScript()` 生成脚本，按网络把焊盘按曼哈顿距离用最近邻串成链（Prim），每段走「斜边 + 直边」，0.5 mm 宽、F.Cu；`appendGroundZone()` 往板文本里补 GND 铺铜区（`pcbnew` 的 `ZONE()` 构造在当前 KiCad 10.0.7 上会段错误，改成写 sexpr，再用 `ZONE_FILLER` 只做填充）。
+- **默认 `dryRun`：只算段数、不改文件**。原因见下。
+- 真机（`tetris-handheld` 板副本，41 元件）：GND 44 个焊盘 → 86 段、VBUS 7 个焊盘 → 12 段；DRC 未连接从 108 降到 59。
+- 但同一份走线也把 DRC 违规从 3 条推到 139 条，其中出现 `shorting_items`（GND 与 V3V3 短接）与 `tracks_crossing`——最近邻串联不考虑障碍，等于在焊盘之间横穿其它焊盘与网络。**这种走线不能写进板子**，所以工具默认预览、`apply: true` 才落盘，文档里写明「预览用」。
+- 铺铜的另一处限制：tscircuit 导出的板子里网络只有名字没有编号（`(net "GND")`），写铺铜区需要编号，于是 `appendGroundZone()` 直接拒绝并给原因；等板子由我们自己的写入器生成时再补编号。
+- 结论：电源布线要能写，必须先有**避障网格**（A* + 障碍栅格 + 过孔代价）。这一段只交付「计划与测量」，不交付「布好的板」。
+- 测试 3 条：脚本默认有 `dryRun` 开关与 `ZONE_FILLER`、铺铜拒绝无编号网络且认编号、结果解析。
 
 ### 一百四十七、落板：搬元件、清旧线（S139）
 

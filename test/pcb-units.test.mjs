@@ -111,3 +111,39 @@ test("落板脚本：keepTracks 时不清走线", async () => {
   });
   assert.match(script, /if not payload\['keepTracks'\]/u);
 });
+
+test("电源布线脚本：默认只算不写，铺铜只填充已有区域", async () => {
+  const { buildRouteScript, DEFAULT_POWER_NETS } = await import("../lib/engine/ecad/pcb/route.js");
+  const script = buildRouteScript({
+    boardFile: "b.kicad_pcb", powerNets: [...DEFAULT_POWER_NETS], powerWidthMm: 0.5,
+    planeNet: "GND", planeLayer: "B.Cu", planeClearanceMm: 0.5, keepTracks: false,
+  });
+  assert.match(script, /dryRun = bool\(payload\.get\('dryRun', True\)\)/u);
+  assert.match(script, /if not dryRun:/u);
+  assert.match(script, /ZONE_FILLER/u);
+  assert.match(script, /sys\.argv\[2\]/u);
+});
+
+test("铺铜：网络没有编号时拒绝写入并说清原因", async () => {
+  const { appendGroundZone } = await import("../lib/engine/ecad/pcb/route.js");
+  const bare = '(kicad_pcb (pad "1" (net "GND")))';
+  const refused = appendGroundZone(bare, { x0: 0, y0: 0, x1: 10, y1: 10 });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /没有编号/u);
+
+  const numbered = '(kicad_pcb (pad "1" (net 7 "GND")))';
+  const plan = appendGroundZone(numbered, { x0: 0, y0: 0, x1: 10, y1: 10 });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.netNumber, 7);
+  assert.match(plan.text, /\(zone/u);
+});
+
+test("布线结果解析：认 JSON，拒空与非 JSON", async () => {
+  const { parseRouteOutput } = await import("../lib/engine/ecad/pcb/route.js");
+  const ok = parseRouteOutput('{"tracks":4,"vias":0,"nets":[{"net":"GND","pads":3,"segments":4}],"plane":null,"notes":[]}');
+  assert.equal(ok.ok, true);
+  assert.equal(ok.tracks, 4);
+  assert.equal(ok.nets[0].net, "GND");
+  assert.equal(parseRouteOutput("").ok, false);
+  assert.equal(parseRouteOutput("oops").ok, false);
+});
