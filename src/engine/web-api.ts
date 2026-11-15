@@ -71,6 +71,7 @@ import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
 import { ecadRuntimeDir, runtimeBytes, runtimeInstallMode } from "./ecad/runtime.js";
 import { runSchematicReview } from "./schematic/review.js";
 import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
+import { krtRoot, krtStatus, krtVersion } from "./ecad/pcb/krt.js";
 import { cacheBytes, datasheetCacheDir } from "./datasheet/store.js";
 import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
@@ -1174,6 +1175,11 @@ export async function handleWebApi(input: {
           bytes: installed ? runtimeBytes(ecadRuntimeDir()) : 0,
         },
         autoBuild: readAutoState(projectDir),
+        autoroute: (() => {
+          const root = krtRoot();
+          const status = krtStatus(root);
+          return { ready: status.ok, error: status.ok ? "" : status.error, version: status.ok ? krtVersion(root) : "", root };
+        })(),
         artifacts: await scanEcadArtifacts(workspace.outDir),
         layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },
