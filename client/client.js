@@ -2806,6 +2806,27 @@ function EcadPanel(props) {
           ),
         );
       }
+      // 设计通过后不自动导出：STEP/Gerber 是一次性交付动作，等用户点头（S137）。
+      const pendingExport = ecad.autoBuild !== null && ecad.autoBuild !== undefined && ecad.autoBuild.pendingExport === true;
+      if (pendingExport) {
+        rows.push(
+          e(
+            "div",
+            { key: "export-prompt", style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", padding: "0 0 8px", fontSize: "12px", color: D32_WARN } },
+            e("span", null, "设计已通过检查：现在导出 STEP 与 Gerber 吗？"),
+            e(
+              "button",
+              {
+                type: "button",
+                disabled: job.running,
+                onClick: () => runAction("export"),
+                style: Object.assign({}, debugStyles.button, job.running ? { opacity: 0.5, cursor: "default" } : {}),
+              },
+              job.name === "export" && job.running ? "执行中…" : "导出 STEP 与 Gerber",
+            ),
+          ),
+        );
+      }
       if (job.error !== "") rows.push(e("div", { key: "job-error", style: { padding: "2px 0 6px", fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, job.error));
       if (job.result !== null) {
         const outcome = job.result;

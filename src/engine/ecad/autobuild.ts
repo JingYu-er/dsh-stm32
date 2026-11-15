@@ -27,6 +27,8 @@ export interface EcadAutoState {
   readonly lastDurationMs: number;
   /** 触发这次构建的回合标识（一般用会话 id + 时间），用于「每回合一次」判定。 */
   readonly lastTurn: string;
+  /** 设计通过检查、但还没导出 STEP/Gerber：向用户提示一次，导出后清掉。 */
+  readonly pendingExport: boolean;
 }
 
 export function ecadStateFile(projectDir: string): string {
@@ -44,6 +46,7 @@ export function readAutoState(projectDir: string): EcadAutoState | null {
       lastError: typeof raw.lastError === "string" ? raw.lastError : "",
       lastDurationMs: typeof raw.lastDurationMs === "number" ? raw.lastDurationMs : 0,
       lastTurn: typeof raw.lastTurn === "string" ? raw.lastTurn : "",
+      pendingExport: raw.pendingExport === true,
     };
   } catch {
     return null;
@@ -199,6 +202,8 @@ export async function runAutoBuild(request: AutoBuildRequest): Promise<AutoBuild
     lastError: design.error,
     lastDurationMs: durationMs,
     lastTurn: request.turn,
+    // 通过检查就挂一个「待导出」标记：STEP/Gerber 是交付动作，等用户点头再导。
+    pendingExport: design.ok,
   });
   return { ran: true, reason: decision.reason, ok: design.ok, error: design.error, durationMs, design };
 }

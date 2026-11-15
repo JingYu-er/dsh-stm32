@@ -131,6 +131,16 @@ test("自动构建决策：干净不跑、同回合不跑、间隔不足不跑",
   assert.equal(decideAutoBuild({ dirty, state: old, now, turn: "s1:2" }).go, true);
 });
 
+test("自动构建：通过后挂待导出标记，导出动作清掉（S137）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ecad-state-"));
+  const base = { lastAttemptAt: 1, lastOk: true, lastError: "", lastDurationMs: 5, lastTurn: "t1", pendingExport: true };
+  writeAutoState(dir, base);
+  assert.equal(readAutoState(dir).pendingExport, true);
+  writeAutoState(dir, { ...base, pendingExport: false });
+  assert.equal(readAutoState(dir).pendingExport, false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("状态文件读写往返；缺依赖时不跑构建", async () => {
   const { dir, cleanup } = tempRoot("dsh-state-");
   try {

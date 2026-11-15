@@ -67,7 +67,7 @@ import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { runEcadDesign } from "./ecad/design.js";
-import { readAutoState } from "./ecad/autobuild.js";
+import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
 import { ecadRuntimeDir, runtimeBytes, runtimeInstallMode } from "./ecad/runtime.js";
 import { runSchematicReview } from "./schematic/review.js";
 import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
@@ -1356,6 +1356,13 @@ export async function handleWebApi(input: {
       });
     }
     const fabricated = await exportFabrication(input.deps.subprocess, located.toolchain, latest.pcbFile, workspace.outDir);
+    // 导出成功即清掉「待导出」标记：面板不再提示，避免重复追问（S137）。
+    if (fabricated.ok) {
+      const previous = readAutoState(projectDir);
+      if (previous !== null && previous.pendingExport) {
+        writeAutoState(projectDir, { ...previous, pendingExport: false });
+      }
+    }
     const artifacts = [
       ...fabricated.gerbers.map((item) => ({ name: "gerbers/" + item.name, bytes: item.bytes })),
       ...fabricated.drillFiles.map((item) => ({ name: "drill/" + item.name, bytes: item.bytes })),
