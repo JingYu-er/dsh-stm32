@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S135）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S136）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,24 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百四十四、共享依赖运行时与回合末自动构建（S136）
+
+- 背景：`tscircuit` 的依赖每个工程装一份是 730 MB、`npm i` 25–46 s；同一台机器上十几个工程就是十几个 730 MB。另一件事是「改完源码就忘了构建」，导致 KiCad 里看到的还是旧板子。
+- 依赖全局化（`src/engine/ecad/runtime.ts`）：
+  - 运行时目录 `~/.dsh-stm32/ecad-runtime`（`DSH_STM32_ECAD_RUNTIME` 可覆盖），里面只有一个 `package.json` 与一份 `node_modules`（`tscircuit` + `typescript`）。
+  - `ensureEcadRuntime()` 三种模式：`auto` 真跑 `npm install`、`ask` 只回「缺什么、怎么装」、`off` 一律不装；默认 `ask`——730 MB 的下载不能藏在一次点击里。
+  - `linkRuntimeIntoProject()` 用 Windows 目录联接（`fs.symlinkSync(target, path, "junction")`，不需要管理员权限）把运行时挂成工程的 `hardware/circuit/node_modules`：ESM 解析要求 `node_modules` 出现在工程树里，联接让它「看起来像」本地安装，磁盘只占一份。
+  - `ensureProjectRuntime()` 是构建前的唯一入口：工程内已装就用工程的，否则确保运行时并建联接。`stm32_ecad_build` / `stm32_ecad_design` 都先走它，缺依赖时给的是「怎么装」而不是 bun 的半路报错。
+- 回合末自动构建（`src/engine/ecad/autobuild.ts`）：
+  - 判脏：`circuit/**/*.circuit.tsx` 与 `libs/**/*.kicad_mod|sym` 的最新 mtime 与 `kicad/**/*.kicad_pcb|sch` 比；产物缺失也算脏。
+  - 三条约束：每回合最多一次（`lastTurn`）、两次之间至少 60 s（`AUTO_BUILD_MIN_INTERVAL_MS`）、只跑「构建 + 导库 + ERC/DRC + DFM」不导出成品（`runEcadDesign({ artifacts: false })`）——导出是一次性交付动作，留在按钮里。
+  - 挂载点：`src/index.ts` 已有的 `session/event` 处理器里，`turn/end` 到达后按会话工作目录解析工程（`sessionDirOf`），同一工程用集合去重，不 await（构建十几秒，不能拖住宿主事件）。
+  - 运行时没装时直接跳过并说明原因：安装 730 MB 必须由人确认一次，不能藏在回合结束里。
+  - 状态写 `<工程>/.dsh-stm32/ecad-state.json`（`{lastAttemptAt, lastOk, lastError, lastDurationMs, lastTurn}`），面板头显示「自动构建 MM-DD HH:mm · 通过/有问题」与「共享运行时 N MB / 未安装」。
+- 面板：`/ecad` 响应增 `runtime: {ready, dir, mode, bytes}` 与 `autoBuild`。
+- 验证：`test/ecad-autobuild-units.test.mjs` 7 条（运行时目录优先级、就绪判定与 ask 提示、目录联接、安装模式解析、脏判定三种、自动构建决策三种拒绝理由、状态文件往返 + 缺依赖不跑）；全量 **88 套件 / 1210 pass / 0 fail**、ACCEPTANCE OK、包体 2101.6 KB / 338 文件 / 解包 16245.3 KB。
+- 教训：**能共用的不要按工程复制，能自己判断的不要让人记**。前者是 730 MB 的账，后者是「改完记得点构建」的账；两笔账都该由代码记住。
 
 ### 一百四十三、构建自动跑、焊盘默认合并、原理图侧也有了一键评审（S135）
 

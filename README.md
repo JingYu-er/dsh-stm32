@@ -194,7 +194,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 | 工具 | 用途 |
 | --- | --- |
-| `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖需要在该目录执行 `npm install` |
+| `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖走共享运行时（见下），不再每工程各装一份 |
 | `stm32_sch_review` | 原理图一键评审：读图、规则检查、配置草案与「需要人决策的脚」，只给结论不写盘 |
 | `stm32_ecad_design` | 一键设计：构建 → 合并焊盘（可选）→ 导库 → ERC/DRC → 可制造性与成本 → STEP 与制造文件，逐步报告 |
 | `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json`；构建前预检封装里同坐标的焊盘（USB-C 16P 的 A1/B12 这类），命中就跳过自动布线并忽略摆放间距告警，板子照常产出；需要把同坐标焊盘并成一个时，构建时传 `mergePads=true` |
@@ -208,7 +208,11 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_pdf_read` | 读 PDF：`info` 看页数与文字层、`text` 取指定页文字（保版面，表格可读）、`figures` 列图与表、`table` 把参数表切成行列、`render` 把页面或局部渲染成 PNG 交给视觉读图、`curve` 把曲线图数字化成可复核的 (x, y) 序列、`schematic` 列原理图的元件与网络标签（只给清单，不出网表） |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 
-写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，插件只读。tscircuit 把符号与封装内嵌在工程里、名字归到 `tscircuit` 之类的生成名，检查前会先导出成 `hardware/libs` 下的真库并补齐库表，否则报告里只剩「库不在配置中」这类环境噪音；未命名网络（`.R1 > .pin1 to .C1 > .pin1`）会单独列出并给出 `<net name="VDD" />` 的修法。构建要求 KiCad 10 与其自带的 `bun.exe`；首次 `npm install` 约 730 MB，之后构建一般 15–40 秒。板子上的元件优先用 KiCad 官方库（`footprint="kicad:..."`），需要时再用立创编号兜底。
+写者只有一个：`.kicad_sch` / `.kicad_pcb` 由 tscircuit 生成，插件只读。tscircuit 把符号与封装内嵌在工程里、名字归到 `tscircuit` 之类的生成名，检查前会先导出成 `hardware/libs` 下的真库并补齐库表，否则报告里只剩「库不在配置中」这类环境噪音；未命名网络（`.R1 > .pin1 to .C1 > .pin1`）会单独列出并给出 `<net name="VDD" />` 的修法。构建要求 KiCad 10 与其自带的 `bun.exe`。
+
+依赖只装一次：`tscircuit` 与 `typescript` 装在共享运行时 `~/.dsh-stm32/ecad-runtime`（可用 `DSH_STM32_ECAD_RUNTIME` 改位置），各工程的 `hardware/circuit/node_modules` 用目录联接指向它——ESM 解析要求 `node_modules` 出现在工程树里，联接满足这一点，磁盘只占一份（约 730 MB）。首次是否自动安装由 `DSH_STM32_ECAD_AUTO_INSTALL` 决定：`auto` 直接装、`off` 从不装、缺省 `ask` 只提示命令。
+
+改完电路源码、本轮对话结束时，插件会**自动构建一次**（只构建与检查，不导出成品），这样回到 KiCad 就能看到最新的原理图与 PCB。三条约束：只在源码比产物新或上次失败时跑、每回合最多一次、两次之间至少 60 秒；最近一次结果写在面板头（「自动构建 MM-DD HH:mm · 通过/有问题」）与 `<工程>/.dsh-stm32/ecad-state.json`。板子上的元件优先用 KiCad 官方库（`footprint="kicad:..."`），需要时再用立创编号兜底。
 
 ### 代码与构建
 

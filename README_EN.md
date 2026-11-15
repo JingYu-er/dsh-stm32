@@ -194,7 +194,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 
 | Tool | Purpose |
 | --- | --- |
-| `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies are installed there with `npm install` |
+| `stm32_ecad_init` | Create `hardware/{circuit,kicad,libs,out}` with a minimal `package.json`; dependencies come from the shared runtime (see below), not one copy per project |
 | `stm32_sch_review` | One-shot schematic review: read, rule check, `.ioc` draft and the pins that need a human decision; read-only |
 | `stm32_ecad_design` | One-shot design: build → merge pads (optional) → export libs → ERC/DRC → manufacturability and cost → STEP and fabrication files, reported step by step |
 | `stm32_ecad_build` | Run `tsci build` with KiCad's bundled bun: `.circuit.tsx` → `circuit.json`, SVGs and `kicad/*.kicad_sch|.kicad_pcb`; with `footprint="kicad:…"` it also renames generated `tscircuit:` names back to the real library and copies the official footprints into `hardware/libs`; JLC footprints (`footprint="jlcpcb:C…"`) are vendored into the library per reference and recorded in `libs/sources.json`; before building it pre-checks the footprint for coincident pads (the A1/B12 pair of a 16P USB-C), and when found it skips autorouting and ignores the placement-clearance warning while still producing the board; pass `mergePads=true` to merge coincident same-net pads into one multi-number pad |
@@ -208,7 +208,11 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_pdf_read` | Read a PDF: `info` for page count and text layer, `text` for page text (layout preserved), `figures` to list figures, `table` to cut parameter tables into rows and columns, `render` to rasterise a page or region into PNG for visual reading, `curve` to digitize a curve figure into an auditable (x, y) series |
 | `stm32_ecad_package` | Pack `hardware/` into a deliverable zip (skips `node_modules`, `dist`, `.history`) and read it back to self-check |
 
-There is exactly one writer: `.kicad_sch` / `.kicad_pcb` are produced by tscircuit and only read by the plugin. tscircuit embeds symbols and footprints in the project under generated names such as `tscircuit`, so checks first export them into real libraries under `hardware/libs` and complete the library tables; otherwise the report is dominated by "library not in configuration" noise. Unnamed nets (`.R1 > .pin1 to .C1 > .pin1`) are listed separately with the `<net name="VDD" />` fix. Building requires KiCad 10 and its bundled `bun.exe`; the first `npm install` is about 730 MB and later builds usually take 15–40 seconds. Prefer KiCad's own libraries (`footprint="kicad:..."`) and fall back to JLCPCB part numbers only when needed.
+There is exactly one writer: `.kicad_sch` / `.kicad_pcb` are produced by tscircuit and only read by the plugin. tscircuit embeds symbols and footprints in the project under generated names such as `tscircuit`, so checks first export them into real libraries under `hardware/libs` and complete the library tables; otherwise the report is dominated by "library not in configuration" noise. Unnamed nets (`.R1 > .pin1 to .C1 > .pin1`) are listed separately with the `<net name="VDD" />` fix. Building requires KiCad 10 and its bundled `bun.exe`.
+
+Dependencies are installed once: `tscircuit` and `typescript` live in a shared runtime at `~/.dsh-stm32/ecad-runtime` (`DSH_STM32_ECAD_RUNTIME` overrides), and each project's `hardware/circuit/node_modules` is a directory junction to it — ESM resolution needs `node_modules` inside the project tree, the junction satisfies that, and the disk holds one copy (~730 MB). `DSH_STM32_ECAD_AUTO_INSTALL` controls the first install: `auto` installs, `off` never does, default `ask` only prints the command.
+
+When circuit sources change, the plugin builds once at the end of the turn (build + checks only, no artifacts), so KiCad shows the latest schematic and PCB. Guards: only when sources are newer than products or the last build failed, at most once per turn, at least 60 s apart. The last result appears in the panel header and in `<project>/.dsh-stm32/ecad-state.json`. Prefer KiCad's own libraries (`footprint="kicad:..."`) and fall back to JLCPCB part numbers only when needed.
 
 ### Code and build
 

@@ -17,6 +17,7 @@ import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from ".
 import { checkDfm, writeDru } from "../engine/ecad/dfm.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { runEcadDesign } from "../engine/ecad/design.js";
+import { ensureProjectRuntime } from "../engine/ecad/runtime.js";
 import { exportFabrication } from "../engine/ecad/fabrication.js";
 import { precheckFootprints } from "../engine/ecad/padprecheck.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
@@ -289,6 +290,18 @@ export function registerEcadTools(ctx: DshContext): void {
         };
       }
       const workspace = workspaceOf(project.dir);
+      // 依赖先就位：共享运行时 + 工程联接，缺依赖时给出「怎么装」而不是让 bun 半路失败（S136）。
+      const runtime = await ensureProjectRuntime({ subprocess: ctx.subprocess, circuitDir: workspace.circuitDir, signal: exec.signal });
+      if (!runtime.ok) {
+        return {
+          ok: false,
+          error: runtime.error,
+          kicadDir: "",
+          exitCode: -1,
+          notes: [...runtime.notes],
+          stderrTail: "",
+        };
+      }
       // 布线前先看封装：同坐标焊盘会让自动布线器放弃整板，降级为只摆件（S130）。
       const entryName = (args.entry ?? "").trim() === "" ? "" : (args.entry ?? "").trim();
       const entries = listCircuitEntries(workspace.circuitDir);
@@ -955,6 +968,8 @@ export function registerEcadTools(ctx: DshContext): void {
       const located = locateEcadToolchain();
       if (located.toolchain === null) return { ...empty, error: located.error };
       const workspace = workspaceOf(project.dir);
+      const runtime = await ensureProjectRuntime({ subprocess: ctx.subprocess, circuitDir: workspace.circuitDir, signal: exec.signal });
+      if (!runtime.ok) return { ...empty, error: runtime.error };
       const result = await runEcadDesign({
         subprocess: ctx.subprocess,
         toolchain: located.toolchain,

@@ -27,6 +27,14 @@ function stubLocalStorage() {
   };
 }
 
+test("电路设计页显示共享运行时与最近一次自动构建（S136）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function autoBuildText("));
+  assert.ok(source.includes("共享运行时 "));
+  assert.ok(source.includes("ecad.autoBuild"));
+  assert.ok(source.includes("autoBuild.lastOk === true"));
+});
+
 test("电路设计页有一键设计按钮并渲染步骤（S134）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes('["design", "一键设计"]'));

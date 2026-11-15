@@ -45,6 +45,7 @@ const suites = [
   "channel-tap-units.test.mjs",
     "pinout-units.test.mjs",
     "schematic-units.test.mjs",
+  "ecad-autobuild-units.test.mjs",
     "ecad-units.test.mjs",
   "pdf-units.test.mjs",
   "datasheet-units.test.mjs",
