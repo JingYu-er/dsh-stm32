@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S144）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S145）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,25 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百五十三、换引擎：KiCadRoutingTools 让短接归零（S145）
+
+- 自己写的布线器停在「24/35 网连通、DRC 371 条违规、track_dangling 125」。继续修性价比低，改成把 MIT 的 `drandyhaas/KiCadRoutingTools` 当外部运行时：
+  - `python build_router.py` 默认下载官方预编译 Rust 二进制（**不需要 Rust 工具链**）；本机 GitHub API 被限流（403），脚本回退源码构建又因无 cargo 失败——直接按 `detect_platform_asset()` 的命名规则从 release 下 `grid_router-windows-x86_64.pyd` 即可。
+  - Rust 模块必须能被**子进程**导入：引擎的每个步骤从临时工作目录启动，放在仓库根目录不管用（`No module named 'grid_router'`）；拷进 KiCad python 的 `Lib/site-packages` 才稳。
+  - 依赖：numpy 2.4.6 / scipy 1.17.1 / shapely 2.2.0，`pip install` 到 KiCad 自带 python 3.11.5。
+- **一个必须做的预处理**：tscircuit 导出的 `.kicad_pcb` 把层名写成不带引号的 `(layer F.Cu)`，KiCad 自己认，但引擎的解析器只认 `(layer "F.Cu")`——读不到就把 816 条既有走线、72 个过孔当「不存在」，布线器从这些铜箔中间穿过去，结果 190 条 `shorting_items`。新增 `quoteLayerNames()` 只给单行的 `(layer X)` 与 `(layers A B)` 补引号，跨行的层表一个字不动（第一版用 `[^)]*` 跨行了，把板子写成 `(layers "(0" ...` 直接打不开）。
+- 真机（`tetris-handheld`，41 元件 / 35 网络 / 4 层板）：
+  | 指标 | 归一化基线 | 我们自己的布线器 | KiCadRoutingTools |
+  | --- | --- | --- | --- |
+  | 未连接 | 0（tscircuit 已布） | 170 | **0** |
+  | 违规合计 | 437 | 371 | **128** |
+  | `clearance` | 301 | 17 | **0** |
+  | 短接 | 0 | 5 | **0** |
+  | 耗时 | — | 数十秒 | 146 秒 |
+  - 剩下的 128 条是封装/丝印级别（`lib_footprint_issues` 45、`text_height` 52、`silk_*` 30、`via_dangling` 1），与布线无关，属于 tscircuit 封装与丝印规范的账。
+- 交付面：`stm32_pcb_autoroute`（默认 `dryRun` 只出计划）、`krt.ts`（运行时定位/版本/日志解析/连通性检查）、面板沿用电路设计页。
+- 教训：**该换零件时换零件**。同样的「短接归零」我们花了两个阶段（S143、S144）还没做到，换成一个成熟引擎后一次成功；自己的价值应该留在「集成、判据、报告与面板」上。
 
 ### 一百五十二、布线器的两条硬约束：终点必须在焊盘层、整网要么全留要么全丢（S144）
 

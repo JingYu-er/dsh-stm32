@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readCircuitNetlist } from "../lib/engine/ecad/pcb/netlist.js";
 import { planPlacement } from "../lib/engine/ecad/pcb/placement.js";
+import * as krt from "../lib/engine/ecad/pcb/krt.js";
 
 function sample() {
   return JSON.stringify([
@@ -194,4 +195,39 @@ test("落盘前自检：压到别网焊盘的走线被丢掉", async () => {
   assert.equal(checked.rejected.length, 1);
   assert.equal(checked.accepted.length, 1);
   assert.equal(checked.accepted[0].y1, 8);
+});
+
+test("KiCadRoutingTools：层名补引号只碰单行的 layer/layers，不改层表（S145）", () => {
+  const { quoteLayerNames } = krt;
+  const src = [
+    "(kicad_pcb",
+    "  (layers",
+    '    (0 "F.Cu" signal)',
+    '    (31 "B.Cu" signal)',
+    "  )",
+    "  (segment (start 1 2) (end 3 4) (width 0.25) (layer F.Cu) (net 32))",
+    "  (via (at 5 6) (size 0.6) (drill 0.3) (layers F.Cu B.Cu) (net 0))",
+    ")",
+  ].join("\n");
+  const out = quoteLayerNames(src);
+  assert.ok(out.text.includes('(layer "F.Cu")'), "单行 layer 要补引号");
+  assert.ok(out.text.includes('(layers "F.Cu" "B.Cu")'), "via 的 layers 要补引号");
+  assert.ok(out.text.includes('    (0 "F.Cu" signal)'), "层表那几行不能动");
+  assert.equal(out.quoted, 2);
+});
+
+test("KiCadRoutingTools：从 autoroute 日志里读出计划、未连接数与告警（S145）", () => {
+  const { parseAutorouteLog } = krt;
+  const text = [
+    "WARNING: 4 footprint block(s) share 1 reference(s)",
+    'AUTOROUTE_PLAN: {"steps": [{"tag": "planes", "tool": "planes", "what": "pour GND", "why": "next to every signal layer", "optional": false}, {"tag": "route", "tool": "route", "what": "route every net", "why": "grid 0.05 mm", "optional": false}]}',
+    'AUTOROUTE_SUMMARY: {"open_nets": 0, "drc_items": 0, "steps": 2, "seconds": 146.3}',
+  ].join("\n");
+  const parsed = parseAutorouteLog(text);
+  assert.equal(parsed.steps.length, 2);
+  assert.equal(parsed.steps[0].tag, "planes");
+  assert.equal(parsed.openNets, 0);
+  assert.equal(parsed.drc, 0);
+  assert.equal(parsed.warnings.length, 1);
+  assert.equal(parsed.error, "");
 });
