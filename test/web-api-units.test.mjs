@@ -1319,7 +1319,7 @@ test("没有会话目录时不再退到「最近用过的工程」（S91 撤掉�
   assert.match(String(res.body.error), /projectDir 不能为空/u);
 });
 
-test("POST /ecad/action：动作名只认七个，其余直接 400", async () => {
+test("POST /ecad/action：动作名只认八个，其余直接 400", async () => {
   const { dir, env } = tempEnv("ecad-action");
   const deps = { subprocess: fakeSubprocess, env: env };
   const wrong = await handleWebApi({

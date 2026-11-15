@@ -195,6 +195,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 用途 |
 | --- | --- |
 | `stm32_ecad_init` | 建 `hardware/{circuit,kicad,libs,out}` 与最小 `package.json`；依赖需要在该目录执行 `npm install` |
+| `stm32_ecad_design` | 一键设计：构建 → 合并焊盘（可选）→ 导库 → ERC/DRC → 可制造性与成本 → STEP 与制造文件，逐步报告 |
 | `stm32_ecad_build` | 用 KiCad 自带的 bun 跑 `tsci build`：`.circuit.tsx` → `circuit.json`、SVG 与 `kicad/*.kicad_sch|.kicad_pcb`；并把 `tscircuit:` 生成名换回真库名（`footprint="kicad:…"` 时），官方封装复制进 `hardware/libs`；立创封装（`footprint="jlcpcb:C…"`）按位号固化进库并记在 `libs/sources.json`；构建前预检封装里同坐标的焊盘（USB-C 16P 的 A1/B12 这类），命中就跳过自动布线并忽略摆放间距告警，板子照常产出；需要把同坐标焊盘并成一个时，构建时传 `mergePads=true` |
 | `stm32_ecad_check` | 先补齐工程库表与嘉立创工艺规则（`<工程>.kicad_dru`），再跑 `kicad-cli sch erc` 与 `pcb drc`，把违规收敛成规则、级别与涉及项清单；顺带报出未命名网络、板子尺寸、最细走线、最小孔径与打样成本 |
 | `stm32_ecad_libs` | 把生成工程里内嵌的封装/符号抽成 `hardware/libs` 下的真库，并补齐 `fp-lib-table` / `sym-lib-table` |

@@ -16,6 +16,7 @@ import { basename, dirname, join } from "node:path";
 import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
 import { checkDfm, writeDru } from "../engine/ecad/dfm.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
+import { runEcadDesign } from "../engine/ecad/design.js";
 import { exportFabrication } from "../engine/ecad/fabrication.js";
 import { precheckFootprints } from "../engine/ecad/padprecheck.js";
 import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
@@ -33,6 +34,7 @@ import { resolveProjectLayout } from "../engine/project-layout.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 
 export const ECAD_INIT_TOOL = "stm32_ecad_init";
+export const ECAD_DESIGN_TOOL = "stm32_ecad_design";
 export const ECAD_BUILD_TOOL = "stm32_ecad_build";
 export const ECAD_CHECK_TOOL = "stm32_ecad_check";
 export const ECAD_STEP_TOOL = "stm32_ecad_step";
@@ -877,6 +879,99 @@ export function registerEcadTools(ctx: DshContext): void {
         bytes: exported.bytes,
         durationMs: exported.durationMs,
         missingModels: [...exported.missingModels],
+      };
+    },
+  });
+  ctx.tools.register({
+    name: ECAD_DESIGN_TOOL,
+    description:
+      "一键设计：构建 → 合并焊盘（可选）→ 导库 → ERC/DRC → 可制造性与成本 → STEP 与制造文件，一次跑完整条流水线并逐步报告。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+        entry: { type: "string", description: "入口文件（相对 hardware/circuit）；缺省取第一个 *.circuit.tsx。" },
+        mergePads: { type: "boolean", description: "把同一封装内同坐标、同网络的焊盘合并成一个多编号焊盘；默认不合并。" },
+        artifacts: { type: "boolean", description: "是否顺带导出 STEP 与 Gerber/钻孔/坐标；默认导出。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          error: { type: "string" },
+          kicadDir: { type: "string" },
+          pcbFile: { type: "string" },
+          schematicFile: { type: "string" },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                step: { type: "string" },
+                ok: { type: "boolean" },
+                detail: { type: "string" },
+                ms: { type: "number" },
+              },
+              required: ["step", "ok", "detail", "ms"],
+            },
+          },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["ok", "error", "kicadDir", "pcbFile", "schematicFile", "steps", "notes"],
+      },
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          steps: { step: string; ok: boolean; detail: string; ms: number }[];
+          notes: string[];
+        };
+        const lines = ["一键设计：" + (result.ok ? "全部通过" : "有步骤失败")];
+        for (const step of result.steps) {
+          lines.push((step.ok ? "OK  " : "FAIL ") + step.step + " · " + step.detail + "（" + String(step.ms) + " ms）");
+        }
+        if (result.notes.length > 0) {
+          lines.push("");
+          for (const note of result.notes) lines.push("- " + note);
+        }
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 600_000,
+    isConcurrencySafe: () => false,
+    execute: async (
+      args: { projectDir?: string; entry?: string; mergePads?: boolean; artifacts?: boolean },
+      exec: ToolExec,
+    ) => {
+      const empty = { ok: false, error: "", kicadDir: "", pcbFile: "", schematicFile: "", steps: [], notes: [] };
+      const project = await projectDirOf(ctx, args.projectDir, exec);
+      if (!project.ok) return { ...empty, error: project.error };
+      const located = locateEcadToolchain();
+      if (located.toolchain === null) return { ...empty, error: located.error };
+      const workspace = workspaceOf(project.dir);
+      const result = await runEcadDesign({
+        subprocess: ctx.subprocess,
+        toolchain: located.toolchain,
+        workspace,
+        ...(args.entry === undefined ? {} : { entry: args.entry }),
+        ...(args.mergePads === undefined ? {} : { mergePads: args.mergePads }),
+        ...(args.artifacts === undefined ? {} : { artifacts: args.artifacts }),
+        signal: exec.signal,
+      });
+      return {
+        ok: result.ok,
+        error: result.error,
+        kicadDir: result.kicadDir,
+        pcbFile: result.pcbFile,
+        schematicFile: result.schematicFile,
+        steps: [...result.steps],
+        notes: [...result.notes],
       };
     },
   });

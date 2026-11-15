@@ -2741,6 +2741,7 @@ function EcadPanel(props) {
         "div",
         { key: "actions", style: { display: "flex", flexWrap: "wrap", gap: "6px", padding: "4px 0 8px" } },
         ...[
+          ["design", "一键设计"],
           ["build", "构建"],
           ["check", "检查"],
           ["libs", "导出库"],
@@ -2792,6 +2793,16 @@ function EcadPanel(props) {
               ? e("div", { style: { opacity: 0.85, wordBreak: "break-all" } }, "交付包：" + outcome.file + (typeof outcome.bytes === "number" ? "（" + sizeText(outcome.bytes) + "）" : ""))
               : null,
             outcome.error !== undefined && outcome.error !== "" ? e("div", { style: { color: "var(--dsw-alias-state-error-primary)" } }, outcome.error) : null,
+            Array.isArray(outcome.steps) && outcome.steps.length > 0
+              ? e("div", { key: "design-steps", style: { display: "grid", gap: "2px" } },
+                  ...outcome.steps.map((step, index) =>
+                    e("div", { key: "step-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
+                      e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: step.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" }) }, step.ok ? "OK" : "FAIL"),
+                      e("span", { style: { minWidth: "72px", opacity: 0.85 } }, step.step),
+                      e("span", { style: { opacity: 0.75 } }, step.detail),
+                    ),
+                  ))
+              : null,
             outcome.dfm !== undefined && outcome.dfm !== null
               ? e("div", { key: "dfm-line", style: { opacity: 0.85 } },
                   "板 " + String(outcome.dfm.widthMm) + "×" + String(outcome.dfm.heightMm) + " mm · " + String(outcome.dfm.layers) + " 层 · 最细走线 " + String(outcome.dfm.minTrackMm) + " mm · 打样约 " + String(outcome.dfm.approxCny) + " 元",

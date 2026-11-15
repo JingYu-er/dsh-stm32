@@ -66,6 +66,7 @@ import { checkDfm, writeDru } from "./ecad/dfm.js";
 import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
+import { runEcadDesign } from "./ecad/design.js";
 import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
 import { cacheBytes, datasheetCacheDir } from "./datasheet/store.js";
 import { findIocFile } from "./generate.js";
@@ -1171,18 +1172,45 @@ export async function handleWebApi(input: {
     return ok({ layoutFix: { ok: fixed.ok, error: fixed.error, workspaceRoot: fixed.workspaceRoot, actions: fixed.actions, notes: fixed.notes } });
   }
   if (path === WEB_API_PREFIX + "/ecad/action") {
+    // 面板上的八个动作：都对应一个工具在做的事，只是不必让用户去对话里敲一遍。
     // 面板上的六个动作：都对应一个工具在做的事，只是不必让用户去对话里敲一遍。
     // 构建与检查要几十秒，面板在请求返回前只显示「执行中」，不做乐观更新。
     const requested = typeof parsed.value.projectDir === "string" ? parsed.value.projectDir.trim() : "";
     const projectDir = withProject(requested);
     if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
     const action = typeof parsed.value.action === "string" ? parsed.value.action : "";
-    if (!["build", "check", "libs", "step", "export", "package", "datasheets"].includes(action)) {
-      return fail(400, "action 只能是 build / check / libs / step / export / package / datasheets");
+    if (!["build", "check", "libs", "step", "export", "package", "datasheets", "design"].includes(action)) {
+      return fail(400, "action 只能是 build / check / libs / step / export / package / datasheets / design");
     }
     const layout = resolveProjectLayout(projectDir);
     const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
     const started = Date.now();
+    // 一键设计：构建 → 合并焊盘 → 导库 → ERC/DRC → 可制造性 → 制造文件（S134）。
+    if (action === "design") {
+      const located = locateEcadToolchain();
+      if (located.toolchain === null) return fail(409, located.error);
+      const result = await runEcadDesign({
+        subprocess: input.deps.subprocess,
+        toolchain: located.toolchain,
+        workspace,
+        mergePads: parsed.value.mergePads === true,
+        artifacts: parsed.value.artifacts !== false,
+      });
+      return ok({
+        ecadAction: {
+          action,
+          ok: result.ok,
+          error: result.error,
+          durationMs: Date.now() - started,
+          steps: [...result.steps],
+          notes: [...result.notes],
+          file: "",
+          bytes: 0,
+          files: 0,
+          skipped: 0,
+        },
+      });
+    }
     // 补手册只读 circuit 源码与网络，不需要 KiCad：放在工具链探测之前（S120）。
     if (action === "datasheets") {
       const ds = await ensureProjectDatasheets(projectDir, {

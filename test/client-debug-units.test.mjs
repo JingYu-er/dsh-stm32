@@ -27,6 +27,12 @@ function stubLocalStorage() {
   };
 }
 
+test("电路设计页有一键设计按钮并渲染步骤（S134）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes('["design", "一键设计"]'));
+  assert.ok(source.includes("Array.isArray(outcome.steps)"));
+});
+
 test("client.js：注册设置面板与调试台两个槽位，调试台可渲染", async () => {
   const registered = [];
   let loaded = null;
