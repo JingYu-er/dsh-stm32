@@ -19,7 +19,7 @@ import { runCapture } from "../subprocess-runner.js";
 import type { PopplerTools } from "./toolchain.js";
 import { extractTablesFromWords, parseBboxXml, type PdfTable } from "./tables.js";
 import { decodePng } from "./png.js";
-import { calibrateFromWords, digitizeCurves } from "./curve.js";
+import { calibrateFromWords, chromaBounds, digitizeCurves, legendLabels } from "./curve.js";
 
 export interface PdfInfo {
   ok: boolean;
@@ -390,11 +390,20 @@ export async function readPdfCurves(
   const pages = parseBboxXml(boxed.stdout);
   const words = pages[0]?.words ?? [];
   const scale = dpi / 72;
-  const calibrated = calibrateFromWords(words, { scale });
+  // 先把彩色像素的外接框量出来：同页有两张图时，刻度只认这一块附近的（S124）。
+  const bounds = chromaBounds(image.image, Math.round(8 * scale));
+  const calibrated = calibrateFromWords(words, bounds === null ? { scale } : { scale, bounds });
   if (!calibrated.ok) {
     return { ...empty, error: calibrated.error, imageFile: rendered.imageFile };
   }
   const digitized = digitizeCurves(image.image, calibrated.calibration, options.maxPoints === undefined ? {} : { maxPoints: options.maxPoints });
+  const labels = legendLabels(words, image.image, bounds, { scale });
+  for (const item of digitized.series) {
+    const index = ["red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta"].indexOf(item.hue);
+    const label = labels.get(index);
+    if (label !== undefined) item.label = label;
+  }
+  if (labels.size === 0) digitized.notes.push("图例文字没认出来（可能是字形轮廓），序列按色相命名");
   return {
     ok: digitized.series.length > 0,
     error: digitized.series.length > 0 ? "" : "没有采样到曲线像素",

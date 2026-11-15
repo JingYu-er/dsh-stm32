@@ -26,6 +26,8 @@ export interface Calibration {
 export interface CurveSeries {
   /** 色相名：red / orange / yellow / green / cyan / blue / violet / magenta */
   hue: string;
+  /** 图例里认出的名字（Mean / Max 这类）；认不出为空串（S124）。 */
+  label: string;
   color: string;
   points: { x: number; y: number }[];
   pixels: number;
@@ -136,7 +138,7 @@ export function digitizeCurves(
     const xs = points.map((point) => point.x);
     const outOfRange = xs.some((value) => value < xLow - xSpan * 0.2 || value > xHigh + xSpan * 0.2);
     if (outOfRange) notes.push(HUE_NAMES[bucket] + " 的横向范围超出坐标轴，端点值可能不可信");
-    series.push({ hue: HUE_NAMES[bucket] ?? "unknown", color: BUCKET_RGB[bucket] ?? "#888888", points, pixels });
+    series.push({ hue: HUE_NAMES[bucket] ?? "unknown", label: "", color: BUCKET_RGB[bucket] ?? "#888888", points, pixels });
   }
   if (series.length === 0) notes.push("没有找到饱和色调的曲线像素：这张图可能不是彩色曲线");
   return { calibration, series, notes };
@@ -180,10 +182,21 @@ function fitLine(pairs: { pixel: number; value: number }[]): { a: number; b: num
  */
 export function calibrateFromWords(
   words: readonly PdfWord[],
-  options: { scale?: number } = {},
+  options: { scale?: number; bounds?: PixelBounds } = {},
 ): { ok: true; calibration: Calibration } | NoCalibration {
   const scale = options.scale ?? 1;
+  const bounds = options.bounds;
+  /** 只认落在图区范围内的刻度：同页两张图时，靠这个把隔壁图的刻度筛掉（S124）。 */
+  const insideBounds = (word: PdfWord): boolean => {
+    if (bounds === undefined) return true;
+    const cx = ((word.x0 + word.x1) / 2) * scale;
+    const cy = ((word.y0 + word.y1) / 2) * scale;
+    const padX = (bounds.x1 - bounds.x0) * 0.25;
+    const padY = (bounds.y1 - bounds.y0) * 0.25;
+    return cx >= bounds.x0 - padX && cx <= bounds.x1 + padX && cy >= bounds.y0 - padY && cy <= bounds.y1 + padY;
+  };
   const numeric = words
+    .filter((word) => insideBounds(word))
     .map((word) => ({ word, value: numberOfWord(word.text) }))
     .filter((item): item is { word: PdfWord; value: number } => item.value !== null);
   if (numeric.length < 6) return { ok: false, error: "页面上认出的数字太少（" + numeric.length + " 个），无法标定坐标轴" };
@@ -232,12 +245,21 @@ export function calibrateFromWords(
   const notes: string[] = [
     "纵轴刻度 " + yTicks.length + " 个（" + yTicks[0]?.value + "…" + yTicks[yTicks.length - 1]?.value + "）",
     "横轴刻度 " + xTicks.length + " 个（" + xTicks[0]?.value + "…" + xTicks[xTicks.length - 1]?.value + "）",
-    "标定按最近的一列/一行数字拟合，若图上有多组刻度，结果可能是错的那一组",
+    bounds === undefined
+      ? "标定按最近的一列/一行数字拟合：同页若有多张图，结果可能落到隔壁那张"
+      : "刻度只取图区附近的那一组（同页多图时按彩色像素外接框筛过）",
   ];
-  const spreadOf = (ticks: { pixel: number }[]): number =>
-    median(ticks.slice(1).map((item, index) => Math.abs(item.pixel - (ticks[index]?.pixel ?? 0))));
-  if (spreadOf(yTicks) > 60) notes.push("纵轴刻度间距偏大（" + Math.round(spreadOf(yTicks)) + " px），拟合可能不稳");
-  if (spreadOf(xTicks) > 120) notes.push("横轴刻度间距偏大（" + Math.round(spreadOf(xTicks)) + " px），拟合可能不稳");
+  /** 刻度间距是否均匀：均匀的刻度拟合才可信，绝对值大小不影响线性标定。 */
+  const irregularity = (ticks: { pixel: number }[]): number => {
+    const gaps = ticks.slice(1).map((item, index) => Math.abs(item.pixel - (ticks[index]?.pixel ?? 0)));
+    const middle = median(gaps);
+    if (middle === 0) return 0;
+    return Math.max(...gaps.map((gap) => Math.abs(gap - middle) / middle));
+  };
+  const yIrregular = irregularity(yTicks);
+  const xIrregular = irregularity(xTicks);
+  if (yIrregular > 0.4) notes.push("纵轴刻度间距不均匀（最大偏差 " + Math.round(yIrregular * 100) + "%），拟合可能不稳");
+  if (xIrregular > 0.4) notes.push("横轴刻度间距不均匀（最大偏差 " + Math.round(xIrregular * 100) + "%），拟合可能不稳");
   return {
     ok: true,
     calibration: {
@@ -246,4 +268,92 @@ export function calibrateFromWords(
       notes,
     },
   };
+}
+
+export interface PixelBounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * 彩色像素的外接框（S124）。
+ *
+ * 一张页可能有两张图，刻度文字也各有一套。先量出「彩色曲线占了哪块地方」，
+ * 再用它把刻度候选筛到同一块地方，才能避免标定到隔壁那张图。
+ */
+export function chromaBounds(image: DecodedPng, margin = 0): PixelBounds | null {
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const at = (y * image.width + x) * 4;
+      const bucket = hueBucket(image.rgba[at] ?? 0, image.rgba[at + 1] ?? 0, image.rgba[at + 2] ?? 0);
+      if (bucket < 0) continue;
+      if (x < x0) x0 = x;
+      if (y < y0) y0 = y;
+      if (x > x1) x1 = x;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0 || y1 < 0) return null;
+  return {
+    x0: Math.max(0, x0 - margin),
+    y0: Math.max(0, y0 - margin),
+    x1: Math.min(image.width - 1, x1 + margin),
+    y1: Math.min(image.height - 1, y1 + margin),
+  };
+}
+
+/**
+ * 图例的「颜色 → 名字」（S124）。
+ *
+ * 手册的图例是「一小段彩色线段 + 一个词」。词能从 bbox 里拿到，颜色只能从图里取：
+ * 在词的左边找一小块彩色像素，取出现最多的色相，就得到这条线的名字。
+ * 图例文字若被转成轮廓，这里自然拿不到，返回空表即可。
+ */
+export function legendLabels(
+  words: readonly PdfWord[],
+  image: DecodedPng,
+  bounds: PixelBounds | null,
+  options: { scale?: number } = {},
+): Map<number, string> {
+  const scale = options.scale ?? 1;
+  const labels = new Map<number, string>();
+  const candidates = words.filter((word) => /^[A-Za-z][A-Za-z0-9 .%°-]{0,18}$/u.test(word.text.trim()) && word.text.trim().length >= 2);
+  for (const word of candidates) {
+    const y0 = Math.round(word.y0 * scale);
+    const y1 = Math.round(word.y1 * scale);
+    const xStart = Math.round(word.x0 * scale) - Math.round(30 * scale);
+    const xEnd = Math.round(word.x0 * scale) - 2;
+    if (y0 < 0 || y1 >= image.height || xEnd <= 0) continue;
+    if (bounds !== null) {
+      const inside = y0 >= bounds.y0 - Math.round(24 * scale) && y1 <= bounds.y1 + Math.round(24 * scale) && xEnd >= bounds.x0 - Math.round(60 * scale);
+      if (!inside) continue;
+    }
+    const counts = new Map<number, number>();
+    for (let y = Math.max(0, y0); y <= Math.min(image.height - 1, y1); y += 1) {
+      for (let x = Math.max(0, xStart); x <= Math.min(image.width - 1, xEnd); x += 1) {
+        const at = (y * image.width + x) * 4;
+        const bucket = hueBucket(image.rgba[at] ?? 0, image.rgba[at + 1] ?? 0, image.rgba[at + 2] ?? 0);
+        if (bucket < 0) continue;
+        counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+      }
+    }
+    let bestBucket = -1;
+    let bestCount = 0;
+    for (const [bucket, count] of counts) {
+      if (count > bestCount) {
+        bestBucket = bucket;
+        bestCount = count;
+      }
+    }
+    if (bestBucket < 0 || bestCount < 12) continue;
+    if (labels.has(bestBucket)) continue;
+    labels.set(bestBucket, word.text.trim());
+  }
+  return labels;
 }

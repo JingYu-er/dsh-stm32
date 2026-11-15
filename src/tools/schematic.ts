@@ -16,6 +16,10 @@ import { resolveSearchConfig } from "../data/search-roots.js";
 import { checkSchematic } from "../engine/schematic/checks.js";
 import { findRootSchematic, readSchematic, type SchematicReport } from "../engine/schematic/model.js";
 import { draftIoc } from "../engine/schematic/to-ioc.js";
+import { locatePoppler } from "../engine/pdf/toolchain.js";
+import { datasheetCacheDir, resolveDatasheetRef } from "../engine/datasheet/store.js";
+import { pinFunctionIndex, readDatasheetPinout } from "../engine/datasheet/pinout.js";
+import { popplerDirs } from "./pdf.js";
 import type { DshContext, JsonSchema, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 import { resolveProjectLayout } from "../engine/project-layout.js";
@@ -440,7 +444,7 @@ export function registerSchematicTools(ctx: DshContext): void {
     timeoutMs: 60_000,
     isConcurrencySafe: () => true,
     async execute(
-      rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[] } | undefined,
+      rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[]; datasheet?: string } | undefined,
       exec: ToolExec,
     ): Promise<SchPinsValue> {
       const args = rawArgs ?? {};
@@ -569,6 +573,10 @@ export function registerSchematicTools(ctx: DshContext): void {
         projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
         rootFile: { type: "string", description: "入口 .kicad_sch 路径；缺省按 .kicad_pro 同名文件推断。" },
         cubeMxRoots: { type: "array", items: { type: "string" }, description: "CubeMX 安装根目录候选；缺省按默认搜索。" },
+        datasheet: {
+          type: "string",
+          description: "厂商手册的立创编号或型号：器件库缺这个脚的信号时，用手册引脚表兜底；先用 stm32_ds_fetch 缓存。",
+        },
       },
     },
     output: {
@@ -593,8 +601,9 @@ export function registerSchematicTools(ctx: DshContext): void {
                 confidence: { type: "string", enum: ["high", "medium", "low"] },
                 candidates: { type: "array", items: { type: "string" } },
                 note: { type: "string" },
+                source: { type: "string", enum: ["cubemx", "datasheet"] },
               },
-              required: ["number", "name", "net", "signal", "confidence", "candidates", "note"],
+              required: ["number", "name", "net", "signal", "confidence", "candidates", "note", "source"],
             },
           },
           peripherals: {
@@ -661,7 +670,7 @@ export function registerSchematicTools(ctx: DshContext): void {
           ok: boolean;
           message: string;
           mcu: string;
-          pins: { name: string; net: string; signal: string; confidence: string }[];
+          pins: { name: string; net: string; signal: string; confidence: string; source: string }[];
           gpioPins: { pin: string; signal: string; label: string }[];
           softwareFallbacks: { pin: string; net: string; protocol: string; tradeoff: string }[];
           unresolved: { name: string; net: string }[];
@@ -670,7 +679,8 @@ export function registerSchematicTools(ctx: DshContext): void {
         if (!result.ok) return [{ type: "text", text: "配置草案未生成：" + result.message }];
         const lines = ["配置草案（" + result.mcu + "）"];
         for (const pin of result.pins.slice(0, 24)) {
-          lines.push("  " + pin.name.padEnd(6) + " " + pin.net.padEnd(14) + " → " + (pin.signal === "" ? "（未匹配）" : pin.signal) + " [" + pin.confidence + "]");
+          const mark = pin.source === "datasheet" ? "（手册）" : "";
+          lines.push("  " + pin.name.padEnd(6) + " " + pin.net.padEnd(14) + " → " + (pin.signal === "" ? "（未匹配）" : pin.signal) + mark + " [" + pin.confidence + "]");
         }
         for (const pin of result.gpioPins) lines.push("  GPIO：" + pin.pin + " 配成 " + pin.signal + "，标签 " + pin.label);
         for (const fallback of result.softwareFallbacks) lines.push("  软件模拟：" + fallback.pin + " " + fallback.net + "（" + fallback.protocol + "）— " + fallback.tradeoff);
@@ -682,7 +692,7 @@ export function registerSchematicTools(ctx: DshContext): void {
     timeoutMs: 60_000,
     isConcurrencySafe: () => true,
     async execute(
-      rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[] } | undefined,
+      rawArgs: { projectDir?: string; rootFile?: string; cubeMxRoots?: string[]; datasheet?: string } | undefined,
       exec: ToolExec,
     ) {
       const args = rawArgs ?? {};
@@ -696,7 +706,24 @@ export function registerSchematicTools(ctx: DshContext): void {
       const config = resolveSearchConfig(process.env, args.cubeMxRoots === undefined ? {} : { cubeMxRoots: args.cubeMxRoots });
       const db = locateCubemxDb(config.cubeMxRoots);
       const facts = db === null || loaded.report.mcu === null ? null : readMcuFacts(db, loaded.report.mcu.value);
-      const draft = draftIoc(loaded.report, facts);
+      let pinFunctions: Map<string, string[]> | undefined;
+      const wantDatasheet = typeof args.datasheet === "string" ? args.datasheet.trim() : "";
+      if (wantDatasheet !== "") {
+        const found = resolveDatasheetRef(datasheetCacheDir(), wantDatasheet);
+        if (found === null) {
+          notes.push("手册 " + wantDatasheet + " 还没缓存：先 stm32_ds_fetch code=" + wantDatasheet + " 再生成草案。");
+        } else {
+          const poppler = locatePoppler(popplerDirs());
+          if (poppler.tools === null) {
+            notes.push("没有可用的 poppler，读不了手册引脚表：" + poppler.error);
+          } else {
+            const pinout = await readDatasheetPinout(ctx.subprocess, poppler.tools, found.file, {}, exec.signal);
+            pinFunctions = pinFunctionIndex(pinout);
+            notes.push(pinout.ok ? "手册引脚表：" + String(pinout.pins.length) + " 个脚（" + found.entry.code + "）" : "手册里没有认出引脚表：" + pinout.error);
+          }
+        }
+      }
+      const draft = draftIoc(loaded.report, facts, { pinFunctions });
       if (draft.ok && facts === null) notes.push(db === null ? "没有找到 CubeMX 器件库：草案里没有信号建议。" : "CubeMX 器件库里没有这颗型号：草案里没有信号建议。");
       return {
         ok: draft.ok,

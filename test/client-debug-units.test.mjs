@@ -250,3 +250,10 @@ test("电路设计页签：数据手册状态与补齐按钮（S120）", () => {
   assert.match(source, /\["datasheets", "补手册"\]/);
   assert.match(source, /ecad\.datasheets/);
 });
+
+test("电路设计页签：手册占用与补手册按钮（S124）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /function dsSizeText\(/u);
+  assert.match(source, /dsSizeText\(datasheets\)/u);
+  assert.match(source, /ecad\.datasheets/u);
+});

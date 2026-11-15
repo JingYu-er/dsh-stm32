@@ -66,6 +66,7 @@ import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { datasheetStatus, ensureProjectDatasheets } from "./datasheet/auto.js";
+import { cacheBytes, datasheetCacheDir } from "./datasheet/store.js";
 import { findIocFile } from "./generate.js";
 import type { SubprocessService } from "../types.js";
 
@@ -1146,7 +1147,7 @@ export async function handleWebApi(input: {
           : { ok: false, error: latest.error, kicadDir: "", pcbFile: "", schematicFile: "" },
         steps: steps.slice(0, 20),
         libs: await scanEcadLibs(workspace.libsDir),
-        datasheets: datasheetStatus(projectDir),
+        datasheets: { ...datasheetStatus(projectDir), bytes: cacheBytes(datasheetCacheDir()) },
         artifacts: await scanEcadArtifacts(workspace.outDir),
         layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },

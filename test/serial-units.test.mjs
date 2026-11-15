@@ -82,7 +82,7 @@ async function call(args) {
   // 交互类动作没显式给超时的话统一放宽到 4 s。open 不参与：它要断言
   // 「report.settings.timeoutMs 是默认 1000」，注入会把这个断言变成自证。
   const interactive = args.action !== "open" && args.action !== "close";
-  const widened = interactive ? { timeoutMs: 4000, ...args } : args;
+  const widened = interactive ? { timeoutMs: 6000, ...args } : args;
   const value = await tool.execute(widened, exec);
   assert.ok(value && typeof value.message === "string", "工具必须返回 {message, report}");
   return value.report;
@@ -328,11 +328,15 @@ test("ack 超时：桥活着但没回执 → bridge-start-timeout", async () => 
 test("idle：bridge 按 idleTimeoutMs 自行退出，之后 read 报 no-session", async () => {
   // 空闲窗口要比「桥启动 + 回执」长：CI 上光起 PowerShell 桥就要一秒多，
   // 400 ms 会在 ack 之前就把桥饿死，open 直接失败（曾因此红过一次）。
-  const idleTimeoutMs = 2500;
+  const idleTimeoutMs = 3000;
+  // 先热一次桥进程：CI 冷启动可能比空闲窗口还慢，热过再开才是在测「空闲退出」本身。
+  const warm = await call({ action: "open", port: "COM7", timeoutMs: 15000 });
+  assert.equal(warm.ok, true, "预热开串口失败：" + warm.errors.join("；"));
+  await call({ action: "close" });
   const opened = await call({ action: "open", port: "COM7", idleTimeoutMs: idleTimeoutMs });
   assert.equal(opened.ok, true, "open 应成功：" + opened.errors.join("；"));
   // 等桥自己走到空闲上限，不再用读请求去探——读可能刷新桥的空闲计时。
-  await new Promise((resolve) => setTimeout(resolve, idleTimeoutMs + 600));
+  await new Promise((resolve) => setTimeout(resolve, idleTimeoutMs + 800));
   const deadline = Date.now() + 8000;
   let last = null;
   while (Date.now() < deadline) {

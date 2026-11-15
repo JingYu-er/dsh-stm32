@@ -17,6 +17,7 @@ import {
   importDatasheetFile,
   isLcscCode,
   listDatasheets,
+  pruneDatasheets,
   type DatasheetEntry,
 } from "../engine/datasheet/store.js";
 import { projectJlcpcbCodes } from "../engine/datasheet/auto.js";
@@ -267,11 +268,15 @@ export function registerDatasheetTools(ctx: DshContext): void {
 
   ctx.tools.register({
     name: DS_LIST_TOOL,
-    description: "列出本地数据手册缓存：编号、型号、品牌、大小、抓取时间与来源，附缓存目录与总占用。",
+    description:
+      "列出本地数据手册缓存：编号、型号、品牌、大小、抓取时间与来源，附缓存目录与总占用。传 remove 或 olderThanDays 时顺带清理——不做自动过期，删多少由人决定。",
     parameters: {
       type: "object",
       additionalProperties: false,
-      properties: {},
+      properties: {
+        remove: { type: "array", items: { type: "string" }, description: "要删的编号（C25137 或 lcsc:C25137）；先看不传参数的列表。" },
+        olderThanDays: { type: "number", description: "删掉超过这么多天没再抓过的条目；不给表示不按时间删。" },
+      },
       required: [],
     },
     output: {
@@ -284,11 +289,31 @@ export function registerDatasheetTools(ctx: DshContext): void {
           cacheDir: { type: "string" },
           totalBytes: { type: "number" },
           entries: { type: "array", items: entryView },
+          removed: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { code: { type: "string" }, bytes: { type: "number" } },
+              required: ["code", "bytes"],
+            },
+          },
+          freedBytes: { type: "number" },
+          notes: { type: "array", items: { type: "string" } },
         },
-        required: ["ok", "error", "cacheDir", "totalBytes", "entries"],
+        required: ["ok", "error", "cacheDir", "totalBytes", "entries", "removed", "freedBytes", "notes"],
       },
       render: (_args, value) => {
-        const result = value as { ok: boolean; error: string; cacheDir: string; totalBytes: number; entries: Record<string, unknown>[] };
+        const result = value as {
+          ok: boolean;
+          error: string;
+          cacheDir: string;
+          totalBytes: number;
+          entries: Record<string, unknown>[];
+          removed: { code: string; bytes: number }[];
+          freedBytes: number;
+          notes: string[];
+        };
         if (!result.ok) return [{ type: "text", text: "读取失败：" + result.error }];
         const lines = [
           "缓存目录：" + result.cacheDir,
@@ -297,19 +322,45 @@ export function registerDatasheetTools(ctx: DshContext): void {
         for (const entry of result.entries) {
           lines.push("  " + String(entry["code"]) + " · " + String(entry["mpn"]) + " · " + String(Math.round(Number(entry["bytes"]) / 1024)) + " KB · " + String(entry["fetchedAt"]).slice(0, 10));
         }
+        if (result.removed.length > 0) {
+          lines.push("已清理 " + String(result.removed.length) + " 份，释放 " + String(Math.round(result.freedBytes / 1024)) + " KB：" + result.removed.map((item) => item.code).join("、"));
+        }
+        for (const note of result.notes) lines.push("  ! " + note);
         return [{ type: "text", text: lines.join("\n") }];
       },
     },
     timeoutMs: 30_000,
     isConcurrencySafe: () => true,
-    execute: async () => {
+    execute: async (rawArgs: { remove?: string[]; olderThanDays?: number } | undefined) => {
       const env = process.env;
       const cacheDir = cacheDirOf(env);
+      const args = rawArgs ?? {};
       try {
+        const removed: { code: string; bytes: number }[] = [];
+        const notes: string[] = [];
+        let freedBytes = 0;
+        if (Array.isArray(args.remove) || typeof args.olderThanDays === "number") {
+          const pruned = pruneDatasheets(cacheDir, {
+            ...(Array.isArray(args.remove) ? { remove: args.remove } : {}),
+            ...(typeof args.olderThanDays === "number" ? { olderThanDays: args.olderThanDays } : {}),
+          });
+          removed.push(...pruned.removed);
+          freedBytes = pruned.bytes;
+          notes.push(...pruned.notes);
+        }
         const listing = listDatasheets(cacheDir);
-        return { ok: true, error: "", cacheDir, totalBytes: listing.totalBytes, entries: listing.entries.map(view) };
+        return { ok: true, error: "", cacheDir, totalBytes: listing.totalBytes, entries: listing.entries.map(view), removed, freedBytes, notes };
       } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error), cacheDir, totalBytes: 0, entries: [] };
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          cacheDir,
+          totalBytes: 0,
+          entries: [],
+          removed: [],
+          freedBytes: 0,
+          notes: [],
+        };
       }
     },
   });

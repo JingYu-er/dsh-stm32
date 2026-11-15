@@ -74,6 +74,7 @@ const outputSchema: JsonSchema = {
             additionalProperties: false,
             properties: {
               hue: { type: "string" },
+              label: { type: "string", description: "图例里认出的名字（Mean / Max）；认不出为空串。" },
               color: { type: "string" },
               pixels: { type: "number" },
               points: {
@@ -190,7 +191,7 @@ export function registerPdfTools(ctx: DshContext): void {
           tables?: { title: string; page: number; rows: number; columns: string[]; cells: string[][]; confidence: string; warnings: string[] }[];
           curves?: {
             page: number;
-            series: { hue: string; color: string; pixels: number; points: { x: number; y: number }[] }[];
+            series: { hue: string; label?: string; color: string; pixels: number; points: { x: number; y: number }[] }[];
             xTicks: number[];
             yTicks: number[];
           };
@@ -229,7 +230,7 @@ export function registerPdfTools(ctx: DshContext): void {
             const first = item.points[0];
             const last = item.points[item.points.length - 1];
             lines.push(
-              "- " + item.hue + "：" + String(item.points.length) + " 点，" +
+              "- " + item.hue + (item.label === undefined || item.label === "" ? "" : "（" + item.label + "）") + "：" + String(item.points.length) + " 点，" +
                 (first === undefined ? "?" : String(first.x) + " → " + String(first.y)) + " … " +
                 (last === undefined ? "?" : String(last.x) + " → " + String(last.y)),
             );

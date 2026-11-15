@@ -354,3 +354,79 @@ export function importDatasheetFile(cacheDir: string, source: string, code?: str
   rmSync(temp, { force: true });
   return result;
 }
+
+export interface PruneResult {
+  ok: boolean;
+  error: string;
+  removed: { code: string; bytes: number }[];
+  bytes: number;
+  kept: string[];
+  notes: string[];
+}
+
+/**
+ * 清理缓存（S124）：按编号删，或按「超过 N 天没再抓过」删。
+ *
+ * 不做容量上限：手册是外部证据，删多少应该由人决定；这里只提供可复核的入口——
+ * 返回删了哪些、释放多少字节、还剩哪些，删之前先确认索引里确实有这一份。
+ */
+export function pruneDatasheets(
+  cacheDir: string,
+  options: { remove?: readonly string[]; olderThanDays?: number } = {},
+): PruneResult {
+  const index = readIndex(cacheDir);
+  const codes = new Set(Object.keys(index.entries));
+  const removed: PruneResult["removed"] = [];
+  const notes: string[] = [];
+  const wanted = (options.remove ?? []).map((value) => normalizeCode(value)).filter((value) => value !== "");
+  for (const code of wanted) {
+    const entry = index.entries[code];
+    if (entry === undefined) {
+      notes.push("缓存里没有 " + code + "，跳过");
+      continue;
+    }
+    removeEntry(cacheDir, entry, removed);
+    codes.delete(code);
+  }
+  if (options.olderThanDays !== undefined && options.olderThanDays > 0) {
+    const cutoff = Date.now() - options.olderThanDays * 24 * 3600 * 1000;
+    for (const code of [...codes]) {
+      const entry = index.entries[code];
+      if (entry === undefined) continue;
+      const stamp = Date.parse(entry.fetchedAt);
+      if (Number.isNaN(stamp) || stamp >= cutoff) continue;
+      removeEntry(cacheDir, entry, removed);
+      codes.delete(code);
+    }
+  }
+  if (removed.length === 0 && notes.length === 0) notes.push("没有给出要删的编号，也没有超过期限的条目");
+  const bytes = removed.reduce((sum, item) => sum + item.bytes, 0);
+  const keptEntries: DatasheetIndex["entries"] = {};
+  for (const [code, entry] of Object.entries(index.entries)) if (codes.has(code)) keptEntries[code] = entry;
+  writeIndex(cacheDir, { version: 1, entries: keptEntries });
+  const kept = [...codes].sort((a, b) => a.localeCompare(b));
+  return { ok: true, error: "", removed, bytes, kept, notes };
+}
+
+function removeEntry(cacheDir: string, entry: DatasheetEntry, removed: PruneResult["removed"]): void {
+  const file = entryFile(cacheDir, entry);
+  let bytes = entry.bytes;
+  try {
+    const stat = statSync(file);
+    bytes = stat.size;
+  } catch {
+    // 文件已经不在，按索引里记的字节数计
+  }
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    // 删不掉就仍然从索引里摘掉，下次扫描会重建
+  }
+  const dir = join(cacheDir, entry.code);
+  try {
+    rmSync(join(dir, "digest.json"), { force: true });
+  } catch {
+    // 索引文件删不掉不影响结论
+  }
+  removed.push({ code: entry.code, bytes });
+}

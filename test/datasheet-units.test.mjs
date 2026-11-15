@@ -9,6 +9,7 @@ import { detectSections } from "../lib/engine/datasheet/digest.js";
 import {
   ensureDatasheet,
   importDatasheetFile,
+  pruneDatasheets,
   listDatasheets,
   readIndex,
   resolveDatasheetRef,
@@ -156,4 +157,30 @@ test("关键页索引：正文里提到关键词不算章节，不误报", () =>
     { page: 2, text: "The device has a pin configuration that is described below in the following section of this document, please read" },
   ];
   assert.deepEqual(detectSections(pages), []);
+});
+
+test("清理入口：按编号删、按天数删，都返回释放的字节（S124）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ds-"));
+  try {
+    const source = join(dir, "a.pdf");
+    writeFileSync(source, PDF);
+    assert.equal(importDatasheetFile(dir, source, "C11702", "NCD0805R1").ok, true);
+    assert.equal(importDatasheetFile(dir, source, "C25137", "0402WGF931JTCE").ok, true);
+    const pruned = pruneDatasheets(dir, { remove: ["C11702", "C99999"] });
+    assert.equal(pruned.ok, true);
+    assert.deepEqual(pruned.removed.map((item) => item.code), ["C11702"]);
+    assert.ok(pruned.bytes > 0, "要报出释放的字节数");
+    assert.ok(pruned.notes.some((note) => note.includes("C99999")), "不存在的编号要说明");
+    assert.deepEqual(pruned.kept, ["C25137"]);
+    assert.equal(listDatasheets(dir).entries.length, 1);
+    const fresh = pruneDatasheets(dir, { olderThanDays: 1 });
+    assert.deepEqual(fresh.removed, [], "刚导入的条目不该被天数清掉");
+    const index = readIndex(dir);
+    index.entries["C25137"].fetchedAt = "2020-01-01T00:00:00.000Z";
+    writeFileSync(join(dir, "index.json"), JSON.stringify(index), "utf8");
+    const byAge = pruneDatasheets(dir, { olderThanDays: 1 });
+    assert.deepEqual(byAge.removed.map((item) => item.code), ["C25137"], "改了抓取时间的旧条目按天数删");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

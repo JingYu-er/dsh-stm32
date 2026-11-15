@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { checkSchematic, readIocPins } from "../lib/engine/schematic/checks.js";
 import { findRootSchematic, readSchematic } from "../lib/engine/schematic/model.js";
 import { draftIoc } from "../lib/engine/schematic/to-ioc.js";
+import { pinFunctionIndex, readPinoutTables } from "../lib/engine/datasheet/pinout.js";
 import { crossCheckPcb, readPcb } from "../lib/engine/schematic/pcb.js";
 import { parseSexpr } from "../lib/engine/schematic/sexpr.js";
 import { agentOfSession, resetSessionAgents } from "../lib/engine/session-context.js";
@@ -258,4 +259,61 @@ test("配置草案：没有器件库时给出下一步而不是空结果（S113�
   assert.equal(draft.ok, false);
   assert.match(draft.error, /CubeMX 器件库/u);
   assert.equal(draft.pins.length, 0);
+});
+
+test("手册引脚表：认出引脚列与功能列，别名一起收（S123）", () => {
+  const table = {
+    title: "Table 4. Pinout",
+    page: 12,
+    rows: 3,
+    columns: 2,
+    cells: [
+      ["Pin name", "Alternate functions"],
+      ["PA5", "SPI1_SCK TIM2_CH1"],
+      ["PB9-BOOT0", "BOOT0"],
+    ],
+    confidence: "high",
+    warnings: [],
+  };
+  const report = readPinoutTables([table]);
+  assert.equal(report.ok, true);
+  const pa5 = report.pins.find((pin) => pin.name === "PA5");
+  assert.deepEqual(pa5?.functions, ["SPI1_SCK", "TIM2_CH1"]);
+  const boot = report.pins.find((pin) => pin.name === "PB9");
+  assert.ok(boot?.aliases.includes("BOOT0"), "复合脚名的后半段进别名");
+  const index = pinFunctionIndex(report);
+  assert.deepEqual(index.get("PA5"), ["SPI1_SCK", "TIM2_CH1"]);
+});
+
+test("配置草案：器件库缺信号时用手册引脚表兜底，并标出来源（S123）", () => {
+  const root = findRootSchematic(FIXTURE);
+  const { report } = readSchematic(root);
+  const pinFact = (...signals) => ({ name: "", position: 0, signals: new Map(signals.map((signal) => [signal, []])) });
+  const facts = {
+    name: "STM32L021F4Ux",
+    packageName: "ST_UFQFPN-20",
+    frequencyMhz: 32,
+    family: "STM32L0",
+    line: "STM32L021",
+    core: "ARM Cortex-M0+",
+    ramKb: 6,
+    flashKb: [16],
+    ioNb: 20,
+    clockTree: "",
+    pins: new Map([
+      ["PA5", pinFact("GPIO")],
+      ["PA13", pinFact("SYS_SWDIO", "GPIO")],
+    ]),
+    ips: new Map(),
+  };
+  const plain = draftIoc(report, facts);
+  assert.equal(new Map(plain.pins.map((pin) => [pin.name, pin])).get("PA5")?.signal, "", "库里只有 GPIO 时对不上 SDA");
+  const pinFunctions = new Map([["PA5", ["I2C1_SDA", "I2C1_SCL"]]]);
+  const enriched = draftIoc(report, facts, { pinFunctions });
+  const pa5 = new Map(enriched.pins.map((pin) => [pin.name, pin])).get("PA5");
+  assert.equal(pa5?.signal, "I2C1_SDA");
+  assert.equal(pa5?.source, "datasheet");
+  assert.match(pa5?.note ?? "", /厂商手册/u);
+  const pa13 = new Map(enriched.pins.map((pin) => [pin.name, pin])).get("PA13");
+  assert.equal(pa13?.source, "cubemx", "器件库能解析的脚不受手册影响");
 });

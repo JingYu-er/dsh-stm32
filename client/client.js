@@ -2680,7 +2680,15 @@ window.__ModuleLoader__.load({
 
     // 面板上的五个动作与工具一一对应：构建、检查、导出库、导出 STEP、打包制造文件。
     // 请求在服务端同步执行（构建几十秒），面板只显示「执行中」，回来后一次性渲染结果。
-    function EcadPanel(props) {
+    /** 手册缓存的占用（MB / KB），面板只读展示；清理交给 stm32_ds_list 的 remove/olderThanDays。 */
+function dsSizeText(datasheets) {
+  const bytes = datasheets !== null && typeof datasheets === "object" ? Number(datasheets.bytes) : NaN;
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes >= 1024 * 1024) return "（" + (bytes / (1024 * 1024)).toFixed(1) + " MB）";
+  return "（" + String(Math.round(bytes / 1024)) + " KB）";
+}
+
+function EcadPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useEcad(projectDir, 20000);
       const [job, setJob] = useState({ name: "", running: false, result: null, error: "" });
@@ -2722,7 +2730,7 @@ window.__ModuleLoader__.load({
             e(
               "span",
               { style: dsMissing.length > 0 ? { color: D32_WARN } : {} },
-              "手册 " + String(dsCached.length) + "/" + String(dsCached.length + dsMissing.length),
+              "手册 " + String(dsCached.length) + "/" + String(dsCached.length + dsMissing.length) + dsSizeText(datasheets),
             ),
             e("span", { style: { opacity: 0.55 } }, "动作在页签里触发，结果就地显示"),
           ),

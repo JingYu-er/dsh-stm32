@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { locatePoppler } from "../lib/engine/pdf/toolchain.js";
 import { extractPdfText, listFigures, readPdfInfo, renderPdfPage } from "../lib/engine/pdf/reader.js";
 import { extractTablesFromWords, parseBboxXml } from "../lib/engine/pdf/tables.js";
-import { calibrateFromWords, digitizeCurves } from "../lib/engine/pdf/curve.js";
+import { calibrateFromWords, chromaBounds, digitizeCurves, legendLabels } from "../lib/engine/pdf/curve.js";
 import { decodePng } from "../lib/engine/pdf/png.js";
 import { CAPABILITY_COMPONENTS } from "../lib/engine/toolchain-gate.js";
 
@@ -260,4 +260,62 @@ test("PNG 解码：拒绝非 PNG 与 16 位图（S122）", () => {
   ]);
   const sixteen = decodePng(png);
   assert.equal(sixteen.ok, false);
+});
+
+function makeImage(width, height, paint) {
+  const rgba = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * 4;
+      const [r, g, b] = paint(x, y);
+      rgba[at] = r; rgba[at + 1] = g; rgba[at + 2] = b; rgba[at + 3] = 255;
+    }
+  }
+  return { width, height, rgba };
+}
+
+test("曲线：彩色像素外接框避开灰度背景（S124）", () => {
+  const image = makeImage(60, 40, (x, y) => (x >= 10 && x <= 30 && y >= 8 && y <= 20 ? [255, 0, 0] : [240, 240, 240]));
+  const bounds = chromaBounds(image, 2);
+  assert.ok(bounds !== null);
+  assert.equal(bounds.x0, 8);
+  assert.equal(bounds.x1, 32);
+  assert.equal(bounds.y0, 6);
+  assert.equal(bounds.y1, 22);
+  const gray = makeImage(20, 20, () => [128, 128, 128]);
+  assert.equal(chromaBounds(gray), null, "纯灰度图没有彩色像素");
+});
+
+test("曲线：图例文字按左侧色块认出名字（S124）", () => {
+  // 左侧一条红色线段（图例色块），右侧是文字框位置。
+  const image = makeImage(120, 40, (x, y) => (x >= 20 && x <= 34 && y >= 18 && y <= 21 ? [255, 0, 0] : [255, 255, 255]));
+  const words = [
+    { text: "Mean", x0: 38, y0: 15, x1: 60, y1: 25 },
+    { text: "x", x0: 70, y0: 15, x1: 78, y1: 25 },
+  ];
+  const labels = legendLabels(words, image, null, { scale: 1 });
+  assert.equal(labels.get(0), "Mean", "red 桶对应 Mean");
+  assert.equal(labels.size, 1, "单字母词不算图例");
+});
+
+test("曲线：同页两张图时，刻度按图区范围筛选（S124）", () => {
+  const word = (text, x0, y0, x1, y1) => ({ text, x0, y0, x1, y1 });
+  const words = [];
+  // 左边那张图的纵轴刻度在 x=100，右边那张在 x=900。
+  for (let i = 0; i < 5; i += 1) {
+    words.push(word(String(1 + i * 0.1), 96, 100 + i * 30, 120, 110 + i * 30));
+    words.push(word(String(3 + i * 0.1), 896, 100 + i * 30, 920, 110 + i * 30));
+  }
+  // 横轴刻度：左图在 y=260，右图在 y=380。
+  for (let i = 0; i < 5; i += 1) {
+    words.push(word(String(-40 + i * 40), 130 + i * 60, 250, 160 + i * 60, 268));
+    words.push(word(String(200 + i * 40), 930 + i * 60, 370, 960 + i * 60, 388));
+  }
+  const left = calibrateFromWords(words, { scale: 1, bounds: { x0: 120, y0: 90, x1: 460, y1: 280 } });
+  assert.equal(left.ok, true);
+  assert.ok(left.calibration.y.ticks.every((tick) => tick.value < 2), "纵轴只取左图那一列");
+  assert.ok(left.calibration.x.ticks.every((tick) => tick.value <= 200), "横轴只取左图那一行");
+  const right = calibrateFromWords(words, { scale: 1, bounds: { x0: 900, y0: 90, x1: 1240, y1: 400 } });
+  assert.equal(right.ok, true);
+  assert.ok(right.calibration.x.ticks.every((tick) => tick.value >= 200), "右图取到 200 起的刻度");
 });

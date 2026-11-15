@@ -265,6 +265,8 @@ static void rtt_init(void) {
 - `stm32_ecad_build` 成功后会自动补齐本工程用到的手册；面板「电路设计」头部显示「手册 2/3」，缺的标黄，点「补手册」走同一套逻辑。
 - `stm32_ds_lookup code=C25137 kind=electrical` 直接翻到电气特性那一页：先读前 40 页建一次索引（只记页号），之后按页取正文。
 - `stm32_ds_list` 看已缓存哪几份、占多少空间。
+- 手册的引脚表可兜底 `stm32_sch_to_ioc`：`stm32_sch_to_ioc datasheet=C25137`，器件库没有这个脚的信号时，用手册「Pin name / Alternate functions」两列补候选，结果标 `（手册）`。
+- 缓存清理：`stm32_ds_list remove=C25137` 或 `olderThanDays=180`，返回删了哪些、释放多少字节；面板「手册 x/y（N.N MB）」只读，删除走工具。
 - 曲线图不用靠眼睛估：`stm32_pdf_read file=DS14721.pdf mode=curve page=44` 按色相分出每条曲线，用纵/横刻度做线性标定，返回 (x, y) 序列；图例文字认不出，序列按色相命名。
 - 抓到之后直接 `stm32_pdf_read file=C25137`（或写型号）就能读，不必再给路径——引脚、电气参数、时序都从这里取，不靠记忆编。
 

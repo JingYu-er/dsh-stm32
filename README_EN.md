@@ -261,6 +261,8 @@ Non-STM32 parts are fetched once and cached:
 - `stm32_ecad_build` fetches the datasheets the project uses after a successful build; the Circuit design tab shows `datasheets 2/3` in its header and the same logic behind its "fetch datasheets" button.
 - `stm32_ds_lookup code=C25137 kind=electrical` jumps to the electrical characteristics page: the first 40 pages are indexed once (page numbers only), then text is read per page.
 - `stm32_ds_list` shows what is cached and how much space it takes.
+- The datasheet pin table can back `stm32_sch_to_ioc`: pass `datasheet=C25137` and pins whose signals are missing from the CubeMX database get candidates from the "Pin name / Alternate functions" columns, marked `(datasheet)`.
+- Cache cleanup: `stm32_ds_list remove=C25137` or `olderThanDays=180` reports what was deleted and how many bytes were freed; the panel shows "handbooks x/y (N.N MB)" read-only, deletion stays in the tool.
 - Curves do not have to be eyeballed: `stm32_pdf_read file=DS14721.pdf mode=curve page=44` groups pixels by hue, calibrates a linear mapping from the axis ticks and returns an (x, y) series; legend text is not decoded, so series are named by hue.
 - Afterwards `stm32_pdf_read file=C25137` (or the MPN) reads the cached copy directly, so pinout, limits and timing come from the document.
 
