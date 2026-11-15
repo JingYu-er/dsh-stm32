@@ -261,6 +261,7 @@ Non-STM32 parts are fetched once and cached:
 - `stm32_ecad_build` fetches the datasheets the project uses after a successful build; the Circuit design tab shows `datasheets 2/3` in its header and the same logic behind its "fetch datasheets" button.
 - `stm32_ds_lookup code=C25137 kind=electrical` jumps to the electrical characteristics page: the first 40 pages are indexed once (page numbers only), then text is read per page.
 - `stm32_ds_list` shows what is cached and how much space it takes.
+- Curves do not have to be eyeballed: `stm32_pdf_read file=DS14721.pdf mode=curve page=44` groups pixels by hue, calibrates a linear mapping from the axis ticks and returns an (x, y) series; legend text is not decoded, so series are named by hue.
 - Afterwards `stm32_pdf_read file=C25137` (or the MPN) reads the cached copy directly, so pinout, limits and timing come from the document.
 
 ## Slash commands
