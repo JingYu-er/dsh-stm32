@@ -102,3 +102,34 @@ test("工具层把工程根解析成程序目录（S96）", async () => {
   const kept = await resolveFirmwareDir({ get: () => undefined }, plain, undefined);
   assert.equal(kept.projectDir, plain, "程序在根上的老工程保持原样");
 });
+
+test("自定义目录名：fw/ 里的 .ioc 也能被扫到（S127）", () => {
+  const root = tempProject("fw-name");
+  touch(path.join(root, "fw"), "tetris.ioc", "Mcu.Name=STM32F303CCTx\n");
+  touch(path.join(root, "fw"), "CMakeLists.txt", "");
+  touch(path.join(root, "pc"), "demo.c", "");
+  const layout = resolveProjectLayout(root);
+  assert.equal(layout.firmwareDir, path.join(root, "fw"), "fw 不在候选名里，要能靠扫描找到");
+  assert.match(layout.notes.join(" / "), /fw/u, "notes 要写清楚是哪一层");
+});
+
+test("conf 里点名 .ioc 时以它所在目录为准（S127）", () => {
+  const root = tempProject("conf-ioc");
+  touch(path.join(root, "firmware-app"), "main.ioc", "Mcu.Name=STM32F103C8Tx\n");
+  writeProjectConf(root, { ioc: "firmware-app/main.ioc" });
+  const layout = resolveProjectLayout(root);
+  assert.equal(layout.firmwareDir, path.join(root, "firmware-app"));
+  assert.match(layout.notes.join(" / "), /conf 里的 \.ioc 在 firmware-app/u);
+});
+
+test("根上只有工作区索引时顺着索引进唯一子工程（S127）", () => {
+  const root = tempProject("index-root");
+  const child = path.join(root, "handheld");
+  touch(path.join(child, "Core"), "main.c", "");
+  writeProjectConf(root, {});
+  const indexText = "# 工作区索引\nversion=1\nproject=handheld\n";
+  fs.writeFileSync(path.join(root, "dsh-stm32.conf"), indexText, "utf8");
+  const layout = resolveProjectLayout(root);
+  assert.equal(layout.firmwareDir, child);
+  assert.match(layout.notes.join(" / "), /工作区索引/u);
+});
