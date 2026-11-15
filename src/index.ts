@@ -39,6 +39,7 @@ import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerSchematicTools } from "./tools/schematic.js";
+import { registerLayoutTools } from "./tools/layout.js";
 import { registerDatasheetTools } from "./tools/datasheet.js";
 import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
@@ -126,6 +127,7 @@ export function apply(ctx: DshContext): void {
   registerRegsRead(toolsCtx);
   registerRoutePlan(toolsCtx);
   registerSchematicTools(toolsCtx);
+  registerLayoutTools(toolsCtx);
   registerDatasheetTools(toolsCtx);
   registerEcadTools(toolsCtx);
   registerPdfTools(toolsCtx);

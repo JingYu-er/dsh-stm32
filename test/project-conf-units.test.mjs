@@ -40,7 +40,7 @@ test("registerWorkspaceProject：首次写入带表头且用相对路径，重�
   const project = path.join(root, "demo");
   fs.mkdirSync(project);
   assert.equal(registerWorkspaceProject(root, project), true, "首次应写入");
-  const conf = path.join(root, CONF_FILE_NAME);
+  const conf = path.join(root, ".dsh-stm32", "workspace.conf");
   assert.equal(fs.existsSync(conf), true);
   const text = fs.readFileSync(conf, "utf8");
   assert.match(text, /^# dsh-stm32 工作区索引/m);

@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 40 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 41 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -154,6 +154,7 @@ Boundaries are listed under [Known limitations](#known-limitations): HAL scaffol
 | `stm32_assets` | Lists, verifies and prunes bundled assets (chip data, `.ioc` templates, linker scripts, startup files, register tables) |
 | `stm32_cache` | Lists, verifies, fetches and prunes the download cache (register-route CMSIS templates) |
 | `stm32_project_create` | Scaffolds a project: `route:"hal"` from templates plus firmware package, `route:"register"` without CubeMX; both emit `openocd.cfg` |
+| `stm32_layout_fix` | Check and normalise the config files: the workspace index lives in `<workspace>/.dsh-stm32/workspace.conf`, the project description in the project root; dry run unless `apply=true` (backing up each rewritten file as `.bak`) |
 | `stm32_project_export` | Packs a project as a zip, excluding `build/`, `.dsh-stm32/`, `node_modules/`, `.git/` by default, optionally with prebuilt artifacts |
 
 ### `.ioc`: inspect and edit
@@ -296,7 +297,7 @@ The in-session debug console shows one timeline for both sides: the start, succe
 | Artifacts | elf / hex / bin, size, checksum, capacity, build-to-build comparison | Copy checksums |
 | Changes | `.ioc` differences against a baseline | Record a baseline, restore one key, restore all |
 
-Project directories are resolved by convention, and the locations can be set explicitly: firmware lives in `program/`, `firmware/`, `app/`, `user/`, `fw/`, `code/`, or the project root; when none of them match, `*.ioc` is scanned two levels deep and its parent directory becomes the firmware directory (the name is yours to choose); the KiCad project lives in `hardware/`, `kicad/`, `hw/`, or `pcb/` (otherwise `*.kicad_pro` is scanned); configuration and baselines stay in `.dsh-stm32/` at the project root. Both locations can be written to `dsh-stm32.conf` (`firmware=` / `hardware=`), and an `ioc=` entry wins over all conventions.
+Project directories are resolved by convention, and the locations can be set explicitly: firmware lives in `program/`, `firmware/`, `app/`, `user/`, `fw/`, `code/`, or the project root; when none of them match, `*.ioc` is scanned two levels deep and its parent directory becomes the firmware directory (the name is yours to choose); the KiCad project lives in `hardware/`, `kicad/`, `hw/`, or `pcb/` (otherwise `*.kicad_pro` is scanned); configuration and baselines stay in `.dsh-stm32/` at the project root. Both locations can be written to `dsh-stm32.conf` (`firmware=` / `hardware=`), and an `ioc=` entry wins over all conventions. The workspace index always lives in `<workspace>/.dsh-stm32/workspace.conf` and the project description in the project root; `stm32_layout_fix` moves misplaced files (backing them up first).
 
 Opening the panel first loads the most recent records for the session, then appends live. Events are written every 30 seconds to `~/.dsh-stm32/evidence/<date>/<session>/` for replay and export, retained for 7 days and the last 20 sessions by default, all configurable. The panel shows only this plugin's own tool calls. The panel shows only this session's project and debug session: in a session from another workspace, the panel stays empty instead of borrowing another session's project or debug output.
 
@@ -453,7 +454,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 40 tools
+  tools/            registration and argument validation for 41 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

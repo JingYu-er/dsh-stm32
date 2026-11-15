@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：40 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：41 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -155,6 +155,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_cache` | 查看、校验、拉取、清理下载缓存（寄存器版 CMSIS 模板） |
 | `stm32_project_create` | 建工程：`route:"hal"` 用模板 + 固件包，`route:"register"` 建不依赖 CubeMX 的寄存器工程；两条路线均生成 `openocd.cfg` |
 | `stm32_project_export` | 工程打包为 zip，默认排除 `build/`、`.dsh-stm32/`、`node_modules/`、`.git/`，可附编译产物 |
+| `stm32_layout_fix` | 检查并把配置文件归位：工作区索引在 `<工作区>/.dsh-stm32/workspace.conf`、工程描述在工程根；默认只报计划，`apply=true` 才改文件（先备份 `.bak`） |
 
 ### `.ioc`：查看与修改
 
@@ -300,7 +301,7 @@ static void rtt_init(void) {
 | 产物 | elf / hex / bin、大小、校验和、容量、两次构建对比 | 复制校验和 |
 | 变更 | `.ioc` 与基线的差异 | 记基线、恢复单键、一次恢复全部 |
 
-工程目录按约定解析，位置可显式指定：程序目录取 `program/`、`firmware/`、`app/`、`user/`、`fw/`、`code/` 或工程根；这些候选都不命中时按深度 2 内扫描 `*.ioc`，命中的父目录就是程序目录（目录名由使用者决定）；KiCad 工程取 `hardware/`、`kicad/`、`hw/`、`pcb/`（都没有时扫描 `*.kicad_pro`）；配置与基线在工程根的 `.dsh-stm32/`。两处位置可写进工程根的 `dsh-stm32.conf`（`firmware=` / `hardware=`），写了 `ioc=` 时以该文件所在的目录为准。
+工程目录按约定解析，位置可显式指定：程序目录取 `program/`、`firmware/`、`app/`、`user/`、`fw/`、`code/` 或工程根；这些候选都不命中时按深度 2 内扫描 `*.ioc`，命中的父目录就是程序目录（目录名由使用者决定）；KiCad 工程取 `hardware/`、`kicad/`、`hw/`、`pcb/`（都没有时扫描 `*.kicad_pro`）；配置与基线在工程根的 `.dsh-stm32/`。两处位置可写进工程根的 `dsh-stm32.conf`（`firmware=` / `hardware=`），写了 `ioc=` 时以该文件所在的目录为准。工作区索引固定写在 `<工作区>/.dsh-stm32/workspace.conf`，工程描述固定写在工程根，放错时用 `stm32_layout_fix` 一键归位（先备份）。
 
 打开面板会先补齐本会话最近的记录，之后实时追加。事件每 30 秒写入 `~/.dsh-stm32/evidence/<日期>/<会话>/`，可回放、导出；默认保留 7 天、最近 20 个会话，可在配置里调整。面板只展示本插件自己的工具调用，不含其他工具的调用。面板只显示本会话的工程与调试会话：换到另一个工作区的会话时，没有工程就是空面板，不会借用别的会话的工程与调试输出。
 
@@ -458,7 +459,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            40 个工具的注册与参数校验
+  tools/            41 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

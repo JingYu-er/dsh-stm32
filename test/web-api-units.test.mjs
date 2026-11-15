@@ -225,11 +225,12 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：四十九条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 49);
-  assert.equal(new Set(WEB_API_PATHS).size, 49);
+test("WEB_API_PATHS：五十条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 50);
+  assert.equal(new Set(WEB_API_PATHS).size, 50);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/action"), true);
+  assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/layout"), true);
   for (const route of WEB_API_PATHS) {
     assert.equal(route.startsWith(WEB_API_PREFIX + "/"), true, route);
   }

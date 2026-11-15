@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S127）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S128）
 
 ### 一、目标与约束
 
@@ -7375,3 +7375,17 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
 - 复核：`node test/run-units.mjs` **80 套件 / 1088 pass / 0 fail**；`npm run test:size` **1943.0 KB / 295 文件 / 解包 15686.1 KB**（README 在 `files` 内，重排后比发布时小 37 KB）；两份均 410 行、节次一一对应，grep 无第二人称。
 - 提交 `docs: 双语 README 按工程工具专业简约风重排`；`v0.1.8` 删除后就地重建到该提交并 push（tag 与 main 同指该提交）。
 - 教训：**README 只写使用者能观察到的东西**——实现约束、内部数据结构、字段名属于开发笔记；安装路径要按「先能跑起来、再补能力」组织，而不是先罗列全部依赖。**双语文档按节次对齐**，先取证再改文案，否则重排过程最容易把计数写错。
+
+### 一百三十六、配置文件归位：两种 conf 不再同名同地（S128）
+
+- 现象：用户的 `tetris-handheld` 里，工作区索引（`project=fw`）放在工程根，工程描述（`name=`/`mcu=`/`ioc=`）放在 `fw/` 子目录——两份文件同名，内容各占一半语义，谁该在哪一层全靠记忆。
+- 规范（写进代码，不再靠文档教育）：
+  - 工作区索引 → `<工作区>/.dsh-stm32/workspace.conf`（只放 `version` 与 `project=`）；
+  - 工程描述 → `<工程根>/dsh-stm32.conf`（`ioc=`/`build=` 相对工程根）；
+  - 插件状态 → `<工程根>/.dsh-stm32/`。
+- 落点：
+  - `project-conf.ts` 增 `WORKSPACE_CONF_REL`；`registerWorkspaceProject()` 只写新位置；`readWorkspaceIndex()` 新位置优先、旧位置兼容（`exists` 两个位置都算）。
+  - 新 `project-repair.ts`：`planLayoutFix()` 只读规划、`applyLayoutFix()` 才动文件（每份被改写的文件先存 `.bak`）。两类动作——程序目录里的工程描述并回工程根（`ioc` 改写成相对路径、补 `firmware=`）；工程根里的 `project=` 行搬到上一级索引（指向子目录的项直接丢弃，那些不是独立工程）。
+  - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
+- 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
+- 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
