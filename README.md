@@ -217,6 +217,17 @@ pnpm add "link:D:\path\to\dsh-stm32"
 
 改完电路源码、本轮对话结束时，插件会**自动构建一次**（只构建与检查，不导出成品），这样回到 KiCad 就能看到最新的原理图与 PCB。三条约束：只在源码比产物新或上次失败时跑、每回合最多一次、两次之间至少 60 秒；最近一次结果写在面板头（「自动构建 MM-DD HH:mm · 通过/有问题」）与 `<工程>/.dsh-stm32/ecad-state.json`。板子上的元件优先用 KiCad 官方库（`footprint="kicad:..."`），需要时再用立创编号兜底。
 
+PCB 布线用外部引擎 `KiCadRoutingTools`（MIT，Rust 网格布线器）。它不在插件包里，装一次、所有工程共用：
+
+```bash
+git clone --depth 1 https://github.com/drandyhaas/KiCadRoutingTools ~/.dsh-stm32/kicad-routing-tools
+# Rust 模块：python build_router.py 会下载预编译二进制；GitHub API 限流时直接下 release 的 grid_router-windows-x86_64.pyd
+# 把它放进 KiCad python 的 Lib/site-packages（子进程要能 import 到）
+"D:/app/KiCad/10.0/bin/python.exe" -m pip install numpy scipy shapely
+```
+
+位置可用 `DSH_STM32_KRT_ROOT` 改。装好后 `stm32_pcb_autoroute` 才能跑；没装时该工具直接报一句「还没安装」，其余功能不受影响。实测（41 元件 / 35 网络 / 4 层板）未连接 0，DRC 违规从 437 降到 128，其中短接与间距全部清零，146 秒。
+
 ### 代码与构建
 
 | 工具 | 用途 |

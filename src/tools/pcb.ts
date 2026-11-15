@@ -212,7 +212,7 @@ export function registerPcbTools(ctx: DshContext): void {
   const routeTool: ToolDefinition = {
     name: PCB_ROUTE_TOOL,
     description:
-      "在已放置的板上布电源与地：按网络把焊盘用最近邻链连起来（F.Cu，0.5 mm），并尝试补一块 GND 铺铜区后填充；不处理信号线。默认保留既有走线。",
+      "实验性的自研布线器：在已放置的板上按网络把焊盘用最近邻链连起来并尝试补 GND 铺铜。已被 stm32_pcb_autoroute 取代，保留用于对照与无引擎时的兜底。",
     parameters: {
       type: "object",
       additionalProperties: false,

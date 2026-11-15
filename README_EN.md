@@ -217,6 +217,17 @@ Dependencies are installed once: `tscircuit` and `typescript` live in a shared r
 
 When circuit sources change, the plugin builds once at the end of the turn (build + checks only, no artifacts), so KiCad shows the latest schematic and PCB. Guards: only when sources are newer than products or the last build failed, at most once per turn, at least 60 s apart. The last result appears in the panel header and in `<project>/.dsh-stm32/ecad-state.json`. Prefer KiCad's own libraries (`footprint="kicad:..."`) and fall back to JLCPCB part numbers only when needed.
 
+PCB routing uses an external engine, `KiCadRoutingTools` (MIT, Rust grid router). It is not shipped with the plugin: install once, shared by every project:
+
+```bash
+git clone --depth 1 https://github.com/drandyhaas/KiCadRoutingTools ~/.dsh-stm32/kicad-routing-tools
+# Rust module: `python build_router.py` downloads a prebuilt binary; when the GitHub API is rate-limited,
+# fetch `grid_router-windows-x86_64.pyd` from the release and drop it into KiCad python's Lib/site-packages.
+"D:/app/KiCad/10.0/bin/python.exe" -m pip install numpy scipy shapely
+```
+
+Override the location with `DSH_STM32_KRT_ROOT`. Without it `stm32_pcb_autoroute` reports that the engine is missing and everything else keeps working. Measured on a 41-part / 35-net / 4-layer board: 0 open nets, DRC violations down from 437 to 128 with all shorts and clearance errors cleared, 146 s.
+
 ### Code and build
 
 | Tool | Purpose |
