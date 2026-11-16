@@ -1462,3 +1462,21 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.length, 52);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
+
+test("GET /ecad：共享运行时与工程挂载分开报（S152）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-ecad-runtime-"));
+  const project = path.join(root, "proj");
+  fs.mkdirSync(project, { recursive: true });
+  const home = path.join(root, "home");
+  const env = { ...process.env, DSH_STM32_HOME: home };
+  const first = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/ecad", query: { projectDir: project }, deps: { subprocess: null, env } });
+  assert.equal(first.body.ecad.runtime.ready, false, "运行时目录不存在时不能报就绪");
+  assert.equal(first.body.ecad.runtime.bytes, 0);
+  assert.equal(first.body.ecad.installed, false);
+  const cli = path.join(home, "ecad-runtime", "node_modules", "tscircuit", "cli.mjs");
+  fs.mkdirSync(path.dirname(cli), { recursive: true });
+  fs.writeFileSync(cli, "// cli\n", "utf8");
+  const second = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/ecad", query: { projectDir: project }, deps: { subprocess: null, env } });
+  assert.equal(second.body.ecad.runtime.ready, true, "共享运行时存在即就绪，与工程是否挂载无关");
+  assert.equal(second.body.ecad.runtime.linked, false, "工程没挂载要如实报 false");
+});

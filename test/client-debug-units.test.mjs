@@ -31,6 +31,8 @@ test("电路设计页显示共享运行时与最近一次自动构建（S136）"
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes("function autoBuildText("));
   assert.ok(source.includes("共享运行时 "));
+  assert.ok(source.includes("本工程未挂载"));
+  assert.ok(source.includes("依赖已挂载"), "工程级挂载状态与机器共享运行时是两个数，标签要分开");
   assert.ok(source.includes("ecad.autoBuild"));
   assert.ok(source.includes("autoBuild.lastOk === true"));
 });
