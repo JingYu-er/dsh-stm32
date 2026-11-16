@@ -8,14 +8,27 @@
  *
  * 判据只认板子上与图纸上都能读到的证据，读不到就说读不到。
  */
-import { statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 import { resolveProjectLayout } from "../project-layout.js";
 import { findLatestKicadBuild, planEcadWorkspace } from "./tsci.js";
 import { readSchematic } from "../schematic/model.js";
 import { crossCheckPcb, readPcb, type PcbCheckReport } from "../schematic/pcb.js";
+import { buildSheetNets } from "../schematic/nets.js";
+import { parseSchText } from "../schematic/kicad-sch.js";
+import { drawSheetPath } from "../schematic/draw.js";
 
 export type NetGateState = "ok" | "stale" | "mismatch" | "unknown";
+
+/** 手绘层与生成图纸的差异（S176）：只比元件与每个引脚所在的网络，不比坐标。 */
+export interface HandDiff {
+  readonly file: string;
+  readonly exists: boolean;
+  readonly partsOnlyInHand: readonly string[];
+  readonly partsOnlyInBuild: readonly string[];
+  /** 同一个引脚在两边落在不同网络上的描述（`R1.2`）。 */
+  readonly pinsChanged: readonly string[];
+}
 
 export interface NetGateFinding {
   readonly id: string;
@@ -39,6 +52,7 @@ export interface NetGateReport {
   readonly split: number;
   readonly nameMismatches: number;
   readonly missingPads: number;
+  readonly hand: HandDiff;
   readonly findings: readonly NetGateFinding[];
   readonly notes: readonly string[];
 }
@@ -58,6 +72,7 @@ const EMPTY: NetGateReport = {
   split: 0,
   nameMismatches: 0,
   missingPads: 0,
+  hand: { file: "", exists: false, partsOnlyInHand: [], partsOnlyInBuild: [], pinsChanged: [] },
   findings: [],
   notes: [],
 };
@@ -165,6 +180,57 @@ export function checkNetGate(projectDir: string, options: NetGateOptions = {}): 
   return evaluateGate(projectDir, latest.schematicFile, latest.pcbFile);
 }
 
+/** 每个引脚 `ref.number` → 它所在网络的引脚签名；未连网络的引脚不在表里。 */
+function pinSignatures(sheetFile: string): Map<string, string> {
+  const text = readFileSync(sheetFile, "utf8");
+  const sheet = parseSchText(text, sheetFile, sheetFile);
+  const built = buildSheetNets(sheet);
+  const signatures = new Map<string, string>();
+  for (const net of built.nets) {
+    if (net.pins.length < 2) continue;
+    const signature = net.pins
+      .map((pin) => pin.ref + "." + pin.number)
+      .sort()
+      .join(",");
+    for (const pin of net.pins) signatures.set(pin.ref + "." + pin.number, signature);
+  }
+  return signatures;
+}
+
+function diffHand(buildSheet: string, handSheet: string): HandDiff {
+  if (!existsSync(handSheet)) {
+    return { file: handSheet, exists: false, partsOnlyInHand: [], partsOnlyInBuild: [], pinsChanged: [] };
+  }
+  let hand;
+  let build;
+  try {
+    hand = readSchematic(handSheet).report;
+    build = readSchematic(buildSheet).report;
+  } catch {
+    return { file: handSheet, exists: true, partsOnlyInHand: [], partsOnlyInBuild: [], pinsChanged: [] };
+  }
+  const handRefs = new Set(hand.components.map((component) => component.ref));
+  const buildRefs = new Set(build.components.map((component) => component.ref));
+  const partsOnlyInHand = [...handRefs].filter((ref) => !buildRefs.has(ref)).sort();
+  const partsOnlyInBuild = [...buildRefs].filter((ref) => !handRefs.has(ref)).sort();
+  let pinsChanged: string[] = [];
+  try {
+    const handPins = pinSignatures(handSheet);
+    const buildPins = pinSignatures(buildSheet);
+    const keys = new Set([...handPins.keys(), ...buildPins.keys()]);
+    pinsChanged = [...keys]
+      .filter((key) => (handPins.get(key) ?? "") !== (buildPins.get(key) ?? ""))
+      .filter((key) => {
+        const ref = key.slice(0, key.indexOf("."));
+        return handRefs.has(ref) && buildRefs.has(ref);
+      })
+      .sort();
+  } catch {
+    pinsChanged = [];
+  }
+  return { file: handSheet, exists: true, partsOnlyInHand, partsOnlyInBuild, pinsChanged };
+}
+
 function evaluateGate(projectDir: string, schematicFile: string, pcbFile: string): NetGateReport {
   let schematicMs = 0;
   let pcbMs = 0;
@@ -206,6 +272,25 @@ function evaluateGate(projectDir: string, schematicFile: string, pcbFile: string
   }
   const schematicRefs = schematicReport.components.map((component) => component.ref);
   const findings = findingsOf(staleSeconds, check, schematicRefs, [...boardReport.refs], [...connectedRefs]);
+
+  // 手绘层：只比元件与网络，不比坐标（坐标每次构建都会被重排）。
+  const hand = diffHand(schematicFile, drawSheetPath(projectDir));
+  if (hand.partsOnlyInHand.length > 0) {
+    findings.push({
+      id: "hand.part-not-in-build",
+      severity: "warning",
+      message: "手绘层多了元件：" + hand.partsOnlyInHand.slice(0, 8).join("、") + (hand.partsOnlyInHand.length > 8 ? " 等" : ""),
+      fix: "这些元件只在 hardware/schematic 里：要么用 stm32_sch_import 把它们吸收回 circuit.tsx，要么明确手绘层就是最终图纸",
+    });
+  }
+  if (hand.pinsChanged.length > 0) {
+    findings.push({
+      id: "hand.net-diff",
+      severity: "warning",
+      message: "手绘层有 " + String(hand.pinsChanged.length) + " 个引脚的网络与生成图纸不同：" + hand.pinsChanged.slice(0, 8).join("、"),
+      fix: "先确认哪一边是想要的；要保留手绘改法就吸收回源，否则用 seed 重新拷底图",
+    });
+  }
   const state: NetGateState =
     findings.some((finding) => finding.id === "gate.net-split") || findings.some((finding) => finding.id === "gate.pad-missing")
       ? "mismatch"
@@ -235,6 +320,7 @@ function evaluateGate(projectDir: string, schematicFile: string, pcbFile: string
     split: check.split.length,
     nameMismatches: check.nameMismatches.length,
     missingPads: check.missingPads.length,
+    hand,
     findings,
     notes,
   };

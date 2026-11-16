@@ -1878,6 +1878,18 @@ export function registerPcbTools(ctx: DshContext): void {
       split: { type: "number" },
       nameMismatches: { type: "number" },
       missingPads: { type: "number" },
+      hand: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          file: { type: "string" },
+          exists: { type: "boolean" },
+          partsOnlyInHand: { type: "array", items: { type: "string" } },
+          partsOnlyInBuild: { type: "array", items: { type: "string" } },
+          pinsChanged: { type: "array", items: { type: "string" } },
+        },
+        required: ["file", "exists", "partsOnlyInHand", "partsOnlyInBuild", "pinsChanged"],
+      },
       findings: {
         type: "array",
         items: {
@@ -1894,7 +1906,7 @@ export function registerPcbTools(ctx: DshContext): void {
       },
       notes: { type: "array", items: { type: "string" } },
     },
-    required: ["ok", "error", "state", "staleSeconds", "schematicFile", "pcbFile", "schematicComponents", "pcbFootprints", "compared", "matched", "split", "nameMismatches", "missingPads", "findings", "notes"],
+    required: ["ok", "error", "state", "staleSeconds", "schematicFile", "pcbFile", "schematicComponents", "pcbFootprints", "compared", "matched", "split", "nameMismatches", "missingPads", "hand", "findings", "notes"],
   };
 
   const netgateTool: ToolDefinition = {
@@ -1914,10 +1926,18 @@ export function registerPcbTools(ctx: DshContext): void {
     output: {
       schema: netgateOutput,
       render: (_args, value) => {
-        const report = value as { ok: boolean; error: string; state: string; staleSeconds: number; schematicComponents: number; pcbFootprints: number; compared: number; matched: number; split: number; missingPads: number; findings: { severity: string; message: string; fix: string }[]; notes: string[] };
+        const report = value as { ok: boolean; error: string; state: string; staleSeconds: number; schematicComponents: number; pcbFootprints: number; compared: number; matched: number; split: number; missingPads: number; hand: { exists: boolean; partsOnlyInHand: string[]; pinsChanged: string[] }; findings: { severity: string; message: string; fix: string }[]; notes: string[] };
         if (!report.ok) return [{ type: "text", text: "一致性门禁没跑起来：" + report.error }];
         const lines: string[] = [];
         lines.push("一致性：" + String(report.state) + " · " + String(report.compared) + " 条网络对上 " + String(report.matched) + " 条 · 元件 " + String(report.schematicComponents) + "/" + String(report.pcbFootprints));
+        if (report.hand.exists) {
+          const handParts = report.hand.partsOnlyInHand.length;
+          lines.push(
+            "手绘层：多 " + String(handParts) + " 个元件 · " + String(report.hand.pinsChanged.length) + " 个引脚网络不同",
+          );
+        } else {
+          lines.push("手绘层：没有");
+        }
         for (const finding of report.findings) {
           lines.push("[" + finding.severity + "] " + finding.message + " → " + finding.fix);
         }

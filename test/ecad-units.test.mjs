@@ -1822,6 +1822,46 @@ test("一致性门禁：读出拆网/缺焊盘/悬空件，图纸更新过就报
   rmSync(work, { recursive: true, force: true });
 });
 
+test("一致性门禁：手绘层多出来的元件与改过的网络都要点出来（S176）", () => {
+  // 生成图纸用 sch-edit 夹具（有 lib_id，能克隆）；板子用 D_NFC 夹具（只用来比元件与网络）。
+  const schFixture = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+  const pcbFixture = fileURLToPath(new URL("./fixtures/kicad-10-d-nfc/D_NFC.kicad_pcb", import.meta.url));
+  const schematicFile = schFixture;
+  const pcbFile = pcbFixture;
+
+  const work = mkdtempSync(join(tmpdir(), "dsh-hand-"));
+  const handFile = drawSheetPath(work);
+  mkdirSync(dirname(handFile), { recursive: true });
+  writeFileSync(handFile, readFileSync(schematicFile, "utf8"), "utf8");
+
+  // 手绘层里克隆一个 R2，并把 R2.1 接到 R1.1：元件与网络两边都会不一样。
+  const hand = readDrawSheet(handFile);
+  const kinds = symbolBlocks(hand);
+  assert.ok(kinds.length > 0, "夹具里要有元件块");
+  const drawn = drawOnSheet(hand, handFile, [
+    { op: "clone", from: "R1", ref: "R2", at: { x: 200, y: 100 } },
+    { op: "wire", a: { ref: "R2", pin: "1" }, b: { ref: "R1", pin: "1" } },
+  ]);
+  assert.equal(drawn.ok, true, drawn.error);
+  writeFileSync(handFile, drawn.text, "utf8");
+
+  const report = checkNetGate(work, { pcbFile, schematicFile });
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.hand.exists, true);
+  assert.equal(report.hand.partsOnlyInHand.includes("R2"), true, "手绘层多的元件要点出来");
+  assert.equal(report.hand.pinsChanged.length > 0, true, "改过的网络要点出来");
+  assert.ok(report.findings.some((finding) => finding.id === "hand.part-not-in-build"));
+  assert.ok(report.findings.some((finding) => finding.id === "hand.net-diff"));
+
+  // 没有手绘层的地方要如实说没有。
+  const plain = mkdtempSync(join(tmpdir(), "dsh-hand-none-"));
+  const none = checkNetGate(plain, { pcbFile, schematicFile });
+  assert.equal(none.hand.exists, false);
+
+  rmSync(work, { recursive: true, force: true });
+  rmSync(plain, { recursive: true, force: true });
+});
+
 test("原理图编辑：连线插在两脚端点之间，重放幂等，标名落在引脚上（S170）", () => {
   const file = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
   const before = readFileSync(file, "utf8");

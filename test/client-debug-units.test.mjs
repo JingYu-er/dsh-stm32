@@ -322,6 +322,7 @@ test("电路设计页能看 EMC 体检：铺铜与电源线宽写在面板上（
   assert.equal(source.includes("function useNetGate("), true, "电路设计页要有一致性门禁的钩子");
   assert.equal(source.includes("ecad/netgate?projectDir="), true, "一致性门禁走独立接口");
   assert.equal(source.includes("一致性"), true, "面板上要能看到这一块");
+  assert.equal(source.includes("手绘层"), true, "面板要显示手绘层与生成图纸的差异");
   assert.ok(source.indexOf("function useNetGate(") < source.indexOf("function EcadPanel("), "钩子要定义在面板之前");
   assert.equal(source.includes("function useImpedance("), true, "叠层块要有阻抗规则按钮的钩子");
   assert.equal(source.includes("ecad/impedance?projectDir="), true, "阻抗规则走独立接口");

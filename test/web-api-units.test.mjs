@@ -2036,6 +2036,10 @@ test("GET /ecad/netgate：没有板子时给人话，缺 projectDir 时 400（S1
     const gate = empty.body.netgate;
     assert.equal(gate.ok, false);
     assert.ok(String(gate.error).length > 0);
+    // 手绘层信息跟着回包一起走（S176）：没有手绘层也要显式说没有。
+    assert.equal(typeof gate.hand, "object");
+    assert.equal(gate.hand.exists, false);
+    assert.deepEqual(gate.hand.partsOnlyInHand, []);
 
     const missing = await handleWebApi({
       method: "GET",
