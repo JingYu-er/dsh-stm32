@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { registerWebRoutes } from "../lib/engine/web-routes.js";
 import { capabilitiesOf, configSnapshot, handleWebApi, installStart, installTaskState, resetInstallTasks, saveConfig, summarizeProbe, WEB_API_PATHS, WEB_API_PREFIX, setSessionWorkspaceResolver } from "../lib/engine/web-api.js";
 import { resetToolchainConfigCache } from "../lib/data/toolchain-config.js";
 import { resetDebugSessionsForTest } from "../lib/engine/debug-session.js";
@@ -225,9 +226,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十一条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 51);
-  assert.equal(new Set(WEB_API_PATHS).size, 51);
+test("WEB_API_PATHS：五十二条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 52);
+  assert.equal(new Set(WEB_API_PATHS).size, 52);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/action"), true);
@@ -243,6 +244,7 @@ test("WEB_API_PATHS：五十一条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/debug/breakpoints"), true, "断点面板必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/abort"), true, "在途调用中止必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/schematic"), true, "原理图页必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/pcb"), true, "板图必须有独立路由，否则 host 直接回 404");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels"), true, "常驻通道状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
@@ -1399,6 +1401,8 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
 });
 
 test("GET /ecad/pcb：给工程就出板图，层开关与缺板提示都对（S151）", async () => {
+  // host 只为 WEB_API_PATHS 里的路径注册 handler：漏登记就 404，绕开 serve 直接测 handleWebApi 是发现不了的。
+  assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/pcb"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "s151-pcb-"));
   const kicad = path.join(root, "hardware", "kicad");
   fs.mkdirSync(kicad, { recursive: true });
@@ -1438,4 +1442,23 @@ test("GET /ecad/pcb：给工程就出板图，层开关与缺板提示都对（S
   const noProject = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/pcb", query: {}, deps });
   assert.equal(noProject.status, 400);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 回归）", () => {
+  const registered = [];
+  const ctx = {
+    inject(_names, fn) {
+      fn({
+        get(name) {
+          if (name === "webServer") return { register: (route) => registered.push(route.path) };
+          if (name === "subprocess") return { runCapture: async () => ({ stdout: "", stderr: "", code: 0 }) };
+          return undefined;
+        },
+      });
+    },
+  };
+  registerWebRoutes(ctx);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/pcb"), true, "少了这条，浏览器只会看到 404");
+  assert.equal(registered.length, 52);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });

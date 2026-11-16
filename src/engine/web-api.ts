@@ -553,6 +553,8 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/schematic",
   WEB_API_PREFIX + "/schematic/review",
   WEB_API_PREFIX + "/ecad",
+  // 板图要单独登记：host 只给 WEB_API_PATHS 里的路径注册 handler，没登记就是 404。
+  WEB_API_PREFIX + "/ecad/pcb",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
 ];

@@ -5914,10 +5914,14 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 旋转方向是实测出来的：KiCad 的 y 轴向下、`(at x y θ)` 的正角在屏幕上是逆时针，所以 `rotate(dx,dy,deg)` 用 `x' = dx·cos + dy·sin`、`y' = -dx·sin + dy·cos`。实测 J1 `(at 100 104 180)` 的 `pad(-9.75,0)` 落在 `(109.75,104)`，与 KiCad 视图一致。
 - 渲染（`src/engine/ecad/pcb/pcb-svg.ts`）：`viewBox` + `maxPx 720`，颜色全走宿主令牌——顶层 `state-business-primary`、底层 `state-success-primary`、板框 `label-secondary`、丝印 `label-tertiary`、过孔 `state-warn-primary`，深浅色主题自动跟随。矩形/圆角/椭圆焊盘按旋转后的多边形画，圆焊盘用 `<circle>`；边距 1.6 mm。
 - 接线：`GET /ecad/pcb`（层开关传 `0` 才隐藏、`refs=1` 才画位号）；工具 `stm32_pcb_render`（`layers: all|top|bottom`、`refs`、`saveAs`，不给 `saveAs` 只回计数）；面板「板图」区块——顶/底/焊盘/过孔/丝印/板框/位号 复选框 + 刷新 + 尺寸与计数摘要 + 内联 SVG。
-- 一处容易忘的收口：`handleWebApi` 的「GET 无 body」白名单是按路径列出来的，新路由必须同时加进那份清单，否则请求先被 405「这个接口只接受 POST」挡掉，看起来像路由没注册。
+- 两处容易忘的收口，都要加「新路径」才算真的接通：
+  1. `handleWebApi` 的「GET 无 body」白名单是按路径列出来的，漏加会先被 405「这个接口只接受 POST」挡掉，看起来像路由没注册；
+  2. **`WEB_API_PATHS` 才是 host 注册 handler 的依据**——`registerWebRoutes()` 只遍历这份清单注册，漏加就是浏览器里的「接口返回失败（HTTP 404）」，而直接调 `handleWebApi` 的测试完全发现不了。这一条是实测踩出来的：功能自测全过，页面上第一次点「板图」就是 404。
+  回归测试因此分成两层：`registerWebRoutes` 用假 `webServer` 收注册表断言路径在里面（路由数 52）；`test/web-api-units` 里断言 `WEB_API_PATHS` 含 `/ecad/pcb` 且总数 52。
 - 真实板实测（tetris-handheld，62×104 mm、4 层）：解析 121 ms、渲染 13 ms、SVG 182 KB、386 焊盘 / 626 走线 / 72 过孔 / 1253 图元；路由回包 42 ms。截图核对：板框正确、顶层蓝/底层绿、丝印与过孔可见，顶部两个大圆盘是 `U42/U43` 的无编号安装焊盘（`footprint` 没有 `Reference` 时按序号回退）。
-- 验证：全量 **88 套件 / 1238 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2145.0 KB / 350 文件 / 解包 16397.5 KB。
-- 教训：**渲染能力的价钱要按「它占多少包体 + 许可是否明确」算，不是按「它能不能画」算**。这里的解析量只有几百行、格式是稳定文本，自己写反而更可控；外部渲染器的价值在符号库与整包预览，等需要那部分时再谈。
+- 验证：全量 **88 套件 / 1239 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2145.2 KB / 350 文件 / 解包 16398.0 KB。
+- 教训（接路由）：**「纯逻辑测过了」不等于「接口通了」**。分发逻辑、白名单、host 注册表是三张各写一遍的表，加路径时得三张一起加；把注册表本身纳入测试，比再点一次页面可靠。
+- 教训（渲染能力的价钱）：**要按「它占多少包体 + 许可是否明确」算，不是按「它能不能画」算**。这里的解析量只有几百行、格式是稳定文本，自己写反而更可控；外部渲染器的价值在符号库与整包预览，等需要那部分时再谈。
 
 ### 一、目标与约束
 
