@@ -295,6 +295,17 @@ export interface LatestKicadBuild {
   readonly schematicFile: string;
 }
 
+/**
+ * 布线器的工作目录与派生板子不算「最近一次构建」。
+ *
+ * KiCadRoutingTools 把每一步的中间结果写在 `<板名>.kicad_pcb.autoroute/` 下（`step04_route.kicad_pcb`
+ * 这类文件比成品板新），不排除掉的话面板与工具报的「最近构建」会指向中间步骤——那份板子没有
+ * 原理图、也不是最终产物。
+ */
+function isRouterWorkingPath(name: string): boolean {
+  return name.includes(".autoroute") || name.endsWith(".auto.kicad_pcb") || name.endsWith(".norm.kicad_pcb");
+}
+
 /** 在若干根目录下找最新的 `.kicad_pcb`，同目录里的 `.kicad_sch` 一并返回。 */
 function newestKicadProject(roots: readonly string[]): { kicadDir: string; pcbFile: string; schematicFile: string } | null {
   let best: { kicadDir: string; pcbFile: string; schematicFile: string; mtimeMs: number } | null = null;
@@ -308,7 +319,7 @@ function newestKicadProject(roots: readonly string[]): { kicadDir: string; pcbFi
       continue;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
+      if (entry.name.startsWith(".") || isRouterWorkingPath(entry.name)) continue;
       const path = join(current, entry.name);
       if (entry.isDirectory()) {
         stack.push(path);

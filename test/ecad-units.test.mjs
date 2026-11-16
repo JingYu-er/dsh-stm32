@@ -1008,3 +1008,30 @@ test("设计规则按层数取嘉立创常规档：多层 0.10、双层 0.127、
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("最近构建跳过布线器的工作目录与派生板子（S150）", () => {
+  const dir = tempDir("ecad-latest-");
+  try {
+    const kicad = join(dir, "circuit", "dist", "board", "kicad");
+    const working = join(kicad, "board.kicad_pcb.autoroute");
+    mkdirSync(working, { recursive: true });
+    const board = join(kicad, "board.kicad_pcb");
+    const step = join(working, "step04_route.kicad_pcb");
+    writeFileSync(board, "(kicad_pcb)", "utf8");
+    writeFileSync(join(kicad, "board.kicad_sch"), "(kicad_sch)", "utf8");
+    writeFileSync(step, "(kicad_pcb)", "utf8");
+    writeFileSync(join(kicad, "board.auto.kicad_pcb"), "(kicad_pcb)", "utf8");
+    // 中间步骤比成品新：不排除的话「最近构建」会指向那份没有原理图的板子。
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(step, later, later);
+    utimesSync(join(kicad, "board.auto.kicad_pcb"), later, later);
+
+    const found = findLatestKicadBuild({ kicadDir: join(dir, "empty"), circuitDir: join(dir, "circuit") });
+    assert.equal(found.ok, true);
+    assert.equal(found.pcbFile, board);
+    assert.equal(found.schematicFile, join(kicad, "board.kicad_sch"));
+    assert.equal(found.kicadDir, kicad);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

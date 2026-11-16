@@ -286,6 +286,14 @@ test("流程图页有一键评审按钮，请求走 /schematic/review（S135）"
   assert.equal(source.includes("...reviewRows"), true);
 });
 
+test("电路设计页在数据回来之前不读空对象，避免整页空白（S150）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  // 首次渲染时 ecad 必然是 null；直接读 ecad.autoBuild 会抛错，React 卸载整棵子树。
+  assert.ok(source.includes("const pendingExport = ecad !== null && ecad !== undefined && ecad.autoBuild !== null"));
+  const panel = source.slice(source.indexOf("function EcadPanel("));
+  assert.equal(panel.includes("const pendingExport = ecad.autoBuild"), false);
+});
+
 test("电路设计页显示布线引擎状态，并可勾选含布线（S146）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes("布线引擎未安装"));

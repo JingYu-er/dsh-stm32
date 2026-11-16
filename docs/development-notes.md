@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S149）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S150）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,20 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百五十八、点开「电路设计」整页空白：先判空再读字段（S150）
+
+- 现象：用户点调试台的「电路设计」页签，整页什么都不显示——不是报错条，是连页签条、状态栏一起消失。
+- 定位路径（GUI 有登录 token 保护，浏览器打不开，只能离线复现）：把 `client/client.js` 按宿主的模块形状载入 Node，stub `window.__ModuleLoader__`/`document`/`localStorage`/`EventSource`/`fetch`，用 jsdom + `react-dom/client` 真挂载 `DebugConsole`，再点「电路设计」。第一次点击就复现：
+  ```
+  TypeError: Cannot read properties of null (reading 'autoBuild')
+      at EcadPanel (client/client.js:2830)
+  ```
+- 原因：`useEcad()` 首次渲染时 `ecad` 必然是 `null`（请求还没回来）。面板里绝大多数读取都写成 `ecad === null || …`，唯独 S137 加的「导出提示」那行直接读 `ecad.autoBuild`。React 遇到渲染期未捕获异常会卸载整棵子树——人看到的就是整页空白，且数据回来后也不会自愈。
+- 修法：`const pendingExport = ecad !== null && ecad !== undefined && ecad.autoBuild !== null && …`。单行改动，但它属于「回归必测」的那一类：面板里任何 `ecad.x` 都必须带判空。
+- 顺手修掉同批复盘发现的一个真 bug：`GET /ecad` 的 `latest.kicadDir` 指向 `tetris.kicad_pcb.autoroute`、`pcbFile` 是 `step04_route.kicad_pcb`、`schematicFile` 为空。KiCadRoutingTools 把每一步中间结果写进 `<板名>.kicad_pcb.autoroute/`，那些文件比成品新，`newestKicadProject()` 取「最新 `.kicad_pcb`」时就把中间步骤当成了构建产物。新增 `isRouterWorkingPath()`：跳过含 `.autoroute` 的目录/文件、以及 `.auto.kicad_pcb`/`.norm.kicad_pcb` 这类派生产物；真机复查 `latest` 回到 `.../kicad/tetris.kicad_pcb` 且带 `.kicad_sch`。
+- 验证：jsdom 挂载复跑——空工程与选中工程两条路径都 0 异常，页签内容正常（「布线引擎 0.24.0」「含布线」「一键设计」等）；`test/ecad-units.test.mjs` 增「最近构建跳过布线器的工作目录与派生板子」、`test/client-debug-units.test.mjs` 增「数据回来之前不读空对象」；全量 **88 套件 / 1234 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2133.7 KB / 348 文件 / 解包 16351.8 KB。
+- 教训：**整页空白几乎总是渲染期未捕获异常**，而它最常出现在「数据还没到」的那一次渲染。要复现就用离线挂载（jsdom + 真组件 + 真接口快照），比在 GUI 里点要有用得多——尤其是 GUI 有登录 token、外部浏览器进不去的时候。写组件时把「首次渲染时这个值是 null」当成契约的一部分，`null` 判空不能靠自觉，测试里钉一条源码断言也值。
 
 ### 一百五十七、设计规则要跟布线器同一档（S149）
 
