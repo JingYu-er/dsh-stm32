@@ -21,6 +21,7 @@ import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
 import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
+import { analyzePowerBudget } from "../lib/engine/ecad/pcb/power.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
@@ -48,6 +49,23 @@ function tempDir(prefix) {
 }
 
 /** 假 KiCad 安装：`bin/kicad-cli.exe` 与 `bin/bun.exe` 只需存在。 */
+
+/** 电源预算夹具（S160）：VBUS 0.2 mm、V3V3 0.3 mm、VDDA 无走线、VBAT_SW 无电压但 0.5 mm。 */
+const POWER_BOARD = [
+  "(kicad_pcb (version 20241229) (generator pcbnew)",
+  '  (net 0 "")',
+  '  (net 1 "GND")',
+  '  (net 2 "VBUS")',
+  '  (net 3 "V3V3")',
+  '  (net 4 "VDDA")',
+  '  (net 5 "VBAT_SW")',
+  "  (segment (start 0 0) (end 10 0) (width 0.2) (layer F.Cu) (net 2))",
+  "  (segment (start 0 0) (end 10 0) (width 0.3) (layer F.Cu) (net 3))",
+  "  (segment (start 0 0) (end 10 0) (width 0.5) (layer F.Cu) (net 5))",
+  ")",
+  "",
+].join("\n");
+
 function fakeKicadRoot() {
   const root = tempDir("ecad-kicad-");
   mkdirSync(join(root, "bin"), { recursive: true });
@@ -1376,6 +1394,56 @@ test("需求文档：事实从工程里读，已有文件不覆盖，force 才�
     assert.equal(dry.mcu, "STM32F103C8T6（LQFP48）");
     assert.match(dry.markdown, /## 方案/u);
     assert.equal(dry.written.length, 0, "不给 write 不写文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("电源预算：只合计你填的电流，按名字估的另计，未填的单列（S160）", async () => {
+  const dir = tempDir("ecad-power-");
+  try {
+    writeFileSync(join(dir, "board.kicad_pcb"), POWER_BOARD, "utf8");
+    const facts = analyzePowerBudget(POWER_BOARD, "board.kicad_pcb", null, {
+      currents: { V3V3: 0.25, NOSUCH: 1 },
+      voltages: { VBAT_SW: 3.7 },
+    });
+    assert.equal(facts.ok, true, facts.error);
+    const rail = (name) => facts.rails.find((item) => item.net === name);
+    assert.equal(rail("V3V3").currentA, 0.25);
+    assert.equal(rail("V3V3").assumed, false);
+    assert.equal(rail("V3V3").ok, true, "0.25 A 需 0.045 mm，0.3 mm 够");
+    assert.equal(rail("VBUS").assumed, true, "没填的按名字估 1 A");
+    assert.equal(rail("VBUS").ok, false, "0.2 mm 不够 1 A 的 0.302 mm");
+    assert.equal(rail("VBAT_SW").voltageV, 3.7, "电压可覆盖");
+    assert.equal(facts.totalA, 0.25, "预算只算填的");
+    assert.equal(facts.totalW, 0.825);
+    assert.equal(facts.estimatedA, 2.5, "估的另计：VBUS 1 + VDDA 0.5 + VBAT_SW 1（夹具没有 VBAT）");
+    assert.equal(facts.unfilled, 0);
+    assert.match(facts.notes.join(" "), /没有这个电源网络：NOSUCH/u);
+    assert.match(facts.notes.join(" "), /不当作需求/u);
+
+    const bare = analyzePowerBudget(POWER_BOARD, "board.kicad_pcb", null, {});
+    assert.equal(bare.totalA, 0, "一个都没填时预算是 0，不能把估算当预算");
+    assert.ok(bare.estimatedA > 0);
+
+    const broken = analyzePowerBudget("(segment", "x.kicad_pcb", null);
+    assert.equal(broken.ok, false);
+
+    const tools = new Map();
+    const ctx = {
+      tools: { register: (definition) => { tools.set(definition.name, definition); return () => {}; } },
+      get() {
+        return undefined;
+      },
+    };
+    registerPcbTools(ctx);
+    const tool = tools.get("stm32_power");
+    assert.ok(tool !== undefined, "stm32_power 应当注册");
+    const out = await tool.execute({ projectDir: dir, boardFile: "board.kicad_pcb", currents: [{ net: "V3V3", currentA: 0.25 }] }, { signal: new AbortController().signal });
+    assert.equal(out.ok, true, out.error);
+    assert.equal(out.rails.find((item) => item.net === "V3V3").known, true);
+    assert.equal(out.rails.find((item) => item.net === "VBUS").known, true, "按名字估的也算已知，但 assumed 为真");
+    assert.equal(out.totalA, 0.25);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

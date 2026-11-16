@@ -31,6 +31,7 @@ import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datashee
 import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../engine/ecad/pcb/emc.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
+import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
@@ -40,6 +41,7 @@ export const PCB_RENDER_TOOL = "stm32_pcb_render";
 export const PCB_BOM_TOOL = "stm32_bom";
 export const PCB_STACKUP_TOOL = "stm32_stackup";
 export const PCB_BRIEF_TOOL = "stm32_brief";
+export const PCB_POWER_TOOL = "stm32_power";
 export const PCB_EMC_TOOL = "stm32_emc";
 
 const output: JsonSchema = {
@@ -1057,6 +1059,156 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+  const powerOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      boardFile: { type: "string" },
+      rails: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            net: { type: "string" },
+            voltageV: { type: "number" },
+            currentA: { type: "number" },
+            assumed: { type: "boolean" },
+            known: { type: "boolean" },
+            refs: { type: "array", items: { type: "string" } },
+            minTrackMm: { type: "number" },
+            requiredMm: { type: "number" },
+            ok: { type: "boolean" },
+          },
+          required: ["net", "voltageV", "currentA", "assumed", "known", "refs", "minTrackMm", "requiredMm", "ok"],
+        },
+      },
+      totalA: { type: "number" },
+      totalW: { type: "number" },
+      estimatedA: { type: "number" },
+      estimatedW: { type: "number" },
+      inputA: { type: "number" },
+      inputV: { type: "number" },
+      efficiency: { type: "number" },
+      unfilled: { type: "number" },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "boardFile", "rails", "totalA", "totalW", "estimatedA", "estimatedW", "inputA", "inputV", "efficiency", "unfilled", "notes"],
+  };
+
+  const powerTool: ToolDefinition = {
+    name: PCB_POWER_TOOL,
+    description:
+      "算电源树电流预算：列出板上每个电源网络（电压从名字认、电流按你填的算）、挂着的元件、最窄走线与按 IPC-2221 需要的宽度，合计功率与输入电流。只合计你填的电流；按名字估的另计，不当需求。器件 IDD 请用 stm32_pdf_read 的 table 模式从手册抽出来再填 currents。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        currents: {
+          type: "array",
+          description: "每个网络填电流（A），例如 [{ net: \"V3V3\", currentA: 0.25 }]。",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { net: { type: "string" }, currentA: { type: "number" } },
+            required: ["net", "currentA"],
+          },
+        },
+        voltages: {
+          type: "array",
+          description: "覆盖从网络名认出的电压（V），例如 [{ net: \"VBAT_SW\", voltageV: 3.7 }]。",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { net: { type: "string" }, voltageV: { type: "number" } },
+            required: ["net", "voltageV"],
+          },
+        },
+        inputV: { type: "number", description: "输入电压（折算输入电流用）；不给取最高电源轨。" },
+        efficiency: { type: "number", description: "电源效率，DC-DC 约 0.85；LDO 传 1。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: powerOutput,
+      render: (_args, value) => {
+        const result = value as { ok: boolean; error: string; rails: { net: string; voltageV: number; currentA: number; assumed: boolean; known: boolean; refs: string[]; minTrackMm: number; requiredMm: number; ok: boolean }[]; totalA: number; totalW: number; estimatedA: number; estimatedW: number; inputA: number; inputV: number; notes: string[] };
+        if (!result.ok) return [{ type: "text", text: "电源预算失败：" + result.error }];
+        const lines: string[] = [];
+        for (const rail of result.rails) {
+          const current = !rail.known ? "电流未填" : rail.assumed ? "≈" + String(rail.currentA) + " A（估算）" : String(rail.currentA) + " A";
+          const verdict = !rail.known ? "待定" : rail.ok ? "够" : "偏窄";
+          const voltage = rail.voltageV > 0 ? String(rail.voltageV) + " V" : "电压未知";
+          lines.push(rail.net + " · " + voltage + " · " + current + " · 最窄 " + String(rail.minTrackMm) + " mm / 需 " + String(rail.requiredMm) + " mm（" + verdict + "）" + (rail.refs.length > 0 ? " · " + String(rail.refs.length) + " 个元件" : ""));
+        }
+        lines.push("预算合计：" + String(result.totalA) + " A / " + String(result.totalW) + " W" + (result.estimatedA > 0 ? "；另有估算 " + String(result.estimatedA) + " A / " + String(result.estimatedW) + " W 不计入" : ""));
+        if (result.inputA > 0) lines.push("输入：" + String(result.inputV) + " V 下约 " + String(result.inputA) + " A");
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; boardFile?: string; currents?: { net: string; currentA: number }[]; voltages?: { net: string; voltageV: number }[]; inputV?: number; efficiency?: number }, exec: ToolExec) => {
+      const empty = { ok: false, error: "", boardFile: "", rails: [] as Array<Record<string, unknown>>, totalA: 0, totalW: 0, estimatedA: 0, estimatedW: 0, inputA: 0, inputV: 0, efficiency: 0, unfilled: 0, notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      let boardFile = "";
+      let kicadDir = "";
+      if (typeof args.boardFile === "string" && args.boardFile !== "") {
+        boardFile = resolve(resolved.projectDir, args.boardFile);
+      } else {
+        const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+        const latest = findLatestKicadBuild(workspace);
+        if (!latest.ok || latest.pcbFile === "") return { ...empty, error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error };
+        boardFile = latest.pcbFile;
+        kicadDir = latest.kicadDir;
+      }
+      if (!existsSync(boardFile)) return { ...empty, boardFile, error: "找不到板子文件：" + boardFile };
+      let netlist = null;
+      if (kicadDir !== "") {
+        const circuitFile = join(dirname(kicadDir), "circuit.json");
+        if (existsSync(circuitFile)) {
+          try {
+            netlist = readCircuitNetlist(readFileSync(circuitFile, "utf8"));
+          } catch {
+            netlist = null;
+          }
+        }
+      }
+      const currents: Record<string, number> = {};
+      for (const item of args.currents ?? []) if (item.net !== "" && Number.isFinite(item.currentA)) currents[item.net] = item.currentA;
+      const voltages: Record<string, number> = {};
+      for (const item of args.voltages ?? []) if (item.net !== "" && Number.isFinite(item.voltageV)) voltages[item.net] = item.voltageV;
+      const budget = analyzePowerBudget(readFileSync(boardFile, "utf8"), boardFile, netlist, {
+        currents,
+        voltages,
+        inputV: args.inputV,
+        efficiency: args.efficiency,
+      });
+      if (!budget.ok) return { ...empty, boardFile, error: budget.error };
+      return {
+        ok: true,
+        error: "",
+        boardFile: budget.boardFile,
+        rails: budget.rails.map((rail) => ({ ...rail, voltageV: rail.voltageV ?? 0, currentA: rail.currentA ?? 0, known: rail.currentA !== null, ok: rail.ok === true })),
+        totalA: budget.totalA,
+        totalW: budget.totalW,
+        estimatedA: budget.estimatedA,
+        estimatedW: budget.estimatedW,
+        inputA: budget.inputA,
+        inputV: budget.inputV,
+        efficiency: budget.efficiency,
+        unfilled: budget.unfilled,
+        notes: [...budget.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
@@ -1064,4 +1216,5 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(stackupTool);
   ctx.tools.register(emcTool);
   ctx.tools.register(briefTool);
+  ctx.tools.register(powerTool);
 }

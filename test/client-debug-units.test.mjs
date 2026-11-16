@@ -321,6 +321,15 @@ test("电路设计页能看 EMC 体检：铺铜与电源线宽写在面板上（
   assert.ok(source.indexOf("function useEmc(") < source.indexOf("function EcadPanel("));
 });
 
+test("电路设计页能看电源预算：未填电流标待定（S160）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function usePower("));
+  assert.ok(source.includes("\"ecad/power?projectDir=\""));
+  assert.ok(source.includes("\"电源预算\""));
+  assert.ok(source.includes("电流未填"), "未填电流要如实标，不能当 0 A");
+  assert.ok(source.indexOf("function usePower(") < source.indexOf("function EcadPanel("));
+});
+
 test("电路设计页能看叠层：按工程取阻抗线宽，没有板子就显示提示（S157）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes("function useStackup("));

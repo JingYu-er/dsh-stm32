@@ -226,9 +226,10 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十六条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 56);
-  assert.equal(new Set(WEB_API_PATHS).size, 56);
+test("WEB_API_PATHS：五十七条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 57);
+  assert.equal(new Set(WEB_API_PATHS).size, 57);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
@@ -1570,8 +1571,55 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/bom"), true, "少了这条，BOM 只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/stackup"), true, "少了这条，叠层只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/emc"), true, "少了这条，EMC 只会看到 404");
-  assert.equal(registered.length, 56);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/power"), true, "少了这条，电源预算只会看到 404");
+  assert.equal(registered.length, 57);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
+});
+
+test("GET /ecad/power：电源网络与线宽判据都在报告里，缺工程时 400（S160）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-power-"));
+  try {
+    const kicad = path.join(dir, "hardware", "kicad");
+    fs.mkdirSync(kicad, { recursive: true });
+    fs.writeFileSync(
+      path.join(kicad, "board.kicad_pcb"),
+      [
+        "(kicad_pcb (version 20241229) (generator pcbnew)",
+        '  (net 0 "")',
+        '  (net 1 "GND")',
+        '  (net 2 "VBUS")',
+        '  (net 3 "V3V3")',
+        "  (segment (start 0 0) (end 10 0) (width 0.2) (layer F.Cu) (net 2))",
+        "  (segment (start 0 0) (end 10 0) (width 0.3) (layer F.Cu) (net 3))",
+        ")",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const okReply = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/power",
+      query: { projectDir: dir },
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(okReply.status, 200);
+    const power = okReply.body.power;
+    assert.equal(power.ok, true, power.error);
+    assert.equal(power.rails.length, 2, "GND 不进电源轨");
+    assert.equal(power.rails.find((item) => item.net === "VBUS").ok, false, "0.2 mm 不够 1 A");
+    assert.equal(power.rails.find((item) => item.net === "V3V3").assumed, true);
+    assert.equal(power.unfilled, 0);
+
+    const badReply = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/power",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(badReply.status, 400);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("GET /ecad：共享运行时与工程挂载分开报（S152）", async () => {
