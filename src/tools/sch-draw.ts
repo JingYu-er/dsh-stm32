@@ -5,10 +5,11 @@
  * 目标文件固定在 `hardware/schematic/<name>.kicad_sch`，构建从不触碰它。
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
-import type { DshContext, SubprocessService, ToolExec } from "../types.js";
+import type { DshContext, JsonSchema, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
 import { resolveProjectLayout } from "../engine/project-layout.js";
 import { findLatestKicadBuild, planEcadWorkspace } from "../engine/ecad/tsci.js";
@@ -24,7 +25,15 @@ import {
   type DrawReport,
 } from "../engine/schematic/draw.js";
 
+import {
+  backupBoardFile,
+  buildHandSyncScript,
+  parseHandSyncOutput,
+  planHandSync,
+} from "../engine/ecad/pcb/hand-sync.js";
+
 export const SCH_DRAW_TOOL = "stm32_sch_draw";
+export const SCH_SYNC_TOOL = "stm32_sch_sync";
 
 interface DrawArgs {
   projectDir?: string;
@@ -133,14 +142,14 @@ export function registerSchDrawTools(ctx: DshContext): void {
             type: "object",
             additionalProperties: false,
             properties: {
-              op: { type: "string", enum: ["wire", "label", "clone", "move", "remove"] },
+              op: { type: "string", enum: ["wire", "label", "clone", "move", "remove", "place"] },
               a: { type: "object", additionalProperties: true, description: "wire 起点：{ref,pin} 或 {x,y}。" },
               b: { type: "object", additionalProperties: true, description: "wire 终点：{ref,pin} 或 {x,y}。" },
               at: { type: "object", additionalProperties: true, description: "label 位置 {ref,pin}|{x,y}；clone/move 的目标坐标 {x,y}。" },
               text: { type: "string", description: "label 的网络名。" },
               from: { type: "string", description: "clone 的源位号。" },
               libId: { type: "string", description: "place 的符号库编号，形如 Device:R_Small 或 MyLib:SOIC-8（来自 libs/symbols 或 KiCad 官方库）。" },
-              footprint: { type: "string", description: "place 时顺手写的封装 Lib:Name。" },
+              footprint: { type: "string", description: "clone/place 时写进 Footprint 属性的封装 Lib:Name（补到 PCB 时按它找库）。" },
               rotation: { type: "number", description: "place 的旋转角度，默认 0。" },
               ref: { type: "string", description: "clone 的新位号，或 move/remove 的目标位号。" },
               value: { type: "string", description: "clone 时顺手改 Value（如 10k）。" },
@@ -275,6 +284,188 @@ export function registerSchDrawTools(ctx: DshContext): void {
         failed: [...report.failed],
         notes,
         netlist,
+      };
+    },
+  });
+  // 手绘层新放的器件补到板子上（S177）：默认只出计划，apply 才写盘。
+  const syncOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      schematicFile: { type: "string" },
+      boardFile: { type: "string" },
+      applied: { type: "boolean" },
+      added: { type: "number" },
+      skipped: { type: "array", items: { type: "string" } },
+      missingLib: { type: "array", items: { type: "string" } },
+      unassigned: { type: "number" },
+      parts: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ref: { type: "string" },
+            value: { type: "string" },
+            footprint: { type: "string" },
+            x: { type: "number" },
+            y: { type: "number" },
+            nets: { type: "number" },
+          },
+          required: ["ref", "value", "footprint", "x", "y", "nets"],
+        },
+      },
+      alreadyOnBoard: { type: "number" },
+      noFootprint: { type: "array", items: { type: "string" } },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "schematicFile", "boardFile", "applied", "added", "skipped", "missingLib", "unassigned", "parts", "alreadyOnBoard", "noFootprint", "notes"],
+  };
+
+  ctx.tools.register({
+    name: SCH_SYNC_TOOL,
+    description:
+      "把手绘层（hardware/schematic）里新放的器件补到 PCB：按位号找板上没有的元件，按 Footprint 属性从库加载封装，赋板上已有的同名网络。默认只出计划（apply=false），写盘前留 .bak。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为会话工作目录。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        schematicFile: { type: "string", description: "指定手绘层；缺省 hardware/schematic/schematic.kicad_sch。" },
+        apply: { type: "boolean", description: "true 才真的写进板子（默认 false，只出计划）。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: syncOutput,
+      render: (_args, value) => {
+        const report = value as {
+          ok: boolean;
+          error: string;
+          applied: boolean;
+          added: number;
+          parts: { ref: string; footprint: string; x: number; y: number; nets: number }[];
+          alreadyOnBoard: number;
+          noFootprint: string[];
+          missingLib: string[];
+          skipped: string[];
+          unassigned: number;
+          notes: string[];
+        };
+        if (!report.ok) return [{ type: "text", text: "补封装没跑起来：" + report.error }];
+        const lines: string[] = [];
+        lines.push(report.applied ? "已补进板子：" + String(report.added) + " 个" : "计划（未写盘）：" + String(report.parts.length) + " 个");
+        for (const part of report.parts.slice(0, 12)) {
+          lines.push("  " + part.ref + " · " + part.footprint + " @ " + String(part.x) + "," + String(part.y) + " · " + String(part.nets) + " 个网络");
+        }
+        if (report.parts.length > 12) lines.push("  另有 " + String(report.parts.length - 12) + " 个");
+        lines.push("已在板上：" + String(report.alreadyOnBoard));
+        if (report.missingLib.length > 0) lines.push("库里找不到封装：" + report.missingLib.join("、"));
+        if (report.skipped.length > 0) lines.push("跳过（已存在）：" + report.skipped.join("、"));
+        if (report.unassigned > 0) lines.push("有 " + String(report.unassigned) + " 个引脚的网络在板上不存在，没赋上");
+        for (const note of report.notes) lines.push(note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const shaped = args as { projectDir?: string; boardFile?: string; schematicFile?: string; apply?: boolean };
+      const project = await resolveProjectDir(ctx, shaped.projectDir, exec);
+      const located = locateEcadToolchain();
+      const toolchain = located.toolchain;
+      const footprintDirs = located.ok && toolchain !== null ? [toolchain.footprintDir] : [];
+      const plan = planHandSync(project.projectDir, {
+        boardFile: shaped.boardFile,
+        schematicFile: shaped.schematicFile,
+        footprintDirs,
+      });
+      const empty = {
+        ok: false,
+        error: "",
+        schematicFile: plan.schematicFile,
+        boardFile: plan.boardFile,
+        applied: false,
+        added: 0,
+        skipped: [] as string[],
+        missingLib: [] as string[],
+        unassigned: 0,
+        parts: [] as { ref: string; value: string; footprint: string; x: number; y: number; nets: number }[],
+        alreadyOnBoard: plan.alreadyOnBoard.length,
+        noFootprint: [...plan.noFootprint],
+        notes: [...plan.notes],
+      };
+      if (!plan.ok) return { ...empty, error: plan.error };
+      const shapedParts = plan.parts.map((part) => ({
+        ref: part.ref,
+        value: part.value,
+        footprint: part.footprint,
+        x: part.x,
+        y: part.y,
+        nets: part.nets.length,
+      }));
+      if (shaped.apply !== true) {
+        return { ...empty, ok: true, parts: shapedParts, notes: [...plan.notes, "这是计划：加 apply=true 才写进板子"] };
+      }
+      if (!located.ok || toolchain === null) return { ...empty, ok: false, error: "没有找到 KiCad 工具链：补封装要用 KiCad 自带的 python", parts: shapedParts };
+      if (plan.parts.length === 0) return { ...empty, ok: true, applied: false, parts: shapedParts };
+
+      backupBoardFile(plan.boardFile);
+      const stamp = String(Date.now());
+      const scriptFile = join(tmpdir(), "dsh-stm32-handsync-" + stamp + ".py");
+      const resultFile = join(tmpdir(), "dsh-stm32-handsync-" + stamp + ".json");
+      writeFileSync(scriptFile, buildHandSyncScript(plan), "utf8");
+      const payload = JSON.stringify({
+        boardFile: plan.boardFile,
+        libraryDirs: [...plan.libraryDirs],
+        parts: plan.parts.map((part) => ({
+          ref: part.ref,
+          value: part.value,
+          library: part.library,
+          footprintName: part.footprintName,
+          x: part.x,
+          y: part.y,
+          nets: part.nets.map((net) => ({ number: net.number, net: net.net })),
+        })),
+      });
+      const run = await runCapture(ctx.subprocess, {
+        argv: [toolchain.python, scriptFile, payload, resultFile],
+        cwd: dirname(plan.boardFile),
+        env: toolchain.env,
+        timeoutMs: 120_000,
+        maxBytes: 256_000,
+        signal: exec.signal,
+      });
+      if (run.exitCode !== 0) {
+        return {
+          ...empty,
+          ok: false,
+          error: "KiCad python 执行失败：" + (run.stderr === "" ? run.stdout : run.stderr).slice(-400),
+          parts: shapedParts,
+        };
+      }
+      const parsed = existsSync(resultFile) ? parseHandSyncOutput(readFileSync(resultFile, "utf8")) : null;
+      if (parsed === null || !parsed.ok) {
+        return { ...empty, ok: false, error: "没读到补封装结果：脚本没有写出结果文件（板子可能被锁定或路径不可写）", parts: shapedParts };
+      }
+      const notes = [...plan.notes];
+      if (parsed.unassigned > 0) notes.push("有 " + String(parsed.unassigned) + " 个引脚的网络在板上不存在，没赋上");
+      return {
+        ok: true,
+        error: "",
+        schematicFile: plan.schematicFile,
+        boardFile: plan.boardFile,
+        applied: true,
+        added: parsed.added,
+        skipped: parsed.skipped,
+        missingLib: parsed.missingLib,
+        unassigned: parsed.unassigned,
+        parts: shapedParts,
+        alreadyOnBoard: plan.alreadyOnBoard.length,
+        noFootprint: [...plan.noFootprint],
+        notes,
       };
     },
   });

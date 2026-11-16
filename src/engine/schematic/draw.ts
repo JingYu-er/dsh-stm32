@@ -34,6 +34,7 @@ export type DrawOp =
       readonly ref: string;
       readonly at?: { readonly x: number; readonly y: number };
       readonly value?: string;
+      readonly footprint?: string;
     }
   | { readonly op: "move"; readonly ref: string; readonly at: { readonly x: number; readonly y: number } }
   | { readonly op: "remove"; readonly ref: string }
@@ -164,10 +165,17 @@ function insert(text: string, addition: string): string {
   return head + addition + text.slice(end);
 }
 
-function cloneBlock(block: string, ref: string, at: { x: number; y: number }, value?: string): string {
+function cloneBlock(
+  block: string,
+  ref: string,
+  at: { x: number; y: number },
+  value?: string,
+  footprint?: string,
+): string {
   let next = block.replace(/\(uuid [^)]*\)/gu, '(uuid "' + randomUUID() + '")');
   next = next.replace(/(\(property "Reference" ")[^"]*(")/u, "$1" + ref + "$2");
   if (value !== undefined) next = next.replace(/(\(property "Value" ")[^"]*(")/u, "$1" + value + "$2");
+  if (footprint !== undefined) next = next.replace(/(\(property "Footprint" ")[^"]*(")/u, "$1" + footprint + "$2");
   next = next.replace(/\(at [^)]*\)/u, "(at " + num(at.x) + " " + num(at.y) + " 0)");
   next = next.replace(/(\(path "[^"]*"\s*\(reference ")[^"]*(")/u, "$1" + ref + "$2");
   return next.startsWith("  ") ? next : "  " + next;
@@ -312,7 +320,7 @@ export function drawOnSheet(
         x: (origin?.at.x ?? 0) + 25.4,
         y: origin?.at.y ?? 0,
       };
-      next = insert(next, cloneBlock(next.slice(source.start, source.end), op.ref, at, op.value));
+      next = insert(next, cloneBlock(next.slice(source.start, source.end), op.ref, at, op.value, op.footprint));
       sheet = parseSchText(next, file, file);
       applied += 1;
       notes.push("克隆 " + op.from + " → " + op.ref + " @" + num(at.x) + "," + num(at.y));

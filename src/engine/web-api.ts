@@ -21,7 +21,8 @@ import {
   updateToolchainConfig,
   type ToolchainConfig,
 } from "../data/toolchain-config.js";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { resolveSearchConfig } from "../data/search-roots.js";
@@ -38,6 +39,13 @@ import { evidencePolicy, evidenceRoot, pruneEvidence } from "./event-log.js";
 import { readProjectConf, readWorkspaceIndex, scanWorkspaceProjects } from "./project-conf.js";
 import { resolveProjectLayout } from "./project-layout.js";
 import { applyLayoutFix, planLayoutFix } from "./project-repair.js";
+import { runCapture } from "./subprocess-runner.js";
+import {
+  backupBoardFile,
+  buildHandSyncScript,
+  parseHandSyncOutput,
+  planHandSync,
+} from "./ecad/pcb/hand-sync.js";
 import { abortAll, abortCall, listRunning } from "./progress.js";
 import { channelTapStatus, setChannelTaps } from "./channel-tap.js";
 import { watchRecorder } from "./watch-record.js";
@@ -581,6 +589,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/impedance",
   WEB_API_PREFIX + "/ecad/netgate",
   WEB_API_PREFIX + "/schematic/edit",
+  WEB_API_PREFIX + "/schematic/sync",
   WEB_API_PREFIX + "/ecad/mech",
   // 器件搜索也要单独登记（S163）：GET /ecad/parts?q=… 直接查立创，不依赖工程。
   WEB_API_PREFIX + "/ecad/parts",
@@ -855,14 +864,14 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 与 /ecad/brief 一个路径两种动词：GET 读、POST 写（改登记表 / 生成文档）。
-  if (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit") {
+  if (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit" || path === WEB_API_PREFIX + "/schematic/sync") {
     if (method !== "GET" && method !== "POST") return fail(405, "这个接口只接受 GET 或 POST");
   } else if (needsBody && method !== "POST") {
     return fail(405, "这个接口只接受 POST");
   } else if (!needsBody && method !== "GET") {
     return fail(405, "这个接口只接受 GET");
   }
-  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit") && method === "POST";
+  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit" || path === WEB_API_PREFIX + "/schematic/sync") && method === "POST";
   const parsed = needsBody || twoVerb ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);
@@ -1476,6 +1485,88 @@ export async function handleWebApi(input: {
           failed: [...replay.failed],
           notes: [...replay.notes],
         },
+      },
+    });
+  }
+
+  if (path === WEB_API_PREFIX + "/schematic/sync") {
+    // 手绘层新放的器件补到板子（S177）：GET 出计划，POST { apply: true } 才写。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const apply = method === "POST";
+    const plan = planHandSync(projectDir, {
+      boardFile: typeof query["boardFile"] === "string" ? query["boardFile"] : undefined,
+      schematicFile: typeof query["schematicFile"] === "string" ? query["schematicFile"] : undefined,
+    });
+    if (!plan.ok) return ok({ sync: { ok: false, error: plan.error, schematicFile: plan.schematicFile, boardFile: plan.boardFile, parts: [], added: 0, skipped: [], missingLib: [], unassigned: 0, notes: [] } });
+    if (!apply) {
+      return ok({
+        sync: {
+          ok: true,
+          error: "",
+          schematicFile: plan.schematicFile,
+          boardFile: plan.boardFile,
+          parts: plan.parts.map((part) => ({ ref: part.ref, footprint: part.footprint, nets: part.nets.length })),
+          added: 0,
+          skipped: [...plan.alreadyOnBoard],
+          missingLib: [],
+          unassigned: plan.noNet,
+          notes: [...plan.notes],
+        },
+      });
+    }
+    const located = locateEcadToolchain(envOf(input.deps));
+    if (!located.ok || located.toolchain === null) {
+      return ok({ sync: { ok: false, error: "没有找到 KiCad 工具链：补封装要用 KiCad 自带的 python", schematicFile: plan.schematicFile, boardFile: plan.boardFile, parts: [], added: 0, skipped: [], missingLib: [], unassigned: 0, notes: [...plan.notes] } });
+    }
+    if (plan.parts.length === 0) {
+      return ok({ sync: { ok: true, error: "", schematicFile: plan.schematicFile, boardFile: plan.boardFile, parts: [], added: 0, skipped: [...plan.alreadyOnBoard], missingLib: [], unassigned: plan.noNet, notes: [...plan.notes, "板上已经有这些位号：没有要补的"] } });
+    }
+    backupBoardFile(plan.boardFile);
+    const stamp = String(Date.now());
+    const scriptFile = join(tmpdir(), "dsh-stm32-handsync-" + stamp + ".py");
+    const resultFile = join(tmpdir(), "dsh-stm32-handsync-" + stamp + ".json");
+    writeFileSync(scriptFile, buildHandSyncScript(plan), "utf8");
+    const payload = JSON.stringify({
+      boardFile: plan.boardFile,
+      libraryDirs: [...plan.libraryDirs, located.toolchain.footprintDir],
+      parts: plan.parts.map((part) => ({
+        ref: part.ref,
+        value: part.value,
+        library: part.library,
+        footprintName: part.footprintName,
+        x: part.x,
+        y: part.y,
+        nets: part.nets.map((net) => ({ number: net.number, net: net.net })),
+      })),
+    });
+    const run = await runCapture(input.deps.subprocess, {
+      argv: [located.toolchain.python, scriptFile, payload, resultFile],
+      cwd: dirname(plan.boardFile),
+      env: located.toolchain.env,
+      timeoutMs: 120_000,
+      maxBytes: 256_000,
+    });
+    if (run.exitCode !== 0) {
+      return ok({ sync: { ok: false, error: "KiCad python 执行失败：" + (run.stderr === "" ? run.stdout : run.stderr).slice(-400), schematicFile: plan.schematicFile, boardFile: plan.boardFile, parts: [], added: 0, skipped: [], missingLib: [], unassigned: 0, notes: [] } });
+    }
+    const parsed = existsSync(resultFile) ? parseHandSyncOutput(readFileSync(resultFile, "utf8")) : null;
+    if (parsed === null || !parsed.ok) {
+      return ok({ sync: { ok: false, error: "没读到补封装结果：脚本没有写出结果文件", schematicFile: plan.schematicFile, boardFile: plan.boardFile, parts: [], added: 0, skipped: [], missingLib: [], unassigned: 0, notes: [] } });
+    }
+    return ok({
+      sync: {
+        ok: true,
+        error: "",
+        schematicFile: plan.schematicFile,
+        boardFile: plan.boardFile,
+        parts: plan.parts.map((part) => ({ ref: part.ref, footprint: part.footprint, nets: part.nets.length })),
+        added: parsed.added,
+        skipped: parsed.skipped,
+        missingLib: parsed.missingLib,
+        unassigned: parsed.unassigned,
+        notes: [...plan.notes],
       },
     });
   }

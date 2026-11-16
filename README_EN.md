@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 61 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 65 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -217,6 +217,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_netgate` | Keep schematic and PCB in step: stale board, split nets, missing pads |
 | `stm32_sch_import` | Absorb KiCad board edits back into `circuit.tsx`: netlist and parts only, positions are re-laid out on build |
 | `stm32_sch_edit` | Hand edits to the schematic: stored as instructions in `schematic-edits.json` and replayed at the end of each build |
+| `stm32_sch_sync` | Push parts added in the hand layer onto the board: reads refs/values/footprints/nets from `hardware/schematic/*.kicad_sch`, plans with `planHandSync`, and on `apply: true` runs KiCad's bundled python to `FootprintLoad` + `Add` them into the latest built `.kicad_pcb` (leaves a `.bak`). Skips refs already on the board, refuses `tscircuit:` and footprint-less parts, assigns only nets the board already declares, and parks new parts below the board outline with a note to move them before routing |
 | `stm32_sch_draw` | Schematic hand layer: `wire` between pins or points, `label` nets, `clone` a part with a new reference, `place` a new part from a symbol library (embeds `lib_symbols`), `move`/`remove`; writes `hardware/schematic/*.kicad_sch` (never touched by builds) with no KiCad process required, then validates with `kicad-cli sch export netlist` |
 | `stm32_part_import` | Part import: copy a footprint from the KiCad libraries by `Lib:Name`, generate a symbol skeleton from its pad numbers, record the LCSC part as footprint properties (`LCSC`/`MPN`/`Brand`/`Datasheet`), and register `fp-lib-table`/`sym-lib-table`; a missing footprint is an error, never a guess |
 | `stm32_symbol_footprint` | Symbol and footprint generation: emit `.kicad_sym` from a pin list and `.kicad_mod` from package dimensions (QFP / SOIC / two-pad parts); dimensions and pin numbers must be supplied, missing one is an error |
@@ -492,7 +493,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 64 tools
+  tools/            registration and argument validation for 65 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

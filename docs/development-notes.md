@@ -5903,7 +5903,23 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S176）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S177）
+
+### 一百八十五、手绘层新放的器件补到板子上（S177）
+
+手绘层（`hardware/schematic/*.kicad_sch`）里 `clone` / `place` 出来的器件只存在于图纸；板子是 tscircuit 构建产物，里面没有它们。补进板子的规则有三条，都是为了不替人做主：
+
+- 板上已有的位号跳过，不覆盖人摆好的位置。
+- 没有 `Footprint` 属性的、或者封装属于 `tscircuit:` 的，不补；位号列进 notes，让人自己决定换成哪个 KiCad 库封装。
+- 网络只在板上已声明同名网络时才赋；`N$3`、`Net-(R1-Pad1)`、`.C1 > .pin2 to .D1 > .anode` 这类自动网名不赋，补进去的封装就落在板上等人接线。
+
+实现分两段：`planHandSync()` 出计划（读手绘层取位号/值/封装/网络，读板子取已有位号与板框），`buildHandSyncScript()` 把计划写成 python 交给 KiCad 自带的解释器执行——`FootprintLoad` 逐个试 `<库目录>/<Lib>.pretty`，`board.Add()` 后用 `SetReference` / `SetValue` / `SetPosition`，再按 `board.GetNetInfo().NetsByName()` 赋焊盘网络。写盘前留 `.bak`；新封装的坐标是暂定的（板框下方一排），notes 里明写「布线前要挪」。
+
+**实测发现的一个真实写法差异**：tscircuit 生成的图纸把 `Footprint` 只写在 `lib_symbols` 的符号定义里，实例上的 `(property "Footprint" "")` 是空的。只看实例会把每个件都判成「没有封装」，一个也不补。改为实例为空时回退到库定义（`parseSchText` 新增 `libFootprints`），同一张图纸才能既认出 `tscircuit:*` 也能认出人手换上去的真库名。
+
+真机（`pipe3`）：克隆 `R1` → `R30`（`4k7`、`Resistor_SMD:R_0402_1005Metric`）后，计划 1 件；脚本 `rc=0`、`added:1`，板子里出现 `R30` 的 Reference；`tscircuit:` 封装的两个件如实列进「没有 Footprint 属性，不补到板上」。
+
+工具 `stm32_sch_sync`（默认只出计划，`apply: true` 才写）、路由 `/schematic/sync`（GET 计划 / POST 应用）。教训：判断「有没有封装」要按图纸的实际写法把两处都读一遍；暂定坐标必须写进 notes，否则人会以为已经摆好。
 
 ### 一百八十四、手绘层也进网表门禁：只比元件与网络，不比坐标（S176）
 

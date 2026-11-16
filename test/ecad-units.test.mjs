@@ -19,6 +19,7 @@ import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { importPart } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
+import { assignableNet, buildHandSyncScript, parseHandSyncOutput, planHandSync } from "../lib/engine/ecad/pcb/hand-sync.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -2214,4 +2215,87 @@ test("放置：从 .kicad_sym 内嵌符号并生成实例，库缺失要报出�
   ], () => libText);
   assert.equal(noLibTable.ok, false);
   assert.match(noLibTable.failed[0], /lib_symbols/u);
+});
+
+test("手绘层补封装：已在板上的跳过，tscircuit 封装不补，克隆的新件带库与网络计划（S177）", () => {
+  const work = mkdtempSync(join(tmpdir(), "dsh-handsync-"));
+  try {
+    const fixture = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+    const sheetDir = join(work, "hardware", "schematic");
+    mkdirSync(sheetDir, { recursive: true });
+    const sheet = join(sheetDir, "schematic.kicad_sch");
+    copyFileSync(fixture, sheet);
+
+    const kicad = join(work, "hardware", "kicad");
+    mkdirSync(kicad, { recursive: true });
+    const board = join(kicad, "board.kicad_pcb");
+    writeFileSync(
+      board,
+      [
+        "(kicad_pcb (version 20241229) (generator pcbnew)",
+        "  (layers (0 F.Cu signal) (2 B.Cu signal))",
+        '  (net 0 "")',
+        '  (net 1 "GND")',
+        "  (gr_line (start 0 0) (end 30 0) (width 0.1) (layer Edge.Cuts))",
+        "  (gr_line (start 30 0) (end 30 20) (width 0.1) (layer Edge.Cuts))",
+        "  (gr_line (start 30 20) (end 0 20) (width 0.1) (layer Edge.Cuts))",
+        "  (gr_line (start 0 20) (end 0 0) (width 0.1) (layer Edge.Cuts))",
+        '  (footprint "Resistor_SMD:R_0402_1005Metric" (layer F.Cu) (at 5 5)',
+        '    (property "Reference" "R1" (at 0 0 0))',
+        '    (pad "1" smd rect (at -0.5 0) (size 0.5 0.6) (layers "F.Cu") (net 1 "GND"))',
+        "  )",
+        ")",
+        "",
+      ].join("\n"),
+    );
+
+    const first = planHandSync(work, { boardFile: board, schematicFile: sheet });
+    assert.equal(first.ok, true);
+    assert.equal(first.alreadyOnBoard.includes("R1"), true, "R1 已在板上，应跳过");
+    assert.equal(first.noFootprint.some((item) => item.startsWith("C1") && item.includes("tscircuit")), true, "tscircuit 封装不补，要如实说");
+    assert.match(first.notes.join("\n"), /tscircuit/u);
+
+    const cloned = drawOnSheet(readDrawSheet(sheet), sheet, [
+      { op: "clone", from: "R1", ref: "R30", at: { x: 40, y: 30 }, value: "4k7", footprint: "Resistor_SMD:R_0402_1005Metric" },
+      { op: "wire", a: { ref: "R30", pin: "1" }, b: { ref: "R30", pin: "2" } },
+    ]);
+    assert.equal(cloned.ok, true);
+    writeFileSync(sheet, cloned.text, "utf8");
+
+    const plan = planHandSync(work, { boardFile: board, schematicFile: sheet });
+    assert.equal(plan.ok, true);
+    const part = plan.parts.find((item) => item.ref === "R30");
+    assert.notEqual(part, undefined);
+    assert.equal(part.library, "Resistor_SMD");
+    assert.equal(part.footprintName, "R_0402_1005Metric");
+    assert.equal(part.value, "4k7");
+    assert.equal(typeof part.x, "number");
+    assert.equal(part.y > 20, true, "暂定位置应在板框下方");
+    assert.equal(part.nets.every((net) => assignableNet(net.net)), true);
+    assert.match(plan.notes.join("\n"), /坐标是暂定的/u);
+
+    const script = buildHandSyncScript(plan);
+    assert.match(script, /FootprintLoad/u);
+    assert.match(script, /\.pretty/u);
+    assert.match(script, /SetReference/u);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("手绘层补封装：自动网名不赋，脚本输出只认最后一行 JSON（S177）", () => {
+  assert.equal(assignableNet("SENSE"), true);
+  assert.equal(assignableNet("GND"), true);
+  assert.equal(assignableNet(""), false);
+  assert.equal(assignableNet("N$12"), false);
+  assert.equal(assignableNet("Net-(R1-Pad1)"), false);
+  assert.equal(assignableNet(".C1 > .pin2 to .D1 > .anode"), false);
+
+  const parsed = parseHandSyncOutput(['warning: swig', '{"added":2,"skipped":["R5"],"missingLib":["Foo"],"unassigned":1}'].join("\n"));
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.added, 2);
+  assert.deepEqual(parsed.skipped, ["R5"]);
+  assert.deepEqual(parsed.missingLib, ["Foo"]);
+  assert.equal(parsed.unassigned, 1);
+  assert.equal(parseHandSyncOutput("no json here").ok, false);
 });

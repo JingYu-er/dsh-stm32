@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：64 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：65 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -219,6 +219,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_netgate` | 网表与 PCB 的持续门禁：图纸比板子新、网络拆开、焊盘缺失 |
 | `stm32_sch_import` | 从 KiCad 板子吸收改动回 `circuit.tsx`：只比网表与元件，坐标不保留（构建重排） |
 | `stm32_sch_edit` | 原理图人工编辑：指令存 `schematic-edits.json`，构建收尾重放；KiCad 10 的 IPC 不提供原理图读写 |
+| `stm32_sch_sync` | 手绘层新放的器件补到板子：读 `hardware/schematic/*.kicad_sch` 的位号/值/封装/网络，`planHandSync` 出计划，`apply: true` 时交 KiCad 自带 python 用 `FootprintLoad` 把封装 `Add` 进最近一次构建的 `.kicad_pcb`（写前留 `.bak`）；板上已有的位号跳过，`tscircuit:` 封装与没有 `Footprint` 的件不补，自动网名不赋；坐标暂定在板框下方，notes 会提醒布线前挪 |
 | `stm32_sch_draw` | 图纸手绘层：`wire` 连两脚、`label` 标名、`clone` 复制元件、`place` 从符号库放新器件（内嵌 `lib_symbols`）、`move`/`remove`；写 `hardware/schematic/*.kicad_sch`（构建不碰），不需要打开 KiCad，写完用 `kicad-cli` 导网表校验 |
 | `stm32_part_import` | 器件导入：按 `Lib:Name` 从 KiCad 官方库复制封装，按焊盘号生成符号骨架，立创编号写成封装属性（`LCSC`/`MPN`/`Brand`/`Datasheet`），并登记 `fp-lib-table`/`sym-lib-table`；封装库里没有就报错，不猜 |
 | `stm32_symbol_footprint` | 符号与封装生成：按引脚表出 `.kicad_sym`，按封装尺寸出 `.kicad_mod`（QFP / SOIC / 两脚小件）；尺寸与引脚号必须由调用方给出，缺一个就报错 |
@@ -500,7 +501,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            64 个工具的注册与参数校验
+  tools/            65 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

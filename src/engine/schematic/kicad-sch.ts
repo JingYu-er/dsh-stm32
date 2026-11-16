@@ -78,6 +78,8 @@ export interface SchFile {
   readonly junctions: readonly SchPoint[];
   readonly sheetRefs: readonly SchSheetRef[];
   readonly libPins: ReadonlyMap<string, readonly SchLibPin[]>;
+  /** 符号库里定义的封装名（`Device:R` → `Resistor_SMD:R_0402_1005Metric`）。实例上的 Footprint 常为空。 */
+  readonly libFootprints: ReadonlyMap<string, string>;
 }
 
 export interface SchTree {
@@ -141,6 +143,18 @@ function readLibPins(doc: SExprNode): Map<string, SchLibPin[]> {
     }
     collect(lib, 0);
     out.set(name, pins);
+  }
+  return out;
+}
+
+function readLibFootprints(doc: SExprNode): Map<string, string> {
+  const out = new Map<string, string>();
+  const libs = childOf(doc, "lib_symbols");
+  for (const lib of childrenOf(libs, "symbol")) {
+    const name = atomOf(lib, 1);
+    if (name === "") continue;
+    const footprint = propertyMap(lib).get("Footprint") ?? "";
+    if (footprint !== "") out.set(name, footprint);
   }
   return out;
 }
@@ -237,6 +251,7 @@ export function parseSchText(text: string, file: string, relFile = file): SchFil
     junctions,
     sheetRefs,
     libPins: readLibPins(doc),
+    libFootprints: readLibFootprints(doc),
   };
 }
 
