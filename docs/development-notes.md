@@ -5903,7 +5903,21 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S150）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S151）
+
+### 一百五十九、板图预览：自研 SVG 而不是 42 MB 渲染器（S151）
+
+- 需求：调试台的「电路设计」页只有状态和按钮，看不到板子长什么样——元件摆得开不开、走线有多密，全靠读数字。用户批准先做 P0：只读 `.kicad_pcb` 出板图。
+- 先验证外部渲染器是否可复用：`@huaqiu/ecad-renderer` 的 `renderProjectFromZip` / `renderPcb(boardProto)` 确实能直吃 KiCad 工程（拆 zip、找与 `.kicad_pro` 同名的根图）。但 `npm view` 显示它 **没有 license 字段**、`dist.unpackedSize = 42380919`（42 MB），依赖 `jszip` + `immutable` + `@huaqiu/kicad-sexpr-parser`。为一个页签背 42 MB 且许可不明，不值得——改为自己出 SVG，零依赖。
+- 解析（`src/engine/ecad/pcb/scene.ts`）：复用 `src/engine/schematic/sexpr.ts` 的 `parseSexpr`，把 `.kicad_pcb` 读成 `PcbScene`：板框（`gr_line/gr_rect/gr_circle/gr_arc` 在 `Edge.Cuts`）、焊盘（`pad` 相对封装原点，`pad 绝对 = 封装 at + 旋转(pad at)`，`rotation = 封装角 + 焊盘角`）、走线（`segment/arc`）、过孔、丝印（`fp_line/fp_rect/fp_circle/fp_poly/fp_arc` 且只收 `*SilkS`）、位号。
+- 内层走线不画，但要**说出来**：该板 816 条 `segment` 里 626 条在 F/B、190 条在 `In1.Cu/In2.Cu`。`innerTracks` 单独计数，notes 写「内层有 N 条走线：预览只画顶层与底层」——不然人会以为板上只有这些线。
+- 旋转方向是实测出来的：KiCad 的 y 轴向下、`(at x y θ)` 的正角在屏幕上是逆时针，所以 `rotate(dx,dy,deg)` 用 `x' = dx·cos + dy·sin`、`y' = -dx·sin + dy·cos`。实测 J1 `(at 100 104 180)` 的 `pad(-9.75,0)` 落在 `(109.75,104)`，与 KiCad 视图一致。
+- 渲染（`src/engine/ecad/pcb/pcb-svg.ts`）：`viewBox` + `maxPx 720`，颜色全走宿主令牌——顶层 `state-business-primary`、底层 `state-success-primary`、板框 `label-secondary`、丝印 `label-tertiary`、过孔 `state-warn-primary`，深浅色主题自动跟随。矩形/圆角/椭圆焊盘按旋转后的多边形画，圆焊盘用 `<circle>`；边距 1.6 mm。
+- 接线：`GET /ecad/pcb`（层开关传 `0` 才隐藏、`refs=1` 才画位号）；工具 `stm32_pcb_render`（`layers: all|top|bottom`、`refs`、`saveAs`，不给 `saveAs` 只回计数）；面板「板图」区块——顶/底/焊盘/过孔/丝印/板框/位号 复选框 + 刷新 + 尺寸与计数摘要 + 内联 SVG。
+- 一处容易忘的收口：`handleWebApi` 的「GET 无 body」白名单是按路径列出来的，新路由必须同时加进那份清单，否则请求先被 405「这个接口只接受 POST」挡掉，看起来像路由没注册。
+- 真实板实测（tetris-handheld，62×104 mm、4 层）：解析 121 ms、渲染 13 ms、SVG 182 KB、386 焊盘 / 626 走线 / 72 过孔 / 1253 图元；路由回包 42 ms。截图核对：板框正确、顶层蓝/底层绿、丝印与过孔可见，顶部两个大圆盘是 `U42/U43` 的无编号安装焊盘（`footprint` 没有 `Reference` 时按序号回退）。
+- 验证：全量 **88 套件 / 1238 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2145.0 KB / 350 文件 / 解包 16397.5 KB。
+- 教训：**渲染能力的价钱要按「它占多少包体 + 许可是否明确」算，不是按「它能不能画」算**。这里的解析量只有几百行、格式是稳定文本，自己写反而更可控；外部渲染器的价值在符号库与整包预览，等需要那部分时再谈。
 
 ### 一、目标与约束
 

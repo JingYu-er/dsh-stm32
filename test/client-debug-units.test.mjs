@@ -301,3 +301,16 @@ test("电路设计页显示布线引擎状态，并可勾选含布线（S146）"
   assert.ok(source.includes("pcb: true"));
   assert.ok(source.includes("autoroute.ready"));
 });
+
+test("电路设计页能看板图：按层开关请求 /ecad/pcb，SVG 内联渲染（S151）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function usePcbView("));
+  assert.ok(source.includes("\"ecad/pcb?\""));
+  assert.ok(source.includes("\"板图\""));
+  assert.ok(source.includes("d32-pcb-figure"));
+  // 关掉的层传 0，位号只有显式打开才请求。
+  assert.ok(source.includes("params.push(name + \"=0\")"));
+  assert.ok(source.includes("params.push(\"refs=1\")"));
+  // 钩子必须定义在面板之前，否则运行期引用不到。
+  assert.ok(source.indexOf("function usePcbView(") < source.indexOf("function EcadPanel("));
+});

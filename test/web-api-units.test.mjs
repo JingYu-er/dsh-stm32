@@ -1397,3 +1397,45 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
     assert.equal(response.body.interrupts.entries[0].name, "USART1");
   }
 });
+
+test("GET /ecad/pcb：给工程就出板图，层开关与缺板提示都对（S151）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s151-pcb-"));
+  const kicad = path.join(root, "hardware", "kicad");
+  fs.mkdirSync(kicad, { recursive: true });
+  fs.writeFileSync(
+    path.join(kicad, "board.kicad_pcb"),
+    [
+      '(kicad_pcb (version 20241229) (layers (0 "F.Cu" signal) (31 "B.Cu" signal))',
+      '  (gr_line (start 0 0) (end 20 0) (width 0.1) (layer Edge.Cuts))',
+      '  (gr_line (start 20 0) (end 20 10) (width 0.1) (layer Edge.Cuts))',
+      '  (gr_line (start 20 10) (end 0 10) (width 0.1) (layer Edge.Cuts))',
+      '  (gr_line (start 0 10) (end 0 0) (width 0.1) (layer Edge.Cuts))',
+      '  (footprint "tscircuit:r0402" (layer F.Cu) (at 10 5 0) (property "Reference" "R1" (at 0 0 0))',
+      '    (pad "1" smd rect (at -1 0 0) (size 1 0.6) (layers F.Cu F.Mask)))',
+      '  (segment (start 0 0) (end 5 0) (width 0.25) (layer F.Cu) (net 1))',
+      '  (segment (start 0 1) (end 5 1) (width 0.25) (layer B.Cu) (net 1)))',
+    ].join("\n"),
+    "utf8",
+  );
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/pcb", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  assert.equal(got.body.pcbView.ok, true, got.body.pcbView.error);
+  assert.equal(got.body.pcbView.pads, 1);
+  assert.equal(got.body.pcbView.tracks, 2);
+  assert.match(got.body.pcbView.svg, /<svg/u);
+
+  const hidden = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/pcb", query: { projectDir: root, bottom: "0", refs: "0" }, deps });
+  assert.equal(hidden.body.pcbView.ok, true);
+  assert.doesNotMatch(hidden.body.pcbView.svg, /state-success-primary/u);
+
+  fs.rmSync(path.join(kicad, "board.kicad_pcb"));
+  const none = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/pcb", query: { projectDir: root }, deps });
+  assert.equal(none.status, 200);
+  assert.equal(none.body.pcbView.ok, false);
+  assert.match(none.body.pcbView.error, /KiCad 工程|kicad_pcb/u);
+
+  const noProject = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/pcb", query: {}, deps });
+  assert.equal(noProject.status, 400);
+  fs.rmSync(root, { recursive: true, force: true });
+});

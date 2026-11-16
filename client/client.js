@@ -854,6 +854,8 @@ window.__ModuleLoader__.load({
      */
     const DEBUG_CSS = [
       ".d32-page { --d32-accent: var(--dsw-alias-state-business-primary); }",
+      "/* 板图：SVG 撑满容器宽度，超高由容器滚动（S151）。 */",
+      ".d32-pcb-figure svg { display: block; max-width: 100%; height: auto; }",
       "/* 瑞士国际主义：面板内一律直角，圆角由语言决定，不留给单个组件（S89）。 */",
       ".d32-page, .d32-page * { border-radius: 0 !important; }",
       ".d32-page button, .d32-page input, .d32-page select { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }",
@@ -2702,9 +2704,49 @@ function dsSizeText(datasheets) {
   return "（" + String(Math.round(bytes / 1024)) + " KB）";
 }
 
+// 板图（S151）：只读 .kicad_pcb 出 SVG，按层取图；切换层或点刷新才重新请求。
+function usePcbView(projectDir, show) {
+  const [view, setView] = useState(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  const key = JSON.stringify(show);
+  useEffect(() => {
+    let closed = false;
+    if (typeof projectDir !== "string" || projectDir === "") {
+      setView(null);
+      setError("");
+      return () => {
+        closed = true;
+      };
+    }
+    const params = ["projectDir=" + encodeURIComponent(projectDir)];
+    for (const name of ["top", "bottom", "pads", "vias", "silk", "edge"]) {
+      if (show[name] === false) params.push(name + "=0");
+    }
+    if (show.refs === true) params.push("refs=1");
+    const load = async () => {
+      const result = await callApi("GET", "ecad/pcb?" + params.join("&"));
+      if (closed) return;
+      if (result.ok) {
+        setView(result.value.pcbView);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+    };
+    load();
+    return () => {
+      closed = true;
+    };
+  }, [projectDir, key, tick]);
+  return { view: view, error: error, reload: () => setTick((value) => value + 1) };
+}
+
 function EcadPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
       const state = useEcad(projectDir, 20000);
+      const [pcbShow, setPcbShow] = useState({ top: true, bottom: true, pads: true, vias: true, silk: true, edge: true, refs: false });
+      const pcb = usePcbView(projectDir, pcbShow);
       const [job, setJob] = useState({ name: "", running: false, result: null, error: "" });
       const [autoTried, setAutoTried] = useState(false);
       const [withPcb, setWithPcb] = useState(false);
@@ -2817,6 +2859,61 @@ function EcadPanel(props) {
         ),
       );
       if (actionRow !== null) rows.push(actionRow);
+      // 板图：看见走线密度与元件排布，再决定要不要重布或加宽线（S151）。
+      if (projectDir !== "") {
+        const toggleNames = [
+          ["top", "顶层"],
+          ["bottom", "底层"],
+          ["pads", "焊盘"],
+          ["vias", "过孔"],
+          ["silk", "丝印"],
+          ["edge", "板框"],
+          ["refs", "位号"],
+        ];
+        const pcbView = pcb.view;
+        const toggleRow = e(
+          "div",
+          { key: "pcb-toggles", style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", padding: "0 0 6px", fontSize: "12px", opacity: 0.85 } },
+          e("span", { style: Object.assign({}, D32_LABEL_MONO, { letterSpacing: "0.12em" }) }, "板图"),
+          ...toggleNames.map((pair) =>
+            e(
+              "label",
+              { key: "pcb-tog-" + pair[0], style: { display: "inline-flex", alignItems: "center", gap: "4px" } },
+              e("input", {
+                type: "checkbox",
+                checked: pcbShow[pair[0]] !== false,
+                onChange: (event) => {
+                  const next = Object.assign({}, pcbShow);
+                  next[pair[0]] = event.target.checked;
+                  setPcbShow(next);
+                },
+              }),
+              pair[1],
+            ),
+          ),
+          e("button", { key: "pcb-refresh", type: "button", onClick: () => pcb.reload(), style: Object.assign({}, debugStyles.button, { padding: "1px 8px", fontSize: "12px" }) }, "刷新"),
+          pcbView !== null && pcbView.ok
+            ? e("span", { key: "pcb-size", style: { opacity: 0.7 } }, String(pcbView.widthMm) + " × " + String(pcbView.heightMm) + " mm · 焊盘 " + String(pcbView.pads) + " · 走线 " + String(pcbView.tracks) + (pcbView.innerTracks > 0 ? "（内层 " + String(pcbView.innerTracks) + " 条未画）" : "") + " · 过孔 " + String(pcbView.vias))
+            : null,
+        );
+        const pcbBody =
+          pcb.error !== ""
+            ? e("div", { key: "pcb-err", style: { fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, pcb.error)
+            : pcbView === null
+              ? e("div", { key: "pcb-loading", style: { fontSize: "12px", opacity: 0.6 } }, "读取板图…")
+              : pcbView.ok
+                ? e(
+                    "div",
+                    { key: "pcb-svg", className: "d32-pcb-figure", style: { border: D32_HAIR, background: "var(--dsw-alias-bg-layer-2)", padding: "6px", overflow: "auto", maxHeight: "560px" } },
+                    e("div", { style: { display: "block", width: "100%" }, dangerouslySetInnerHTML: { __html: pcbView.svg } }),
+                  )
+                : e("div", { key: "pcb-fail", style: { fontSize: "12px", opacity: 0.75 } }, pcbView.error);
+        rows.push(e("div", { key: "pcb-view", style: { padding: "0 0 10px" } }, toggleRow, pcbBody,
+          ...(pcbView !== null && pcbView.ok && pcbView.notes.length > 0
+            ? [e("div", { key: "pcb-notes", style: { fontSize: "11px", opacity: 0.6, padding: "4px 0 0" } }, pcbView.notes.join("；"))]
+            : []),
+        ));
+      }
       if (dsMissing.length > 0) {
         rows.push(
           e(

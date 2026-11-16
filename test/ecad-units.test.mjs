@@ -18,9 +18,12 @@ import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/eca
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
+import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
+import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
 import { mergeCoincidentPads } from "../lib/engine/ecad/padmerge.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
+import { registerPcbTools } from "../lib/tools/pcb.js";
 import { buildTargets } from "../lib/engine/probe.js";
 import { resolveSearchConfig } from "../lib/data/search-roots.js";
 import { guidesFor } from "../lib/data/install-guides.js";
@@ -1031,6 +1034,106 @@ test("最近构建跳过布线器的工作目录与派生板子（S150）", () =
     assert.equal(found.pcbFile, board);
     assert.equal(found.schematicFile, join(kicad, "board.kicad_sch"));
     assert.equal(found.kicadDir, kicad);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const SCENE_BOARD = `(kicad_pcb (version 20241229) (generator circuit-json-to-kicad)
+  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user))
+  (gr_line (start 0 0) (end 20 0) (width 0.1) (layer Edge.Cuts))
+  (gr_line (start 20 0) (end 20 10) (width 0.1) (layer Edge.Cuts))
+  (gr_line (start 20 10) (end 0 10) (width 0.1) (layer Edge.Cuts))
+  (gr_line (start 0 10) (end 0 0) (width 0.1) (layer Edge.Cuts))
+  (footprint "tscircuit:qfn48" (layer F.Cu) (at 10 5 180)
+    (property "Reference" "U1" (at 0 -2 0))
+    (fp_text reference "U1" (at 0 -2 0) (layer F.SilkS) (effects (font (size 1 1))))
+    (fp_line (start -1 0) (end 1 0) (width 0.15) (layer F.SilkS))
+    (pad "1" smd rect (at 2 0 0) (size 1 2) (layers F.Cu F.Mask))
+    (pad "2" smd circle (at 0 2 0) (size 0.6 0.6) (layers F.Cu F.Mask)))
+  (segment (start 0 0) (end 5 0) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 0 1) (end 5 1) (width 0.25) (layer B.Cu) (net 1))
+  (segment (start 0 2) (end 5 2) (width 0.25) (layer In1.Cu) (net 1))
+  (via (at 3 3) (size 0.8) (drill 0.4) (layers F.Cu B.Cu)))`;
+
+test("板图：解析 .kicad_pcb 出焊盘/走线/过孔/板框与内层说明（S151）", () => {
+  const scene = parsePcbScene(SCENE_BOARD, "mem.kicad_pcb");
+  assert.equal(scene.ok, true, scene.error);
+  assert.equal(scene.copperLayers, 3);
+  assert.equal(scene.outline.length, 4);
+  assert.equal(scene.pads.length, 2);
+  assert.equal(scene.tracks.length, 2, "只收顶层与底层");
+  assert.equal(scene.innerTracks, 1, "内层单独计数");
+  assert.match(scene.notes.join(" "), /内层有 1 条走线/u);
+  assert.equal(scene.vias.length, 1);
+  assert.equal(scene.silk.length, 1);
+  assert.equal(scene.refs.length, 1);
+  assert.equal(scene.refs[0].text, "U1");
+  // 封装转 180°：pad(2,0) → 相对 (-2,0)，绝对 (8,5)。
+  const pad = scene.pads.find((item) => item.number === "1");
+  assert.equal(Math.round(pad.x * 1000) / 1000, 8);
+  assert.equal(Math.round(pad.y * 1000) / 1000, 5);
+  assert.equal(pad.rotation, 180);
+  assert.equal(pad.side, "top");
+  assert.deepEqual([scene.bbox.x, scene.bbox.y, scene.bbox.width, scene.bbox.height], [0, 0, 20, 10]);
+
+  const rendered = renderPcbSvg(scene, { show: { top: true, bottom: true, pads: true, vias: true, silk: true, edge: true, refs: true } });
+  assert.equal(rendered.ok, true, rendered.error);
+  assert.match(rendered.svg, /<svg[^>]*viewBox="/u);
+  assert.match(rendered.svg, /var\(--dsw-alias-state-business-primary\)/u, "顶层走线用宿主令牌");
+  assert.match(rendered.svg, /var\(--dsw-alias-state-success-primary\)/u, "底层走线用宿主令牌");
+  assert.match(rendered.svg, /U1/u, "开了 refs 才画位号");
+  assert.equal(rendered.pads, 2);
+  assert.equal(rendered.tracks, 2);
+  assert.equal(rendered.vias, 1);
+  // 关掉底层：底层颜色不再出现，计数也不含底层走线。
+  const onlyTop = renderPcbSvg(scene, { show: { top: true, bottom: false, pads: true, vias: true, silk: true, edge: true, refs: false } });
+  assert.equal(onlyTop.ok, true);
+  assert.doesNotMatch(onlyTop.svg, /state-success-primary/u);
+  assert.doesNotMatch(onlyTop.svg, /U1/u);
+  assert.equal(onlyTop.tracks, 1);
+
+  const broken = parsePcbScene("(kicad_pcb", "broken.kicad_pcb");
+  assert.equal(broken.ok, false);
+  assert.match(broken.error, /读不懂|语法|括号/u);
+  const missing = readPcbScene("C:/definitely/not/here.kicad_pcb");
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /读不到|找不到/u);
+});
+
+test("工具 stm32_pcb_render：给临时板出 SVG，saveAs 才落盘（S151）", async () => {
+  const dir = tempDir("ecad-pcb-render-");
+  try {
+    const kicad = join(dir, "hardware", "kicad");
+    mkdirSync(kicad, { recursive: true });
+    writeFileSync(join(kicad, "board.kicad_pcb"), SCENE_BOARD, "utf8");
+    const tools = new Map();
+    const ctx = {
+      tools: { register: (definition) => { tools.set(definition.name, definition); return () => {}; } },
+      get(name) {
+        if (name === "workingDirectory") return { ensure: async () => dir };
+        return undefined;
+      },
+    };
+    registerPcbTools(ctx);
+    const tool = tools.get("stm32_pcb_render");
+    assert.ok(tool !== undefined, "工具应当注册");
+
+    const dry = await tool.execute({ projectDir: dir }, { signal: new AbortController().signal });
+    assert.equal(dry.ok, true, dry.error);
+    assert.equal(dry.savedTo, "", "不给 saveAs 不该写文件");
+    assert.equal(dry.pads, 2);
+    assert.equal(dry.tracks, 2);
+    assert.equal(dry.innerTracks, 1);
+    assert.match(dry.notes.join(" "), /内层/u);
+
+    const saved = await tool.execute({ projectDir: dir, saveAs: "out/board.svg", layers: "top", refs: true }, { signal: new AbortController().signal });
+    assert.equal(saved.ok, true, saved.error);
+    assert.match(saved.savedTo.replace(/\\/gu, "/"), /out\/board\.svg$/u);
+    assert.ok(existsSync(saved.savedTo));
+    const svg = readFileSync(saved.savedTo, "utf8");
+    assert.match(svg, /<svg/u);
+    assert.equal(saved.tracks, 1, "只要顶层");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
