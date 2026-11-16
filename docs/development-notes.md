@@ -5949,6 +5949,35 @@ tscircuit 是原理图与 PCB 的唯一写者，每次 `stm32_ecad_build` 都会
 
 同时修掉一个真 bug：S169 的面板补丁引用了 D32_BUTTON，但这个常量从来没定义过，电路设计页一渲染就 ReferenceError，整棵子树被卸载——表现就是「点进去什么也不显示」。补上常量，并加一条静态守卫测试：面板源码里出现的每个 D32_* 都必须在源码里有 const 定义，缺一个就失败。这类错误 React 不会在编译期报，只能靠「引用了就定义过」的机械检查。
 
+### 一百七十八、三段流水线跑一遍，暴露的两个接口 bug（S171）
+
+用 3 个元件（10k 电阻、100nF 电容、红色 LED）跑了「原理图 → 板子 → 布线 → 校验」全流程，目的是把「哪些能全自动」从讨论变成数字。结果：4 个环节全自动跑通，但暴露两个我们自己造成的接口 bug。
+
+**流程与实测**（工程 `C:/Users/Admin/AppData/Local/Temp/pipe3`）
+
+| 环节 | 手段 | 结果 |
+| --- | --- | --- |
+| 原理图 | tscircuit `index.circuit.tsx` | 9.1 s，ERC 0 错 / 2 警（两端悬空，符合预期） |
+| 放置 | `stm32_pcb_place` | 3 / 3 个元件，清掉 4 条旧走线 |
+| 布线 | `stm32_pcb_autoroute` | 6.8 s、4 段、0 过孔、0 未连接 |
+| 校验 | `check_connected.py` + `kicad-cli pcb drc` + `stm32_netgate` | 全连通；DRC 0 错 / 9 警；网表 2/2 网络对上 |
+
+**bug 1：输出 schema 少一个字段，工具报「invalid output」**
+
+`stm32_pcb_autoroute` 的 `steps` 项声明了 `tag/what/why/optional` 且 `additionalProperties: false`，而引擎产出的每一步还带 `tool`（KRT 里是 `route` / `route_p2`）。宿主校验失败，整次调用被判失败——**板子其实已经布完了**，用户看到的是错误。修法：schema 补 `tool` 并加入 `required`。
+
+教训：`additionalProperties: false` 的 schema 是白名单，引擎新增字段就要同步 schema，否则功能正确、接口失败。
+
+**bug 2：找不到板子就报「先跑一次构建」**
+
+`stm32_pcb_place` / `autoroute` 取板只查 `hardware/kicad`，而 tscircuit 把板子写在 `hardware/circuit/dist/<入口>/kicad/`。新工程第一次跑就撞上「还没有 .kicad_pcb：先跑一次构建」，明明刚构建完。修法：新增 `pickBoard(projectDir, workspace, explicit)`——显式 → `hardware/kicad` → `findLatestKicadBuild()` 的产物，四处取板点统一走它。
+
+**还没修的一条：线宽判据与布线器不同档**
+
+布线器按嘉立创工艺下限布（0.0889 mm），我们的 `.kicad_dru` 最小线宽写 0.2 mm，于是 DRC 报 4 条 `track_width`。这与 S149 的 `clearance` 是同一类问题（规则要跟布线器同档），但线宽档没跟着层数走。下一步按层数取「最小线宽」（1–2 层 0.127、4 层 0.1），与 `fab_tiers.py` 对齐。
+
+**结论**：原理图、放置、布线、校验四步都能全自动；卡点不在接口，在「判据要和实际工艺同档」。这次踩的两个 bug 都是我们自己的 schema 与路径假设，不是 KiCad 的限制。
+
 ### 一百七十七、网表门禁：图纸比板子新，就直说「板子旧了」（S169）
 
 `stm32_sch_check` 能一次把原理图与板子对完账，但它回答的是「现在对不对」；真正会出事的是「改完原理图忘了同步到板子」——那时两边都自洽，只是板子是旧的。

@@ -73,6 +73,18 @@ const output: JsonSchema = {
   required: ["ok", "error", "boardFile", "moved", "missing", "removedTracks", "parts", "boardWidth", "boardHeight", "notes"],
 };
 
+/** 选板子：显式路径优先；没有就看 hardware/kicad，再退到最近一次构建的产物（tscircuit 把板子写在 circuit/dist 下）。 */
+function pickBoard(projectDir: string, workspace: { kicadDir: string }, explicit?: string): string {
+  if (explicit !== undefined && explicit !== "") return resolve(projectDir, explicit);
+  const direct = newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+  if (direct !== "") return direct;
+  try {
+    return findLatestKicadBuild(workspace as never)?.pcbFile ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function newestFile(dir: string, pattern: RegExp, depth = 3): string {
   if (!existsSync(dir)) return "";
   let best = "";
@@ -126,8 +138,8 @@ const autorouteOutput: JsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { tag: { type: "string" }, what: { type: "string" }, why: { type: "string" }, optional: { type: "boolean" } },
-        required: ["tag", "what", "why", "optional"],
+        properties: { tag: { type: "string" }, tool: { type: "string" }, what: { type: "string" }, why: { type: "string" }, optional: { type: "boolean" } },
+        required: ["tag", "tool", "what", "why", "optional"],
       },
     },
     warnings: { type: "array", items: { type: "string" } },
@@ -181,7 +193,7 @@ export function registerPcbTools(ctx: DshContext): void {
       const model = readCircuitNetlist(readFileSync(circuitFile, "utf8"));
       if (!model.ok) return { ...empty, error: model.error };
 
-      const boardFile = args.boardFile !== undefined && args.boardFile !== "" ? args.boardFile : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+      const boardFile = pickBoard(resolved.projectDir, workspace, args.boardFile);
       if (boardFile === "" || !existsSync(boardFile)) return { ...empty, error: "还没有 .kicad_pcb：先跑一次构建，或传 boardFile 指定板子" };
 
       // 板框以 KiCad 画的那块为准：circuit.json 里的尺寸可能与实际板框不一致。
@@ -291,7 +303,7 @@ export function registerPcbTools(ctx: DshContext): void {
       const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
       const boardFile = args.boardFile !== undefined && args.boardFile !== ""
         ? args.boardFile
-        : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+        : pickBoard(resolved.projectDir, workspace);
       if (boardFile === "" || !existsSync(boardFile)) return { ...empty, error: "还没有可用的 .kicad_pcb：先跑 stm32_ecad_build 或 stm32_pcb_place" };
 
       const notes: string[] = [];
@@ -401,7 +413,7 @@ export function registerPcbTools(ctx: DshContext): void {
       if (located.toolchain === null) return { ...empty, error: located.error };
 
       const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
-      const board = args.boardFile !== undefined && args.boardFile !== "" ? args.boardFile : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+      const board = pickBoard(resolved.projectDir, workspace, args.boardFile);
       if (board === "" || !existsSync(board)) return { ...empty, error: "还没有 .kicad_pcb：先构建，或传 boardFile 指定板子" };
 
       const notes: string[] = [];
@@ -522,7 +534,7 @@ export function registerPcbTools(ctx: DshContext): void {
       const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
       if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
       const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
-      const board = args.boardFile !== undefined && args.boardFile !== "" ? resolve(resolved.projectDir, args.boardFile) : newestFile(workspace.kicadDir, /\.kicad_pcb$/u);
+      const board = pickBoard(resolved.projectDir, workspace, args.boardFile);
       if (board === "" || !existsSync(board)) return { ...empty, error: "还没有 .kicad_pcb：先构建，或传 boardFile 指定板子" };
       const scene = readPcbScene(board);
       if (!scene.ok) return { ...empty, error: scene.error };
