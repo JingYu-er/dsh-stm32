@@ -215,6 +215,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_pcb_gerber` | Manufacturing-file review: read the Gerber and drill files produced by `stm32_ecad_export` back into one SVG (optional layer filter) to check outline, copper, silk and holes before shipping; unsupported constructs are listed in notes |
 | `stm32_impedance` | Impedance write-back: compute the track width and gap for 50 Ω single-ended and 90 Ω differential from the stackup and write them as custom rules in `.kicad_dru` (named nets only); KiCad DRC has no impedance constraint, so the rules carry geometry |
 | `stm32_netgate` | Keep schematic and PCB in step: stale board, split nets, missing pads |
+| `stm32_sch_import` | Absorb KiCad board edits back into `circuit.tsx`: netlist and parts only, positions are re-laid out on build |
 | `stm32_sch_edit` | Hand edits to the schematic: stored as instructions in `schematic-edits.json` and replayed at the end of each build |
 | `stm32_symbol_footprint` | Symbol and footprint generation: emit `.kicad_sym` from a pin list and `.kicad_mod` from package dimensions (QFP / SOIC / two-pad parts); dimensions and pin numbers must be supplied, missing one is an error |
 | `stm32_part_search` | Part search: look up LCSC codes, stock, price ladders and datasheet links by MPN, parameters or code; results cached 24 h, package field left blank when the API omits it |

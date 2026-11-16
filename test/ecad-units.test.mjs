@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -16,6 +16,7 @@ import { applySchEdits, pinPoint, replaySchEditsTo } from "../lib/engine/schemat
 import { parseSchText } from "../lib/engine/schematic/kicad-sch.js";
 import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
+import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -1876,4 +1877,94 @@ test("原理图编辑：重放走构建目录，第一次落盘、第二次只�
   const empty = replaySchEditsTo("", edits);
   assert.equal(empty.applied, 0);
   assert.ok(empty.notes.some((note) => note.includes("还没有构建产物")));
+});
+
+const PCB = `(kicad_pcb (version 20241229) (generator "dsh-stm32")
+  (gr_line (start 0 0) (end 30 0) (layer "Edge.Cuts"))
+  (gr_line (start 30 0) (end 30 20) (layer "Edge.Cuts"))
+  (gr_line (start 30 20) (end 0 20) (layer "Edge.Cuts"))
+  (gr_line (start 0 20) (end 0 0) (layer "Edge.Cuts"))
+  (footprint "tscircuit:resistor_res0402" (layer "F.Cu") (at 5 5)
+    (property "Reference" "R1")
+    (property "Value" "10kΩ")
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net 1 "GND"))
+    (pad "2" smd rect (at 1 0) (size 0.6 0.6) (layers "F.Cu") (net ".R1 > .pin2 to .C1 > .pin2"))
+  )
+  (footprint "tscircuit:capacitor_cap0402" (layer "F.Cu") (at 12 5)
+    (property "Reference" "C1")
+    (property "Value" "100nF")
+    (property "Supplier Part Number" "C1525, C307331")
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net 1 "GND"))
+    (pad "2" smd rect (at 1 0) (size 0.6 0.6) (layers "F.Cu") (net ".R1 > .pin2 to .C1 > .pin2"))
+  )
+  (footprint "tscircuit:led_diode0603_anodepin2_cathodepin1" (layer "F.Cu") (at 20 5)
+    (property "Reference" "D1")
+    (property "Value" "LED")
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net "VCC"))
+    (pad "2" smd rect (at 1 0) (size 0.6 0.6) (layers "F.Cu") (net "VCC"))
+  )
+)`;
+
+test("吸收：网络按 tscircuit 的 A to B 名合并，元件值与封装还原（S172）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-import-"));
+  const board = join(dir, "board.kicad_pcb");
+  writeFileSync(board, PCB);
+  const state = readImportState(board);
+  assert.equal(state.ok, true);
+  assert.equal(state.widthMm, 30);
+  assert.equal(state.heightMm, 20);
+  assert.deepEqual(state.parts.map((part) => part.ref), ["C1", "D1", "R1"]);
+  const c1 = state.parts.find((part) => part.ref === "C1");
+  assert.equal(c1?.value, "100nF");
+  assert.equal(c1?.footprint, "0402");
+  assert.deepEqual(c1?.suppliers, ["C1525", "C307331"]);
+  assert.equal(state.nets.length, 3);
+  const ground = state.nets.find((net) => net.name === "GND");
+  assert.deepEqual(ground?.pins, [{ ref: "C1", pin: "1" }, { ref: "R1", pin: "1" }]);
+  const pair = state.nets.find((net) => net.pins.some((pin) => pin.ref === "R1"));
+  assert.deepEqual(pair?.pins, [{ ref: "C1", pin: "2" }, { ref: "R1", pin: "2" }]);
+  const power = state.nets.find((net) => net.name === "VCC");
+  assert.deepEqual(power?.pins, [{ ref: "D1", pin: "1" }, { ref: "D1", pin: "2" }]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("吸收：生成的 TSX 用 jlcpcb 对象写料号、二极管补 pinLabels，电阻值去掉 Ω（S172）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-import-"));
+  const board = join(dir, "board.kicad_pcb");
+  writeFileSync(board, PCB);
+  const state = readImportState(board);
+  const source = renderCircuitSource(state);
+  assert.ok(source.includes('<board width="30mm" height="20mm">'));
+  assert.ok(source.includes('resistance="10k"'));
+  assert.ok(source.includes('supplierPartNumbers={{ jlcpcb: ["C1525", "C307331"] }}'));
+  assert.ok(source.includes('pinLabels={{ "pin1": "cathode", "pin2": "anode" }}'));
+  assert.ok(source.includes('<trace from=".C1 > .pin2" to=".R1 > .pin2" />'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("吸收：diff 只报增删改，写盘前留 .bak，备份失败就不改源（S172）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-import-"));
+  const board = join(dir, "board.kicad_pcb");
+  const source = join(dir, "index.circuit.tsx");
+  const circuitJson = join(dir, "circuit.json");
+  writeFileSync(board, PCB);
+  writeFileSync(source, "// 旧源\n");
+  writeFileSync(circuitJson, JSON.stringify([
+    { type: "source_component", name: "R1", ftype: "simple_resistor", value: "10k" },
+    { type: "source_component", name: "C1", ftype: "simple_capacitor", value: "100nF" },
+  ]));
+  const preview = absorbFromKicad(dir, { boardFile: board, sourceFile: source, circuitJsonFile: circuitJson });
+  assert.equal(preview.written, false);
+  assert.deepEqual(preview.diff.added, ["D1"]);
+  assert.deepEqual(preview.diff.changed, []);
+  assert.equal(readFileSync(source, "utf8"), "// 旧源\n");
+  const stored = absorbFromKicad(dir, { boardFile: board, sourceFile: source, circuitJsonFile: circuitJson, write: true });
+  assert.equal(stored.written, true);
+  assert.ok(readFileSync(source, "utf8").includes("由 dsh-stm32 从 KiCad 工程吸收"));
+  assert.ok(readdirSync(dir).some((name) => name.endsWith(".bak")));
+  const diff = diffImport(readImportState(board), readFileSync(circuitJson, "utf8"));
+  assert.deepEqual(diff.added, ["D1"]);
+  assert.equal(diff.removed.length, 0);
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(existsSync(dir), false);
 });

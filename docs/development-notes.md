@@ -5903,7 +5903,29 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S170）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S172）
+
+### 一百八十、吸收：tscircuit 仍是源，KiCad 里改的按网表差异写回（S172）
+
+**为什么是这条路线。** 图纸与板子的唯一写者仍是 tscircuit：`stm32_ecad_build` 每次重写 `hardware/circuit/dist/<工程>/kicad/`，直接改 `.kicad_sch` 下一次构建就没了。而 KiCad 10.0.7 的 IPC 只有原理图**写**的 handler（`CreateItems` / `UpdateItems` / `DeleteItems` / `PlaceSymbol`），没有 `GetItems`，也读不回图元。于是用户显式在 KiCad 里改，工具只读板子、按**网表差异**把改动吸收回 `index.circuit.tsx`，下一次构建重新导出图纸——坐标与画法会被重排，这是这条路线接受的代价。
+
+**怎么读。** `src/engine/ecad/import.ts`：
+
+- 网络用并查集合并：tscircuit 的 pad 网络是字符串 `.C1 > .pin2 to .D1 > .anode`，不是编号；同一个网络会同时出现在很多焊盘上。先按 `A to B` 名把两端连起来，再按命名网络（`(net 1 "GND")`）或网络编号（`(net 0)`）分组。
+- 引脚名要归一化：网络名里写 `.pin2`、`.anode`，焊盘上写 `2`。`pinNumberOf` 把 `pinN` 拆成 `N`，`pinAliases` 从封装名 `led_diode0603_anodepin2_cathodepin1` 抽出 `anode→2`、`cathode→1`——否则会造出 `.pinpin2`、`.pinanode` 这种假脚（实测踩过）。
+- 板框只认 `Edge.Cuts` 上的 `gr_line`；尺寸写进 `<board width height>`，坐标不写。
+
+**怎么写。** `renderCircuitSource` 输出 TSX，三条被真构建逼出来的规矩：
+
+1. `supplierPartNumbers` 在 tscircuit 里是**对象**，不是数组：`={{ jlcpcb: ["C1525", "C307331"] }}`。
+2. 二极管类要显式 `pinLabels`，否则 tscircuit 会拿供应商件的极性校验：`={{ "pin1": "cathode", "pin2": "anode" }}`。
+3. 电阻值写 `resistance="10k"`（去掉 `Ω`），电容/电感同理；比较新旧值时先归一化单位，`10k` 与 `10kΩ` 是同一个值。
+
+`diffImport` 只比 `source_component` 的 `name` 与 `value`：新增、删除、改值三类；`absorbFromKicad({ write: true })` 先写 `.bak` 再改源，备份失败就不动源。
+
+**实测。** 3 元件小电路（`C:/Users/Admin/AppData/Local/Temp/pipe3`）：从 `index.auto.kicad_pcb` 吸收出 3 个元件、2 条网络、30×20 mm；把新源放进干净工程重新构建，再读回仍是 3 个元件、2 条网络（`C1.1+R1.2`、`C1.2+D1.2`）。单测 3 条（网络合并与引脚归一化、TSX 三条规矩、diff 与 `.bak`）；全量 1287 pass。
+
+**教训。** 网络名是字符串不是编号；库表之外还有第三张「属性形状」的隐式契约（`supplierPartNumbers` 是对象）；极性校验只认 `pinLabels`，不认封装名里的 `anodepin2`；比较值前先归一化，否则每次吸收都报「改值」。
 
 ### 一百七十八、原理图编辑：KiCad 10 不给原理图 IPC，就把编辑存成指令重放（S170）
 
@@ -5949,7 +5971,7 @@ tscircuit 是原理图与 PCB 的唯一写者，每次 `stm32_ecad_build` 都会
 
 同时修掉一个真 bug：S169 的面板补丁引用了 D32_BUTTON，但这个常量从来没定义过，电路设计页一渲染就 ReferenceError，整棵子树被卸载——表现就是「点进去什么也不显示」。补上常量，并加一条静态守卫测试：面板源码里出现的每个 D32_* 都必须在源码里有 const 定义，缺一个就失败。这类错误 React 不会在编译期报，只能靠「引用了就定义过」的机械检查。
 
-### 一百七十八、三段流水线跑一遍，暴露的两个接口 bug（S171）
+### 一百七十九、三段流水线跑一遍，暴露的两个接口 bug（S171）
 
 用 3 个元件（10k 电阻、100nF 电容、红色 LED）跑了「原理图 → 板子 → 布线 → 校验」全流程，目的是把「哪些能全自动」从讨论变成数字。结果：4 个环节全自动跑通，但暴露两个我们自己造成的接口 bug。
 
