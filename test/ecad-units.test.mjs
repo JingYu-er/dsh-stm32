@@ -9,6 +9,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { buildFootprint } from "../lib/engine/ecad/gen/footprint.js";
+import { buildSymbol } from "../lib/engine/ecad/gen/symbol.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -1500,4 +1502,53 @@ test("机械：板框与定位孔从 pcb 里读，孔位按板框左下角归一
   const missingOutline = parseMech("(kicad_pcb (version 20241229))", "x.kicad_pcb");
   assert.equal(missingOutline.ok, false);
   assert.match(missingOutline.error, /板框/u);
+});
+
+test("符号与封装生成：引脚数、坐标与文件名都对得上（S164）", () => {
+  const qfp = buildFootprint({ kind: "qfp", name: "LQFP-48_7x7_P0.5mm", pins: 48, pitch: 0.5, bodyWidthMm: 7, bodyHeightMm: 7, padWidthMm: 1.5, padHeightMm: 0.28 });
+  assert.equal(qfp.ok, true, qfp.error);
+  assert.equal(qfp.pinCount, 48);
+  assert.equal((qfp.text.match(/\(pad "/gu) ?? []).length, 48, "QFP 要画出 48 个焊盘");
+  assert.match(qfp.text, /\(footprint "LQFP-48_7x7_P0\.5mm"/u);
+  assert.match(qfp.text, /\(pad "1" smd rect \(at -3\.95 -2\.75\)/u, "1 脚在左列最上");
+  assert.match(qfp.text, /\(pad "48" smd rect \(at 2\.75 -3\.95\)/u, "48 脚在上边最右（逆时针收到）");
+
+  const soic = buildFootprint({ kind: "soic", name: "SOIC-8", pins: 8, pitch: 1.27, bodyWidthMm: 3.9 });
+  assert.equal(soic.ok, true, soic.error);
+  assert.equal(soic.pinCount, 8);
+  assert.match(soic.text, /\(pad "1" smd rect \(at -2\.35 -1\.905\)/u);
+  assert.match(soic.text, /\(pad "8" smd rect \(at 2\.35 -1\.905\)/u, "8 脚在右列最上（自下而上接续）");
+
+  const passive = buildFootprint({ kind: "passive", name: "R_0402_1005Metric", bodyWidthMm: 1, bodyHeightMm: 0.5 });
+  assert.equal(passive.ok, true, passive.error);
+  assert.equal((passive.text.match(/\(pad "/gu) ?? []).length, 2);
+
+  const bad = buildFootprint({ kind: "qfp", name: "X", pins: 10, pitch: 0.5, bodyWidthMm: 7, bodyHeightMm: 7 });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /4 的倍数/u);
+  const missing = buildFootprint({ kind: "soic", name: "X", pins: 8 });
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /pitch/u, "缺 pitch 必须报错，不猜");
+
+  const sym = buildSymbol({
+    name: "STM32F103C8T6",
+    pins: [
+      { number: "1", name: "VBAT", kind: "power_in" },
+      { number: "2", name: "PC13" },
+      { number: "3", name: "PC14" },
+      { number: "4", name: "VSS", kind: "power_in" },
+    ],
+  });
+  assert.equal(sym.ok, true, sym.error);
+  assert.equal(sym.pinCount, 4);
+  assert.equal((sym.text.match(/\(pin /gu) ?? []).length, 4);
+  assert.match(sym.text, /\(pin power_in line \(at -7\.62 1\.27 0\)/u, "左列第一脚在左边界外一格、比本体顶低一格");
+  assert.match(sym.text, /\(number "1"/u);
+  assert.equal(sym.bodyWidthMm >= 10, true, "本体宽按最长引脚名推");
+  const dup = buildSymbol({ name: "X", pins: [{ number: "1", name: "A" }, { number: "1", name: "B" }] });
+  assert.equal(dup.ok, false);
+  assert.match(dup.error, /编号重复/u);
+  const noNum = buildSymbol({ name: "X", pins: [{ number: "", name: "A" }] });
+  assert.equal(noNum.ok, false);
+  assert.match(noNum.error, /缺 number/u);
 });
