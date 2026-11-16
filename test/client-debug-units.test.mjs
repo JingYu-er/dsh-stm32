@@ -313,6 +313,14 @@ test("电路设计页能看 BOM：默认只读缓存，点「查价」才联网�
   assert.ok(source.includes("params.push(\"prices=1\")"), "只有点查价才带 prices=1");
   assert.ok(source.indexOf("function useBom(") < source.indexOf("function EcadPanel("));
 });
+test("电路设计页能看 EMC 体检：铺铜与电源线宽写在面板上（S158）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function useEmc("));
+  assert.ok(source.includes("\"ecad/emc?projectDir=\""));
+  assert.ok(source.includes("\"EMC\""));
+  assert.ok(source.indexOf("function useEmc(") < source.indexOf("function EcadPanel("));
+});
+
 test("电路设计页能看叠层：按工程取阻抗线宽，没有板子就显示提示（S157）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes("function useStackup("));

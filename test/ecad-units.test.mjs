@@ -19,6 +19,7 @@ import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } 
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
+import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
@@ -1114,6 +1115,49 @@ test("价格：只认 JSON-LD 的 Product 报价，缺数字回 null（S156）",
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("EMC：电流按 IPC-2221 换线宽，铺铜网络不判窄，换层过孔要求地回流（S158）", () => {
+  // 1 A、温升 10 ℃、1 oz：约 0.30 mm；电流越大线越宽。
+  const one = requiredWidthMm(1);
+  assert.ok(one > 0.28 && one < 0.33, "1 A 大约是 0.30 mm，实际 " + String(one));
+  assert.ok(requiredWidthMm(2) > one);
+  assert.equal(requiredWidthMm(0), 0);
+  assert.equal(defaultCurrentForNet("VBUS"), 1);
+  assert.equal(defaultCurrentForNet("V3V3"), 0.5);
+  assert.equal(defaultCurrentForNet("LCD_CS"), 0);
+  const board = [
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "In1.Cu" "In2.Cu" "B.Cu")',
+    '  (net 0 "")',
+    '  (net 1 "V3V3")',
+    '  (net 2 "VBUS")',
+    '  (net 3 "GND")',
+    '  (segment (start 0 0) (end 10 0) (width 0.25) (layer F.Cu) (net 1))',
+    '  (segment (start 0 1) (end 5 1) (width 0.15) (layer F.Cu) (net 2))',
+    '  (segment (start 0 6) (end 10 6) (width 0.25) (layer F.Cu) (net 3))',
+    '  (segment (start 0 6) (end 5 6) (width 0.25) (layer In1.Cu) (net 3))',
+    '  (segment (start 5 1) (end 10 1) (width 0.15) (layer In2.Cu) (net 2))',
+    '  (via (at 5 1) (size 0.6) (drill 0.3) (layers F.Cu In2.Cu))',
+    '  (zone (net 3) (layer "In1.Cu"))',
+    ")",
+  ].join("\n");
+  const report = analyzeEmc(board);
+  assert.equal(report.ok, true);
+  assert.equal(report.copperLayers, 4);
+  assert.deepEqual(report.zonesByLayer, { "In1.Cu": 1 });
+  const vbus = report.powerTraces.find((item) => item.net === "VBUS");
+  assert.ok(vbus !== undefined);
+  assert.equal(vbus.ok, false, "0.15 mm 带不动 1 A");
+  const three = report.powerTraces.find((item) => item.net === "V3V3");
+  assert.ok(three !== undefined && three.ok === true, "0.5 A 用 0.25 mm 够");
+  const gnd = report.powerTraces.find((item) => item.net === "GND");
+  assert.equal(gnd, undefined, "有整层铺铜的网络不该被拿最窄走线判窄");
+  assert.ok(report.findings.some((item) => item.id === "emc.power-trace-width" && item.message.includes("VBUS")));
+  assert.ok(report.findings.some((item) => item.id === "emc.return-path-via"), "5,1 换层但 1.5 mm 内没有地线头");
+  // 两层板：多一条回流提醒。
+  const two = analyzeEmc(board.replace('"In1.Cu" "In2.Cu" ', ""));
+  assert.ok(two.findings.some((item) => item.id === "emc.two-layer-return"));
 });
 
 test("叠层与阻抗：按层数取叠层，50/90/100 Ω 的线宽能反算回目标（S157）", () => {

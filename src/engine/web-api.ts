@@ -71,6 +71,7 @@ import { connectPcbIpc, runPcbIpc } from "./ecad/pcb/ipc.js";
 import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
 import { applyQuotes, readBom } from "./ecad/bom.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "./ecad/pcb/stackup.js";
+import { analyzeEmc } from "./ecad/pcb/emc.js";
 import { ensurePrices, priceCachePath, readPriceCache } from "./datasheet/price.js";
 import { runEcadDesign } from "./ecad/design.js";
 import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
@@ -561,6 +562,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/pcb",
   WEB_API_PREFIX + "/ecad/bom",
   WEB_API_PREFIX + "/ecad/stackup",
+  WEB_API_PREFIX + "/ecad/emc",
   WEB_API_PREFIX + "/ecad/ipc",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
@@ -820,6 +822,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/pcb" &&
     path !== WEB_API_PREFIX + "/ecad/bom" &&
     path !== WEB_API_PREFIX + "/ecad/stackup" &&
+    path !== WEB_API_PREFIX + "/ecad/emc" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
@@ -1299,6 +1302,43 @@ export async function handleWebApi(input: {
           fetched.length > 0 ? ["这次联网取到 " + String(fetched.length) + " 个编号的报价"] : [],
           failed.length > 0 ? ["有 " + String(failed.length) + " 个编号没取到报价：" + failed.slice(0, 6).join("、")] : [],
         ),
+      },
+    });
+  }
+
+  if (path === WEB_API_PREFIX + "/ecad/emc") {
+    // EMC 与热（S158）：电源线载流、铺铜与参考平面、换层过孔回流；不做磁场仿真。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const layout = resolveProjectLayout(projectDir);
+    const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
+    const latest = findLatestKicadBuild(workspace);
+    const emptyEmc = {
+      ok: false,
+      error: latest.ok ? "还没有 .kicad_pcb：先构建一次，或在 KiCad 里存一次板子。" : latest.error,
+      boardFile: "",
+      copperLayers: 0,
+      nets: 0,
+      zonesByLayer: {} as Record<string, number>,
+      powerTraces: [] as Array<Record<string, unknown>>,
+      findings: [] as Array<Record<string, unknown>>,
+      notes: [] as string[],
+    };
+    if (!latest.ok || latest.pcbFile === "") return ok({ emc: emptyEmc });
+    const report = analyzeEmc(readFileSync(latest.pcbFile, "utf8"), latest.pcbFile);
+    if (!report.ok) return ok({ emc: { ...emptyEmc, boardFile: latest.pcbFile, error: report.error } });
+    return ok({
+      emc: {
+        ok: true,
+        error: "",
+        boardFile: report.boardFile,
+        copperLayers: report.copperLayers,
+        nets: report.nets,
+        zonesByLayer: report.zonesByLayer,
+        powerTraces: report.powerTraces,
+        findings: report.findings,
+        notes: report.notes,
       },
     });
   }

@@ -226,10 +226,11 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十五条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 55);
-  assert.equal(new Set(WEB_API_PATHS).size, 55);
+test("WEB_API_PATHS：五十六条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 56);
+  assert.equal(new Set(WEB_API_PATHS).size, 56);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
@@ -1403,6 +1404,41 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
   }
 });
 
+test("GET /ecad/emc：电源线偏窄与铺铜都在报告里，缺工程时 400（S158）", async () => {
+  assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s158-emc-"));
+  const dist = path.join(root, "hardware", "circuit", "dist", "board");
+  fs.mkdirSync(path.join(dist, "kicad"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dist, "kicad", "board.kicad_pcb"),
+    [
+      "(kicad_pcb (version 20241229)",
+      '  (layers "F.Cu" "In1.Cu" "In2.Cu" "B.Cu")',
+      '  (net 1 "VBUS")',
+      '  (net 2 "GND")',
+      '  (segment (start 0 0) (end 10 0) (width 0.2) (layer F.Cu) (net 1))',
+      '  (segment (start 0 1) (end 10 1) (width 0.25) (layer F.Cu) (net 2))',
+      '  (zone (net 2) (layer "In1.Cu"))',
+      ")",
+    ].join("\n"),
+    "utf8",
+  );
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/emc", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  const emc = got.body.emc;
+  assert.equal(emc.ok, true, emc.error);
+  assert.equal(emc.copperLayers, 4);
+  assert.equal(emc.zonesByLayer["In1.Cu"], 1);
+  assert.equal(emc.powerTraces.length, 1, "GND 靠铺铜，不该进载流清单");
+  assert.equal(emc.powerTraces[0].net, "VBUS");
+  assert.equal(emc.powerTraces[0].ok, false, "0.2 mm 带不动 1 A");
+  assert.ok(emc.findings.some((item) => item.id === "emc.power-trace-width"));
+  const bad = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/emc", query: {}, deps });
+  assert.equal(bad.status, 400);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("GET /ecad/stackup：按层数取叠层，没有板子时给人话（S157）", async () => {
   assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "s157-stackup-"));
@@ -1533,7 +1569,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/pcb"), true, "少了这条，浏览器只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/bom"), true, "少了这条，BOM 只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/stackup"), true, "少了这条，叠层只会看到 404");
-  assert.equal(registered.length, 55);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/emc"), true, "少了这条，EMC 只会看到 404");
+  assert.equal(registered.length, 56);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
