@@ -20,6 +20,7 @@ import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
+import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
@@ -1329,6 +1330,50 @@ test("打开 KiCad：拼对 pcbnew 参数，连不上时按给定节奏重探（
 
     const timedOut = await waitForIpc({ probe: async () => "", pollMs: 1, timeoutMs: 5, sleep: async () => {} });
     assert.equal(timedOut.ok, false, "一直连不上要如实报超时");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("需求文档：事实从工程里读，已有文件不覆盖，force 才重写（S159）", async () => {
+  const dir = tempDir("ecad-brief-");
+  try {
+    writeFileSync(join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Name=STM32F103C8Tx\nMcu.Package=LQFP48\n", "utf8");
+    const facts = collectBriefFacts(dir);
+    assert.equal(facts.ok, true, facts.error);
+    assert.equal(facts.mcu.cpn, "STM32F103C8T6");
+    assert.match(facts.notes.join(" "), /还没有构建产物/u);
+
+    const first = writeBriefs(dir, facts);
+    assert.equal(first.ok, true, first.error);
+    assert.equal(first.written.length, 3);
+    const mrd = readFileSync(join(dir, "docs", "01-MRD.md"), "utf8");
+    assert.match(mrd, /## 已确认事实/u);
+    assert.match(mrd, /STM32F103C8T6/u);
+    assert.match(mrd, /待定/u, "需求内容不替人编");
+
+    const second = writeBriefs(dir, facts);
+    assert.equal(second.written.length, 0, "已有文件默认不覆盖");
+    assert.equal(second.skipped.length, 3);
+    const forced = writeBriefs(dir, facts, true);
+    assert.equal(forced.written.length, 3, "force 才重写");
+
+    const tools = new Map();
+    const ctx = {
+      tools: { register: (definition) => { tools.set(definition.name, definition); return () => {}; } },
+      get(name) {
+        if (name === "workingDirectory") return { ensure: async () => dir };
+        return undefined;
+      },
+    };
+    registerPcbTools(ctx);
+    const tool = tools.get("stm32_brief");
+    assert.ok(tool !== undefined, "stm32_brief 应当注册");
+    const dry = await tool.execute({ projectDir: dir, format: "brief" }, { signal: new AbortController().signal });
+    assert.equal(dry.ok, true, dry.error);
+    assert.equal(dry.mcu, "STM32F103C8T6（LQFP48）");
+    assert.match(dry.markdown, /## 方案/u);
+    assert.equal(dry.written.length, 0, "不给 write 不写文件");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
