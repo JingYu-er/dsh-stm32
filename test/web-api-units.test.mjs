@@ -226,12 +226,13 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十七条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 59);
-  assert.equal(new Set(WEB_API_PATHS).size, 59);
+test("WEB_API_PATHS：六十条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 60);
+  assert.equal(new Set(WEB_API_PATHS).size, 60);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/parts"), true, "器件搜索必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
@@ -1576,7 +1577,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/power"), true, "少了这条，电源预算只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
-  assert.equal(registered.length, 59);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/parts"), true, "少了这条，器件搜索只会看到 404");
+  assert.equal(registered.length, 60);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1794,4 +1796,67 @@ test("IPC 输出解析：取最后一行 JSON，忽略 KiCad 的告警（S153）
   const garbage = parseIpcOutput("no json here");
   assert.equal(garbage.ok, false);
   assert.equal(garbage.kind, "INTERNAL");
+});
+
+test("GET /ecad/parts：命中缓存时不联网，空关键词 400（S163）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-parts-"));
+  const home = path.join(root, "home");
+  try {
+    fs.mkdirSync(home, { recursive: true });
+    // 预先写一条缓存：10|1|c8734（路由默认 limit=10） —— 请求必须命中它，否则会去联网。
+    fs.writeFileSync(
+      path.join(home, "part-search.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "10|1|c8734": {
+            at: Date.now(),
+            total: 7,
+            hits: [
+              {
+                code: "C8734",
+                mpn: "STM32F103C8T6",
+                brand: "ST",
+                packageName: "",
+                stock: 6000,
+                minBuy: 1,
+                priceUsd: 0.9402,
+                ladder: [{ qty: 1, priceUsd: 0.9402 }],
+                category: "",
+                datasheetUrl: "",
+                inStock: true,
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const env = { ...process.env, DSH_STM32_HOME: home };
+    const hit = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/parts",
+      query: { q: "C8734" },
+      deps: { subprocess: fakeSubprocess, env },
+    });
+    assert.equal(hit.status, 200);
+    const parts = hit.body.parts;
+    assert.equal(parts.ok, true, parts.error);
+    assert.equal(parts.cached, true, "有缓存就不该联网");
+    assert.equal(parts.hits.length, 1);
+    assert.equal(parts.hits[0].code, "C8734");
+    assert.equal(parts.hits[0].priceUsd, 0.9402);
+    assert.match(parts.notes.join("；"), /接口没给封装字段/u);
+
+    const empty = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/parts",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env },
+    });
+    assert.equal(empty.status, 400);
+    assert.match(String(empty.body.error), /q 不能为空/u);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

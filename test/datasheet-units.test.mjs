@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 import { parseLcscPage } from "../lib/engine/datasheet/lcsc.js";
 import { detectSections } from "../lib/engine/datasheet/digest.js";
+import { parseProductList, searchParts } from "../lib/engine/datasheet/search.js";
 import {
   ensureDatasheet,
   importDatasheetFile,
@@ -180,6 +181,80 @@ test("清理入口：按编号删、按天数删，都返回释放的字节（S1
     writeFileSync(join(dir, "index.json"), JSON.stringify(index), "utf8");
     const byAge = pruneDatasheets(dir, { olderThanDays: 1 });
     assert.deepEqual(byAge.removed.map((item) => item.code), ["C25137"], "改了抓取时间的旧条目按天数删");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("器件搜索：按接口字段削成 PartHit，缓存命中就不联网，错误码给人话（S163）", async () => {
+  const payload = {
+    code: 200,
+    result: {
+      totalCount: 7,
+      productList: [
+        {
+          productCode: "C8734",
+          productModel: "STM32F103C8T6",
+          brandNameEn: "ST",
+          encapStandard: null,
+          stockNumber: 6000,
+          minBuyNumber: 1,
+          productPriceList: [
+            { ladder: 100, usdPrice: 0.85 },
+            { ladder: 1, usdPrice: 0.9402 },
+          ],
+          pdfUrl: "https://example.test/a.pdf",
+          thirdWmCatalogNameEn: "MCU",
+        },
+        { productCode: "not-a-code", productModel: "x" },
+      ],
+    },
+  };
+  const parsed = parseProductList(payload);
+  assert.equal(parsed.total, 7);
+  assert.equal(parsed.hits.length, 1, "编号不像 C 开头的行要丢掉");
+  const hit = parsed.hits[0];
+  assert.equal(hit.code, "C8734");
+  assert.equal(hit.packageName, "", "接口不给封装就留空，不拿型号猜");
+  assert.equal(hit.priceUsd, 0.9402, "阶梯价取最小起订档");
+  assert.deepEqual(hit.ladder.map((step) => step.qty), [1, 100]);
+
+  const dir = mkdtempSync(join(tmpdir(), "dsh-search-"));
+  try {
+    const cacheFile = join(dir, "part-search.json");
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const first = await searchParts("C8734", { limit: 8, cacheFile, fetchImpl, now: () => 1_000_000 });
+    assert.equal(first.ok, true, first.error);
+    assert.equal(first.cached, false);
+    assert.equal(calls, 1);
+    assert.equal(existsSync(cacheFile), true);
+
+    const second = await searchParts("C8734", { limit: 8, cacheFile, fetchImpl, now: () => 1_000_100 });
+    assert.equal(second.cached, true, "24 小时内同一查询走缓存");
+    assert.equal(calls, 1, "命中缓存不能再联网");
+
+    const refreshed = await searchParts("C8734", { limit: 8, cacheFile, fetchImpl, now: () => 1_000_200, noCache: true });
+    assert.equal(refreshed.cached, false);
+    assert.equal(calls, 2, "noCache 要绕开缓存");
+
+    const badCode = await searchParts("C8734", {
+      limit: 8,
+      cacheFile,
+      now: () => 2_000_000,
+      noCache: true,
+      fetchImpl: async () => new Response(JSON.stringify({ code: 404, msg: "The static resource is unavailable." }), { status: 200 }),
+    });
+    assert.equal(badCode.ok, false);
+    assert.match(badCode.error, /错误码 404/u);
+    assert.match(badCode.error, /static resource/u);
+
+    const empty = await searchParts("   ");
+    assert.equal(empty.ok, false);
+    assert.match(empty.error, /关键词不能为空/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

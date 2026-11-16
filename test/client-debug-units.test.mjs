@@ -373,3 +373,11 @@ test("电路设计页能看机械约束：板框与定位孔，点导出才 POST
   assert.match(source, /\{ export: true \}/u);
   assert.equal(source.indexOf("function useMech(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
 });
+
+test("电路设计页能搜器件：输入关键词才联网（S163）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /function useParts\(/u);
+  assert.match(source, /"ecad\/parts\?"/u);
+  assert.match(source, /器件搜索/u);
+  assert.ok(source.indexOf("function useParts(") < source.indexOf("function EcadPanel("), "useParts 要在 EcadPanel 之前定义");
+});
