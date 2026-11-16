@@ -54,12 +54,14 @@ function emptyFacts(projectDir: string, error: string): BriefFacts {
 export function collectBriefFacts(projectDir: string, env: NodeJS.ProcessEnv = process.env): BriefFacts {
   const dir = projectDir.trim();
   if (dir === "") return emptyFacts(dir, "projectDir 不能为空");
-  const pinout = readPinout(dir, env);
+  // 工程根与程序目录是两回事：`.ioc` 通常落在 `program/`、`fw/` 这类子目录里（S95 的约定），
+  // 所以先按约定找到程序目录，再读引脚表。
+  const layout = resolveProjectLayout(dir);
+  const pinout = readPinout(layout.firmwareDir, env);
   if (!pinout.ok) return emptyFacts(dir, pinout.error);
   const report = pinout.report;
   const notes: string[] = [];
 
-  const layout = resolveProjectLayout(dir);
   const workspace = planEcadWorkspace(dir, layout.hardwareDir);
   const latest = findLatestKicadBuild(workspace);
   let board: BriefFacts["board"] = null;

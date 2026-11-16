@@ -1338,7 +1338,9 @@ test("打开 KiCad：拼对 pcbnew 参数，连不上时按给定节奏重探（
 test("需求文档：事实从工程里读，已有文件不覆盖，force 才重写（S159）", async () => {
   const dir = tempDir("ecad-brief-");
   try {
-    writeFileSync(join(dir, "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Name=STM32F103C8Tx\nMcu.Package=LQFP48\n", "utf8");
+    // `.ioc` 按约定可以落在程序子目录里：工程根读不到时要按 S95 的约定找下去。
+    mkdirSync(join(dir, "program"), { recursive: true });
+    writeFileSync(join(dir, "program", "demo.ioc"), "Mcu.CPN=STM32F103C8T6\nMcu.Name=STM32F103C8Tx\nMcu.Package=LQFP48\n", "utf8");
     const facts = collectBriefFacts(dir);
     assert.equal(facts.ok, true, facts.error);
     assert.equal(facts.mcu.cpn, "STM32F103C8T6");
