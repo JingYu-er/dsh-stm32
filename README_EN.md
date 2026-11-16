@@ -217,6 +217,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_netgate` | Keep schematic and PCB in step: stale board, split nets, missing pads |
 | `stm32_sch_import` | Absorb KiCad board edits back into `circuit.tsx`: netlist and parts only, positions are re-laid out on build |
 | `stm32_sch_edit` | Hand edits to the schematic: stored as instructions in `schematic-edits.json` and replayed at the end of each build |
+| `stm32_part_import` | Part import: copy a footprint from the KiCad libraries by `Lib:Name`, generate a symbol skeleton from its pad numbers, record the LCSC part as footprint properties (`LCSC`/`MPN`/`Brand`/`Datasheet`), and register `fp-lib-table`/`sym-lib-table`; a missing footprint is an error, never a guess |
 | `stm32_symbol_footprint` | Symbol and footprint generation: emit `.kicad_sym` from a pin list and `.kicad_mod` from package dimensions (QFP / SOIC / two-pad parts); dimensions and pin numbers must be supplied, missing one is an error |
 | `stm32_part_search` | Part search: look up LCSC codes, stock, price ladders and datasheet links by MPN, parameters or code; results cached 24 h, package field left blank when the API omits it |
 | `stm32_mech` | Enclosure and mechanical constraints: outline size, mounting-hole coordinates and drills, minimum hole-to-edge distance, board area; `export` writes a DXF (R12, outline + mounting holes) for mechanical tools |
@@ -490,7 +491,7 @@ Development-only environment variables (not needed in daily use): `DSH_STM32_ASS
 ```text
 src/
   index.ts          plugin entry: tools, slash commands, panel API, SKILL
-  tools/            registration and argument validation for 59 tools
+  tools/            registration and argument validation for 63 tools
   engine/           engines: project, .ioc, generation, build, flash, debug, events, panel API
   data/             chip data, CubeMX data, clocks, search roots, toolchain config
   commands/         7 slash commands

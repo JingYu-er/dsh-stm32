@@ -45,6 +45,7 @@ import { registerImportTools } from "./tools/import-circuit.js";
 import { registerLayoutTools } from "./tools/layout.js";
 import { registerDatasheetTools } from "./tools/datasheet.js";
 import { registerGenTools } from "./tools/gen.js";
+import { registerPartImportTools } from "./tools/part-import.js";
 import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
@@ -140,6 +141,7 @@ export function apply(ctx: DshContext): void {
   registerLayoutTools(toolsCtx);
   registerDatasheetTools(toolsCtx);
   registerGenTools(toolsCtx);
+  registerPartImportTools(toolsCtx);
   registerEcadTools(toolsCtx);
   registerPcbTools(toolsCtx);
   registerPdfTools(toolsCtx);

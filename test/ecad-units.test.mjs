@@ -17,6 +17,7 @@ import { parseSchText } from "../lib/engine/schematic/kicad-sch.js";
 import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
+import { importPart } from "../lib/engine/ecad/part-import.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -1967,4 +1968,93 @@ test("吸收：diff 只报增删改，写盘前留 .bak，备份失败就不改�
   assert.equal(diff.removed.length, 0);
   rmSync(dir, { recursive: true, force: true });
   assert.equal(existsSync(dir), false);
+});
+
+// S173：器件导入用合成库，离线验证「复制封装 + 生成符号 + 登记库表」三件事。
+const SOIC8_MOD = `(footprint "SOIC-8_3.9x4.9mm_P1.27mm" (version 20260206) (generator "pcbnew")
+  (layer "F.Cu")
+  (pad "1" smd roundrect (at -2.7 -1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd roundrect (at -2.7 -0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "3" smd roundrect (at -2.7 0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "4" smd roundrect (at -2.7 1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "5" smd roundrect (at 2.7 1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "6" smd roundrect (at 2.7 0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "7" smd roundrect (at 2.7 -0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "8" smd roundrect (at 2.7 -1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+)`;
+
+function fakeToolchain(footprintDir) {
+  return {
+    root: "C:/fake/KiCad",
+    kicadCli: "C:/fake/KiCad/bin/kicad-cli.exe",
+    bun: "",
+    python: "",
+    footprintDir,
+    symbolDir: footprintDir,
+    model3dDir: footprintDir,
+    env: {},
+    notes: [],
+  };
+}
+
+test("器件导入：复制封装、按焊盘生符号、两张库表各一条（S173）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-part-"));
+  const libDir = join(dir, "kicad-libs", "footprints");
+  mkdirSync(join(libDir, "Package_SO.pretty"), { recursive: true });
+  writeFileSync(join(libDir, "Package_SO.pretty", "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"), SOIC8_MOD);
+  mkdirSync(join(dir, "project", "hardware", "kicad"), { recursive: true });
+
+  const toolchain = fakeToolchain(libDir);
+  const preview = await importPart(join(dir, "project"), toolchain, {
+    footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+  });
+  assert.equal(preview.ok, true);
+  assert.equal(preview.pads.length, 8);
+  assert.deepEqual(preview.written, []);
+  assert.ok(preview.footprint !== null && preview.footprint.file.includes("libs"));
+
+  const written = await importPart(join(dir, "project"), toolchain, {
+    footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    code: "C1234",
+    write: true,
+    fetchImpl: async () => new Response("<html>no pdf here</html>"),
+  });
+  assert.equal(written.ok, true);
+  assert.equal(written.written.length, 4);
+  const mod = readFileSync(written.footprint.file, "utf8");
+  assert.ok(mod.includes('(property "LCSC" "C1234"'));
+  assert.ok(mod.includes("(pad \"8\""));
+  assert.ok(readFileSync(written.symbol.file, "utf8").includes('(symbol "SOIC-8_3.9x4.9mm_P1.27mm"'));
+  const fpTable = readFileSync(join(dir, "project", "hardware", "kicad", "fp-lib-table"), "utf8");
+  assert.equal((fpTable.match(/\(fp_lib_table/gu) ?? []).length, 1);
+  assert.ok(fpTable.includes('(lib (name "Package_SO")'));
+  assert.ok(fpTable.includes("libs/footprints/Package_SO.pretty"));
+
+  const again = await importPart(join(dir, "project"), toolchain, {
+    footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    write: true,
+    fetchImpl: async () => new Response("<html></html>"),
+  });
+  assert.equal(again.ok, true);
+  const table2 = readFileSync(join(dir, "project", "hardware", "kicad", "fp-lib-table"), "utf8");
+  assert.equal((table2.match(/\(fp_lib_table/gu) ?? []).length, 1);
+  assert.equal((table2.match(/\(lib \(name "Package_SO"\)/gu) ?? []).length, 1);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("器件导入：库里没有就报缺哪个封装，立创编号格式不对直接拒（S173）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-part-"));
+  const libDir = join(dir, "kicad-libs");
+  mkdirSync(libDir, { recursive: true });
+  const toolchain = fakeToolchain(libDir);
+  const missing = await importPart(dir, toolchain, { footprint: "Package_SO:NOPE-8" });
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /库里没有这个封装/u);
+  mkdirSync(join(dir, "hardware", "kicad"), { recursive: true });
+  mkdirSync(join(libDir, "Local.pretty"), { recursive: true });
+  writeFileSync(join(libDir, "Local.pretty", "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"), SOIC8_MOD);
+  const badCode = await importPart(dir, toolchain, { footprint: "SOIC-8_3.9x4.9mm_P1.27mm", code: "1234" });
+  assert.equal(badCode.ok, false);
+  assert.match(badCode.error, /立创编号格式不对/u);
+  rmSync(dir, { recursive: true, force: true });
 });

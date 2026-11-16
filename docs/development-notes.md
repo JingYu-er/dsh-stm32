@@ -5903,7 +5903,23 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S172）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S173）
+
+### 一百八十一、器件导入：封装从库里来，来源写进属性（S173）
+
+立创的检索能给出编号、型号、库存与阶梯价，但**不给封装与符号**（`encapStandard` 常年为 null）。把编号变成能在 KiCad 里放下的东西，只有两条路：自己按型号猜封装（必错），或者从库里取现成封装再补一层来源信息。这一节做后者，并把"来源"当成第一等数据。
+
+**导入做三件事，顺序不能换。**
+
+1. **封装从 KiCad 官方库复制**。`footprint` 参数写 `Lib:Name`（如 `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm`），工具在 `toolchain.footprintDir` 下找 `<Lib>.pretty/<Name>.kicad_mod`，复制到工程的 `libs/footprints/<Lib>.pretty/`。找不到就直说"KiCad 库里没有这个封装"，不退回生成——生成器只懂 QFP/SOIC/两脚三类，拿它猜 0402 的焊盘尺寸是假的。
+2. **符号按焊盘号生成**。`buildSymbol` 只吃"引脚编号"，正好与封装的焊盘号一一对应，`(pad "1")` 就是 `(pin "1")`。这样网表对得上，但**引脚名等于编号**，功能名（VDD/PA0）要人后续在符号编辑器里改。生成失败就报错，不落一个半成品符号。
+3. **来源写进封装属性**。给了 `code` 就把 `(property "LCSC" "C14663")`、`MPN`、`Brand`、`Datasheet` 四条塞进 `.kicad_mod`，插在最后一个 `)` 之前。这样 BOM、价格、手册三件事以后都能从板子反查，不用再依赖 `circuit.json`。
+
+**库表只登记一次。** `fp-lib-table` 与 `sym-lib-table` 用 S155 的 `upsertLibEntries` 写：只抽 `(lib …)` 块重建，第二次导入同一个库还是一行。uri 用 `${KIPRJMOD}/../../libs/footprints/<Lib>.pretty`，与 normalize 的写法一致。
+
+**实测。** `Resistor_SMD:R_0603_1608Metric` + `C14663`：preview 焊盘 2、型号 `CC0603KRX7R9BB104`、未写盘；`write:true` 出 4 个文件（封装、符号、两张库表），封装里四条属性齐全。KiCad 接受：`pcbnew.FootprintLoad(lib, "R_0603_1608Metric")` 取回 2 个焊盘（`pad 1` 在 −0.825 mm、`pad 2` 在 +0.825 mm），`kicad-cli sym export svg` 正常出图。表头计数用 `(lib (name "X")` 数，别数裸的库名——uri 里也有一次。
+
+**教训：导入器的价值不在"能生成"，在"不乱造"。** 封装来自库、符号来自焊盘号、来源来自立创编号，三样都有出处；任何一样拿不到就停下来报错。猜出来的封装画在板子上，比没有封装更糟。
 
 ### 一百八十、吸收：tscircuit 仍是源，KiCad 里改的按网表差异写回（S172）
 
