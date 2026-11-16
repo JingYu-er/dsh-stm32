@@ -2747,6 +2747,13 @@ function EcadPanel(props) {
       const state = useEcad(projectDir, 20000);
       const [pcbShow, setPcbShow] = useState({ top: true, bottom: true, pads: true, vias: true, silk: true, edge: true, refs: false });
       const pcb = usePcbView(projectDir, pcbShow);
+      const [ipc, setIpc] = useState(null);
+      const checkIpc = () => {
+        setIpc({ ok: true, pending: true });
+        callApi("GET", "ecad/ipc")
+          .then((reply) => setIpc(reply !== null && reply !== undefined && reply.ipc !== undefined ? reply.ipc : { ok: false, error: "接口没回 ipc 字段" }))
+          .catch((error) => setIpc({ ok: false, error: String(error && error.message ? error.message : error) }));
+      };
       const [job, setJob] = useState({ name: "", running: false, result: null, error: "" });
       const [autoTried, setAutoTried] = useState(false);
       const [withPcb, setWithPcb] = useState(false);
@@ -2893,6 +2900,14 @@ function EcadPanel(props) {
             ),
           ),
           e("button", { key: "pcb-refresh", type: "button", onClick: () => pcb.reload(), style: Object.assign({}, debugStyles.button, { padding: "1px 8px", fontSize: "12px" }) }, "刷新"),
+          e("button", { key: "pcb-ipc", type: "button", onClick: checkIpc, style: Object.assign({}, debugStyles.button, { padding: "1px 8px", fontSize: "12px" }) }, "检查 KiCad"),
+          ipc === null
+            ? null
+            : ipc.pending === true
+              ? e("span", { key: "pcb-ipc-pending", style: { fontSize: "12px", opacity: 0.6 } }, "连接 KiCad…")
+              : ipc.ok
+                ? e("span", { key: "pcb-ipc-ok", style: { fontSize: "12px", opacity: 0.75 } }, "KiCad IPC 已连接 · " + String(ipc.boardName) + "（元件 " + String(ipc.footprints) + " · 走线 " + String(ipc.tracks) + "）")
+                : e("span", { key: "pcb-ipc-fail", style: { fontSize: "12px", color: "var(--dsw-alias-state-warn-primary)" } }, "KiCad IPC 未连上：" + String(ipc.error)),
           pcbView !== null && pcbView.ok
             ? e("span", { key: "pcb-size", style: { opacity: 0.7 } }, String(pcbView.widthMm) + " × " + String(pcbView.heightMm) + " mm · 焊盘 " + String(pcbView.pads) + " · 走线 " + String(pcbView.tracks) + (pcbView.innerTracks > 0 ? "（内层 " + String(pcbView.innerTracks) + " 条未画）" : "") + " · 过孔 " + String(pcbView.vias))
             : null,

@@ -226,9 +226,9 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十二条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 52);
-  assert.equal(new Set(WEB_API_PATHS).size, 52);
+test("WEB_API_PATHS：五十三条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 53);
+  assert.equal(new Set(WEB_API_PATHS).size, 53);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/action"), true);
@@ -245,6 +245,7 @@ test("WEB_API_PATHS：五十二条路由都在前缀下，且没有重复", () =
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/abort"), true, "在途调用中止必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/schematic"), true, "原理图页必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/pcb"), true, "板图必须有独立路由，否则 host 直接回 404");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/ipc"), true, "KiCad IPC 检查也要独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels"), true, "常驻通道状态必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/start"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/channels/stop"), true);
@@ -1459,7 +1460,7 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   };
   registerWebRoutes(ctx);
   assert.equal(registered.includes("/dsh-stm32/api/ecad/pcb"), true, "少了这条，浏览器只会看到 404");
-  assert.equal(registered.length, 52);
+  assert.equal(registered.length, 53);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1479,4 +1480,33 @@ test("GET /ecad：共享运行时与工程挂载分开报（S152）", async () =
   const second = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/ecad", query: { projectDir: project }, deps: { subprocess: null, env } });
   assert.equal(second.body.ecad.runtime.ready, true, "共享运行时存在即就绪，与工程是否挂载无关");
   assert.equal(second.body.ecad.runtime.linked, false, "工程没挂载要如实报 false");
+});
+
+test("GET /ecad/ipc：连不上 KiCad 时给人话，不抛（S153）", async () => {
+  // 这个用例只验证信封与降级：本机 KiCad 若开着，会拿到 ok:true；没开则必须是带 error 的 ok:false。
+  const out = await handleWebApi({ method: "GET", path: "/dsh-stm32/api/ecad/ipc", query: {}, deps: { subprocess: null, env: process.env } });
+  assert.equal(out.status === 200 || out.status === 400, true);
+  const ipc = out.body.ipc;
+  assert.equal(typeof ipc.ok, "boolean");
+  if (ipc.ok) {
+    assert.equal(typeof ipc.boardName, "string");
+    assert.equal(ipc.boardName.length > 0, true);
+  } else {
+    assert.equal(ipc.error.length > 0, true);
+    assert.equal(ipc.kind.length > 0, true);
+  }
+});
+
+test("IPC 输出解析：取最后一行 JSON，忽略 KiCad 的告警（S153）", async () => {
+  const { parseIpcOutput } = await import("../lib/engine/ecad/pcb/ipc.js");
+  const okly = parseIpcOutput('warning: something\n{"ok":true,"data":{"version":"10.0.7"}}\n');
+  assert.equal(okly.ok, true);
+  assert.equal(okly.data.version, "10.0.7");
+  const failed = parseIpcOutput('{"ok":false,"error":{"kind":"FAILED_PRECONDITION","message":"连不上"}}');
+  assert.equal(failed.ok, false);
+  assert.equal(failed.kind, "FAILED_PRECONDITION");
+  assert.equal(failed.error, "连不上");
+  const garbage = parseIpcOutput("no json here");
+  assert.equal(garbage.ok, false);
+  assert.equal(garbage.kind, "INTERNAL");
 });

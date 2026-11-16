@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：47 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：48 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -483,7 +483,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            47 个工具的注册与参数校验
+  tools/            48 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

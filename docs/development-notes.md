@@ -5903,7 +5903,26 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S152）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S153）
+
+### 一百六十一、接 KiCad 的官方 IPC：局部编辑交给编辑器（S153）
+
+P1 的目标不是再写一个布线器，而是**不再独占板子**：`stm32_pcb_autoroute` 走的是「自己算一遍、写回文件」，人改过的东西会被下一次重建覆盖；官方 IPC 接口则是让编辑器自己在内存里改，撤销栈、DRC 标记、铺铜刷新都是它的。
+
+实现分两层：`src/engine/ecad/pcb/ipc-script.ts` 是一支 Python 脚本（协议全在这边，用 KiCad 自带的 `kipy`），`ipc.ts` 只做「找 Python → 写 payload → 跑脚本 → 解析一行 JSON」。信封沿用 P0 调研时的写法：`{ok, data}` / `{ok:false, error:{kind,message}}`，`kind ∈ FAILED_PRECONDITION | NOT_FOUND | INVALID_ARGUMENT | INTERNAL`。
+
+工具 `stm32_pcb_ipc`（第 48 个）七个动作：`status` 看板况、`inspect` 看元件与网络、`move` 按位号移动、`route` 按折线布一段、`via` 加过孔、`refill` 重铺铜、`save` 保存。**默认 `apply:false` 只回计划**；要真改必须 `apply:true` 且带 `expectBoard`，脚本会先比对当前活动文档名，对不上就拒绝——「改错板子」的代价太高，宁可多一个必填。
+
+真机验证（本机 KiCad 10.0.7 开着用户的 `PCB1.kicad_pcb`）：`status` 回「10.0.7-16-g9394981f2e · 95 元件 / 630 走线 / 128 过孔 / 9 铺铜 / 102 网络」，耗时约 1 s；`expectBoard` 给错名字时被拦下（`INVALID_ARGUMENT`），`move` 的目标位号不存在时回 `NOT_FOUND`。
+
+两处 KiCad 10.0.7 的能力缺口，代码里都按「不因此让整次诊断失败」处理：
+
+1. `GetDocumentModifiedState` 没有 handler——`board.is_document_modified()` 必抛 `ApiError`，改成 `safe_bool()` 包一层，`modified` 恒为 false；
+2. `OpenDocument` 没有 handler——**没法从 IPC 切文档**，所以「改哪块板」只能由用户先在编辑器里切好；`expectBoard` 从「防误伤」升级成「唯一的板子选择机制」。
+
+面板上加了「检查 KiCad」按钮与 `/ecad/ipc`（路由 53）：只探一次连接、报当前打开的是哪块板，不在面板里做写操作。
+
+验证：全量 **88 套件 / 1242 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2151.3 KB / 352 文件 / 解包 16422.9 KB；新增用例「IPC 输出解析：取最后一行 JSON，忽略 KiCad 的告警」（脚本 stdout 混进告警时仍能取到结果）与「GET /ecad/ipc：连不上 KiCad 时给人话，不抛」。
 
 ### 一百五十九、板图预览：自研 SVG 而不是 42 MB 渲染器（S151）
 

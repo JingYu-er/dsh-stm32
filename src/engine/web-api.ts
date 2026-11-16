@@ -67,6 +67,7 @@ import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { readPcbScene } from "./ecad/pcb/scene.js";
+import { runPcbIpc } from "./ecad/pcb/ipc.js";
 import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
 import { runEcadDesign } from "./ecad/design.js";
 import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
@@ -555,6 +556,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad",
   // 板图要单独登记：host 只给 WEB_API_PATHS 里的路径注册 handler，没登记就是 404。
   WEB_API_PREFIX + "/ecad/pcb",
+  WEB_API_PREFIX + "/ecad/ipc",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
 ];
@@ -811,6 +813,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/schematic" &&
     path !== WEB_API_PREFIX + "/ecad" &&
     path !== WEB_API_PREFIX + "/ecad/pcb" &&
+    path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
   if (path === WEB_API_PREFIX + "/watch") {
@@ -1190,6 +1193,31 @@ export async function handleWebApi(input: {
         layout: { projectDir: layout.projectDir, firmwareDir: layout.firmwareDir, hardwareDir: layout.hardwareDir, notes: layout.notes },
       },
     });
+  }
+  if (path === WEB_API_PREFIX + "/ecad/ipc") {
+    // 面板上的「检查 KiCad」：只报能不能连上编辑器里的板子。真改板子走工具，面板不替用户动手。
+    const located = locateEcadToolchain();
+    if (located.toolchain === null) {
+      return ok({ ipc: { ok: false, kind: "FAILED_PRECONDITION", error: located.error, version: "", boardName: "", footprints: 0, tracks: 0, vias: 0, zones: 0, nets: 0 } });
+    }
+    const result = await runPcbIpc({ subprocess: input.deps.subprocess, python: located.toolchain.python }, { action: "status", timeoutMs: 20000 });
+    if (!result.ok) {
+      return ok({ ipc: { ok: false, kind: result.kind, error: result.error, version: "", boardName: "", footprints: 0, tracks: 0, vias: 0, zones: 0, nets: 0 } });
+    }
+    const data = result.data as { version?: string; board?: { name?: string; counts?: Record<string, number> } };
+    const counts = data.board?.counts ?? {};
+    return ok({ ipc: {
+      ok: true,
+      kind: "",
+      error: "",
+      version: data.version ?? "",
+      boardName: data.board?.name ?? "",
+      footprints: counts["footprints"] ?? 0,
+      tracks: counts["tracks"] ?? 0,
+      vias: counts["vias"] ?? 0,
+      zones: counts["zones"] ?? 0,
+      nets: counts["nets"] ?? 0,
+    } });
   }
   if (path === WEB_API_PREFIX + "/ecad/pcb") {
     // 板图预览（S151）：只读 .kicad_pcb 出 SVG。不改板、不跑子进程，板子打不开时回可读错误。
