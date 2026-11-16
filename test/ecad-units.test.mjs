@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { buildFootprint } from "../lib/engine/ecad/gen/footprint.js";
 import { buildSymbol } from "../lib/engine/ecad/gen/symbol.js";
 import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
+import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -1630,4 +1631,64 @@ test("布线体检：差分对长度差、平面层上的信号、去耦电容�
   const broken = analyzeLinks("(kicad_pcb", "broken.kicad_pcb");
   assert.equal(broken.ok, false);
   assert.match(broken.error, /读不懂|括号/u);
+});
+
+test("制造文件回看：Gerber 的线/焊盘/区域与 Excellon 的孔都对得上，选层不影响钻孔（S166）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-gerber-"));
+  try {
+    // 一个最小可用的两层板：板框、一顶层走线 + 一个焊盘 + 一块 G36 区域、一个钻孔。
+    const lay = (name, body) => {
+      writeFileSync(join(dir, name), [
+        "%TF.GenerationSoftware,KiCad,Pcbnew,10.0.7*%",
+        "%FSLAX46Y46*%",
+        "%MOMM*%",
+        "%LPD*%",
+        "G01*",
+        "%ADD10C,0.500000*%",
+        "%ADD11R,1.000000X0.600000*%",
+        "D10*",
+        body,
+        "M02*",
+      ].join("\n"));
+    };
+    lay("board-F_Cu.gtl", [
+      "X10000000Y20000000D02*",
+      "X20000000Y20000000D01*",
+      "D11*",
+      "X30000000Y30000000D03*",
+      "G36*",
+      "X0Y0D02*",
+      "X5000000Y0D01*",
+      "X5000000Y5000000D01*",
+      "G37*",
+    ].join("\n"));
+    lay("board-Edge_Cuts.gm1", "X0Y0D02*\nX60000000Y0D01*\nX60000000Y100000000D01*\nX0Y100000000D01*\nX0Y0D01*");
+    writeFileSync(join(dir, "board.drl"), ["M48", "; FORMAT={-:-/ absolute / metric / decimal}", "FMAT,2", "METRIC", "T1C0.400", "%", "G90", "G05", "T1", "X10.0Y-20.0", "X30.0Y-30.0", "M30"].join("\n"));
+    const view = readGerberSet(dir);
+    assert.equal(view.ok, true, view.error);
+    assert.equal(view.drillHoles, 2);
+    assert.equal(view.widthMm > 60, true);
+    const cu = view.layers.find((layer) => layer.name === "F_Cu");
+    assert.equal(cu.kind, "copper");
+    assert.equal(cu.segments, 1);
+    assert.equal(cu.flashes, 1);
+    assert.equal(cu.regions, 1);
+    const edge = view.layers.find((layer) => layer.name === "Edge_Cuts");
+    assert.equal(edge.kind, "edge");
+    assert.equal(edge.segments, 4);
+    assert.match(view.svg, /<svg/u);
+    assert.match(view.svg, /data-layer="F_Cu"/u);
+    assert.match(view.svg, /data-layer="DRILL"/u);
+    // 只选铜层时，钻孔仍要画（它不属于任何一层）。
+    const onlyCu = readGerberSet(dir, { layers: ["F_Cu"] });
+    assert.equal(onlyCu.ok, true, onlyCu.error);
+    assert.equal(onlyCu.layers.length, 1);
+    assert.equal(onlyCu.drillHoles, 2);
+    // 空目录给人话。
+    const empty = readGerberSet(join(dir, "nope"));
+    assert.equal(empty.ok, false);
+    assert.match(empty.error, /读不到|没有/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

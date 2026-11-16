@@ -389,3 +389,12 @@ test("电路设计页能看布线体检：差分对、平面层与去耦距离�
   assert.ok(clientSource.includes('"布线体检"'), "要有布线体检区块");
   assert.ok(clientSource.indexOf("function useLinks(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
 });
+
+test("电路设计页能看制造文件：Gerber 与钻孔画成一张图（S166）", () => {
+  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(clientSource.includes("function useGerber("), "要有 useGerber");
+  assert.ok(clientSource.includes("ecad/gerber?"), "请求要走 ecad/gerber");
+  assert.ok(clientSource.includes('"制造文件"'), "要有制造文件区块");
+  assert.ok(clientSource.includes('"F_Cu,Edge_Cuts"'), "默认只看顶层与板框");
+  assert.ok(clientSource.indexOf("function useGerber(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
+});

@@ -32,6 +32,7 @@ import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datashee
 import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../engine/ecad/pcb/emc.js";
 import { readLinks } from "../engine/ecad/pcb/links.js";
+import { readGerberSet } from "../engine/ecad/pcb/gerber.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
 import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
 
@@ -47,6 +48,7 @@ export const PCB_POWER_TOOL = "stm32_power";
 export const PCB_EMC_TOOL = "stm32_emc";
 export const PCB_MECH_TOOL = "stm32_mech";
 export const PCB_LINKS_TOOL = "stm32_pcb_links";
+export const PCB_GERBER_TOOL = "stm32_pcb_gerber";
 
 const output: JsonSchema = {
   type: "object",
@@ -1527,6 +1529,128 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+  const gerberOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      dir: { type: "string" },
+      savedTo: { type: "string" },
+      bytes: { type: "number" },
+      widthMm: { type: "number" },
+      heightMm: { type: "number" },
+      drillHoles: { type: "number" },
+      layers: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            file: { type: "string" },
+            kind: { type: "string", enum: ["copper", "silk", "mask", "paste", "edge", "other"] },
+            segments: { type: "number" },
+            flashes: { type: "number" },
+            regions: { type: "number" },
+            skipped: { type: "number" },
+          },
+          required: ["name", "file", "kind", "segments", "flashes", "regions", "skipped"],
+        },
+      },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "dir", "savedTo", "bytes", "widthMm", "heightMm", "drillHoles", "layers", "notes"],
+  };
+
+  const gerberTool: ToolDefinition = {
+    name: PCB_GERBER_TOOL,
+    description:
+      "制造文件回看：把 stm32_ecad_export 导出的 Gerber 与钻孔读回来画成一张 SVG，交付前核对板框、铜、丝印与孔位。只读 RS-274X 的 D01/D02/D03、圆/矩形光标、G36 区域与 Excellon 孔位，读不懂的构造计入 notes。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        dir: { type: "string", description: "Gerber 目录；缺省 <工程>/hardware/out/gerbers。" },
+        layers: { type: "array", items: { type: "string" }, description: "只画名字里含这些后缀的层，例如 F_Cu、Edge_Cuts；不传给全部。" },
+        saveAs: { type: "string", description: "写成这个路径（相对工程根）；缺省 <工程>/hardware/out/gerber-preview.svg。" },
+        maxPx: { type: "number", description: "SVG 最长边像素，默认 760。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: gerberOutput,
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          dir: string;
+          savedTo: string;
+          bytes: number;
+          widthMm: number;
+          heightMm: number;
+          drillHoles: number;
+          layers: { name: string; kind: string; segments: number; flashes: number; regions: number; skipped: number }[];
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "制造文件回看失败：" + result.error }];
+        const lines: string[] = [
+          "制造文件：" + String(result.widthMm) + " × " + String(result.heightMm) + " mm，钻孔 " + String(result.drillHoles) + " 个",
+          "SVG：" + result.savedTo + "（" + String(Math.round(result.bytes / 1024)) + " KB）",
+        ];
+        for (const layer of result.layers) {
+          if (layer.segments === 0 && layer.flashes === 0 && layer.regions === 0 && layer.skipped === 0) continue;
+          lines.push(
+            "层 " + layer.name + "（" + layer.kind + "）：线 " + String(layer.segments) + " · 焊盘 " + String(layer.flashes) + " · 区域 " + String(layer.regions) +
+              (layer.skipped > 0 ? " · 跳过 " + String(layer.skipped) : ""),
+          );
+        }
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; dir?: string; layers?: string[]; saveAs?: string; maxPx?: number }, exec: ToolExec) => {
+      const empty = {
+        ok: false,
+        error: "",
+        dir: "",
+        savedTo: "",
+        bytes: 0,
+        widthMm: 0,
+        heightMm: 0,
+        drillHoles: 0,
+        layers: [] as Array<Record<string, unknown>>,
+        notes: [] as string[],
+      };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const dir = typeof args.dir === "string" && args.dir !== "" ? resolve(resolved.projectDir, args.dir) : join(resolved.projectDir, "hardware", "out", "gerbers");
+      const view = readGerberSet(dir, {
+        ...(Array.isArray(args.layers) && args.layers.length > 0 ? { layers: args.layers } : {}),
+        ...(typeof args.maxPx === "number" ? { maxPx: args.maxPx } : {}),
+      });
+      if (!view.ok) return { ...empty, dir, error: view.error };
+      const savedTo = typeof args.saveAs === "string" && args.saveAs !== "" ? resolve(resolved.projectDir, args.saveAs) : join(resolved.projectDir, "hardware", "out", "gerber-preview.svg");
+      mkdirSync(dirname(savedTo), { recursive: true });
+      writeFileSync(savedTo, view.svg);
+      return {
+        ok: true,
+        error: "",
+        dir: view.dir,
+        savedTo,
+        bytes: Buffer.byteLength(view.svg, "utf8"),
+        widthMm: view.widthMm,
+        heightMm: view.heightMm,
+        drillHoles: view.drillHoles,
+        layers: view.layers.map((item) => ({ ...item })),
+        notes: [...view.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
@@ -1537,4 +1661,5 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(powerTool);
   ctx.tools.register(mechTool);
   ctx.tools.register(linksTool);
+  ctx.tools.register(gerberTool);
 }

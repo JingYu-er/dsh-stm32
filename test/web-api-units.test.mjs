@@ -227,8 +227,8 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
 });
 
 test("WEB_API_PATHS：六十条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 61);
-  assert.equal(new Set(WEB_API_PATHS).size, 61);
+  assert.equal(WEB_API_PATHS.length, 62);
+  assert.equal(new Set(WEB_API_PATHS).size, 62);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
@@ -236,6 +236,7 @@ test("WEB_API_PATHS：六十条路由都在前缀下，且没有重复", () => {
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/links"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/gerber"), true, "制造文件回看必须有独立路由");
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
@@ -1579,7 +1580,7 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/parts"), true, "少了这条，器件搜索只会看到 404");
-  assert.equal(registered.length, 61);
+  assert.equal(registered.length, 62);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1898,4 +1899,29 @@ test("GET /ecad/links：差分对、平面层与去耦距离都在报告里，�
   assert.equal(view.decaps[0].ref, "C1");
   const bad = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/links", query: {}, deps });
   assert.equal(bad.status, 400);
+});
+
+test("GET /ecad/gerber：读导出的 Gerber 与钻孔，没导出时给人话（S166）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-gerber-api-"));
+  const deps = { subprocess: fakeSubprocess, env: process.env };
+  try {
+    const first = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/gerber", query: { projectDir: root }, deps });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.gerber.ok, false);
+    assert.match(String(first.body.gerber.error), /读不到 Gerber|没有 Gerber|ecad_export/u);
+    const dir = path.join(root, "hardware", "out", "gerbers");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "b-F_Cu.gtl"), ["%FSLAX46Y46*%", "%MOMM*%", "G01*", "%ADD10C,0.4*%", "D10*", "X0Y0D02*", "X10000000Y0D01*", "M02*"].join("\n"));
+    fs.writeFileSync(path.join(dir, "b.drl"), ["M48", "METRIC", "T1C0.400", "%", "G90", "G05", "T1", "X1.0Y-1.0", "M30"].join("\n"));
+    const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/gerber", query: { projectDir: root, layers: "F_Cu" }, deps });
+    assert.equal(got.status, 200);
+    const view = got.body.gerber;
+    assert.equal(view.ok, true, view.error);
+    assert.equal(view.drillHoles, 1);
+    assert.match(view.svg, /<svg/u);
+    const bad = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/gerber", query: {}, deps });
+    assert.equal(bad.status, 400);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
