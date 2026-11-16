@@ -226,13 +226,14 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：六十条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 62);
-  assert.equal(new Set(WEB_API_PATHS).size, 62);
+test("WEB_API_PATHS：六十三条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 63);
+  assert.equal(new Set(WEB_API_PATHS).size, 63);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/parts"), true, "器件搜索必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/impedance"), true, "阻抗规则必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/links"), true);
@@ -1617,7 +1618,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/parts"), true, "少了这条，器件搜索只会看到 404");
-  assert.equal(registered.length, 62);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/impedance"), true, "少了这条，阻抗规则只会看到 404");
+  assert.equal(registered.length, 63);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1960,5 +1962,61 @@ test("GET /ecad/gerber：读导出的 Gerber 与钻孔，没导出时给人话�
     assert.equal(bad.status, 400);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GET/POST /ecad/impedance：GET 只出规则文本，POST 才写进 .kicad_dru（S168）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-imp-route-"));
+  try {
+    const kicad = path.join(dir, "hardware", "kicad");
+    fs.mkdirSync(kicad, { recursive: true });
+    fs.writeFileSync(path.join(kicad, "board.kicad_pro"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(kicad, "board.kicad_pcb"), [
+      "(kicad_pcb (version 20241229)",
+      '  (layers "F.Cu" "B.Cu")',
+      '  (net 1 "VBUS") (net 2 "GND")',
+      '  (segment (start 0 0) (end 5 0) (width 0.25) (layer "F.Cu") (net 1))',
+      ")",
+      "",
+    ].join("\n"), "utf8");
+
+    const dry = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/impedance",
+      query: { projectDir: dir, nets: "VBUS" },
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(dry.status, 200);
+    const before = dry.body.impedance;
+    assert.equal(before.ok, true, before.error);
+    assert.equal(before.written, false);
+    assert.equal(before.rules.length, 1);
+    assert.ok(before.rules[0].includes("阻抗 50Ω 单端 VBUS"));
+    assert.equal(fs.existsSync(path.join(kicad, "board.kicad_dru")), false, "GET 不该写盘");
+
+    const written = await handleWebApi({
+      method: "POST",
+      path: "/dsh-stm32/api/ecad/impedance",
+      query: { projectDir: dir, nets: "VBUS" },
+      body: JSON.stringify({ write: true }),
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(written.status, 200);
+    const after = written.body.impedance;
+    assert.equal(after.ok, true, after.error);
+    assert.equal(after.written, true);
+    const dru = fs.readFileSync(path.join(kicad, "board.kicad_dru"), "utf8");
+    assert.ok(dru.includes("阻抗 50Ω 单端 VBUS"));
+    assert.equal((dru.match(/\(version 1\)/gu) || []).length, 1);
+
+    const missing = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/impedance",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(missing.status, 400);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

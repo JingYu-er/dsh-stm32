@@ -5903,7 +5903,50 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S167）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S168）
+
+### 一百七十六、阻抗写回：DRC 里没有 impedance，能写的是线宽与间距（S168）
+
+P3 的最后一项：S157 算出了「50 Ω 该多宽」，但结果停在面板上；这一项把目标写进 KiCad 的设计规则，让编辑器和 DRC 拿着同一套数。
+
+**取证：KiCad 10 认什么、不认什么**
+
+- 自定义规则文件「<工程>.kicad_dru」的语法是 `(version 1)` + 若干 `(rule 名字 (condition …) (constraint …))`，condition 里可以用 `A.NetName == 'USB_DP'`，多个用 `||` 串。
+- 实测能被 `kicad-cli pcb drc` 解析的两条：
+
+```
+(version 1)
+(rule 阻抗 50Ω 单端 (condition A.NetName == 'USB_DP') (constraint track_width (opt 0.359mm)))
+(rule 阻抗 90Ω 差分间距 (condition A.NetName == 'USB_DP' || A.NetName == 'USB_DN') (constraint diff_pair_gap (opt 0.200mm)))
+```
+
+  跑 DRC：138 条违规、**0 条 track_width**——opt 是「目标值」，不达标不报错；只有 min / max 才拦。
+- 在 pcbnew.exe 里 grep impedance 无输出，_pcbnew.pyd 里也计数 0：**KiCad 10 的 DRC 约束词汇里没有 impedance**。所以这里能写的是「为达到目标阻抗该用的几何量」，阻抗本身要板厂按叠层打样验证；这句话直接写进工具的 notes，不假装 DRC 能验阻抗。
+
+**实现**
+
+- src/engine/ecad/pcb/impedance.ts：detectDiffNets(pcbText, boardFile) 复用 S167 的差分对识别；planImpedance(kicadDir, boardText, boardFile, options) 产出 rules（规则文本数组）与 suggestions（目标阻抗 → 线宽、间距 → 网络）；readImpedancePlan 供工具与路由共用；write: true 时重写 `<stem>.kicad_dru`。
+- 三条口径：
+  1. **单端 50 Ω 必须点名**（nets）。不点名就一条都不写——整板统一线宽不是「阻抗」，是偷懒。
+  2. **差分对从板子里认**，最多 12 对；认出来就同时写 track_width 与 diff_pair_gap 两条规则（间距是差分阻抗的主要旋钮）。
+  3. 写盘时**基础四条 + 阻抗规则一起写**：嘉立创 最小线宽/最小间距/最小孔径/最小环宽（取 fabFloorForLayers(copperLayers)，与 S149 同源），所以写多少次都是同一份完整文件，不会只剩阻抗规则。
+- 工具 stm32_impedance（第 59 个，参数 projectDir/boardFile/nets/spacingMm/write）、路由 /ecad/impedance（第 63 条，GET 出规则文本、POST {write:true} 才写盘，与 /ecad/brief、/ecad/mech 同一套两动词登记）、面板「叠层」块里的「写入阻抗规则」按钮。
+
+**真机**
+
+tetris-handheld（4 层），nets 给 VBUS 与 SIG_A：叠层取「嘉立创 4 层 1.6 mm（JLC04161H-3313 同档）」，两条规则都是 opt 0.359mm；写到临时目录后 kicad-cli pcb drc 正常解析（138 条违规、track_width 0 条）。notes 三条：单端没点名的说明（这次点了，不出现）、没有差分对、无 impedance 约束 + 规则只作用于点名网络。
+
+**验证**
+
+- npm run build、npx tsc --noEmit 通过；client/client.js 6806 行。
+- 全量 node test/run-units.mjs：**1277 pass / 0 fail**（88 套件）。
+- node .dsh-stm32/acceptance.mjs ACCEPTANCE OK；npm run test:pack 通过；npm run test:size 包体 **2235.1 KB / 368 文件 / 解包 16770.4 KB**（上限 3906.3 KB）。
+- 新增用例：test/ecad-units.test.mjs 的「阻抗规则：单端要点名，差分对从板子里认，写盘两次不叠版本行（S168）」（干跑不写盘、写盘后 version 行只有一行、同输入写两次字节相同、不点名单端时给说明）；test/web-api-units.test.mjs 的「GET/POST /ecad/impedance：GET 只出规则文本，POST 才写进 .kicad_dru（S168）」（GET 后文件不存在、POST 后存在、缺 projectDir 400）；test/client-debug-units.test.mjs 的钩子与按钮断言。路由计数 62→63。
+
+**教训**
+
+- **规则文件里能写的只有几何量**：阻抗是结果，不是约束；把「该多宽」写进去，比写一句「50 Ω」有用。
+- **一次写全，别做增量**：基础四条 + 阻抗规则整份重写，才不会有「第二次写只剩阻抗规则」的空档。
 
 ### 一百七十五、EMC 进阶：把「间距、回流、串扰」变成三个数得出来的量（S167）
 

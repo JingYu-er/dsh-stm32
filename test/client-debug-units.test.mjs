@@ -319,6 +319,10 @@ test("电路设计页能看 EMC 体检：铺铜与电源线宽写在面板上（
   assert.ok(source.includes("\"ecad/emc?projectDir=\""));
   assert.ok(source.includes("\"EMC\""));
   assert.ok(source.includes("emc-deep"), "EMC 块要显示深度体检那一行（S167）");
+  assert.equal(source.includes("function useImpedance("), true, "叠层块要有阻抗规则按钮的钩子");
+  assert.equal(source.includes("ecad/impedance?projectDir="), true, "阻抗规则走独立接口");
+  assert.equal(source.includes("写入阻抗规则"), true, "按钮文案要能搜到");
+  assert.ok(source.indexOf("function useImpedance(") < source.indexOf("function EcadPanel("), "钩子要定义在面板之前");
   assert.ok(source.includes("回流 "));
   assert.ok(source.indexOf("function useEmc(") < source.indexOf("function EcadPanel("));
 });

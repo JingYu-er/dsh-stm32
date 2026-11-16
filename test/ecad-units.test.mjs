@@ -26,6 +26,7 @@ import { parseMech, renderMechDxf, writeMechDxf } from "../lib/engine/ecad/pcb/m
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
 import { analyzeEmcDeep } from "../lib/engine/ecad/pcb/emc-deep.js";
+import { planImpedance } from "../lib/engine/ecad/pcb/impedance.js";
 import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
 import { analyzePowerBudget } from "../lib/engine/ecad/pcb/power.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
@@ -1732,4 +1733,49 @@ test("EMC 深度体检：差分对间距、回流覆盖、串扰都不算差分�
   assert.equal(report.findings.some((item) => item.id === "emc.pair-spacing"), false);
   // 只有轮廓、没有填充的铺铜要明说按未铺铜处理。
   assert.match(report.notes.join("\n"), /只有轮廓/u);
+});
+
+test("阻抗规则：单端要点名，差分对从板子里认，写盘两次不叠版本行（S168）", () => {
+  const work = mkdtempSync(join(tmpdir(), "dsh-imp-"));
+  const kicadDir = join(work, "kicad");
+  mkdirSync(kicadDir, { recursive: true });
+  writeFileSync(join(kicadDir, "board.kicad_pro"), "{}\n", "utf8");
+  const pcb = [
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "B.Cu" "In1.Cu" "In2.Cu")',
+    '  (net 1 "VBUS") (net 2 "GND") (net 3 "USB_DP") (net 4 "USB_DN")',
+    '  (segment (start 0 0) (end 5 0) (width 0.25) (layer "F.Cu") (net 1))',
+    '  (segment (start 0 2) (end 5 2) (width 0.2) (layer "F.Cu") (net 3))',
+    '  (segment (start 0 2.2) (end 5 2.2) (width 0.2) (layer "F.Cu") (net 4))',
+    ")",
+    "",
+  ].join("\n");
+  const boardFile = join(kicadDir, "board.kicad_pcb");
+  writeFileSync(boardFile, pcb, "utf8");
+
+  const dry = planImpedance(kicadDir, pcb, boardFile, { singles: ["VBUS"] });
+  assert.equal(dry.ok, true);
+  assert.equal(dry.written, false);
+  assert.ok(dry.rules.some((rule) => rule.includes("阻抗 50Ω 单端 VBUS") && rule.includes("track_width (opt")));
+  assert.ok(dry.rules.some((rule) => rule.includes("diff_pair_gap")), "差分对要写间距规则");
+  assert.ok(dry.rules.some((rule) => rule.includes("USB_DP") && rule.includes("USB_DN")));
+  assert.ok(dry.notes.some((note) => note.includes("没有 impedance 约束")));
+
+  const wrote = planImpedance(kicadDir, pcb, boardFile, { singles: ["VBUS"], write: true });
+  assert.equal(wrote.ok, true);
+  assert.equal(wrote.written, true);
+  const first = readFileSync(wrote.rulesFile, "utf8");
+  assert.ok(first.startsWith("(version 1)"));
+  assert.equal((first.match(/\(version 1\)/gu) || []).length, 1);
+  assert.ok(first.includes("嘉立创 最小线宽"));
+  assert.ok(first.includes("阻抗 50Ω 单端 VBUS"));
+
+  const again = planImpedance(kicadDir, pcb, boardFile, { singles: ["VBUS"], write: true });
+  const second = readFileSync(again.rulesFile, "utf8");
+  assert.equal(second, first, "同样的输入写两次结果要一样");
+
+  const noSingles = planImpedance(kicadDir, pcb, boardFile, {});
+  assert.ok(noSingles.notes.some((note) => note.includes("没有点名单端网络")));
+
+  rmSync(work, { recursive: true, force: true });
 });
