@@ -2738,6 +2738,37 @@ function useBom(projectDir, prices) {
   return { bom: bom, error: error, reload: () => setTick((value) => value + 1) };
 }
 
+// 叠层与阻抗（S157）：板子里没有 stackup 段时按层数取嘉立创常规叠层，算 50/90/100 Ω 的线宽。
+function useStackup(projectDir) {
+  const [stackup, setStackup] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let closed = false;
+    if (typeof projectDir !== "string" || projectDir === "") {
+      setStackup(null);
+      setError("");
+      return () => {
+        closed = true;
+      };
+    }
+    const load = async () => {
+      const result = await callApi("GET", "ecad/stackup?projectDir=" + encodeURIComponent(projectDir));
+      if (closed) return;
+      if (result.ok) {
+        setStackup(result.value.stackup);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+    };
+    load();
+    return () => {
+      closed = true;
+    };
+  }, [projectDir]);
+  return { stackup: stackup, error: error };
+}
+
 // 板图（S151）：只读 .kicad_pcb 出 SVG，按层取图；切换层或点刷新才重新请求。
 function usePcbView(projectDir, show) {
   const [view, setView] = useState(null);
@@ -2783,6 +2814,7 @@ function EcadPanel(props) {
       const pcb = usePcbView(projectDir, pcbShow);
       const [bomPrices, setBomPrices] = useState(false);
       const bom = useBom(projectDir, bomPrices);
+      const stackup = useStackup(projectDir);
       const [ipc, setIpc] = useState(null);
       const checkIpc = () => {
         setIpc({ ok: true, pending: true });
@@ -3035,6 +3067,37 @@ function EcadPanel(props) {
         );
       } else if (bom.error !== "") {
         rows.push(e("div", { key: "bom-error", style: { padding: "0 0 8px", fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, "BOM 读取失败：" + bom.error));
+      }
+      // 叠层与阻抗（S157）：给出常用目标的线宽，和板上已有线宽对着看。
+      const stackupView = stackup.stackup;
+      if (stackupView !== null && stackupView !== undefined && stackupView.ok) {
+        const kindNames = { microstrip: "微带 50 Ω", stripline: "带状线 50 Ω", "differential-microstrip": "差分微带", "differential-stripline": "差分带状线" };
+        const items = Array.isArray(stackupView.suggestions) ? stackupView.suggestions : [];
+        rows.push(
+          e(
+            "div",
+            { key: "stackup-view", style: { padding: "0 0 10px" } },
+            e(
+              "div",
+              { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", padding: "4px 0 6px" } },
+              e("span", { style: Object.assign({}, D32_LABEL_MONO, { letterSpacing: "0.12em" }) }, "叠层"),
+              e("span", { style: { fontSize: "12px", opacity: 0.85 } }, String(stackupView.preset) + " · " + String(stackupView.copperLayers) + " 层铜"),
+              stackupView.traceWidths.length > 0
+                ? e("span", { style: { fontSize: "12px", opacity: 0.6 } }, "现有线宽 " + stackupView.traceWidths.map((value) => String(value) + " mm").join("、"))
+                : null,
+            ),
+            e("div", { style: { display: "flex", flexWrap: "wrap", gap: "12px", fontSize: "12px", fontFamily: D32_FONT_CODE } },
+              ...items.map((item) =>
+                e("span", { key: "su-" + String(item.kind) + "-" + String(item.targetOhm), style: { opacity: 0.9 } },
+                  (kindNames[item.kind] || item.kind) + " " + String(item.targetOhm) + " Ω → " + String(item.widthMm) + " mm" +
+                  (String(item.kind).indexOf("differential") === 0 ? "（间距 " + String(item.spacingMm) + " mm）" : "")),
+              ),
+            ),
+            stackupView.notes.length > 0
+              ? e("div", { key: "su-notes", style: { fontSize: "11px", opacity: 0.6, padding: "4px 0 0" } }, stackupView.notes.join("；"))
+              : null,
+          ),
+        );
       }
       if (actionRow !== null) rows.push(actionRow);
       if (dsMissing.length > 0) {

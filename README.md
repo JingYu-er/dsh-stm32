@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：49 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：50 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -209,6 +209,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_pcb_place` | 按 circuit.json 的元件与网络计算落位，再改 `.kicad_pcb` 把元件搬到位（默认清掉旧走线，写盘前留 `.bak`）|
 | `stm32_pcb_autoroute` | 用 KiCadRoutingTools（Rust 网格布线器）铺平面、扇出并布线，回报未连接数；默认只出计划 |
 | `stm32_pcb_render` | 把 `.kicad_pcb` 画成 SVG 板图：板框、顶层与底层走线、焊盘、过孔、丝印；默认只回尺寸与计数，给 `saveAs` 才落盘 |
+| `stm32_stackup` | 算叠层与阻抗：板子没有叠层定义时按层数取嘉立创常规叠层，给 50 Ω 单端与 90/100 Ω 差分的线宽，并列出板上现有线宽 |
 | `stm32_bom` | 读 `circuit.json` 出 BOM：位号、数量、值、封装、立创编号与替代料；`prices` 为真才联网取价，`format=csv` 出嘉立创贴片列 |
 | `stm32_pcb_ipc` | 在**已打开的 KiCad PCB 编辑器**里做局部编辑：看板况、按位号移元件、布一段线、加过孔、重铺铜、保存；走 KiCad 官方 IPC，改动能被 Ctrl+Z 撤销。默认只回计划，`apply: true` + `expectBoard` 才动板子；连不上时自动用 pcbnew 打开本工程的板子并等就绪（`open: false` 可关） |
 | `stm32_pcb_route` | 网格 A* 布线（0.5 mm 栅格）：按网络逐张布、避开已有焊盘与走线；默认预览，`apply: true` 才写盘（写完必须跑 DRC） |
@@ -485,7 +486,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            49 个工具的注册与参数校验
+  tools/            50 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

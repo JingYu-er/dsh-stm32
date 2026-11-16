@@ -226,9 +226,10 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十四条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 54);
-  assert.equal(new Set(WEB_API_PATHS).size, 54);
+test("WEB_API_PATHS：五十五条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 55);
+  assert.equal(new Set(WEB_API_PATHS).size, 55);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
@@ -1402,6 +1403,37 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
   }
 });
 
+test("GET /ecad/stackup：按层数取叠层，没有板子时给人话（S157）", async () => {
+  assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s157-stackup-"));
+  const dist = path.join(root, "hardware", "circuit", "dist", "board");
+  fs.mkdirSync(path.join(dist, "kicad"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dist, "kicad", "board.kicad_pcb"),
+    ['(kicad_pcb (version 20241229)', '  (layers "F.Cu" "F.Mask"', '    "In1.Cu" "B.Cu")', '  (segment (start 0 0) (end 1 0) (width 0.25) (layer F.Cu) (net 1))', ")"].join("\n"),
+    "utf8",
+  );
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/stackup", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  const stackup = got.body.stackup;
+  assert.equal(stackup.ok, true, stackup.error);
+  assert.equal(stackup.copperLayers, 3);
+  assert.deepEqual(stackup.traceWidths, [0.25]);
+  const fifty = stackup.suggestions.find((item) => item.kind === "microstrip" && item.targetOhm === 50);
+  assert.ok(fifty !== undefined && fifty.widthMm > 0);
+  // 没有板子：回空报告与可读提示，不是 500。
+  fs.rmSync(path.join(dist, "kicad", "board.kicad_pcb"), { force: true });
+  const empty = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/stackup", query: { projectDir: root }, deps });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.body.stackup.ok, false);
+  assert.match(String(empty.body.stackup.error), /kicad_pcb|构建|KiCad 工程/u);
+  // 缺 projectDir：400。
+  const bad = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/stackup", query: {}, deps });
+  assert.equal(bad.status, 400);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("GET /ecad/bom：读 circuit.json 分组，没价也照样出行（S156）", async () => {
   assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/bom"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "s156-bom-"));
@@ -1500,7 +1532,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   registerWebRoutes(ctx);
   assert.equal(registered.includes("/dsh-stm32/api/ecad/pcb"), true, "少了这条，浏览器只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/bom"), true, "少了这条，BOM 只会看到 404");
-  assert.equal(registered.length, 54);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/stackup"), true, "少了这条，叠层只会看到 404");
+  assert.equal(registered.length, 55);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 

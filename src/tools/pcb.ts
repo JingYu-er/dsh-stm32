@@ -28,6 +28,7 @@ import { renderPcbSvg } from "../engine/ecad/pcb/pcb-svg.js";
 import { runPcbIpc } from "../engine/ecad/pcb/ipc.js";
 import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine/ecad/bom.js";
 import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datasheet/price.js";
+import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
@@ -35,6 +36,7 @@ export const PCB_AUTOROUTE_TOOL = "stm32_pcb_autoroute";
 export const PCB_IPC_TOOL = "stm32_pcb_ipc";
 export const PCB_RENDER_TOOL = "stm32_pcb_render";
 export const PCB_BOM_TOOL = "stm32_bom";
+export const PCB_STACKUP_TOOL = "stm32_stackup";
 
 const output: JsonSchema = {
   type: "object",
@@ -758,8 +760,101 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+  const stackupOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      boardFile: { type: "string" },
+      copperLayers: { type: "number" },
+      preset: { type: "string" },
+      traceWidths: { type: "array", items: { type: "number" } },
+      suggestions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            kind: { type: "string" },
+            targetOhm: { type: "number" },
+            widthMm: { type: "number" },
+            spacingMm: { type: "number" },
+            achievedOhm: { type: "number" },
+          },
+          required: ["kind", "targetOhm", "widthMm", "spacingMm", "achievedOhm"],
+        },
+      },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "boardFile", "copperLayers", "preset", "traceWidths", "suggestions", "notes"],
+  };
+
+  const stackupTool: ToolDefinition = {
+    name: PCB_STACKUP_TOOL,
+    description:
+      "算叠层与阻抗：板子没有叠层定义时按层数取嘉立创常规叠层（2 层 1.6 mm / 4 层 1.6 mm），给 50 Ω 单端、90/100 Ω 差分的线宽，并列出板上实际用到的线宽。工程估算（±10%），要卡准阻抗得让板厂做阻抗报告。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        spacingMm: { type: "number", description: "差分对的间距（mm），默认 0.2。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: stackupOutput,
+      render: (_args, value) => {
+        const result = value as { ok: boolean; error: string; boardFile: string; copperLayers: number; preset: string; traceWidths: number[]; suggestions: { kind: string; targetOhm: number; widthMm: number; spacingMm: number; achievedOhm: number }[]; notes: string[] };
+        if (!result.ok) return [{ type: "text", text: "叠层分析失败：" + result.error }];
+        const lines: string[] = [];
+        lines.push("叠层：" + result.preset + " · " + String(result.copperLayers) + " 层铜");
+        const names: Record<string, string> = { microstrip: "微带线", stripline: "带状线", "differential-microstrip": "差分微带", "differential-stripline": "差分带状线" };
+        for (const item of result.suggestions) {
+          lines.push((names[item.kind] ?? item.kind) + " " + String(item.targetOhm) + " Ω → 线宽 " + String(item.widthMm) + " mm" + (item.kind.startsWith("differential") ? "（间距 " + String(item.spacingMm) + " mm）" : "") + "，实际 " + String(item.achievedOhm) + " Ω");
+        }
+        if (result.traceWidths.length > 0) lines.push("板上现有线宽：" + result.traceWidths.map((w) => String(w) + " mm").join("、"));
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; boardFile?: string; spacingMm?: number }, exec: ToolExec) => {
+      const empty = { ok: false, error: "", boardFile: "", copperLayers: 0, preset: "", traceWidths: [] as number[], suggestions: [] as { kind: string; targetOhm: number; widthMm: number; spacingMm: number; achievedOhm: number }[], notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      let boardFile = "";
+      if (typeof args.boardFile === "string" && args.boardFile !== "") {
+        boardFile = resolve(resolved.projectDir, args.boardFile);
+      } else {
+        const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+        const latest = findLatestKicadBuild(workspace);
+        if (!latest.ok || latest.pcbFile === "") return { ...empty, error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error };
+        boardFile = latest.pcbFile;
+      }
+      if (!existsSync(boardFile)) return { ...empty, boardFile, error: "找不到板子文件：" + boardFile };
+      const spacingMm = typeof args.spacingMm === "number" && args.spacingMm > 0 ? args.spacingMm : 0.2;
+      const analysis = analyzeStackup(readFileSync(boardFile, "utf8"), boardFile, spacingMm, DEFAULT_TARGETS);
+      if (!analysis.ok) return { ...empty, boardFile, error: analysis.error };
+      return {
+        ok: true,
+        error: "",
+        boardFile: analysis.boardFile,
+        copperLayers: analysis.copperLayers,
+        preset: analysis.preset.label,
+        traceWidths: [...analysis.traceWidths],
+        suggestions: analysis.suggestions.map((item) => ({ ...item })),
+        notes: [...analysis.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
   ctx.tools.register(bomTool);
+  ctx.tools.register(stackupTool);
 }

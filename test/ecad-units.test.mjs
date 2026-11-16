@@ -18,6 +18,7 @@ import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/eca
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
+import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
@@ -1113,6 +1114,36 @@ test("价格：只认 JSON-LD 的 Product 报价，缺数字回 null（S156）",
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("叠层与阻抗：按层数取叠层，50/90/100 Ω 的线宽能反算回目标（S157）", () => {
+  const board = [
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "F.Mask"',
+    '    "In1.Cu" "In2.Cu" "B.Cu")',
+    '  (segment (start 0 0) (end 1 0) (width 0.25) (layer F.Cu) (net 1))',
+    '  (segment (start 0 1) (end 1 1) (width 0.1) (layer B.Cu) (net 2))',
+    ")",
+  ].join("\n");
+  const four = analyzeStackup(board);
+  assert.equal(four.ok, true);
+  assert.equal(four.copperLayers, 4);
+  assert.equal(four.preset.id, "jlc4-1.6");
+  assert.deepEqual(four.traceWidths, [0.1, 0.25]);
+  const fifty = four.suggestions.find((item) => item.kind === "microstrip" && item.targetOhm === 50);
+  assert.ok(fifty !== undefined);
+  assert.ok(Math.abs(fifty.achievedOhm - 50) < 0.5, "反算出的线宽要能回到 50 Ω");
+  const ninety = four.suggestions.find((item) => item.kind === "differential-microstrip" && item.targetOhm === 90);
+  assert.ok(ninety !== undefined && ninety.widthMm > 0);
+  assert.ok(Math.abs(ninety.achievedOhm - 90) < 1);
+  // 两层板换叠层：介质更厚，同样 50 Ω 的线要更宽。
+  const two = analyzeStackup(board.replace(/"In1.Cu" "In2.Cu" /u, ""));
+  assert.equal(two.copperLayers, 2);
+  assert.equal(two.preset.id, "jlc2-1.6");
+  const fiftyTwo = two.suggestions.find((item) => item.kind === "microstrip" && item.targetOhm === 50);
+  assert.ok(fiftyTwo !== undefined && fiftyTwo.widthMm > 1, "1.6 mm 两层板的 50 Ω 微带要比四层板宽得多");
+  assert.ok(four.notes.some((note) => note.includes("没有叠层定义")));
+  assert.ok(four.notes.some((note) => note.includes("0.1 mm 的细线")));
 });
 
 test("库表：重复写也只保留一个表头，已有条目与新增条目各一条（S155）", () => {
