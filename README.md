@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：59 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：60 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -216,6 +216,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_pcb_links` | 布线体检：差分对长度差与过孔数、逐层铺铜与层上信号线数、去耦电容到 IC 电源脚的距离；只算几何与网络名，不做仿真 |
 | `stm32_pcb_gerber` | 制造文件回看：把 `stm32_ecad_export` 导出的 Gerber 与钻孔读回来画成一张 SVG（可选层），交付前核对板框、铜、丝印与孔位；读不懂的构造计入 notes |
 | `stm32_impedance` | 阻抗写回：按叠层算出 50 Ω 单端与 90 Ω 差分该用的线宽与间距，写成 `.kicad_dru` 里的自定义规则（只作用于点名的网络）；KiCad 的 DRC 没有阻抗约束，写入的是可执行的几何量 |
+| `stm32_netgate` | 网表与 PCB 的持续门禁：图纸比板子新、网络拆开、焊盘缺失 |
 | `stm32_symbol_footprint` | 符号与封装生成：按引脚表出 `.kicad_sym`，按封装尺寸出 `.kicad_mod`（QFP / SOIC / 两脚小件）；尺寸与引脚号必须由调用方给出，缺一个就报错 |
 | `stm32_part_search` | 器件搜索：按型号、参数或立创编号查编号、库存、阶梯价与手册地址；结果缓存 24 小时，封装字段接口不给时留空 |
 | `stm32_mech` | 外壳与机械约束：板框尺寸、定位孔坐标与孔径、孔到边最小距离、面积；`export` 写 DXF（R12，外形 + 定位孔）给机械软件 |

@@ -25,6 +25,8 @@ export interface PcbReport {
   readonly generator: string;
   readonly footprints: number;
   readonly pads: number;
+  /** 板子上所有带位号的封装（含没接任何网络的安装孔、测试点）。 */
+  readonly refs: readonly string[];
   readonly nets: ReadonlyMap<string, readonly PcbPad[]>;
 }
 
@@ -72,9 +74,11 @@ export function parsePcbText(text: string, file: string): PcbReport {
   const nets = new Map<string, PcbPad[]>();
   let footprints = 0;
   let pads = 0;
+  const refs: string[] = [];
   for (const footprint of childrenOf(doc, "footprint")) {
     footprints += 1;
     const ref = refOf(footprint);
+    if (ref !== "" && !refs.includes(ref)) refs.push(ref);
     for (const pad of childrenOf(footprint, "pad")) {
       pads += 1;
       const number = atomOf(pad, 1);
@@ -92,6 +96,7 @@ export function parsePcbText(text: string, file: string): PcbReport {
     generator: atomOf(childOf(doc, "generator"), 1),
     footprints,
     pads,
+    refs,
     nets,
   };
 }

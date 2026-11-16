@@ -227,13 +227,14 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
 });
 
 test("WEB_API_PATHS：六十三条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 63);
-  assert.equal(new Set(WEB_API_PATHS).size, 63);
+  assert.equal(WEB_API_PATHS.length, 64);
+  assert.equal(new Set(WEB_API_PATHS).size, 64);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/parts"), true, "器件搜索必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/impedance"), true, "阻抗规则必须有独立路由");
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/netgate"), true, "一致性门禁必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/links"), true);
@@ -1619,7 +1620,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/parts"), true, "少了这条，器件搜索只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/impedance"), true, "少了这条，阻抗规则只会看到 404");
-  assert.equal(registered.length, 63);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/netgate"), true, "少了这条，一致性门禁只会看到 404");
+  assert.equal(registered.length, 64);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -2012,6 +2014,32 @@ test("GET/POST /ecad/impedance：GET 只出规则文本，POST 才写进 .kicad_
     const missing = await handleWebApi({
       method: "GET",
       path: "/dsh-stm32/api/ecad/impedance",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(missing.status, 400);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("GET /ecad/netgate：没有板子时给人话，缺 projectDir 时 400（S169）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-gate-route-"));
+  try {
+    const empty = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/netgate",
+      query: { projectDir: dir },
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(empty.status, 200);
+    const gate = empty.body.netgate;
+    assert.equal(gate.ok, false);
+    assert.ok(String(gate.error).length > 0);
+
+    const missing = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/netgate",
       query: {},
       deps: { subprocess: fakeSubprocess, env: process.env },
     });

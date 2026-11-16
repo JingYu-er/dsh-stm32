@@ -78,6 +78,7 @@ import { readGerberSet } from "./ecad/pcb/gerber.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readImpedancePlan } from "./ecad/pcb/impedance.js";
+import { checkNetGate, netGateSummary } from "./ecad/netgate.js";
 import { readMech, writeMechDxf } from "./ecad/pcb/mech.js";
 import { readCircuitNetlist } from "./ecad/pcb/netlist.js";
 import { ensurePrices, priceCachePath, readPriceCache } from "./datasheet/price.js";
@@ -577,6 +578,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/power",
   WEB_API_PREFIX + "/ecad/brief",
   WEB_API_PREFIX + "/ecad/impedance",
+  WEB_API_PREFIX + "/ecad/netgate",
   WEB_API_PREFIX + "/ecad/mech",
   // 器件搜索也要单独登记（S163）：GET /ecad/parts?q=… 直接查立创，不依赖工程。
   WEB_API_PREFIX + "/ecad/parts",
@@ -845,6 +847,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/power" &&
     path !== WEB_API_PREFIX + "/ecad/brief" &&
     path !== WEB_API_PREFIX + "/ecad/impedance" &&
+    path !== WEB_API_PREFIX + "/ecad/netgate" &&
     path !== WEB_API_PREFIX + "/ecad/mech" &&
     path !== WEB_API_PREFIX + "/ecad/parts" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
@@ -1413,6 +1416,34 @@ export async function handleWebApi(input: {
         holes: report.holes.map((hole) => ({ ...hole })),
         mountingHoles: report.mountingHoles,
         minHoleEdgeMm: report.minHoleEdgeMm,
+        findings: report.findings.map((finding) => ({ ...finding })),
+        notes: [...report.notes],
+      },
+    });
+  }
+
+  if (path === WEB_API_PREFIX + "/ecad/netgate") {
+    // 网表与板子的一致性门禁（S169）：只读，结论 + 修法一起给。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const report = checkNetGate(projectDir);
+    return ok({
+      netgate: {
+        ok: report.ok,
+        error: report.error,
+        state: report.state,
+        summary: netGateSummary(report),
+        staleSeconds: report.staleSeconds,
+        schematicFile: report.schematicFile,
+        pcbFile: report.pcbFile,
+        schematicComponents: report.schematicComponents,
+        pcbFootprints: report.pcbFootprints,
+        compared: report.compared,
+        matched: report.matched,
+        split: report.split,
+        nameMismatches: report.nameMismatches,
+        missingPads: report.missingPads,
         findings: report.findings.map((finding) => ({ ...finding })),
         notes: [...report.notes],
       },

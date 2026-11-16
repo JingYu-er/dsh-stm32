@@ -31,6 +31,7 @@ import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine
 import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datasheet/price.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 import { readImpedancePlan } from "../engine/ecad/pcb/impedance.js";
+import { checkNetGate, netGateSummary } from "../engine/ecad/netgate.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../engine/ecad/pcb/emc.js";
 import { readEmcDeep } from "../engine/ecad/pcb/emc-deep.js";
 import { readLinks } from "../engine/ecad/pcb/links.js";
@@ -46,6 +47,7 @@ export const PCB_RENDER_TOOL = "stm32_pcb_render";
 export const PCB_BOM_TOOL = "stm32_bom";
 export const PCB_STACKUP_TOOL = "stm32_stackup";
 export const PCB_IMPEDANCE_TOOL = "stm32_impedance";
+export const PCB_NETGATE_TOOL = "stm32_netgate";
 export const PCB_BRIEF_TOOL = "stm32_brief";
 export const PCB_POWER_TOOL = "stm32_power";
 export const PCB_EMC_TOOL = "stm32_emc";
@@ -1847,6 +1849,102 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+  const netgateOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      state: { type: "string" },
+      staleSeconds: { type: "number" },
+      schematicFile: { type: "string" },
+      pcbFile: { type: "string" },
+      schematicComponents: { type: "number" },
+      pcbFootprints: { type: "number" },
+      compared: { type: "number" },
+      matched: { type: "number" },
+      split: { type: "number" },
+      nameMismatches: { type: "number" },
+      missingPads: { type: "number" },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            severity: { type: "string" },
+            message: { type: "string" },
+            fix: { type: "string" },
+          },
+          required: ["id", "severity", "message", "fix"],
+        },
+      },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "state", "staleSeconds", "schematicFile", "pcbFile", "schematicComponents", "pcbFootprints", "compared", "matched", "split", "nameMismatches", "missingPads", "findings", "notes"],
+  };
+
+  const netgateTool: ToolDefinition = {
+    name: PCB_NETGATE_TOOL,
+    description:
+      "网表与板子的一致性门禁：对账原理图与 PCB 的网络连通性，并判断板子是不是比图纸旧（改完原理图没更新 PCB 最常见）。一次性对账用 stm32_sch_check；这里是「当前是否同步」的结论与修法。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "直接指定 .kicad_pcb（需与 schematicFile 同时给）。" },
+        schematicFile: { type: "string", description: "直接指定 .kicad_sch（需与 boardFile 同时给）。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: netgateOutput,
+      render: (_args, value) => {
+        const report = value as { ok: boolean; error: string; state: string; staleSeconds: number; schematicComponents: number; pcbFootprints: number; compared: number; matched: number; split: number; missingPads: number; findings: { severity: string; message: string; fix: string }[]; notes: string[] };
+        if (!report.ok) return [{ type: "text", text: "一致性门禁没跑起来：" + report.error }];
+        const lines: string[] = [];
+        lines.push("一致性：" + String(report.state) + " · " + String(report.compared) + " 条网络对上 " + String(report.matched) + " 条 · 元件 " + String(report.schematicComponents) + "/" + String(report.pcbFootprints));
+        for (const finding of report.findings) {
+          lines.push("[" + finding.severity + "] " + finding.message + " → " + finding.fix);
+        }
+        if (report.findings.length === 0) lines.push("图纸与板子一致，没有需要处理的。");
+        for (const note of report.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; boardFile?: string; schematicFile?: string }, exec: ToolExec) => {
+      const empty = { ok: false, error: "", state: "unknown", staleSeconds: 0, schematicFile: "", pcbFile: "", schematicComponents: 0, pcbFootprints: 0, compared: 0, matched: 0, split: 0, nameMismatches: 0, missingPads: 0, findings: [] as Array<Record<string, string>>, notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const explicit =
+        typeof args.boardFile === "string" && args.boardFile !== "" && typeof args.schematicFile === "string" && args.schematicFile !== ""
+          ? { pcbFile: resolve(resolved.projectDir, args.boardFile), schematicFile: resolve(resolved.projectDir, args.schematicFile) }
+          : {};
+      const report = checkNetGate(resolved.projectDir, explicit);
+      return {
+        ok: report.ok,
+        error: report.error,
+        state: report.state,
+        staleSeconds: report.staleSeconds,
+        schematicFile: report.schematicFile,
+        pcbFile: report.pcbFile,
+        schematicComponents: report.schematicComponents,
+        pcbFootprints: report.pcbFootprints,
+        compared: report.compared,
+        matched: report.matched,
+        split: report.split,
+        nameMismatches: report.nameMismatches,
+        missingPads: report.missingPads,
+        findings: report.findings.map((finding) => ({ id: finding.id, severity: finding.severity, message: finding.message, fix: finding.fix })),
+        notes: [...report.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
@@ -1859,4 +1957,5 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(linksTool);
   ctx.tools.register(gerberTool);
   ctx.tools.register(impedanceTool);
+  ctx.tools.register(netgateTool);
 }

@@ -5,8 +5,9 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { buildFootprint } from "../lib/engine/ecad/gen/footprint.js";
@@ -27,6 +28,7 @@ import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
 import { analyzeEmcDeep } from "../lib/engine/ecad/pcb/emc-deep.js";
 import { planImpedance } from "../lib/engine/ecad/pcb/impedance.js";
+import { checkNetGate } from "../lib/engine/ecad/netgate.js";
 import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
 import { analyzePowerBudget } from "../lib/engine/ecad/pcb/power.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
@@ -1776,6 +1778,41 @@ test("阻抗规则：单端要点名，差分对从板子里认，写盘两次�
 
   const noSingles = planImpedance(kicadDir, pcb, boardFile, {});
   assert.ok(noSingles.notes.some((note) => note.includes("没有点名单端网络")));
+
+  rmSync(work, { recursive: true, force: true });
+});
+
+test("一致性门禁：读出拆网/缺焊盘/悬空件，图纸更新过就报板子旧（S169）", () => {
+  const fixture = fileURLToPath(new URL("./fixtures/kicad-10-d-nfc", import.meta.url));
+  const pcbFile = join(fixture, "D_NFC.kicad_pcb");
+  const schematicFile = join(fixture, "D_NFC.kicad_sch");
+
+  const report = checkNetGate("", { pcbFile, schematicFile });
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.state, "mismatch");
+  assert.equal(report.compared, 25);
+  assert.equal(report.matched, 24);
+  assert.equal(report.split, 1);
+  assert.equal(report.missingPads, 4);
+  assert.ok(report.findings.some((finding) => finding.id === "gate.net-split" && finding.severity === "error"));
+  assert.ok(report.findings.some((finding) => finding.id === "gate.pad-missing"));
+  assert.ok(report.findings.some((finding) => finding.id === "gate.component-unconnected"));
+  assert.ok(report.notes.some((note) => note.includes("没接到任何网络")));
+
+  // 图纸比板子新：把板子的时间戳拨到 1 小时前，状态要变成 stale。
+  const work = mkdtempSync(join(tmpdir(), "dsh-gate-"));
+  const stalePcb = join(work, "board.kicad_pcb");
+  copyFileSync(pcbFile, stalePcb);
+  const past = statSync(schematicFile).mtimeMs / 1000 - 3600;
+  utimesSync(stalePcb, past, past);
+  const stale = checkNetGate("", { pcbFile: stalePcb, schematicFile });
+  assert.equal(stale.staleSeconds > 3000, true, "应报出旧了多少秒");
+  assert.ok(stale.findings.some((finding) => finding.id === "gate.stale-board"));
+  assert.equal(stale.state === "stale" || stale.state === "mismatch", true);
+
+  const none = checkNetGate("");
+  assert.equal(none.ok, false);
+  assert.ok(none.error.includes("projectDir"));
 
   rmSync(work, { recursive: true, force: true });
 });
