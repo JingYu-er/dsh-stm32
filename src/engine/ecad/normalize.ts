@@ -9,6 +9,8 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+
+import { upsertLibEntries } from "./libs.js";
 import { join, relative } from "node:path";
 
 export interface CanonicalFootprint {
@@ -201,14 +203,9 @@ export function normalizeKicadProject(kicadDir: string, circuitJsonText: string,
 function mergeFootprintTable(kicadDir: string, libsDir: string, renamed: readonly { to: string }[]): void {
   const table = join(kicadDir, "fp-lib-table");
   const libs = [...new Set(renamed.map((item) => item.to.slice(0, item.to.indexOf(":"))))].filter((lib) => lib !== "");
-  const existing = existsSync(table) ? readFileSync(table, "utf8") : "(fp_lib_table\n)\n";
-  let text = existing;
-  for (const lib of libs) {
-    if (text.includes('(name "' + lib + '")')) continue;
+  const wanted = libs.map((lib) => {
     const dir = join(libsDir, lib + ".pretty");
-    const uri = "${KIPRJMOD}/" + relative(kicadDir, dir).replace(/\\/gu, "/");
-    const entry = '  (lib (name "' + lib + '")(type "KiCad")(uri "' + uri + '")(options "")(descr ""))\n';
-    text = text.replace(/\)\s*$/u, entry + ")\n");
-  }
-  writeFileSync(table, text, "utf8");
+    return { lib, uri: "${KIPRJMOD}/" + relative(kicadDir, dir).replace(/\\/gu, "/") };
+  });
+  upsertLibEntries(table, "fp", wanted);
 }

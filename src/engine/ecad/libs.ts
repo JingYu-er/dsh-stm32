@@ -180,18 +180,6 @@ function splitLibName(full: string): [string, string] {
   return [full.slice(0, at), full.slice(at + 1)];
 }
 
-/** 从 `(lib (name "X") (type "KiCad") (uri "…") …)` 里读已登记的库名。 */
-function existingLibNames(tableText: string): Set<string> {
-  const names = new Set<string>();
-  const pattern = /\(name\s+"([^"]+)"\)/gu;
-  let match = pattern.exec(tableText);
-  while (match !== null) {
-    names.add(match[1] ?? "");
-    match = pattern.exec(tableText);
-  }
-  return names;
-}
-
 function libTableEntry(lib: string, uri: string): string {
   return (
     '  (lib (name "' + lib + '") (type "KiCad") (uri "' + uri.replace(/\\/gu, "/") + '")' +
@@ -199,12 +187,46 @@ function libTableEntry(lib: string, uri: string): string {
   );
 }
 
-function tableText(entries: string[]): string {
-  return "(fp_lib_table\n" + entries.join("") + ")\n";
+/**
+ * 抽取库表里每个 `(lib …)` 块。
+ *
+ * 不能按「第一个 `(` 到最后一个 `)`」切：那样会把表头关键字一起当内容，
+ * 下次写盘再拼一次表头，于是每构建一次多一行 `fp_lib_table`，
+ * KiCad 打开时直接判定库表未初始化（`has type UNINITIALIZED but expected FOOTPRINT`）。
+ */
+function libBlocks(tableText: string): string[] {
+  const blocks: string[] = [];
+  let at = tableText.indexOf("(lib ");
+  while (at >= 0) {
+    let depth = 0;
+    let end = at;
+    for (let i = at; i < tableText.length; i += 1) {
+      if (tableText[i] === "(") depth += 1;
+      else if (tableText[i] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+    if (end <= at) break;
+    blocks.push(tableText.slice(at, end));
+    at = tableText.indexOf("(lib ", end);
+  }
+  return blocks;
 }
 
-/** 读-改-写库表：保留用户已有条目，只追加缺的库。 */
-function mergeLibTable(path: string, wanted: readonly { lib: string; uri: string }[], kind: "fp" | "sym"): string {
+/**
+ * 读-改-写库表：按 `(lib …)` 块重建，保留已有条目，只追加缺失的库。
+ *
+ * 表头固定为 `<kind>_lib_table` + `(version 7)`，与 KiCad 自己写出的格式一致。
+ */
+export function upsertLibEntries(
+  path: string,
+  kind: "fp" | "sym",
+  wanted: readonly { lib: string; uri: string }[],
+): string {
   let existing = "";
   if (existsSync(path)) {
     try {
@@ -213,21 +235,22 @@ function mergeLibTable(path: string, wanted: readonly { lib: string; uri: string
       existing = "";
     }
   }
-  const known = existingLibNames(existing);
-  const body: string[] = [];
-  const open = existing.indexOf("(");
-  const close = existing.lastIndexOf(")");
-  if (open >= 0 && close > open) {
-    body.push(existing.slice(open + 1, close).replace(/^\s+|\s+$/gu, ""));
+  const header = kind === "fp" ? "fp_lib_table" : "sym_lib_table";
+  const kept: string[] = [];
+  const known = new Set<string>();
+  for (const block of libBlocks(existing)) {
+    const name = /\(name\s+"([^"]+)"/u.exec(block)?.[1] ?? "";
+    if (name === "" || known.has(name)) continue;
+    known.add(name);
+    kept.push(block.trim());
   }
   for (const item of wanted) {
     if (known.has(item.lib)) continue;
-    body.push(libTableEntry(item.lib, item.uri).trimEnd());
     known.add(item.lib);
+    kept.push(libTableEntry(item.lib, item.uri).trim());
   }
-  const header = kind === "fp" ? "(fp_lib_table\n" : "(sym_lib_table\n";
-  const text = body.length === 0 ? header + ")\n" : header + body.map((line) => "  " + line + "\n").join("") + ")\n";
-  writeFileSync(path, text, "utf8");
+  const body = kept.map((block) => "  " + block + "\n").join("");
+  writeFileSync(path, "(" + header + "\n  (version 7)\n" + body + ")\n", "utf8");
   return path;
 }
 
@@ -310,8 +333,8 @@ export function exportEmbeddedLibraries(
   const rel = (target: string): string => "${KIPRJMOD}/" + relative(projectDir, target).replace(/\\/gu, "/");
   const fpWanted = footprintLibs.map((item) => ({ lib: item.lib, uri: rel(item.dir) }));
   const symWanted = symbolLibs.map((item) => ({ lib: item.lib, uri: rel(item.file) }));
-  const fpLibTable = mergeLibTable(join(projectDir, "fp-lib-table"), fpWanted, "fp");
-  const symLibTable = mergeLibTable(join(projectDir, "sym-lib-table"), symWanted, "sym");
+  const fpLibTable = upsertLibEntries(join(projectDir, "fp-lib-table"), "fp", fpWanted);
+  const symLibTable = upsertLibEntries(join(projectDir, "sym-lib-table"), "sym", symWanted);
 
   if (footprintLibs.length === 0) notes.push("没有内嵌封装需要导出：封装可能已经是 KiCad 官方库");
   if (symbolLibs.length === 0) notes.push("没有内嵌符号需要导出");

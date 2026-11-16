@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
-import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols } from "../lib/engine/ecad/libs.js";
+import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
 import { checkDfm, estimateCost, readBoardFacts, renderDru, writeDru } from "../lib/engine/ecad/dfm.js";
 import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootprints } from "../lib/engine/ecad/normalize.js";
 import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/ecad/jlcpcb.js";
@@ -1055,6 +1055,25 @@ const SCENE_BOARD = `(kicad_pcb (version 20241229) (generator circuit-json-to-ki
   (segment (start 0 1) (end 5 1) (width 0.25) (layer B.Cu) (net 1))
   (segment (start 0 2) (end 5 2) (width 0.25) (layer In1.Cu) (net 1))
   (via (at 3 3) (size 0.8) (drill 0.4) (layers F.Cu B.Cu)))`;
+
+test("库表：重复写也只保留一个表头，已有条目与新增条目各一条（S155）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-libtable-"));
+  try {
+    const table = join(dir, "fp-lib-table");
+    writeFileSync(table, "(fp_lib_table\n  (lib (name \"Old\")(type \"KiCad\")(uri \"${KIPRJMOD}/old.pretty\")(options \"\")(descr \"\"))\n)\n", "utf8");
+    upsertLibEntries(table, "fp", [{ lib: "New", uri: "${KIPRJMOD}/new.pretty" }]);
+    upsertLibEntries(table, "fp", [{ lib: "New", uri: "${KIPRJMOD}/new.pretty" }, { lib: "Third", uri: "${KIPRJMOD}/third.pretty" }]);
+    const text = readFileSync(table, "utf8");
+    assert.equal(text.match(/\(fp_lib_table/gu)?.length, 1, "表头只能有一个");
+    assert.equal(text.match(/\(name "Old"\)/gu)?.length, 1);
+    assert.equal(text.match(/\(name "New"\)/gu)?.length, 1);
+    assert.equal(text.match(/\(name "Third"\)/gu)?.length, 1);
+    assert.match(text, /^\(fp_lib_table\n  \(version 7\)\n/u);
+    assert.equal(text.trimEnd().endsWith(")"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("板图：解析 .kicad_pcb 出焊盘/走线/过孔/板框与内层说明（S151）", () => {
   const scene = parsePcbScene(SCENE_BOARD, "mem.kicad_pcb");

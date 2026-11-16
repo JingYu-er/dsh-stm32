@@ -5903,7 +5903,26 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S154）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S155）
+
+### 一百六十三、库表被写成「每构建一次多一行表头」（S155）
+
+现象：KiCad 打开插件生成的工程，弹窗说
+
+```
+Library table 'D:\...\hardware\circuit\dist\index\kicad\fp-lib-table'
+has type UNINITIALIZED but expected FOOTPRINT; skipping
+```
+
+打开那张 `fp-lib-table`，开头堆着二十多行裸的 `fp_lib_table`，之后才是正常条目；`sym-lib-table` 同样。
+
+原因在 `src/engine/ecad/libs.ts` 的 `mergeLibTable`：它把「第一个 `(` 到最后一个 `)`」之间的整段当 body 保留，而这段里本来就含表头关键字 `fp_lib_table`；下次写盘再拼一次表头，于是每次构建多一行。KiCad 的库表解析器看到第一行是裸关键字而不是 `(lib …)`，就把整张表判为未初始化——**库一个都没登记，只是弹窗提醒后跳过**，所以现象是「提醒但不报错」。
+
+改法：不再切片原文，改成按平衡括号只抽 `(lib …)` 块（`libBlocks()`），用「表头 + `(version 7)` + 去重后的条目」重建整张表；`src/engine/ecad/normalize.ts` 的 `mergeFootprintTable` 也改为调同一个 `upsertLibEntries()`，两处写库表只剩一条路径。单测覆盖「连续写三次仍只有一个表头、已有条目与新增条目各一条、`(version 7)` 在表头之后」。
+
+事后修复：用修好的函数把 `demo/hardware/circuit/dist/index/kicad/{fp,sym}-lib-table` 各重建一次，`kicad-cli pcb drc` 里 `UNINITIALIZED` 归零（该板只剩 2 条 `text_height`）。
+
+教训：**「保留原文」不能靠首尾括号切片**——遇到带表头的 s-expression，必须按块解析；写盘函数要能证明「同一输入写两次结果相同」，否则错误会随构建次数线性累积。
 
 ### 一百六十二、没开 KiCad 就替人开（S154）
 
