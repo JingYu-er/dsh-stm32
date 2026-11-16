@@ -5,7 +5,8 @@
  * 目标文件固定在 `hardware/schematic/<name>.kicad_sch`，构建从不触碰它。
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { DshContext, SubprocessService, ToolExec } from "../types.js";
 import { resolveProjectDir } from "./project-dir.js";
@@ -49,8 +50,50 @@ function describeOp(op: DrawOp): string {
   if (op.op === "wire") return "wire";
   if (op.op === "label") return "label " + op.text;
   if (op.op === "clone") return "clone " + op.from + " → " + op.ref;
+  if (op.op === "place") return "place " + op.libId + " → " + op.ref;
   if (op.op === "move") return "move " + op.ref;
   return "remove " + op.ref;
+}
+
+/**
+ * 符号库来源：先工程里的 `libs/symbols/<Name>.kicad_sym`（S173 器件导入的落点），
+ * 再 KiCad 官方库 `symbolDir/<Lib>.kicad_sym`。找不到返回 null，由调用方报错。
+ */
+function symbolLibrary(projectDir: string, symbolDir: string): (libId: string) => string | null {
+  const cache = new Map<string, string | null>();
+  return (libId) => {
+    if (cache.has(libId)) return cache.get(libId) ?? null;
+    const colon = libId.indexOf(":");
+    const lib = colon >= 0 ? libId.slice(0, colon) : libId;
+    const name = colon >= 0 ? libId.slice(colon + 1) : libId;
+    const candidates = [
+      join(projectDir, "libs", "symbols", name + ".kicad_sym"),
+      join(projectDir, "libs", "symbols", lib + ".kicad_sym"),
+      join(symbolDir, lib + ".kicad_sym"),
+    ];
+    for (const file of candidates) {
+      if (!existsSync(file)) continue;
+      const text = readFileSync(file, "utf8");
+      if (text.includes('(symbol "' + name + '"')) {
+        cache.set(libId, text);
+        return text;
+      }
+    }
+    if (existsSync(symbolDir)) {
+      for (const file of readdirSync(symbolDir)) {
+        if (!file.endsWith(".kicad_sym")) continue;
+        const full = join(symbolDir, file);
+        if (!file.startsWith(lib)) continue;
+        const text = readFileSync(full, "utf8");
+        if (text.includes('(symbol "' + name + '"')) {
+          cache.set(libId, text);
+          return text;
+        }
+      }
+    }
+    cache.set(libId, null);
+    return null;
+  };
 }
 
 /** 用 kicad-cli 导一次网表当验收；没装工具链就跳过，不判失败。 */
@@ -96,6 +139,9 @@ export function registerSchDrawTools(ctx: DshContext): void {
               at: { type: "object", additionalProperties: true, description: "label 位置 {ref,pin}|{x,y}；clone/move 的目标坐标 {x,y}。" },
               text: { type: "string", description: "label 的网络名。" },
               from: { type: "string", description: "clone 的源位号。" },
+              libId: { type: "string", description: "place 的符号库编号，形如 Device:R_Small 或 MyLib:SOIC-8（来自 libs/symbols 或 KiCad 官方库）。" },
+              footprint: { type: "string", description: "place 时顺手写的封装 Lib:Name。" },
+              rotation: { type: "number", description: "place 的旋转角度，默认 0。" },
               ref: { type: "string", description: "clone 的新位号，或 move/remove 的目标位号。" },
               value: { type: "string", description: "clone 时顺手改 Value（如 10k）。" },
             },
@@ -201,7 +247,12 @@ export function registerSchDrawTools(ctx: DshContext): void {
         return { ok: true, error: "", sheet, seeded, applied: 0, skipped: 0, failed: [], notes: [...notes, "没有给 ops：只看了图纸"], netlist: "" };
       }
 
-      const report: DrawReport = drawOnSheet(text, sheet, ops);
+      const toolchain = locateEcadToolchain(process.env);
+      const library = symbolLibrary(
+        projectDir,
+        toolchain.ok && toolchain.toolchain !== null ? toolchain.toolchain.symbolDir : "",
+      );
+      const report: DrawReport = drawOnSheet(text, sheet, ops, library);
       if (report.applied > 0) writeDrawSheet(sheet, report.text);
       notes.push(...report.notes.map((note) => "· " + note));
       notes.push("动作：" + ops.map(describeOp).join("、"));

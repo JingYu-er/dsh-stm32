@@ -219,7 +219,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_netgate` | 网表与 PCB 的持续门禁：图纸比板子新、网络拆开、焊盘缺失 |
 | `stm32_sch_import` | 从 KiCad 板子吸收改动回 `circuit.tsx`：只比网表与元件，坐标不保留（构建重排） |
 | `stm32_sch_edit` | 原理图人工编辑：指令存 `schematic-edits.json`，构建收尾重放；KiCad 10 的 IPC 不提供原理图读写 |
-| `stm32_sch_draw` | 图纸手绘层：`wire` 连两脚、`label` 标名、`clone` 复制元件、`move` 挪位、`remove` 删除；写 `hardware/schematic/*.kicad_sch`（构建不碰），不需要打开 KiCad，写完用 `kicad-cli` 导网表校验 |
+| `stm32_sch_draw` | 图纸手绘层：`wire` 连两脚、`label` 标名、`clone` 复制元件、`place` 从符号库放新器件（内嵌 `lib_symbols`）、`move`/`remove`；写 `hardware/schematic/*.kicad_sch`（构建不碰），不需要打开 KiCad，写完用 `kicad-cli` 导网表校验 |
 | `stm32_part_import` | 器件导入：按 `Lib:Name` 从 KiCad 官方库复制封装，按焊盘号生成符号骨架，立创编号写成封装属性（`LCSC`/`MPN`/`Brand`/`Datasheet`），并登记 `fp-lib-table`/`sym-lib-table`；封装库里没有就报错，不猜 |
 | `stm32_symbol_footprint` | 符号与封装生成：按引脚表出 `.kicad_sym`，按封装尺寸出 `.kicad_mod`（QFP / SOIC / 两脚小件）；尺寸与引脚号必须由调用方给出，缺一个就报错 |
 | `stm32_part_search` | 器件搜索：按型号、参数或立创编号查编号、库存、阶梯价与手册地址；结果缓存 24 小时，封装字段接口不给时留空 |

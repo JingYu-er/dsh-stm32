@@ -5903,7 +5903,23 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S174）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S175）
+
+### 一百八十三、放新器件：符号从库里内嵌进来（S175）
+
+手绘层原来只能复制图纸里**已有**的元件（`clone`），要放一个图上没有的新器件就没路。这一节补上 `place`：给 `libId`（形如 `Device:R_Small`）与坐标，工具把符号从库里取出来、内嵌进图纸的 `lib_symbols`，再生成一个实例。
+
+**符号库来源两处，按顺序找。** 先工程自己的 `libs/symbols/<Name>.kicad_sym`（S173 器件导入的落点），再 KiCad 官方 `symbolDir/<Lib>.kicad_sym`。命中条件不是文件名，而是文件里真有 `(symbol "<Name>"`——同名文件放错库的情况比想象中多。
+
+**内嵌的关键是改名，不是复制。** `.kicad_sym` 里的符号叫 `R_Small`，但图纸的 `lib_symbols` 里必须叫 `Device:R_Small`（`lib_id` 的全名）。所以只改外层名字，里面的子符号 `R_Small_0_1`、`R_Small_1_1` 保持原名——这是 KiCad 的约定，改了反而认不出。
+
+**实例块要写全。** `lib_id`、`at`（含旋转）、`unit`、`in_bom`、`on_board`、`dnp`、uuid、四个属性（Reference/Value/Footprint/Datasheet）、每个引脚的 `(pin "N" (uuid …))`，以及 `(instances (project "" (path "/<图纸 uuid>" (reference "R9") (unit 1))))`。图纸 uuid 从文件里取，不能随手造——`instances` 的路径对不上，KiCad 会把元件当孤儿。
+
+**引脚号从库里的 `(pin … (number "N" …))` 抓。** 第一版正则要求 `(number "1")` 紧接右括号，而真实符号库是 `(number "1" (effects …))`，于是抓出 0 个引脚——实例虽然还能连（KiCad 按 lib 符号解析），但 `(pin …)` 列表全缺，DRC 与网表对账会露馅。这属于「看起来成功」的错，必须用真库校验。
+
+**实测。** 在 demo 的手绘底图上放 `Device:R_Small` → `R9`（2 脚，`4k7`，封装 `Resistor_SMD:R_0603_1608Metric`），再连 `R9.1↔R9.2`：两个动作都进；`kicad-cli sch export netlist` 导出成功，网表里出现 `R9`。重复放同一个位号是跳过，不重复内嵌。
+
+**教训：符号库的真实格式比文档更细。** 引脚号后面有没有 `(effects …)`、子符号名带不带库前缀、`instances` 路径要哪个 uuid——这三处都只能从真库里看，猜一次就错一次。
 
 ### 一百八十二、手绘层：图纸可以直接写，不需要开 KiCad（S174）
 

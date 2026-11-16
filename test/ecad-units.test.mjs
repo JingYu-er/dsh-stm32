@@ -2118,3 +2118,60 @@ test("手绘层：底图已存在就不覆盖，构建图纸不存在时说清�
   assert.match(missing.error, /还没有可用的构建图纸/u);
   rmSync(dir, { recursive: true, force: true });
 });
+
+// S175：从符号库放一个全新器件——内嵌 lib_symbols、生成实例、引脚号随库走。
+test("放置：从 .kicad_sym 内嵌符号并生成实例，库缺失要报出来（S175）", () => {
+  const fixture = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+  const source = readFileSync(fixture, "utf8");
+  const libText = `(kicad_symbol_lib
+  (version 20241209)
+  (generator "test")
+  (symbol "R_Small"
+    (pin_numbers (hide yes))
+    (pin_names (offset 0.254) (hide yes))
+    (property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+    (property "Value" "R_Small" (at 0 0 90) (effects (font (size 1.27 1.27))))
+    (symbol "R_Small_0_1"
+      (rectangle (start -0.762 1.27) (end 0.762 -1.27) (stroke (width 0.254) (type default)) (fill (type none)))
+    )
+    (symbol "R_Small_1_1"
+      (pin passive line (at 0 2.54 270) (length 1.27)
+        (name "~" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin passive line (at 0 -2.54 90) (length 1.27)
+        (name "~" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)`;
+
+  const placed = drawOnSheet(source, fixture, [
+    { op: "place", libId: "Device:R_Small", ref: "R9", at: { x: 130, y: 120 }, value: "4k7", footprint: "Resistor_SMD:R_0603_1608Metric" },
+  ], (libId) => (libId === "Device:R_Small" ? libText : null));
+  assert.equal(placed.ok, true);
+  assert.equal(placed.applied, 1);
+  assert.ok(placed.text.includes('(symbol "Device:R_Small"'));
+  assert.ok(placed.text.includes('(lib_id "Device:R_Small")'));
+  assert.ok(placed.text.includes('(property "Reference" "R9"'));
+  assert.ok(placed.text.includes('(property "Value" "4k7"'));
+  assert.ok(placed.text.includes('(pin "1"'));
+  assert.equal((placed.text.match(/\(lib_id "Device:R_Small"\)/gu) ?? []).length, 1);
+
+  const twice = drawOnSheet(placed.text, fixture, [
+    { op: "place", libId: "Device:R_Small", ref: "R9", at: { x: 130, y: 120 } },
+  ], () => libText);
+  assert.equal(twice.applied, 0);
+  assert.equal(twice.skipped, 1);
+
+  const missing = drawOnSheet(source, fixture, [
+    { op: "place", libId: "Device:NOPE", ref: "R8", at: { x: 100, y: 100 } },
+  ], () => null);
+  assert.equal(missing.ok, false);
+  assert.match(missing.failed[0], /找不到符号库/u);
+
+  const noLibTable = drawOnSheet("(kicad_sch (version 20250114) (generator test))", fixture, [
+    { op: "place", libId: "Device:R_Small", ref: "R7", at: { x: 1, y: 1 } },
+  ], () => libText);
+  assert.equal(noLibTable.ok, false);
+  assert.match(noLibTable.failed[0], /lib_symbols/u);
+});
