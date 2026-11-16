@@ -226,9 +226,10 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
   assert.match(String(badPkg.body.error), /不能以 - 开头/u);
 });
 
-test("WEB_API_PATHS：五十三条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 53);
-  assert.equal(new Set(WEB_API_PATHS).size, 53);
+test("WEB_API_PATHS：五十四条路由都在前缀下，且没有重复", () => {
+  assert.equal(WEB_API_PATHS.length, 54);
+  assert.equal(new Set(WEB_API_PATHS).size, 54);
+  assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/action"), true);
@@ -1401,6 +1402,44 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
   }
 });
 
+test("GET /ecad/bom：读 circuit.json 分组，没价也照样出行（S156）", async () => {
+  assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/bom"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s156-bom-"));
+  const dist = path.join(root, "hardware", "circuit", "dist", "board");
+  fs.mkdirSync(path.join(dist, "kicad"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dist, "circuit.json"),
+    JSON.stringify([
+      { type: "source_component", source_component_id: "s1", name: "R1", ftype: "simple_resistor", display_resistance: "1k", supplier_part_numbers: { jlcpcb: ["C1", "C9"] } },
+      { type: "source_component", source_component_id: "s2", name: "R2", ftype: "simple_resistor", display_resistance: "1k", supplier_part_numbers: { jlcpcb: ["C1"] } },
+      { type: "cad_component", source_component_id: "s1", model_step_url: "https://kicad-mod-cache.tscircuit.com/Resistor_SMD/R_0402_1005Metric.step" },
+      { type: "cad_component", source_component_id: "s2", model_step_url: "https://kicad-mod-cache.tscircuit.com/Resistor_SMD/R_0402_1005Metric.step" },
+      { type: "source_component", source_component_id: "s3", name: "J1", ftype: "simple_connector", supplier_part_numbers: { jlcpcb: [] } },
+    ]),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dist, "kicad", "board.kicad_pcb"), "(kicad_pcb (version 20241229) (layers (0 \"F.Cu\" signal)))", "utf8");
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/bom", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  const bom = got.body.bom;
+  assert.equal(bom.ok, true, bom.error);
+  assert.equal(bom.componentCount, 3);
+  assert.equal(bom.lines.length, 2);
+  // 行按首位的位号排序：J1 在 R1 前面（前缀字母序）。
+  assert.deepEqual(bom.lines[0].refs, ["J1"]);
+  assert.equal(bom.lines[0].value, "connector");
+  assert.equal(bom.lines[0].lcsc, "");
+  assert.deepEqual(bom.lines[1].refs, ["R1", "R2"]);
+  assert.equal(bom.lines[1].qty, 2);
+  assert.equal(bom.lines[1].lcsc, "C1");
+  assert.deepEqual(bom.lines[1].alternatives, ["C9"]);
+  assert.equal(bom.lines[1].footprint, "Resistor_SMD:R_0402_1005Metric");
+  assert.equal(bom.missingLcsc, 1);
+  assert.equal(bom.partsUsd, 0);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("GET /ecad/pcb：给工程就出板图，层开关与缺板提示都对（S151）", async () => {
   // host 只为 WEB_API_PATHS 里的路径注册 handler：漏登记就 404，绕开 serve 直接测 handleWebApi 是发现不了的。
   assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/pcb"));
@@ -1460,7 +1499,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   };
   registerWebRoutes(ctx);
   assert.equal(registered.includes("/dsh-stm32/api/ecad/pcb"), true, "少了这条，浏览器只会看到 404");
-  assert.equal(registered.length, 53);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/bom"), true, "少了这条，BOM 只会看到 404");
+  assert.equal(registered.length, 54);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 

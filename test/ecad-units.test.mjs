@@ -22,6 +22,8 @@ import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../lib/engine/ecad/pcb/pcb-svg.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
 import { mergeCoincidentPads } from "../lib/engine/ecad/padmerge.js";
+import { applyQuotes, buildBom, renderBomCsv, renderBomMarkdown } from "../lib/engine/ecad/bom.js";
+import { parseLcscPrice, readPriceCache, writePriceCache } from "../lib/engine/datasheet/price.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
 import { registerPcbTools } from "../lib/tools/pcb.js";
 import { buildTargets } from "../lib/engine/probe.js";
@@ -1055,6 +1057,63 @@ const SCENE_BOARD = `(kicad_pcb (version 20241229) (generator circuit-json-to-ki
   (segment (start 0 1) (end 5 1) (width 0.25) (layer B.Cu) (net 1))
   (segment (start 0 2) (end 5 2) (width 0.25) (layer In1.Cu) (net 1))
   (via (at 3 3) (size 0.8) (drill 0.4) (layers F.Cu B.Cu)))`;
+
+test("BOM：按主选编号分组、替代料单列，报价只贴到主选（S156）", () => {
+  const circuit = JSON.stringify([
+    { type: "source_component", source_component_id: "a", name: "C1", ftype: "simple_capacitor", display_capacitance: "100nF", supplier_part_numbers: { jlcpcb: ["C14663", "C108079"] } },
+    { type: "source_component", source_component_id: "b", name: "C2", ftype: "simple_capacitor", display_capacitance: "100nF", supplier_part_numbers: { jlcpcb: ["C14663"] } },
+    { type: "source_component", source_component_id: "c", name: "U1", ftype: "simple_chip", manufacturer_part_number: "STM32F103C8T6", supplier_part_numbers: { jlcpcb: [] } },
+    { type: "cad_component", source_component_id: "a", model_step_url: "https://kicad-mod-cache.tscircuit.com/Capacitor_SMD/C_0603_1608Metric.step" },
+    { type: "cad_component", source_component_id: "b", model_step_url: "https://kicad-mod-cache.tscircuit.com/Capacitor_SMD/C_0603_1608Metric.step" },
+  ]);
+  const report = buildBom(circuit, "circuit.json");
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.componentCount, 3);
+  assert.equal(report.lines.length, 2);
+  const cap = report.lines[0];
+  assert.deepEqual(cap.refs, ["C1", "C2"]);
+  assert.equal(cap.qty, 2);
+  assert.equal(cap.lcsc, "C14663");
+  assert.deepEqual(cap.alternatives, ["C108079"]);
+  assert.equal(cap.footprint, "Capacitor_SMD:C_0603_1608Metric");
+  assert.equal(report.lines[1].value, "STM32F103C8T6");
+  assert.equal(report.missingLcsc, 1);
+
+  const priced = applyQuotes(report, {
+    C14663: { priceUsd: 0.0031, currency: "USD", stock: 100, mpn: "CC0603", brand: "YAGEO", fetchedAt: "2026-01-01T00:00:00.000Z" },
+  });
+  assert.equal(priced.priced, 1);
+  assert.equal(priced.partsUsd, 0.0062);
+  assert.equal(priced.lines[0].subtotalUsd, 0.0062);
+  const markdown = renderBomMarkdown(priced);
+  assert.match(markdown, /\| C1, C2 \|/u);
+  assert.match(markdown, /元件成本 \$0\.0062/u);
+  const csv = renderBomCsv(priced);
+  assert.match(csv, /^Comment,Designator,Footprint,LCSC Part #,Quantity/u);
+  assert.match(csv, /C1,C2/u);
+});
+
+test("价格：只认 JSON-LD 的 Product 报价，缺数字回 null（S156）", () => {
+  const html = '<script type="application/ld+json">{"@type":"Product","mpn":"M1","brand":{"name":"B"},"offers":{"price":0.0031,"priceCurrency":"USD","inventoryLevel":9}}</script>';
+  const quote = parseLcscPrice(html);
+  assert.ok(quote !== null);
+  assert.equal(quote.priceUsd, 0.0031);
+  assert.equal(quote.stock, 9);
+  assert.equal(quote.mpn, "M1");
+  assert.equal(parseLcscPrice("<html>no offer</html>"), null);
+  assert.equal(parseLcscPrice('<script type="application/ld+json">{"@type":"Product","offers":{"price":0}}</script>'), null);
+
+  const dir = mkdtempSync(join(tmpdir(), "dsh-price-"));
+  try {
+    const path = join(dir, "prices.json");
+    writePriceCache(path, { version: 1, quotes: { C1: { priceUsd: 0.5, currency: "USD", stock: null, mpn: "", brand: "", fetchedAt: "2026-01-01T00:00:00.000Z" } } });
+    assert.equal(readPriceCache(path).quotes.C1.priceUsd, 0.5);
+    writePriceCache(path, { version: 1, quotes: {} });
+    assert.deepEqual(readPriceCache(path).quotes, {});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("库表：重复写也只保留一个表头，已有条目与新增条目各一条（S155）", () => {
   const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-libtable-"));

@@ -26,12 +26,15 @@ import { krtRoot, krtStatus, krtVersion, quoteLayerNames, runKrtAutoroute, runKr
 import { readPcbScene } from "../engine/ecad/pcb/scene.js";
 import { renderPcbSvg } from "../engine/ecad/pcb/pcb-svg.js";
 import { runPcbIpc } from "../engine/ecad/pcb/ipc.js";
+import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine/ecad/bom.js";
+import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datasheet/price.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
 export const PCB_AUTOROUTE_TOOL = "stm32_pcb_autoroute";
 export const PCB_IPC_TOOL = "stm32_pcb_ipc";
 export const PCB_RENDER_TOOL = "stm32_pcb_render";
+export const PCB_BOM_TOOL = "stm32_bom";
 
 const output: JsonSchema = {
   type: "object",
@@ -663,7 +666,100 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+
+  const bomOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      circuitFile: { type: "string" },
+      savedTo: { type: "string" },
+      lines: { type: "number" },
+      componentCount: { type: "number" },
+      priced: { type: "number" },
+      pricedComponents: { type: "number" },
+      partsUsd: { type: "number" },
+      missingLcsc: { type: "number" },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "circuitFile", "savedTo", "lines", "componentCount", "priced", "pricedComponents", "partsUsd", "missingLcsc", "notes"],
+  };
+
+  const bomTool: ToolDefinition = {
+    name: PCB_BOM_TOOL,
+    description:
+      "出 BOM 与元件成本：读 circuit.json 按「主选编号 + 值 + 封装」分组，列位号、数量、立创编号、替代料、单价与小计。价格默认只读本地缓存；prices=true 才联网去立创取（每个编号约 0.8 s，会限流）。format=csv 出嘉立创贴片 BOM 列，给 saveAs 落盘。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        format: { type: "string", enum: ["markdown", "csv"], description: "输出格式：markdown（默认，带表格）或 csv（嘉立创贴片 BOM 列）。" },
+        prices: { type: "boolean", description: "是否联网补价格；默认 false，只用本地缓存。" },
+        saveAs: { type: "string", description: "把表格写到这个路径（相对工程根）；不传只回摘要。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: bomOutput,
+      render: (_args, value) => {
+        const result = value as { ok: boolean; error: string; circuitFile: string; savedTo: string; lines: number; componentCount: number; priced: number; pricedComponents: number; partsUsd: number; missingLcsc: number; notes: string[] };
+        if (!result.ok) return [{ type: "text", text: "BOM 生成失败：" + result.error }];
+        const lines: string[] = [];
+        lines.push("BOM：" + String(result.lines) + " 行 / " + String(result.componentCount) + " 个元件 · 元件成本 $" + result.partsUsd.toFixed(4));
+        lines.push("有价 " + String(result.priced) + "/" + String(result.lines) + " 行（覆盖 " + String(result.pricedComponents) + " 个元件）" + (result.missingLcsc > 0 ? " · " + String(result.missingLcsc) + " 行没有立创编号" : ""));
+        if (result.savedTo !== "") lines.push("已保存：" + result.savedTo);
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; format?: string; prices?: boolean; saveAs?: string }, exec: ToolExec) => {
+      const empty = { ok: false, error: "", circuitFile: "", savedTo: "", lines: 0, componentCount: 0, priced: 0, pricedComponents: 0, partsUsd: 0, missingLcsc: 0, notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+      const latest = findLatestKicadBuild(workspace);
+      if (!latest.ok || latest.kicadDir === "") return { ...empty, error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error };
+      const circuitFile = join(dirname(latest.kicadDir), "circuit.json");
+      const base = readBom(circuitFile);
+      if (!base.ok) return { ...empty, circuitFile, error: base.error };
+      let quotes = readPriceCache(priceCachePath()).quotes;
+      const notes: string[] = [];
+      if (args.prices === true) {
+        const lookup = await ensurePrices(base.lines.map((line) => line.lcsc).filter((code) => code !== ""));
+        quotes = lookup.quotes;
+        if (lookup.fetched.length > 0) notes.push("这次联网取到 " + String(lookup.fetched.length) + " 个编号的报价");
+        if (lookup.failed.length > 0) notes.push("没取到报价：" + lookup.failed.slice(0, 6).join("、"));
+      }
+      const report = applyQuotes(base, quotes);
+      let savedTo = "";
+      if (typeof args.saveAs === "string" && args.saveAs !== "") {
+        savedTo = resolve(resolved.projectDir, args.saveAs);
+        mkdirSync(dirname(savedTo), { recursive: true });
+        const text = (args.format === "csv" ? renderBomCsv(report) : renderBomMarkdown(report));
+        writeFileSync(savedTo, text, "utf8");
+      }
+      return {
+        ok: true,
+        error: "",
+        circuitFile,
+        savedTo,
+        lines: report.lines.length,
+        componentCount: report.componentCount,
+        priced: report.priced,
+        pricedComponents: report.pricedComponents,
+        partsUsd: report.partsUsd,
+        missingLcsc: report.missingLcsc,
+        notes: report.notes.concat(notes),
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
+  ctx.tools.register(bomTool);
 }

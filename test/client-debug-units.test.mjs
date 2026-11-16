@@ -304,6 +304,15 @@ test("电路设计页显示布线引擎状态，并可勾选含布线（S146）"
   assert.ok(source.includes("autoroute.ready"));
 });
 
+test("电路设计页能看 BOM：默认只读缓存，点「查价」才联网（S156）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("function useBom("));
+  assert.ok(source.includes("\"ecad/bom?\""));
+  assert.ok(source.includes("\"BOM\""));
+  assert.ok(source.includes("\"查价\""));
+  assert.ok(source.includes("params.push(\"prices=1\")"), "只有点查价才带 prices=1");
+  assert.ok(source.indexOf("function useBom(") < source.indexOf("function EcadPanel("));
+});
 test("电路设计页能看板图：按层开关请求 /ecad/pcb，SVG 内联渲染（S151）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(source.includes("function usePcbView("));

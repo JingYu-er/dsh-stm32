@@ -69,6 +69,8 @@ import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { readPcbScene } from "./ecad/pcb/scene.js";
 import { connectPcbIpc, runPcbIpc } from "./ecad/pcb/ipc.js";
 import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
+import { applyQuotes, readBom } from "./ecad/bom.js";
+import { ensurePrices, priceCachePath, readPriceCache } from "./datasheet/price.js";
 import { runEcadDesign } from "./ecad/design.js";
 import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
 import { ecadRuntimeDir, runtimeBytes, runtimeInstallMode, runtimeReady } from "./ecad/runtime.js";
@@ -556,6 +558,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad",
   // 板图要单独登记：host 只给 WEB_API_PATHS 里的路径注册 handler，没登记就是 404。
   WEB_API_PREFIX + "/ecad/pcb",
+  WEB_API_PREFIX + "/ecad/bom",
   WEB_API_PREFIX + "/ecad/ipc",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
@@ -813,6 +816,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/schematic" &&
     path !== WEB_API_PREFIX + "/ecad" &&
     path !== WEB_API_PREFIX + "/ecad/pcb" &&
+    path !== WEB_API_PREFIX + "/ecad/bom" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
@@ -1239,6 +1243,63 @@ export async function handleWebApi(input: {
       notes: connected.notes,
     } });
   }
+  if (path === WEB_API_PREFIX + "/ecad/bom") {
+    // BOM 与元件成本（S156）：读 circuit.json 分组，价格只从缓存里取；`prices=1` 才联网补价。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const layout = resolveProjectLayout(projectDir);
+    const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
+    const latest = findLatestKicadBuild(workspace);
+    const emptyBom = {
+      ok: false,
+      error: latest.ok
+        ? "还没有 circuit.json：先构建一次电路，再回来看 BOM。"
+        : latest.error,
+      circuitFile: "",
+      lines: [] as Array<Record<string, unknown>>,
+      componentCount: 0,
+      priced: 0,
+      pricedComponents: 0,
+      partsUsd: 0,
+      missingLcsc: 0,
+      notes: [] as string[],
+    };
+    if (!latest.ok || latest.kicadDir === "") return ok({ bom: emptyBom });
+    const circuitFile = join(dirname(latest.kicadDir), "circuit.json");
+    const base = readBom(circuitFile);
+    if (!base.ok) return ok({ bom: { ...emptyBom, circuitFile, error: base.error } });
+    let report = applyQuotes(base, readPriceCache(priceCachePath(envOf(input.deps))).quotes);
+    const fetched: string[] = [];
+    const failed: string[] = [];
+    if (query["prices"] === "1") {
+      const lookup = await ensurePrices(
+        report.lines.map((line) => line.lcsc).filter((code) => code !== ""),
+        { env: envOf(input.deps), signal: input.deps.signal },
+      );
+      fetched.push(...lookup.fetched);
+      failed.push(...lookup.failed);
+      report = applyQuotes(base, lookup.quotes);
+    }
+    return ok({
+      bom: {
+        ok: true,
+        error: "",
+        circuitFile,
+        lines: report.lines,
+        componentCount: report.componentCount,
+        priced: report.priced,
+        pricedComponents: report.pricedComponents,
+        partsUsd: report.partsUsd,
+        missingLcsc: report.missingLcsc,
+        notes: report.notes.concat(
+          fetched.length > 0 ? ["这次联网取到 " + String(fetched.length) + " 个编号的报价"] : [],
+          failed.length > 0 ? ["有 " + String(failed.length) + " 个编号没取到报价：" + failed.slice(0, 6).join("、")] : [],
+        ),
+      },
+    });
+  }
+
   if (path === WEB_API_PREFIX + "/ecad/pcb") {
     // 板图预览（S151）：只读 .kicad_pcb 出 SVG。不改板、不跑子进程，板子打不开时回可读错误。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
