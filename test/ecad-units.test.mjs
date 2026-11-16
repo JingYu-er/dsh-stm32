@@ -17,6 +17,7 @@ import { parseSchText } from "../lib/engine/schematic/kicad-sch.js";
 import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
+import { fetchEasyedaPackage, easyedaToKicadMod, parseEasyedaPackage } from "../lib/engine/ecad/easyeda.js";
 import { importPart } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
 import { assignableNet, buildHandSyncScript, parseHandSyncOutput, planHandSync } from "../lib/engine/ecad/pcb/hand-sync.js";
@@ -2298,4 +2299,130 @@ test("手绘层补封装：自动网名不赋，脚本输出只认最后一行 J
   assert.deepEqual(parsed.missingLib, ["Foo"]);
   assert.equal(parsed.unassigned, 1);
   assert.equal(parseHandSyncOutput("no json here").ok, false);
+});
+
+// S178：立创页面的封装图形能转成 .kicad_mod——单位 0.254 mm、两轴取反、THT 带钻孔。
+test("立创封装：PAD/TRACK/ARC/区域转成 KiCad 焊盘与丝印，坐标两轴取反（S178）", () => {
+  const payload = {
+    result: {
+      packageDetail: {
+        dataStr: {
+          head: { x: 4000, y: 3000, c_para: { package: "TEST-SOT", "3DModel": "TEST-SOT.step" } },
+          shape: [
+            "PAD~RECT~4010~3000~3.1496~3.5433~1~~1~0~~0~gge1~~~~0",
+            "PAD~ELLIPSE~3990~3000~3.937~3.937~11~GND~2~0.5~~0~gge2~~~~1",
+            "TRACK~0.8~3~~M 3990 3000 L 4010 3000~gge3~0",
+            "ARC~0.5~3~~M 4000 2990 A 2 2 0 0 1 4002 2990~gge4~0",
+            "SOLIDREGION~99~~M 3980 2980 L 4020 2980 L 4020 3020 L 3980 3020 Z ~solid~gge5~~~~0",
+            "TEXT~N~4000~3000~0~3~~4~U1~gge6~0",
+          ],
+          layers: ["1", "3", "11"],
+        },
+      },
+    },
+  };
+  const pkg = parseEasyedaPackage(payload);
+  assert.equal(pkg.ok, true);
+  assert.equal(pkg.packageName, "TEST-SOT");
+  assert.equal(pkg.model3d, "TEST-SOT.step");
+  assert.equal(pkg.pads.length, 2);
+  const smd = pkg.pads.find((pad) => pad.number === "1");
+  assert.ok(smd !== undefined);
+  assert.equal(smd.shape, "rect");
+  assert.equal(smd.layer, "F.Cu");
+  assert.equal(smd.x, 4010);
+  assert.ok(Math.abs(smd.width - 3.1496) < 1e-9);
+  const tht = pkg.pads.find((pad) => pad.number === "2");
+  assert.ok(tht !== undefined);
+  assert.equal(tht.layer, "*.Cu");
+  assert.equal(tht.holeRadius, 0.5);
+  assert.ok(pkg.graphics.some((graphic) => graphic.kind === "line"));
+  assert.ok(pkg.graphics.some((graphic) => graphic.kind === "arc"));
+  assert.ok(pkg.graphics.some((graphic) => graphic.kind === "region"));
+
+  const center = { x: 4000, y: 3000 };
+  const converted = easyedaToKicadMod(pkg, center, { name: "TEST-SOT" });
+  assert.equal(converted.ok, true);
+  assert.ok(converted.text.includes('(footprint "TEST-SOT"'));
+  assert.ok(converted.text.includes("(at -2.54 0 0)")); // -(4010-4000)*0.254
+  assert.ok(converted.text.includes("thru_hole"));
+  assert.ok(converted.text.includes("(drill 0.254)")); // hole_radius 0.5 EE unit = 0.127 mm → 直径 0.254
+  assert.ok(converted.text.includes("fp_line"));
+  assert.ok(converted.text.includes("fp_arc"));
+
+  // 只有 3D 外形、没有焊盘时要说清楚，而不是给个空封装。
+  const empty = parseEasyedaPackage({ result: { packageDetail: { dataStr: { head: { x: 0, y: 0, c_para: {} }, shape: ["SVGNODE~{\"gId\":\"x\"}"] } } } });
+  assert.equal(empty.ok, false);
+  assert.match(empty.error, /没有可用焊盘/u);
+
+  // 编号格式不对就直接拒，不发请求。
+  return fetchEasyedaPackage("14663").then((result) => {
+    assert.equal(result.ok, false);
+    assert.match(result.error, /立创编号不对/u);
+  });
+});
+
+// S178：库里没有封装时从立创页面转一个；两条来源都失败时两个原因都要说。
+test("器件导入：KiCad 库里没有就回退立创页面，两条都失败给两个原因（S178）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-easyeda-"));
+  const libDir = join(dir, "kicad-libs");
+  mkdirSync(libDir, { recursive: true });
+  mkdirSync(join(dir, "project", "hardware", "kicad"), { recursive: true });
+  const toolchain = fakeToolchain(libDir);
+  const payload = {
+    result: {
+      packageDetail: {
+        dataStr: {
+          head: { x: 4000, y: 3000, c_para: { package: "TEST-SOT", "3DModel": "TEST-SOT.step" } },
+          shape: [
+            "PAD~RECT~4010~3000~3.1496~3.5433~1~~1~0~~0~gge1~~~~0",
+            "PAD~ELLIPSE~3990~3000~3.937~3.937~11~GND~2~0.5~~0~gge2~~~~1",
+          ],
+        },
+      },
+    },
+  };
+  const fakeFetch = async (url) => {
+    const text = String(url);
+    if (text.includes("/api/products/")) return new Response(JSON.stringify(payload), { status: 200 });
+    return new Response("<html></html>", { status: 200 });
+  };
+
+  const preview = await importPart(join(dir, "project"), toolchain, {
+    footprint: "TEST-SOT",
+    code: "C9999",
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(preview.ok, true);
+  assert.equal(preview.footprint?.library, "jlcpcb_C9999");
+  assert.equal(preview.footprint?.source, "easyeda:C9999");
+  assert.equal(preview.pads.length, 2);
+  assert.deepEqual(preview.written, []);
+  assert.ok(preview.notes.some((note) => note.includes("封装来自立创页面")));
+
+  const written = await importPart(join(dir, "project"), toolchain, {
+    footprint: "TEST-SOT",
+    code: "C9999",
+    write: true,
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(written.ok, true);
+  assert.ok(written.footprint !== null && written.footprint.file.includes(join("hardware", "libs")));
+  const mod = readFileSync(written.footprint.file, "utf8");
+  assert.ok(mod.includes('(property "LCSC" "C9999"'));
+  const table = readFileSync(join(dir, "project", "hardware", "kicad", "fp-lib-table"), "utf8");
+  assert.ok(table.includes('(lib (name "jlcpcb_C9999")'));
+
+  // 只查库：不走立创，直接报库里没有。
+  const libOnly = await importPart(join(dir, "project"), toolchain, { footprint: "TEST-SOT", code: "C9999", source: "kicad", fetchImpl: fakeFetch });
+  assert.equal(libOnly.ok, false);
+  assert.match(libOnly.error, /库里没有这个封装/u);
+
+  // 两条来源都失败：库里没有 + 立创页面返回 404。
+  const notFound = async () => new Response("nope", { status: 404 });
+  const failed = await importPart(join(dir, "project"), toolchain, { footprint: "TEST-SOT", code: "C9999", fetchImpl: notFound });
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /库里没有/u);
+  assert.match(failed.error, /立创页面返回 404/u);
+  rmSync(dir, { recursive: true, force: true });
 });
