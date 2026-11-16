@@ -13,6 +13,7 @@ import { locateEcadToolchain } from "../engine/ecad/toolchain.js";
 import { planEcadWorkspace } from "../engine/ecad/tsci.js";
 import { readCircuitNetlist } from "../engine/ecad/pcb/netlist.js";
 import { planPlacement } from "../engine/ecad/pcb/placement.js";
+import { countCopperLayers, ensureDesignRules } from "../engine/ecad/pcb/rules.js";
 import { buildApplyScript, parseApplyOutput } from "../engine/ecad/pcb/apply.js";
 import { appendGroundZone, DEFAULT_POWER_NETS } from "../engine/ecad/pcb/route.js";
 import { buildGeometryScript, parseGeometry } from "../engine/ecad/pcb/geometry.js";
@@ -376,6 +377,15 @@ export function registerPcbTools(ctx: DshContext): void {
       if (board === "" || !existsSync(board)) return { ...empty, error: "还没有 .kicad_pcb：先构建，或传 boardFile 指定板子" };
 
       const notes: string[] = [];
+      // 布线器从 DSN 读间距与线宽，DSN 又取自网络类；先抬到工艺下限，避免「合规于 0.09、违规于 0.2」（S149）。
+      const rules = ensureDesignRules(workspace.kicadDir);
+      if (!rules.ok) notes.push("设计规则未对齐：" + rules.error);
+      else
+        notes.push(
+          "设计规则按 " + String(countCopperLayers(workspace.kicadDir)) + " 层嘉立创常规档：间距 "
+            + String(rules.floor.clearanceMm) + " mm、线宽 " + String(rules.floor.trackWidthMm) + " mm"
+            + (rules.changed.length === 0 ? "（已是该档）" : "（抬升：" + rules.changed.join("、") + "）"),
+        );
       let input = board;
       if (args.normalize !== false) {
         const normalized = quoteLayerNames(readFileSync(board, "utf8"));
@@ -384,6 +394,11 @@ export function registerPcbTools(ctx: DshContext): void {
         if (normalized.quoted > 0) notes.push("层名补引号：" + String(normalized.quoted) + " 处（引擎只认带引号的写法）");
       }
       const outFile = board.replace(/\.kicad_pcb$/u, ".auto.kicad_pcb");
+      // 布线器会把设置写回 .kicad_pro，布线后再抬一次，后续 DRC 才按工艺下限判。
+      const restoreRules = (): void => {
+        const again = ensureDesignRules(workspace.kicadDir, rules.floor);
+        if (again.changed.length > 0) notes.push("布线器重写了网络类，已按同一档再次对齐：" + again.changed.join("、"));
+      };
       const report = await runKrtAutoroute({
         subprocess: ctx.subprocess,
         runtime: { root, python: located.toolchain.python },
@@ -393,6 +408,7 @@ export function registerPcbTools(ctx: DshContext): void {
         signal: exec.signal,
       });
       if (!report.ok) return { ...empty, boardFile: board, error: report.error, steps: report.steps, warnings: report.warnings, notes };
+      restoreRules();
       let output = report.output;
       if (!report.dryRun) {
         const check = await runKrtConnectedCheck({ subprocess: ctx.subprocess, runtime: { root, python: located.toolchain.python }, pcbFile: outFile, signal: exec.signal });

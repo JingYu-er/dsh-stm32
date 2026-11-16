@@ -5903,7 +5903,7 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S148）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S149）
 
 ### 一、目标与约束
 
@@ -7389,6 +7389,18 @@ v0.1.7（2026-11-12）之后仓库里积了 100 个提交、S1–S89 一整条�
   - 工具 `stm32_layout_fix`（默认 dryRun，`apply=true` 才改）；Web `GET /layout` 只规划、`POST /layout` 执行（路由 49 → 50）。
 - 真机：用户工程归位后 `dsh-test/.dsh-stm32/workspace.conf` 只有一行 `project=tetris-handheld`，`tetris-handheld/dsh-stm32.conf` 为 `ioc=fw/tetris.ioc`、`firmware=fw`，`fw/` 下只剩 `.bak`；`resolveProjectLayout` 与 `readPinout` 仍读出 15 个引脚、`STM32F303CCT6`、11 个时钟节点。
 - 教训：**同一类文件不要有两种语义**。放错不是用户的错，是设计让人必须记两套规则；把「谁该在哪」变成代码里的常量，再加一个能一键归位的入口，才算解决。
+
+### 一百五十七、设计规则要跟布线器同一档（S149）
+
+- 现象：一键设计（`pcb: true`）跑通、布线「未连接 0」，但 DRC 报 **258 条 `clearance`**，实测间距 0.1036 / 0.1150 mm 而规则要求 0.2 mm；另外 1 条 `track_width`。
+- 根因不在我们的规则写错，而在**两条口径打架**：`.kicad_dru` 与网络类都按 0.2 mm 判，而布线器 `KiCadRoutingTools` 一律按**嘉立创工艺下限**布线。读 `py_router/fab_tiers.py` 可以确认：`_FAB_FLOORS[4]['standard'] = {clearance 0.10, track_width 0.0889, via 0.45/0.20}`、`[2]['standard'] = {0.127, 0.127}`；`autoroute.py` 的注释直接写明「a finished board meets the fab floor everywhere；a declared net class above it is aspirational, so every step routes at the floor」，而且它的 argparse 只有 `input/output/--dry-run/--finish/--effort-factor/--plane-layer-cost`——**没有 `--clearance`**，网络类再严也压不回来。
+- 修法一（档位按层数）：`pcb/rules.ts` 的 `fabFloorForLayers(copperLayers)` 与 `dfm.ts` 的 `fabRulesForLayers(copperLayers)` 取同一张表——1–2 层 0.127 mm、≥4 层 0.10 mm；`countCopperLayers()` 直接数 PCB 的 `(layers …)` 里的 `F.Cu/B.Cu/InN.Cu`，读不到按 4 层算（最宽松，不会误判更严）。
+- 修法二（只降间距、不动线宽）：`ensureDesignRules()` 的间距**精确对齐**到档位（可升可降），线宽/过孔/孔径仍只升不降——用户放大过的值保留，间距必须和布线器一致，否则不是「合规于 0.2」，就是「DRC 形同没查」。
+- 修法三（量化余量）：布线器在栅格上落线，实测间距比档位小 0.5–2.6 µm（`0.1000 → 0.0974`，最坏落在过孔与走线的圆角上）。`ROUTER_GRID_MARGIN_MM = 0.003` 与 `druFloorForLayers()`/`druRulesForLayers()` 把**判定阈值**减掉这个余量；名义档 0.1 mm 仍写在 DFM 与文档里，不把工艺要求悄悄放宽。
+- 顺序也重要：`.kicad_dru` 必须在**布线之前**写好（DRC 读的就是它）。第一版写在 DFM 步骤里，DRC 用的是上一次留下的 0.2 mm 规则文件，于是白跑两轮。
+- 结果（用户工程 tetris-handheld，41 元件 / 35 网络 / 4 层）：构建 52 s → 布线 31.7 s / 6 步 / 未连接 0 → ERC 0 错误 / 543 警告 → **DRC 0 错误 / 132 警告**（此前 259 错）→ 可制造性 62.0×104.0 mm、最细走线 0.1 mm、打样约 96 元。
+- 验证：全量 **88 套件 / 1232 pass / 0 fail**、ACCEPTANCE OK、`test:pack` 通过、包体 2132.6 KB / 348 文件 / 解包 16350.0 KB。
+- 教训：**规则的阈值不是越严越好，是要和实际执行的工艺档一致**。比布线器严，得到的不是更安全的板，而是满屏误报；比它松，则是 DRC 形同没查。量化余量这种事只能靠实测，图纸上算不出来。
 
 ### 一百五十六、没有导线的原理图：ERC 两类规则不可信（S148）
 

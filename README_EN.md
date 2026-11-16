@@ -226,7 +226,9 @@ git clone --depth 1 https://github.com/drandyhaas/KiCadRoutingTools ~/.dsh-stm32
 "D:/app/KiCad/10.0/bin/python.exe" -m pip install numpy scipy shapely
 ```
 
-Override the location with `DSH_STM32_KRT_ROOT`. Without it `stm32_pcb_autoroute` reports that the engine is missing and everything else keeps working. Measured on a 41-part / 35-net / 4-layer board: 0 open nets, DRC violations down from 437 to 128 with all shorts and clearance errors cleared, 146 s.
+Override the location with `DSH_STM32_KRT_ROOT`. Without it `stm32_pcb_autoroute` reports that the engine is missing and everything else keeps working.
+
+Design rules follow the **copper layer count** at JLCPCB's standard tier: 0.127 mm for 1–2 layers, 0.10 mm for multilayer, the same table the router uses. Routing and DRC share the tier, so `clearance` is not reported board-wide; the `.kicad_dru` threshold is 0.003 mm below the tier to absorb grid quantization (measured minimum 0.0974 mm). Measured on a 41-part / 35-net / 4-layer board through design-with-routing: 0 open nets, DRC down from 259 errors to **0 errors / 132 warnings**, 52 s build and 32 s routing.
 
 ### Code and build
 

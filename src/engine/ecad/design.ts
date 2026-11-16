@@ -11,11 +11,12 @@ import { join } from "node:path";
 import type { SubprocessService } from "../../types.js";
 import { exportFabrication } from "./fabrication.js";
 import { exportStep, runDrc, runErc } from "./checks.js";
-import { checkDfm } from "./dfm.js";
+import { checkDfm, druRulesForLayers, fabRulesForLayers, writeDru } from "./dfm.js";
 import { exportEmbeddedLibraries } from "./libs.js";
 import { mergeCoincidentPads } from "./padmerge.js";
 import { precheckFootprints } from "./padprecheck.js";
 import { krtRoot, krtStatus, quoteLayerNames, runKrtAutoroute, runKrtConnectedCheck } from "./pcb/krt.js";
+import { countCopperLayers, druFloorForLayers, ensureDesignRules } from "./pcb/rules.js";
 import type { EcadToolchain } from "./toolchain.js";
 import { runTsciBuild, type EcadWorkspace } from "./tsci.js";
 
@@ -102,6 +103,17 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
   }
   const pcbFile = pcbOf(kicadDir);
   const schematicFile = schOf(kicadDir);
+  // 工艺档按铜层数取（S149）：布线器、DRC 规则、可制造性判据共用同一档，
+  // 否则线按 0.1 布、规则按 0.2 判，整板都会报间距不足。
+  const copperLayers = countCopperLayers(kicadDir);
+  const dfmRules = fabRulesForLayers(copperLayers);
+  const druRules = druRulesForLayers(copperLayers);
+  const rulesFloor = druFloorForLayers(copperLayers);
+  // 可制造性规则要在布线与 DRC 之前写好：DRC 读的就是这份 .kicad_dru，
+  // 规则留在 0.2 mm 而线按 0.09 mm 布，整板都会被判间距不足（S149）。
+  const dru = writeDru(kicadDir, druRules);
+  if (dru.ok) notes.push("可制造性规则：" + dru.file + "（间距 " + String(dfmRules.minClearanceMm) + " mm、线宽 " + String(dfmRules.minTrackMm) + " mm）");
+  else notes.push("可制造性规则未写入：" + dru.error);
 
   // 3. 合并焊盘（可选）：同坐标、同网络的焊盘并成一个多编号焊盘。
   if (request.mergePads !== false && pcbFile !== "") {
@@ -130,6 +142,14 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
   // 4.5 布线（S146）：外部引擎自带的平面/扇出/去耦/布线四步，缺引擎就跳过而不是失败。
   if (request.pcb === true && pcbFile !== "") {
     started = Date.now();
+    // 布线器从 DSN 读间距与线宽，而 DSN 取自网络类；先把网络类抬到工艺下限（S149）。
+    // 档位按铜层数取嘉立创常规档，与布线器 fab_tiers 同表——否则线按 0.1 布、规则按 0.2 判。
+    const rules = ensureDesignRules(kicadDir, rulesFloor);
+    notes.push(
+      "设计规则按 " + String(copperLayers) + " 层嘉立创常规档：间距 " + String(dfmRules.minClearanceMm)
+        + " mm、线宽 " + String(rules.floor.trackWidthMm) + " mm"
+        + (rules.changed.length === 0 ? "（已是该档，无需改动）" : "（抬升：" + rules.changed.join("、") + "）"),
+    );
     const root = krtRoot();
     const status = krtStatus(root);
     if (!status.ok) {
@@ -160,6 +180,10 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
         started,
       );
       notes.push(...routed.warnings);
+      // 布线器会把自己的设置写回 .kicad_pro，连带把我们抬上去的网络类覆盖回 0.09；
+      // 再抬一次，DRC 才是按工艺下限判的（S149）。
+      const again = ensureDesignRules(kicadDir, rules.floor);
+      if (again.changed.length > 0) notes.push("布线器重写了网络类，已按同一档再次对齐：" + again.changed.join("、"));
     }
   }
 
@@ -175,7 +199,7 @@ export async function runEcadDesign(request: DesignRequest): Promise<DesignResul
 
   // 6. 可制造性与成本：判据是嘉立创常规工艺，只有提示，不阻断。
   started = Date.now();
-  const dfm = checkDfm(readFileSync(pcbFile, "utf8"));
+  const dfm = checkDfm(readFileSync(pcbFile, "utf8"), dfmRules);
   record(
     "可制造性",
     true,

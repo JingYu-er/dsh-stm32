@@ -14,7 +14,8 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { exportStep, findUnnamedNets, runDrc, runErc, type KicadReport } from "../engine/ecad/checks.js";
-import { checkDfm, writeDru } from "../engine/ecad/dfm.js";
+import { checkDfm, druRulesForLayers, fabRulesForLayers, writeDru } from "../engine/ecad/dfm.js";
+import { countCopperLayers } from "../engine/ecad/pcb/rules.js";
 import { exportEmbeddedLibraries } from "../engine/ecad/libs.js";
 import { runEcadDesign } from "../engine/ecad/design.js";
 import { ensureProjectRuntime } from "../engine/ecad/runtime.js";
@@ -529,8 +530,10 @@ export function registerEcadTools(ctx: DshContext): void {
       const libs = exportEmbeddedLibraries(workspace, pcb, sch);
       const pcbText = readFileSync(pcb, "utf8");
       const unnamedNets = findUnnamedNets(pcbText);
-      const dru = writeDru(latest.kicadDir);
-      const dfm = checkDfm(pcbText);
+      // 工艺档按铜层数取（S149），与布线器 fab_tiers 的 standard 档一致。
+      const layered = fabRulesForLayers(countCopperLayers(latest.kicadDir));
+      const dru = writeDru(latest.kicadDir, druRulesForLayers(countCopperLayers(latest.kicadDir)));
+      const dfm = checkDfm(pcbText, layered);
       const [erc, drc] = await Promise.all([
         runErc(ctx.subprocess, located.toolchain, sch, exec.signal),
         runDrc(ctx.subprocess, located.toolchain, pcb, exec.signal),

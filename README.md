@@ -226,7 +226,9 @@ git clone --depth 1 https://github.com/drandyhaas/KiCadRoutingTools ~/.dsh-stm32
 "D:/app/KiCad/10.0/bin/python.exe" -m pip install numpy scipy shapely
 ```
 
-位置可用 `DSH_STM32_KRT_ROOT` 改。装好后 `stm32_pcb_autoroute` 才能跑；没装时该工具直接报一句「还没安装」，其余功能不受影响。实测（41 元件 / 35 网络 / 4 层板）未连接 0，DRC 违规从 437 降到 128，其中短接与间距全部清零，146 秒。
+位置可用 `DSH_STM32_KRT_ROOT` 改。装好后 `stm32_pcb_autoroute` 才能跑；没装时该工具直接报一句「还没安装」，其余功能不受影响。
+
+设计规则跟着**铜层数**取嘉立创常规档：1–2 层 0.127 mm、多层 0.10 mm，与布线器的工艺档同表。布线与 DRC 用同一档，`clearance` 才不会整板误报；写成 `.kicad_dru` 的判定阈值再减 0.003 mm 的量化余量（布线器在栅格上落线，实测最少 0.0974 mm）。实测（41 元件 / 35 网络 / 4 层板，一键设计带布线）未连接 0，DRC 从 259 错降到 **0 错 / 132 警**，构建 52 秒、布线 32 秒。
 
 ### 代码与构建
 

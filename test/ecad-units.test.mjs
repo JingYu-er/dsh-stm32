@@ -17,6 +17,7 @@ import { normalizeKicadProject, normalizePcbFootprintNames, readCanonicalFootpri
 import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/ecad/jlcpcb.js";
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
+import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
 import { coincidentGroups, collectKicadFootprintRefs, parseKicadModPads } from "../lib/engine/ecad/padprecheck.js";
 import { mergeCoincidentPads } from "../lib/engine/ecad/padmerge.js";
 import { registerEcadTools } from "../lib/tools/ecad.js";
@@ -951,5 +952,59 @@ test("机器生成的原理图：未连接类规则降级并注明生成器（S1
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("设计规则按层数取嘉立创常规档：多层 0.10、双层 0.127、只升不降（S149）", () => {
+  const dir = tempDir("ecad-rules-");
+  try {
+    assert.equal(ensureDesignRules(dir).ok, false);
+    const write = () => writeFileSync(
+      join(dir, "board.kicad_pro"),
+      JSON.stringify(
+        {
+          net_settings: { classes: [{ name: "Default", clearance: 0.09, track_width: 0.3 }] },
+          board: { design_settings: { rules: { min_clearance: 0.09, min_track_width: 0.1 } } },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    write();
+    // 没有 PCB 文件时按 4 层算：0.10 mm 档。
+    const four = ensureDesignRules(dir);
+    assert.equal(four.ok, true);
+    assert.equal(four.floor.clearanceMm, 0.1);
+    let parsed = JSON.parse(readFileSync(join(dir, "board.kicad_pro"), "utf8"));
+    assert.equal(parsed.net_settings.classes[0].clearance, 0.1);
+    assert.equal(parsed.net_settings.classes[0].track_width, 0.3, "已够宽的线宽不该被改");
+    assert.equal(parsed.net_settings.classes[0].via_diameter, 0.45);
+    assert.equal(parsed.net_settings.classes[0].via_drill, 0.2);
+    assert.equal(parsed.board.design_settings.rules.min_clearance, 0.1);
+    assert.match(four.changed.join(" "), /clearance/u);
+
+    // 双层板：0.127 mm 档；显式传 FAB_RULE_FLOOR 时仍按 0.2 判。
+    writeFileSync(
+      join(dir, "board.kicad_pcb"),
+      '(kicad_pcb (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user)))',
+      "utf8",
+    );
+    write();
+    const two = ensureDesignRules(dir);
+    assert.equal(countCopperLayers(dir), 2);
+    assert.equal(two.floor.clearanceMm, 0.127);
+    parsed = JSON.parse(readFileSync(join(dir, "board.kicad_pro"), "utf8"));
+    assert.equal(parsed.net_settings.classes[0].clearance, 0.127);
+
+    // 显式给更严的档：间距可以降回来也可以抬上去，线宽只升不降。
+    const strict = ensureDesignRules(dir, FAB_RULE_FLOOR);
+    assert.equal(JSON.parse(readFileSync(join(dir, "board.kicad_pro"), "utf8")).net_settings.classes[0].clearance, 0.2);
+    assert.match(strict.changed.join(" "), /clearance=0\.2/u);
+    const back = ensureDesignRules(dir, fabFloorForLayers(4));
+    assert.equal(JSON.parse(readFileSync(join(dir, "board.kicad_pro"), "utf8")).net_settings.classes[0].clearance, 0.1);
+    assert.match(back.changed.join(" "), /clearance=0\.1/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

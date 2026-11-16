@@ -49,9 +49,29 @@ export const JLC_STANDARD: FabRules = {
   sampleQty: 5,
 };
 
+/**
+ * 按铜层数取嘉立创常规档：1–2 层是 0.127 mm，多层是 0.10 mm。
+ *
+ * 与布线器 `py_router/fab_tiers.py` 的 standard 档同表——DRC 规则比布线器严，
+ * 布出来的线就会整板报间距不足，所以规则必须跟着层数走（S149）。
+ */
+export function fabRulesForLayers(copperLayers: number): FabRules {
+  if (copperLayers <= 2) return { ...JLC_STANDARD, minTrackMm: 0.127, minClearanceMm: 0.127 };
+  return { ...JLC_STANDARD, minTrackMm: 0.1, minClearanceMm: 0.1 };
+}
+
+/**
+ * 写进 `.kicad_dru` 的档位：名义档减掉布线器栅格量化的余量（见 `ROUTER_GRID_MARGIN_MM`）。
+ *
+ * 名义档仍是可制造性判据（`fabRulesForLayers`）；这里只影响 DRC 判定的阈值。
+ */
+export function druRulesForLayers(copperLayers: number): FabRules {
+  const nominal = fabRulesForLayers(copperLayers);
+  return { ...nominal, minClearanceMm: Math.round((nominal.minClearanceMm - 0.003) * 1e6) / 1e6 };
+}
+
 /** 把规则写成 KiCad 自定义设计规则文件，供 `kicad-cli pcb drc` 使用。 */
-export function renderDru(rules: FabRules = JLC_STANDARD): string {
-  return [
+export function renderDru(rules: FabRules = JLC_STANDARD): string {  return [
     "(version 1)",
     `(rule "嘉立创 最小线宽" (constraint track_width (min ${rules.minTrackMm.toFixed(3)}mm)))`,
     `(rule "嘉立创 最小间距" (constraint clearance (min ${rules.minClearanceMm.toFixed(3)}mm)))`,
