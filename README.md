@@ -209,6 +209,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_pcb_place` | 按 circuit.json 的元件与网络计算落位，再改 `.kicad_pcb` 把元件搬到位（默认清掉旧走线，写盘前留 `.bak`）|
 | `stm32_pcb_autoroute` | 用 KiCadRoutingTools（Rust 网格布线器）铺平面、扇出并布线，回报未连接数；默认只出计划 |
 | `stm32_pcb_render` | 把 `.kicad_pcb` 画成 SVG 板图：板框、顶层与底层走线、焊盘、过孔、丝印；默认只回尺寸与计数，给 `saveAs` 才落盘 |
+| `stm32_pcb_ipc` | 在**已打开的 KiCad PCB 编辑器**里做局部编辑：看板况、按位号移元件、布一段线、加过孔、重铺铜、保存；走 KiCad 官方 IPC，改动能被 Ctrl+Z 撤销。默认只回计划，`apply: true` + `expectBoard` 才动板子；连不上时自动用 pcbnew 打开本工程的板子并等就绪（`open: false` 可关） |
 | `stm32_pcb_route` | 网格 A* 布线（0.5 mm 栅格）：按网络逐张布、避开已有焊盘与走线；默认预览，`apply: true` 才写盘（写完必须跑 DRC） |
 | `stm32_ecad_package` | 把 `hardware/` 打成可交付 zip（跳过 `node_modules`、`dist`、`.history`），写完读回自检 |
 

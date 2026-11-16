@@ -1138,3 +1138,45 @@ test("工具 stm32_pcb_render：给临时板出 SVG，saveAs 才落盘（S151）
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("打开 KiCad：拼对 pcbnew 参数，连不上时按给定节奏重探（S154）", async () => {
+  const { openBoardInKicad, waitForIpc } = await import("../lib/engine/ecad/pcb/ipc-open.js");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-open-"));
+  try {
+    const board = join(dir, "board.kicad_pcb");
+    writeFileSync(board, "(kicad_pcb (version 20241229))\n", "utf8");
+
+    const calls = [];
+    const opened = openBoardInKicad(board, { exe: "C:/fake/pcbnew.exe", launcher: (spec) => calls.push(spec) });
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].exe, "C:/fake/pcbnew.exe");
+    assert.equal(calls[0].boardFile.replace(/\\/gu, "/"), board.replace(/\\/gu, "/"));
+    assert.equal(calls[0].cwd.replace(/\\/gu, "/"), dir.replace(/\\/gu, "/"));
+
+    const missing = openBoardInKicad(join(dir, "nope.kicad_pcb"), { exe: "C:/fake/pcbnew.exe" });
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /不存在/u);
+
+    let attempts = 0;
+    const waits = [];
+    const ready = await waitForIpc({
+      probe: async () => {
+        attempts += 1;
+        return attempts >= 3 ? "board.kicad_pcb" : "";
+      },
+      pollMs: 5,
+      timeoutMs: 2000,
+      sleep: async (ms) => waits.push(ms),
+    });
+    assert.equal(ready.ok, true);
+    assert.equal(ready.boardName, "board.kicad_pcb");
+    assert.equal(attempts, 3);
+    assert.deepEqual(waits, [5, 5]);
+
+    const timedOut = await waitForIpc({ probe: async () => "", pollMs: 1, timeoutMs: 5, sleep: async () => {} });
+    assert.equal(timedOut.ok, false, "一直连不上要如实报超时");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

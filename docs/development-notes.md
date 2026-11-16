@@ -5903,7 +5903,21 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S153）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S154）
+
+### 一百六十二、没开 KiCad 就替人开（S154）
+
+S153 把局部编辑接上了 IPC，但用起来有个前置动作：人得自己先开 KiCad、再切到那块板。没开时工具只会回「连不上」，等于把工具的准备成本推回给人。用户的原话是「没打开 kicad 的话，插件应该帮我自动打开当前的 kicad 工程，打开 pcb 编辑器」。
+
+做法分三步，都收在 `src/engine/ecad/pcb/ipc-open.ts`：
+
+1. **先探**：`runPcbIpc(status)` 成功且拿到板名，就什么都不用做；
+2. **再开**：连不上且有板子文件时，用 `pcbnew.exe <板>` 打开——detached + `stdio: "ignore"` + `unref()`，KiCad 是用户的应用，DSH 退出不该把它带走。板子默认取「本工程最近一次构建的 `.kicad_pcb`」（`findLatestKicadBuild`），也可 `boardFile` 显式给；
+3. **等就绪**：每 2 s 探一次，最多 90 s。冷启动实测 **52 s**（KiCad 起进程 + 加载板 + 起 IPC 服务），热启动几秒。超时不算「失败」的黑洞，而是给两条能执行的提示：「等了 N s 仍连不上」+「在 偏好设置 → 插件 勾选『启用 IPC API 服务器』，改完重启 KiCad」。
+
+接线：工具 `stm32_pcb_ipc` 增 `open`（默认 true，不想被打开传 false）、`boardFile`、`projectDir`；`/ecad/ipc?open=1&projectDir=…` 同样自动打开；面板按钮从「检查 KiCad」改成「连接 KiCad」，回包带上 `opened` 与 `notes`，直接显示「已用 pcbnew 打开 …，等 IPC 就绪… → IPC 已就绪（index.kicad_pcb，52 s）」。
+
+端到端验证（真机、真 GUI）：关掉所有 pcbnew → `GET /ecad/ipc?open=1&projectDir=demo` → 200、`opened:true`、`boardName:"index.kicad_pcb"`、总耗时 53 s（含等待）。测试注入 `launcher` 与假 `probe`，覆盖「拼对 exe/板子/cwd」「板子不存在给人话」「第 3 次探测才成功」「一直连不上如实报超时」。
 
 ### 一百六十一、接 KiCad 的官方 IPC：局部编辑交给编辑器（S153）
 

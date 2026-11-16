@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import type { SubprocessService } from "../../../types.js";
 import { runCapture } from "../../subprocess-runner.js";
 import { PCB_IPC_SCRIPT } from "./ipc-script.js";
+import { openBoardInKicad, waitForIpc } from "./ipc-open.js";
+import type { Launcher } from "./ipc-open.js";
 
 export type PcbIpcAction = "status" | "inspect" | "move" | "route" | "via" | "refill" | "save";
 
@@ -46,6 +48,66 @@ export interface PcbIpcResult {
   readonly data: Record<string, unknown>;
   /** 生成出来的脚本路径，进检查报告用。 */
   readonly script: string;
+}
+
+export interface ConnectPcbIpcOptions extends PcbIpcOptions {
+  /** 连不上时要不要替用户把 KiCad 打开（默认 true）。 */
+  readonly autoOpen?: boolean;
+  /** 连不上时要打开的板子；没给就不打开，只报原因。 */
+  readonly boardFile?: string;
+  readonly kicadRoot?: string;
+  /** 覆盖 pcbnew.exe 全路径（测试与自定义安装用）。 */
+  readonly exe?: string;
+  readonly launcher?: Launcher;
+  readonly waitMs?: number;
+  readonly pollMs?: number;
+}
+
+export interface ConnectPcbIpcResult {
+  readonly status: PcbIpcResult;
+  /** 这次有没有替用户启动 KiCad。 */
+  readonly opened: boolean;
+  readonly notes: string[];
+}
+
+/**
+ * 确保 IPC 可用：先探一次，连不上就打开板子再等（S154）。
+ *
+ * 为什么自动打开：没开编辑器时局部编辑一律失败，而用户此刻的意图就是「在这块板上改」；
+ * 让人手动去找地址、开 KiCad、切文档，是把工具的准备工作推回给人。
+ */
+export async function connectPcbIpc(options: ConnectPcbIpcOptions): Promise<ConnectPcbIpcResult> {
+  const notes: string[] = [];
+  const first = await runPcbIpc(options, { action: "status", timeoutMs: options.timeoutMs ?? 30_000 });
+  const boardNameOf = (result: PcbIpcResult): string => {
+    const data = result.data as { board?: { name?: string } } | undefined;
+    return data?.board?.name ?? "";
+  };
+  if (first.ok && boardNameOf(first) !== "") return { status: first, opened: false, notes };
+  if (options.autoOpen === false) return { status: first, opened: false, notes };
+  if (options.boardFile === undefined || options.boardFile === "") {
+    notes.push("要找 KiCad 打开板子，但没有可用的板子文件：先构建一次，或显式给 boardFile");
+    return { status: first, opened: false, notes };
+  }
+  const opened = openBoardInKicad(options.boardFile, { exe: options.exe, kicadRoot: options.kicadRoot, launcher: options.launcher });
+  if (!opened.ok) {
+    notes.push(opened.error);
+    return { status: first, opened: false, notes };
+  }
+  notes.push("已用 pcbnew 打开 " + opened.boardFile + "，等 IPC 就绪…");
+  const waited = await waitForIpc({
+    probe: async () => boardNameOf(await runPcbIpc(options, { action: "status", timeoutMs: 30_000 })),
+    timeoutMs: options.waitMs,
+    pollMs: options.pollMs,
+  });
+  if (!waited.ok) {
+    notes.push("等了 " + String(Math.round(waited.waitedMs / 1000)) + " s 仍连不上：" + waited.error);
+    notes.push("在 KiCad 里打开 偏好设置 → 插件，勾选「启用 IPC API 服务器」，改完重启 KiCad 再试");
+    return { status: first, opened: true, notes };
+  }
+  const second = await runPcbIpc(options, { action: "status", timeoutMs: 30_000 });
+  notes.push("IPC 已就绪（" + waited.boardName + "，" + String(Math.round(waited.waitedMs / 1000)) + " s）");
+  return { status: second, opened: true, notes };
 }
 
 export interface PcbIpcOptions {

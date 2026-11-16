@@ -209,6 +209,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_pcb_place` | Plan component placement from `circuit.json` and move the footprints in `.kicad_pcb` (drops stale tracks by default, keeps a `.bak`) |
 | `stm32_pcb_autoroute` | Route with KiCadRoutingTools (Rust grid router): planes, fanout, then routing; reports open nets. Dry-run by default |
 | `stm32_pcb_render` | Draw a `.kicad_pcb` as an SVG board view: outline, top and bottom copper, pads, vias, silkscreen; returns size and counts unless `saveAs` is given |
+| `stm32_pcb_ipc` | Local edits inside the **open KiCad PCB editor**: board status, move a footprint by reference, draw a track, add a via, refill zones, save. Uses KiCad's official IPC, so edits land in its undo stack. Plan-only by default; `apply: true` plus `expectBoard` to change the board. When nothing is open it launches pcbnew with this project's board and waits (`open: false` to disable) |
 | `stm32_pcb_route` | Grid A* routing (0.5 mm grid) that avoids pads and existing tracks; preview by default, writes only with `apply: true` (run DRC after) |
 | `stm32_ecad_package` | Pack `hardware/` into a deliverable zip (skips `node_modules`, `dist`, `.history`) and read it back to self-check |
 

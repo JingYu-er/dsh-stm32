@@ -67,7 +67,7 @@ import { exportFabrication } from "./ecad/fabrication.js";
 import { packageHardware, verifyPackage } from "./ecad/package.js";
 import { locateEcadToolchain } from "./ecad/toolchain.js";
 import { readPcbScene } from "./ecad/pcb/scene.js";
-import { runPcbIpc } from "./ecad/pcb/ipc.js";
+import { connectPcbIpc, runPcbIpc } from "./ecad/pcb/ipc.js";
 import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
 import { runEcadDesign } from "./ecad/design.js";
 import { readAutoState, writeAutoState } from "./ecad/autobuild.js";
@@ -1200,9 +1200,27 @@ export async function handleWebApi(input: {
     if (located.toolchain === null) {
       return ok({ ipc: { ok: false, kind: "FAILED_PRECONDITION", error: located.error, version: "", boardName: "", footprints: 0, tracks: 0, vias: 0, zones: 0, nets: 0 } });
     }
-    const result = await runPcbIpc({ subprocess: input.deps.subprocess, python: located.toolchain.python }, { action: "status", timeoutMs: 20000 });
+    // open=1：连不上就替用户把最近一次构建的板子交给 pcbnew 打开，等 IPC 就绪（S154）。
+    const autoOpen = query["open"] === "1" || query["open"] === "true";
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    let boardFile = "";
+    if (autoOpen && projectDir !== "") {
+      const layout = resolveProjectLayout(projectDir);
+      const latest = findLatestKicadBuild(planEcadWorkspace(projectDir, layout.hardwareDir));
+      if (latest.ok) boardFile = latest.pcbFile;
+    }
+    const connected = await connectPcbIpc({
+      subprocess: input.deps.subprocess,
+      python: located.toolchain.python,
+      kicadRoot: located.toolchain.root,
+      env,
+      autoOpen,
+      boardFile,
+    });
+    const result = connected.status;
     if (!result.ok) {
-      return ok({ ipc: { ok: false, kind: result.kind, error: result.error, version: "", boardName: "", footprints: 0, tracks: 0, vias: 0, zones: 0, nets: 0 } });
+      return ok({ ipc: { ok: false, kind: result.kind, error: result.error, version: "", boardName: "", footprints: 0, tracks: 0, vias: 0, zones: 0, nets: 0, opened: connected.opened, notes: connected.notes } });
     }
     const data = result.data as { version?: string; board?: { name?: string; counts?: Record<string, number> } };
     const counts = data.board?.counts ?? {};
@@ -1217,6 +1235,8 @@ export async function handleWebApi(input: {
       vias: counts["vias"] ?? 0,
       zones: counts["zones"] ?? 0,
       nets: counts["nets"] ?? 0,
+      opened: connected.opened,
+      notes: connected.notes,
     } });
   }
   if (path === WEB_API_PREFIX + "/ecad/pcb") {

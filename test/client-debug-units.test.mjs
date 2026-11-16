@@ -310,8 +310,8 @@ test("电路设计页能看板图：按层开关请求 /ecad/pcb，SVG 内联渲
   assert.ok(source.includes("\"ecad/pcb?\""));
   assert.ok(source.includes("\"板图\""));
   assert.ok(source.includes("d32-pcb-figure"));
-  assert.ok(source.includes("检查 KiCad"), "面板要能手动探一次 IPC 连接");
-  assert.ok(source.includes('"ecad/ipc"'), "IPC 检查走独立接口");
+  assert.ok(source.includes("连接 KiCad"), "面板要能手动探一次 IPC 连接");
+  assert.ok(source.includes('"ecad/ipc?open=1"'), "连不上时请求带 open=1，让插件自己把 KiCad 打开");
   assert.ok(source.includes("reply.value.ipc"), "callApi 已经把回包包进 value，读 ipc 必须先解包");
   // 关掉的层传 0，位号只有显式打开才请求。
   assert.ok(source.includes("params.push(name + \"=0\")"));
