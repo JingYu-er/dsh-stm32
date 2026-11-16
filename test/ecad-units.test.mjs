@@ -18,6 +18,7 @@ import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { importPart } from "../lib/engine/ecad/part-import.js";
+import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -2056,5 +2057,64 @@ test("器件导入：库里没有就报缺哪个封装，立创编号格式不�
   const badCode = await importPart(dir, toolchain, { footprint: "SOIC-8_3.9x4.9mm_P1.27mm", code: "1234" });
   assert.equal(badCode.ok, false);
   assert.match(badCode.error, /立创编号格式不对/u);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// S174：手绘层只改图纸文本，四个动作都幂等；缺元件/缺脚要报出来。
+test("手绘层：克隆、连线、标名、挪动都能落到图纸上，重复执行幂等（S174）", () => {
+  const fixture = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+  const source = readFileSync(fixture, "utf8");
+  const first = drawOnSheet(source, fixture, [
+    { op: "clone", from: "R1", ref: "R2" },
+    { op: "wire", a: { ref: "R2", pin: "1" }, b: { ref: "R1", pin: "1" } },
+    { op: "label", at: { ref: "R2", pin: "2" }, text: "SENSE" },
+    { op: "move", ref: "C1", at: { x: 120, y: 90 } },
+  ]);
+  assert.equal(first.ok, true);
+  assert.equal(first.applied, 4);
+  assert.equal(first.failed.length, 0);
+  assert.ok(first.text.includes('(property "Reference" "R2"'));
+  assert.ok(first.text.includes('(label "SENSE"'));
+  assert.ok(first.text.includes("(at 120 90 0)"));
+  assert.ok(symbolBlocks(first.text).length === symbolBlocks(source).length + 1);
+
+  const second = drawOnSheet(first.text, fixture, [
+    { op: "clone", from: "R1", ref: "R2" },
+    { op: "wire", a: { ref: "R2", pin: "1" }, b: { ref: "R1", pin: "1" } },
+    { op: "label", at: { ref: "R2", pin: "2" }, text: "SENSE" },
+  ]);
+  assert.equal(second.applied, 0);
+  assert.equal(second.skipped, 3);
+
+  const removed = drawOnSheet(first.text, fixture, [{ op: "remove", ref: "R2" }]);
+  assert.equal(removed.ok, true);
+  assert.equal(symbolBlocks(removed.text).length, symbolBlocks(source).length);
+
+  const bad = drawOnSheet(source, fixture, [
+    { op: "wire", a: { ref: "R9", pin: "1" }, b: { ref: "R1", pin: "1" } },
+    { op: "clone", from: "R7", ref: "R8" },
+  ]);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.applied, 0);
+  assert.equal(bad.failed.length, 2);
+  assert.match(bad.failed[0], /起点找不到/u);
+  assert.match(bad.failed[1], /图纸里没有 R7/u);
+});
+
+test("手绘层：底图已存在就不覆盖，构建图纸不存在时说清先构建（S174）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-draw-"));
+  const buildSheet = join(dir, "build.kicad_sch");
+  const handSheet = drawSheetPath(join(dir, "project"));
+  writeFileSync(buildSheet, "(kicad_sch (version 20250114) (generator test))");
+  const seeded = seedDrawSheet(buildSheet, handSheet);
+  assert.equal(seeded.ok, true);
+  assert.equal(seeded.seeded, true);
+  writeDrawSheet(handSheet, "(hand)");
+  const again = seedDrawSheet(buildSheet, handSheet);
+  assert.equal(again.seeded, false);
+  assert.equal(readDrawSheet(handSheet), "(hand)");
+  const missing = seedDrawSheet(join(dir, "nope.kicad_sch"), join(dir, "x.kicad_sch"));
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /还没有可用的构建图纸/u);
   rmSync(dir, { recursive: true, force: true });
 });
