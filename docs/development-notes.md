@@ -5903,7 +5903,45 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 >>>>>>> d96f2b24bdf2dee59184b40080ff2357b790ff3c
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S169）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S170）
+
+### 一百七十八、原理图编辑：KiCad 10 不给原理图 IPC，就把编辑存成指令重放（S170）
+
+想让 AI 与人一起改原理图，先要回答「改在哪」。PCB 已经有答案：KiCad 的 IPC 能让编辑器在内存里改、撤销栈归它。原理图没有这条路。
+
+**取证：KiCad 10.0.7 的 IPC 只认板子**
+
+`kipy` 的 `Schematic` 类确实有 `get_symbols/get_labels/create_items/update_items/push_commit`，`get_schematic()` 也能返回图纸对象；但对着 `eeschema.exe` 打开的原理图调 `get_symbols()`，回的是
+
+```
+ApiError: KiCad returned error: no handler available for request of type
+  kiapi.common.commands.GetItems
+```
+
+`get_version()` 同样没有 handler（`GetVersion`）。kipy 里这些方法的 docstring 标的是「KiCad 11」——能力在客户端，服务端还没实现。所以「像 PCB 那样交给编辑器」这条路在 10.x 走不通。
+
+**退路：编辑存成指令，构建收尾重放**
+
+tscircuit 是原理图与 PCB 的唯一写者，每次 `stm32_ecad_build` 都会重写 `dist/<工程>/kicad/*.kicad_sch`——直接改文件会被下一次构建抹掉。于是把人工编辑拆成两层：
+
+- 指令层：`circuit/schematic-edits.json`，只有两种动作——`{op:"connect",a:{ref,pin},b:{ref,pin}}` 与 `{op:"label",at:{ref,pin},text}`。
+- 重放层：`src/engine/schematic/edit.ts` 的 `applySchEdits()` 在构建收尾把指令画进刚生成的图纸（`(wire …)` 加在末尾 `)` 之前，L 形三点或同轴一段；`(label …)` 带 `justify left bottom`）。
+
+幂等靠判重：连线看首尾端点（0.001 mm 容差），标名看「名字 + 位置」；重复应用只增加 `skipped`。
+
+**为什么要「立刻重放」**
+
+指令存下来但图纸没变，用户看到的还是旧图，会以为没生效。`stm32_sch_edit` 在 `add` 之后立刻对最近一次构建重放一次（`replayNow`）；没有构建产物时如实说「指令已存，下次 stm32_ecad_build 时重放」。`clear` 只清指令表，已经画在图纸上的线要等下次构建才会消失——这条也写进返回文案。
+
+**面板**
+
+原理图页签底部一行：两个引脚下拉（`ref.pin 名称 → 当前网络`，来自 `/schematic` 新增的 `pinIndex`）+「连起来」，或一个网络名输入 +「标名」，外加「清空指令」；下面列前 6 条已有指令。
+
+**教训**
+
+- 「交给人改」不是一句设计哲学，得先确认编辑器有没有对外接口。同一个 KiCad，PCB 有 IPC、原理图没有。
+- 唯一写者生成的文件，不要做原地编辑；把编辑抽成指令，让写者在收尾重放，才能两边都不丢。
+- 幂等是重放的前提：同一份指令跑一次和跑十次，图纸要一样。
 
 ### 一百七十七、网表门禁：图纸比板子新，就直说「板子旧了」（S169）
 

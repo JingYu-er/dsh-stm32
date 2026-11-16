@@ -12,6 +12,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { buildFootprint } from "../lib/engine/ecad/gen/footprint.js";
 import { buildSymbol } from "../lib/engine/ecad/gen/symbol.js";
+import { applySchEdits, pinPoint, replaySchEditsTo } from "../lib/engine/schematic/edit.js";
+import { parseSchText } from "../lib/engine/schematic/kicad-sch.js";
 import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 
@@ -1815,4 +1817,63 @@ test("一致性门禁：读出拆网/缺焊盘/悬空件，图纸更新过就报
   assert.ok(none.error.includes("projectDir"));
 
   rmSync(work, { recursive: true, force: true });
+});
+
+test("原理图编辑：连线插在两脚端点之间，重放幂等，标名落在引脚上（S170）", () => {
+  const file = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+  const before = readFileSync(file, "utf8");
+  const sheet = parseSchText(before, file, file);
+  assert.ok(sheet.symbols.length >= 2, "夹具里要有两个元件");
+  const from = pinPoint(sheet, "R1", "1");
+  const to = pinPoint(sheet, "C1", "2");
+  assert.ok(from !== null && to !== null, "两个引脚都要能定位");
+
+  const edits = [
+    { op: "connect", a: { ref: "R1", pin: "1" }, b: { ref: "C1", pin: "2" } },
+    { op: "label", at: { ref: "R1", pin: "2" }, text: "SENSE" },
+  ];
+  const outcome = applySchEdits(before, file, edits);
+  assert.equal(outcome.ok, true, outcome.error);
+  assert.equal(outcome.applied, 2);
+  assert.equal(outcome.skipped, 0);
+  assert.deepEqual(outcome.failed, []);
+
+  const after = parseSchText(outcome.text, file, file);
+  assert.ok(after.wires.length >= 1, "应写进一条导线");
+  // 同轴则一条线，否则 L 形两段。
+  const aligned = Math.abs(from.x - to.x) < 0.001 || Math.abs(from.y - to.y) < 0.001;
+  assert.equal(after.wires.length, sheet.wires.length + (aligned ? 1 : 2), "应按同轴或 L 形写入导线");
+  const near = (x, y, point) => Math.abs(x - point.x) < 0.01 && Math.abs(y - point.y) < 0.01;
+  const touches = (point) => after.wires.some((wire) => near(wire.a.x, wire.a.y, point) || near(wire.b.x, wire.b.y, point));
+  assert.equal(touches(from), true, "起点要落在 R1.1 的引脚端点上");
+  assert.equal(touches(to), true, "终点要落在 C1.2 的引脚端点上");
+
+  assert.equal(after.labels.some((label) => label.name === "SENSE"), true, "标名要写进图纸");
+
+  const again = applySchEdits(outcome.text, file, edits);
+  assert.equal(again.applied, 0, "重放不应再画一遍");
+  assert.equal(again.skipped, 2);
+
+  const missing = applySchEdits(before, file, [{ op: "connect", a: { ref: "R1", pin: "9" }, b: { ref: "C1", pin: "1" } }]);
+  assert.equal(missing.applied, 0);
+  assert.ok(missing.failed[0].includes("R1"), "找不到的引脚要指名道姓");
+});
+
+test("原理图编辑：重放走构建目录，第一次落盘、第二次只计跳过（S170）", () => {
+  const file = fileURLToPath(new URL("./fixtures/sch-edit/index.kicad_sch", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "dsh-replay-"));
+  const target = join(dir, "index.kicad_sch");
+  copyFileSync(file, target);
+  const edits = [{ op: "connect", a: { ref: "R1", pin: "1" }, b: { ref: "C1", pin: "2" } }];
+  const first = replaySchEditsTo(dir, edits);
+  assert.equal(first.applied, 1, "第一次要真的画上去");
+  assert.equal(first.failed.length, 0);
+  assert.ok(first.notes.some((note) => note.includes("已重放")));
+  const again = replaySchEditsTo(dir, edits);
+  assert.equal(again.applied, 0);
+  assert.equal(again.skipped, 1);
+  assert.ok(again.notes.some((note) => note.includes("已经画在图纸上")));
+  const empty = replaySchEditsTo("", edits);
+  assert.equal(empty.applied, 0);
+  assert.ok(empty.notes.some((note) => note.includes("还没有构建产物")));
 });

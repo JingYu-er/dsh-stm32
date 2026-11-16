@@ -1907,6 +1907,39 @@ window.__ModuleLoader__.load({
     }
 
     /** 原理图：只读 KiCad 工程，取模块框图与检查结论，供面板渲染。 */
+    function useSchEdits(projectDir) {
+      const [state, setState] = useState({ edits: [], store: "", error: "", busy: false, notes: [] });
+      const load = async () => {
+        if (projectDir === "") return;
+        const result = await callApi("GET", "schematic/edit?projectDir=" + encodeURIComponent(projectDir));
+        if (result.ok) setState({ edits: result.value.snippet.edits, store: result.value.snippet.store, error: "", busy: false, notes: [] });
+        else setState({ edits: [], store: "", error: result.error, busy: false, notes: [] });
+      };
+      useEffect(() => {
+        load();
+      }, [projectDir]);
+      const add = async (payload) => {
+        setState((prev) => Object.assign({}, prev, { busy: true, error: "" }));
+        const result = await callApi("POST", "schematic/edit?projectDir=" + encodeURIComponent(projectDir), payload);
+        if (result.ok) {
+          const snippet = result.value.snippet;
+          const replay = snippet.replay === undefined ? null : snippet.replay;
+          const notes = replay === null ? [] : [...replay.notes, ...replay.failed];
+          setState({ edits: snippet.edits, store: snippet.store, error: "", busy: false, notes: notes });
+          return true;
+        }
+        setState((prev) => Object.assign({}, prev, { busy: false, error: result.error }));
+        return false;
+      };
+      const clear = async () => {
+        setState((prev) => Object.assign({}, prev, { busy: true, error: "" }));
+        const result = await callApi("POST", "schematic/edit?projectDir=" + encodeURIComponent(projectDir), { mode: "clear" });
+        if (result.ok) setState({ edits: [], store: result.value.snippet.store, error: "", busy: false, notes: ["指令表已清空；已经画在图纸上的线要等下次构建才会消失"] });
+        else setState((prev) => Object.assign({}, prev, { busy: false, error: result.error }));
+      };
+      return Object.assign({}, state, { add: add, clear: clear, reload: load });
+    }
+
     function useSchematic(projectDir, intervalMs) {
       const [schematic, setSchematic] = useState(null);
       const [error, setError] = useState("");
@@ -4113,6 +4146,74 @@ function EcadPanel(props) {
           notes.push(e("div", { key: "warn", style: { paddingTop: "6px", fontSize: "11.5px", opacity: 0.65 } }, warnList.join("；")));
         }
       }
+      const pinIndex = schematic === null || !Array.isArray(schematic.pinIndex) ? [] : schematic.pinIndex;
+      const editsState = useSchEdits(projectDir);
+      const [pinA, setPinA] = useState("");
+      const [pinB, setPinB] = useState("");
+      const [labelText, setLabelText] = useState("");
+      const pinOptions = pinIndex.map((entry) => ({
+        value: entry.ref + "." + entry.pin,
+        label: entry.ref + "." + entry.pin + (entry.name === "" ? "" : " " + entry.name) + (entry.net === "" ? "" : " → " + entry.net),
+      }));
+      const splitPin = (value) => {
+        const index = typeof value === "string" ? value.lastIndexOf(".") : -1;
+        if (index <= 0) return null;
+        return { ref: value.slice(0, index), pin: value.slice(index + 1) };
+      };
+      const submitEdit = async (withLabel) => {
+        const a = splitPin(pinA);
+        if (a === null) return;
+        if (withLabel) {
+          if (labelText.trim() === "") return;
+          await editsState.add({ a: a, text: labelText.trim() });
+          setLabelText("");
+          return;
+        }
+        const b = splitPin(pinB);
+        if (b === null) return;
+        await editsState.add({ a: a, b: b });
+        setPinB("");
+      };
+      const editRow = e(
+        "div",
+        { key: "sch-edit", className: "d32-sch-edit", style: { borderTop: "1px solid var(--dsw-alias-border-l3)", paddingTop: "8px", display: "flex", flexDirection: "column", gap: "6px" } },
+        e(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+          e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: "var(--dsw-alias-label-tertiary)" }) }, "连线"),
+          e(
+            "select",
+            { value: pinA, onChange: (event) => setPinA(event.target.value), style: { minWidth: "190px" } },
+            e("option", { value: "" }, "选第一个引脚"),
+            pinOptions.map((option) => e("option", { key: option.value, value: option.value }, option.label)),
+          ),
+          e("span", { style: { opacity: 0.6 } }, "↔"),
+          e(
+            "select",
+            { value: pinB, onChange: (event) => setPinB(event.target.value), style: { minWidth: "190px" } },
+            e("option", { value: "" }, "选第二个引脚"),
+            pinOptions.map((option) => e("option", { key: option.value, value: option.value }, option.label)),
+          ),
+          e("button", { type: "button", disabled: editsState.busy, onClick: () => void submitEdit(false) }, "连起来"),
+          e("span", { style: { opacity: 0.6 } }, "或"),
+          e("input", { type: "text", value: labelText, placeholder: "网络名", onChange: (event) => setLabelText(event.target.value), style: { width: "130px" } }),
+          e("button", { type: "button", disabled: editsState.busy, onClick: () => void submitEdit(true) }, "标名"),
+          e("button", { type: "button", disabled: editsState.busy || editsState.edits.length === 0, onClick: () => void editsState.clear() }, "清空指令"),
+        ),
+        editsState.edits.length === 0
+          ? e("div", { style: { fontSize: "11.5px", opacity: 0.6 } }, "还没有指令：连线与标名会存进 circuit/schematic-edits.json，每次构建收尾重放。")
+          : e(
+              "div",
+              { style: { fontSize: "11.5px", opacity: 0.8, display: "flex", flexDirection: "column", gap: "2px" } },
+              editsState.edits.slice(0, 6).map((edit, index) =>
+                e("div", { key: String(index) }, edit.op === "connect" ? "连线 " + edit.a + " ↔ " + edit.b : "标名 " + edit.a + " → " + edit.text),
+              ),
+              editsState.edits.length > 6 ? e("div", null, "另有 " + String(editsState.edits.length - 6) + " 条") : null,
+            ),
+        editsState.error === "" ? null : e("div", { style: { color: "var(--dsw-alias-state-error-primary)", fontSize: "11.5px" } }, editsState.error),
+        editsState.notes.map((note, index) => e("div", { key: "note" + String(index), style: { fontSize: "11px", opacity: 0.6 } }, note)),
+      );
+      reviewRows.push(editRow);
       return e("div", { className: "d32-page", style: { display: "flex", flexDirection: "column", gap: "4px" } }, head, ...reviewRows, diagram, ...notes);
     }
 

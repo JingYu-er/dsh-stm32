@@ -18,6 +18,7 @@ import type { SubprocessService } from "../../types.js";
 import { runCapture } from "../subprocess-runner.js";
 import { JLC_STANDARD, writeDru } from "./dfm.js";
 import { normalizeKicadProject } from "./normalize.js";
+import { applySchEdits, editStorePath, readSchEdits } from "../schematic/edit.js";
 import { tsxPathOf, vendorJlcpcbFootprints } from "./jlcpcb.js";
 import { ecadEnv, type EcadToolchain } from "./toolchain.js";
 
@@ -245,6 +246,27 @@ export async function runTsciBuild(request: TsciBuildRequest): Promise<TsciBuild
         kicadDir: found.kicadDir,
         libsDir: workspace.libsDir,
       });
+      // 原理图编辑重放（S170）：人工连线/标名存在 circuit/schematic-edits.json 里，
+      // 这里把指令画回刚生成的 .kicad_sch —— 不重放，下一次构建就会把编辑抹掉。
+      {
+        const edits = readSchEdits(editStorePath(workspace.circuitDir));
+        if (edits.length > 0) {
+          for (const name of readdirSync(found.kicadDir)) {
+            if (!name.endsWith(".kicad_sch")) continue;
+            const schFile = join(found.kicadDir, name);
+            const before = readFileSync(schFile, "utf8");
+            const outcome = applySchEdits(before, schFile, edits);
+            if (!outcome.ok) {
+              notes.push("原理图编辑没重放：" + outcome.error);
+              continue;
+            }
+            if (outcome.applied > 0) writeFileSync(schFile, outcome.text, "utf8");
+            if (outcome.applied > 0) notes.push("原理图编辑重放：" + String(outcome.applied) + " 条");
+            for (const failure of outcome.failed) notes.push("原理图编辑失败：" + failure);
+          }
+        }
+      }
+
       if (vendored.ok && vendored.vendored.length > 0) {
         notes.push("立创封装固化：" + String(vendored.vendored.length) + " 个（" + vendored.vendored.map((item) => "C" + item.code).join("、") + "）");
       }
