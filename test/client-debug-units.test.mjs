@@ -409,13 +409,16 @@ test("电路设计页能看制造文件：Gerber 与钻孔画成一张图（S166
   assert.ok(clientSource.indexOf("function useGerber(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
 });
 
-test("原理图页能编辑：选两个引脚连起来，或给引脚标网络名（S170）", () => {
+
+test("面板源码里用到的 D32_* 常量都必须定义过（S170.1）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.equal(source.includes("function useSchEdits("), true, "原理图编辑要有自己的钩子");
-  assert.equal(source.includes("schematic/edit?projectDir="), true, "编辑指令走独立接口");
-  assert.equal(source.includes("\"连起来\""), true, "按钮文案要能搜到");
-  assert.equal(source.includes("\"标名\""), true, "标名按钮要能搜到");
-  assert.equal(source.includes("\"清空指令\""), true, "要能清空指令表");
-  assert.ok(source.indexOf("function useSchEdits(") < source.indexOf("function SchematicPanel("), "钩子要定义在面板之前");
-  assert.ok(source.indexOf("const editsState = useSchEdits(") > source.indexOf("function SchematicPanel("), "面板里要真的用上钩子");
+  const used = [...new Set(source.match(/\bD32_[A-Z0-9_]+\b/g) || [])];
+  const missing = used.filter((name) => !new RegExp("const " + name + "\\b").test(source));
+  assert.deepEqual(missing, [], "引用了没定义的常量：" + missing.join("、") + "（缺一个整个面板都会渲染失败）");
+});
+
+test("原理图页签不放编辑区：改图在 KiCad 里做，再按需导入（S170.1）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.equal(source.includes("function useSchEdits("), false, "编辑区已撤掉");
+  assert.equal(source.includes("\"连起来\""), false, "引脚连线按钮已撤掉");
 });
