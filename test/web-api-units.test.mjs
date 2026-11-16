@@ -1410,6 +1410,43 @@ test("GET /interrupts：.ioc 在 fw/ 子目录时也能读（S129）", async () 
   }
 });
 
+test("GET /ecad/emc：深度体检三项跟着回包一起给，数不出来就说数不出来（S167）", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "s167-emc-"));
+  const dist = path.join(root, "hardware", "circuit", "dist", "board");
+  fs.mkdirSync(path.join(dist, "kicad"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dist, "kicad", "board.kicad_pcb"),
+    [
+      "(kicad_pcb (version 20241229)",
+      '  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal))',
+      '  (net 1 "GND")',
+      '  (net 2 "SIG_A")',
+      '  (net 3 "SIG_B")',
+      '  (segment (start 0 0) (end 20 0) (width 0.2) (layer "F.Cu") (net 2))',
+      '  (segment (start 0 0.05) (end 20 0.05) (width 0.2) (layer "F.Cu") (net 3))',
+      '  (zone (net 1) (net_name "GND") (layer "In1.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))))',
+      ")",
+    ].join("\n"),
+    "utf8",
+  );
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/emc", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  const emc = got.body.emc;
+  assert.equal(emc.ok, true, emc.error);
+  assert.ok(emc.deep, "回包里要有 deep");
+  assert.equal(Array.isArray(emc.deep.pairs), true);
+  assert.equal(Array.isArray(emc.deep.returnPaths), true);
+  assert.equal(Array.isArray(emc.deep.crosstalk), true);
+  // 两根平行线间距 0.05 mm、并行 20 mm：串扰要报出来。
+  assert.equal(emc.deep.crosstalk.length, 1);
+  assert.equal(emc.deep.crosstalk[0].ok, false);
+  // 铺铜只有轮廓、没有填充：reports 空，notes 里明说按未铺铜处理。
+  assert.equal(emc.deep.returnPaths.length, 0);
+  assert.match(emc.notes.join("\n"), /只有轮廓/u);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("GET /ecad/emc：电源线偏窄与铺铜都在报告里，缺工程时 400（S158）", async () => {
   assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "s158-emc-"));

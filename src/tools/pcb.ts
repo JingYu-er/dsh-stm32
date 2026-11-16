@@ -31,6 +31,7 @@ import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine
 import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datasheet/price.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../engine/ecad/pcb/emc.js";
+import { readEmcDeep } from "../engine/ecad/pcb/emc-deep.js";
 import { readLinks } from "../engine/ecad/pcb/links.js";
 import { readGerberSet } from "../engine/ecad/pcb/gerber.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
@@ -904,8 +905,78 @@ export function registerPcbTools(ctx: DshContext): void {
         },
       },
       notes: { type: "array", items: { type: "string" } },
+      deep: {
+        type: "object",
+        additionalProperties: false,
+        description: "深度体检：差分对间距、回流路径覆盖、并行串扰。",
+        properties: {
+          pairs: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                positive: { type: "string" },
+                negative: { type: "string" },
+                minMm: { type: "number" },
+                ok: { type: "boolean" },
+                note: { type: "string" },
+              },
+              required: ["id", "positive", "negative", "minMm", "ok", "note"],
+            },
+          },
+          returnPaths: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                referenceLayer: { type: "string" },
+                signalLayer: { type: "string" },
+                onPlane: { type: "number" },
+                offPlane: { type: "number" },
+                ratio: { type: "number" },
+                ok: { type: "boolean" },
+              },
+              required: ["referenceLayer", "signalLayer", "onPlane", "offPlane", "ratio", "ok"],
+            },
+          },
+          crosstalk: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                aggressor: { type: "string" },
+                victim: { type: "string" },
+                parallelMm: { type: "number" },
+                gapMm: { type: "number" },
+                ok: { type: "boolean" },
+              },
+              required: ["aggressor", "victim", "parallelMm", "gapMm", "ok"],
+            },
+          },
+          findings: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                severity: { type: "string" },
+                message: { type: "string" },
+                fix: { type: "string" },
+              },
+              required: ["id", "severity", "message", "fix"],
+            },
+          },
+          notes: { type: "array", items: { type: "string" } },
+        },
+        required: ["pairs", "returnPaths", "crosstalk", "findings", "notes"],
+      },
     },
-    required: ["ok", "error", "boardFile", "copperLayers", "nets", "zonesByLayer", "powerTraces", "findings", "notes"],
+    required: ["ok", "error", "boardFile", "copperLayers", "nets", "zonesByLayer", "powerTraces", "findings", "notes", "deep"],
   };
 
   const emcTool: ToolDefinition = {
@@ -919,6 +990,7 @@ export function registerPcbTools(ctx: DshContext): void {
         projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
         boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
         currentA: { type: "number", description: "电源网络按多少安培算；不给就按网络名猜（VBUS 1 A、3V3 0.5 A）。" },
+        deep: { type: "boolean", description: "true 才跑差分对间距、回流路径覆盖、并行串扰的深度体检（默认 true）。" },
       },
       required: [],
     },
@@ -934,6 +1006,12 @@ export function registerPcbTools(ctx: DshContext): void {
           lines.push("电源 " + trace.net + "：" + String(trace.currentA) + " A → 需要 " + String(trace.requiredMm) + " mm，实际 " + String(trace.widthMm) + " mm" + (trace.ok ? "" : "（偏窄）"));
         }
         for (const finding of result.findings) lines.push((finding.severity === "warning" ? "注意：" : "提示：") + finding.message + " → " + finding.fix);
+        const deep = (value as { deep?: { pairs: Array<{ id: string; minMm: number; ok: boolean }>; returnPaths: Array<{ referenceLayer: string; signalLayer: string; ratio: number; ok: boolean }>; crosstalk: Array<{ aggressor: string; victim: string; parallelMm: number; gapMm: number }> } }).deep;
+        if (deep !== undefined) {
+          const pairs = deep.pairs.length === 0 ? "无" : String(deep.pairs.length) + " 对（最窄 " + String(Math.min(...deep.pairs.map((item) => item.minMm))).slice(0, 5) + " mm）";
+          const paths = deep.returnPaths.length === 0 ? "无" : deep.returnPaths.map((item) => item.signalLayer + "→" + item.referenceLayer + " 覆盖 " + String(Math.round((1 - item.ratio) * 100)) + "%").join("、");
+          lines.push("深度体检：差分对 " + pairs + " · 回流 " + paths + " · 串扰 " + (deep.crosstalk.length === 0 ? "无" : String(deep.crosstalk.length) + " 处"));
+        }
         if (result.findings.length === 0) lines.push("没有发现需要处理的问题。");
         for (const note of result.notes) lines.push("说明：" + note);
         return [{ type: "text", text: lines.join("\n") }];
@@ -941,8 +1019,9 @@ export function registerPcbTools(ctx: DshContext): void {
     },
     timeoutMs: 30_000,
     isConcurrencySafe: () => true,
-    execute: async (args: { projectDir?: string; boardFile?: string; currentA?: number }, exec: ToolExec) => {
-      const empty = { ok: false, error: "", boardFile: "", copperLayers: 0, nets: 0, zonesByLayer: {} as Record<string, number>, powerTraces: [] as Array<Record<string, unknown>>, findings: [] as Array<Record<string, unknown>>, notes: [] as string[] };
+    execute: async (args: { projectDir?: string; boardFile?: string; currentA?: number; deep?: boolean }, exec: ToolExec) => {
+      const emptyDeep = { pairs: [] as Array<Record<string, unknown>>, returnPaths: [] as Array<Record<string, unknown>>, crosstalk: [] as Array<Record<string, unknown>>, findings: [] as Array<Record<string, unknown>>, notes: [] as string[] };
+      const empty = { ok: false, error: "", boardFile: "", copperLayers: 0, nets: 0, zonesByLayer: {} as Record<string, number>, powerTraces: [] as Array<Record<string, unknown>>, findings: [] as Array<Record<string, unknown>>, notes: [] as string[], deep: emptyDeep };
       const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
       if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
       let boardFile = "";
@@ -962,6 +1041,16 @@ export function registerPcbTools(ctx: DshContext): void {
       }
       const report = analyzeEmc(readFileSync(boardFile, "utf8"), boardFile, override);
       if (!report.ok) return { ...empty, boardFile, error: report.error };
+      const deepReport = args.deep === false ? null : readEmcDeep(boardFile, (file) => readFileSync(file, "utf8"));
+      const deep = deepReport === null
+        ? emptyDeep
+        : {
+            pairs: deepReport.pairs.map((item) => ({ ...item })),
+            returnPaths: deepReport.returnPaths.map((item) => ({ ...item })),
+            crosstalk: deepReport.crosstalk.map((item) => ({ ...item })),
+            findings: deepReport.findings.map((item) => ({ ...item })),
+            notes: [...deepReport.notes],
+          };
       return {
         ok: true,
         error: "",
@@ -970,8 +1059,9 @@ export function registerPcbTools(ctx: DshContext): void {
         nets: report.nets,
         zonesByLayer: { ...report.zonesByLayer },
         powerTraces: report.powerTraces.map((item) => ({ ...item })),
-        findings: report.findings.map((item) => ({ ...item })),
-        notes: [...report.notes],
+        findings: [...report.findings.map((item) => ({ ...item })), ...deep.findings],
+        notes: [...report.notes, ...deep.notes],
+        deep,
       };
     },
   };

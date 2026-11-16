@@ -72,6 +72,7 @@ import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
 import { applyQuotes, readBom } from "./ecad/bom.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "./ecad/pcb/stackup.js";
 import { analyzeEmc } from "./ecad/pcb/emc.js";
+import { readEmcDeep } from "./ecad/pcb/emc-deep.js";
 import { readLinks } from "./ecad/pcb/links.js";
 import { readGerberSet } from "./ecad/pcb/gerber.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
@@ -1636,10 +1637,13 @@ export async function handleWebApi(input: {
       powerTraces: [] as Array<Record<string, unknown>>,
       findings: [] as Array<Record<string, unknown>>,
       notes: [] as string[],
+      deep: { pairs: [] as Array<Record<string, unknown>>, returnPaths: [] as Array<Record<string, unknown>>, crosstalk: [] as Array<Record<string, unknown>>, findings: [] as Array<Record<string, unknown>>, notes: [] as string[] },
     };
     if (!latest.ok || latest.pcbFile === "") return ok({ emc: emptyEmc });
     const report = analyzeEmc(readFileSync(latest.pcbFile, "utf8"), latest.pcbFile);
     if (!report.ok) return ok({ emc: { ...emptyEmc, boardFile: latest.pcbFile, error: report.error } });
+    // 深度体检（S167）：差分对间距、回流路径覆盖、并行串扰——数不出来就说数不出来，不编。
+    const deepReport = readEmcDeep(latest.pcbFile, (file) => readFileSync(file, "utf8"));
     return ok({
       emc: {
         ok: true,
@@ -1649,8 +1653,15 @@ export async function handleWebApi(input: {
         nets: report.nets,
         zonesByLayer: report.zonesByLayer,
         powerTraces: report.powerTraces,
-        findings: report.findings,
-        notes: report.notes,
+        findings: [...report.findings, ...deepReport.findings],
+        notes: [...report.notes, ...deepReport.notes],
+        deep: {
+          pairs: deepReport.pairs,
+          returnPaths: deepReport.returnPaths,
+          crosstalk: deepReport.crosstalk,
+          findings: deepReport.findings,
+          notes: deepReport.notes,
+        },
       },
     });
   }

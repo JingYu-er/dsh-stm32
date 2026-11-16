@@ -209,7 +209,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_pcb_place` | 按 circuit.json 的元件与网络计算落位，再改 `.kicad_pcb` 把元件搬到位（默认清掉旧走线，写盘前留 `.bak`）|
 | `stm32_pcb_autoroute` | 用 KiCadRoutingTools（Rust 网格布线器）铺平面、扇出并布线，回报未连接数；默认只出计划 |
 | `stm32_pcb_render` | 把 `.kicad_pcb` 画成 SVG 板图：板框、顶层与底层走线、焊盘、过孔、丝印；默认只回尺寸与计数，给 `saveAs` 才落盘 |
-| `stm32_emc` | EMC 与热的基础体检：电源线按 IPC-2221 算所需线宽、查铺铜与参考平面、查换层过孔旁的地过孔 |
+| `stm32_emc` | EMC 体检：电源线按 IPC-2221 算所需线宽、查铺铜与参考平面、查换层过孔旁的地过孔；`deep` 再查差分对间距、回流路径覆盖与并行串扰 |
 | `stm32_stackup` | 算叠层与阻抗：板子没有叠层定义时按层数取嘉立创常规叠层，给 50 Ω 单端与 90/100 Ω 差分的线宽，并列出板上现有线宽 |
 | `stm32_bom` | 读 `circuit.json` 出 BOM：位号、数量、值、封装、立创编号与替代料；`prices` 为真才联网取价，`format=csv` 出嘉立创贴片列 |
 | `stm32_power` | 算电源树电流预算：每个电源网络的电压、电流、挂着的元件、最窄走线 vs IPC-2221 需求宽度；只合计你填的电流，估算另计，未填标待定 |

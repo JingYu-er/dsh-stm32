@@ -25,6 +25,7 @@ import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers
 import { parseMech, renderMechDxf, writeMechDxf } from "../lib/engine/ecad/pcb/mech.js";
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
+import { analyzeEmcDeep } from "../lib/engine/ecad/pcb/emc-deep.js";
 import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
 import { analyzePowerBudget } from "../lib/engine/ecad/pcb/power.js";
 import { parsePcbScene, readPcbScene } from "../lib/engine/ecad/pcb/scene.js";
@@ -1691,4 +1692,44 @@ test("制造文件回看：Gerber 的线/焊盘/区域与 Excellon 的孔都对�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("EMC 深度体检：差分对间距、回流覆盖、串扰都不算差分对内部（S167）", () => {
+  const board = [
+    "(kicad_pcb",
+    '  (version 20241229)',
+    '  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal))',
+    '  (net 1 "GND")',
+    '  (net 2 "USB_DP")',
+    '  (net 3 "USB_DN")',
+    '  (net 4 "SIG_A")',
+    '  (net 5 "SIG_B")',
+    '  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 2))',
+    '  (segment (start 0 0.15) (end 10 0.15) (width 0.2) (layer "F.Cu") (net 3))',
+    '  (segment (start 0 5) (end 10 5) (width 0.2) (layer "F.Cu") (net 4))',
+    '  (segment (start 0 5.05) (end 10 5.05) (width 0.2) (layer "F.Cu") (net 5))',
+    '  (zone (net 1) (net_name "GND") (layer "In1.Cu") (filled_polygon (layer "In1.Cu") (pts (xy -1 -1) (xy 12 -1) (xy 12 6) (xy -1 6))))',
+    '  (zone (net 1) (net_name "GND") (layer "In2.Cu") (polygon (pts (xy 20 20) (xy 30 20) (xy 30 30))))',
+    ")",
+  ].join("\n");
+  const report = analyzeEmcDeep(board, "C:/tmp/dsh-ecad-deep.kicad_pcb");
+  assert.equal(report.ok, true, report.error);
+  // 差分对：USB_DP / USB_DN 间距 0.15 mm，在 0.1–1 mm 之间算画对了。
+  assert.equal(report.pairs.length, 1);
+  assert.equal(report.pairs[0].id, "USB");
+  assert.equal(report.pairs[0].minMm, 0.15);
+  assert.equal(report.pairs[0].ok, true);
+  // 回流：In1.Cu 有已填充的铜皮，F.Cu 的线全在铜皮覆盖范围内。
+  assert.equal(report.returnPaths.length, 1);
+  assert.equal(report.returnPaths[0].referenceLayer, "In1.Cu");
+  assert.equal(report.returnPaths[0].onPlane > 0, true);
+  assert.equal(report.returnPaths[0].ok, true);
+  // 串扰：只有 SIG_A / SIG_B 这一对（差分对内部不算）。
+  assert.equal(report.crosstalk.length, 1);
+  assert.equal(report.crosstalk[0].victim, "SIG_B");
+  assert.equal(report.crosstalk[0].ok, false);
+  assert.equal(report.findings.some((item) => item.id === "emc.crosstalk"), true);
+  assert.equal(report.findings.some((item) => item.id === "emc.pair-spacing"), false);
+  // 只有轮廓、没有填充的铺铜要明说按未铺铜处理。
+  assert.match(report.notes.join("\n"), /只有轮廓/u);
 });
