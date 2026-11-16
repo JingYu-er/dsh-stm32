@@ -353,3 +353,13 @@ test("电路设计页能看板图：按层开关请求 /ecad/pcb，SVG 内联渲
   // 钩子必须定义在面板之前，否则运行期引用不到。
   assert.ok(source.indexOf("function usePcbView(") < source.indexOf("function EcadPanel("));
 });
+
+test("电路设计页能看需求文档：先看状态，点生成才 POST（S161）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /function useBrief\(/u);
+  assert.match(source, /"ecad\/brief\?projectDir="/u);
+  assert.match(source, /"需求文档"/u);
+  assert.match(source, /"生成骨架"/u);
+  assert.match(source, /write: true, force: force === true/u);
+  assert.equal(source.indexOf("function useBrief(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
+});

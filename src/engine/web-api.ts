@@ -73,6 +73,7 @@ import { applyQuotes, readBom } from "./ecad/bom.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "./ecad/pcb/stackup.js";
 import { analyzeEmc } from "./ecad/pcb/emc.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
+import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readCircuitNetlist } from "./ecad/pcb/netlist.js";
 import { ensurePrices, priceCachePath, readPriceCache } from "./datasheet/price.js";
 import { runEcadDesign } from "./ecad/design.js";
@@ -566,6 +567,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/stackup",
   WEB_API_PREFIX + "/ecad/emc",
   WEB_API_PREFIX + "/ecad/power",
+  WEB_API_PREFIX + "/ecad/brief",
   WEB_API_PREFIX + "/ecad/ipc",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
@@ -827,17 +829,19 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/stackup" &&
     path !== WEB_API_PREFIX + "/ecad/emc" &&
     path !== WEB_API_PREFIX + "/ecad/power" &&
+    path !== WEB_API_PREFIX + "/ecad/brief" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
-  // /watch 一个路径两种动词：GET 列清单、POST 改登记表。
-  if (path === WEB_API_PREFIX + "/watch") {
+  // /watch 与 /ecad/brief 一个路径两种动词：GET 读、POST 写（改登记表 / 生成文档）。
+  if (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief") {
     if (method !== "GET" && method !== "POST") return fail(405, "这个接口只接受 GET 或 POST");
   } else if (needsBody && method !== "POST") {
     return fail(405, "这个接口只接受 POST");
   } else if (!needsBody && method !== "GET") {
     return fail(405, "这个接口只接受 GET");
   }
-  const parsed = needsBody || (path === WEB_API_PREFIX + "/watch" && method === "POST") ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
+  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief") && method === "POST";
+  const parsed = needsBody || twoVerb ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);
   if (path === WEB_API_PREFIX + "/config") {
@@ -1310,6 +1314,80 @@ export async function handleWebApi(input: {
     });
   }
 
+
+  if (path === WEB_API_PREFIX + "/ecad/brief") {
+    // 需求文档（S161）：GET 看三份文档在不在、多大；POST 才生成骨架（默认不覆盖）。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const docsDir = join(projectDir, "docs");
+    const files = ["01-MRD.md", "02-hardware-PRD.md", "03-design-brief.md"].map((name) => {
+      const file = join(docsDir, name);
+      let bytes = 0;
+      let updatedMs = 0;
+      try {
+        const info = statSync(file);
+        bytes = info.size;
+        updatedMs = info.mtimeMs;
+      } catch {
+        // 文件不存在：bytes 0 即正确状态。
+      }
+      return { name, exists: bytes > 0, bytes, updatedMs };
+    });
+    const facts = collectBriefFacts(projectDir);
+    const emptyBrief = {
+      ok: false,
+      error: facts.ok ? "" : facts.error,
+      projectDir,
+      docsDir,
+      files,
+      mcu: "",
+      clocks: "",
+      peripherals: [] as string[],
+      notes: [] as string[],
+      written: [] as string[],
+      skipped: [] as string[],
+    };
+    if (!facts.ok) return ok({ brief: emptyBrief });
+    if (method === "POST" && parsed.value.write === true) {
+      const force = parsed.value.force === true;
+      const result = writeBriefs(projectDir, facts, force);
+      if (!result.ok) return ok({ brief: { ...emptyBrief, error: result.error } });
+      return ok({
+        brief: {
+          ok: true,
+          error: "",
+          projectDir,
+          docsDir,
+          files: files.map((file) => {
+            let bytes = file.bytes;
+            try {
+              bytes = statSync(join(docsDir, file.name)).size;
+            } catch {
+              bytes = 0;
+            }
+            return { ...file, exists: bytes > 0, bytes };
+          }),
+          mcu: facts.mcu.cpn,
+          clocks: facts.clocks.sysclkHz === null ? "" : String(Math.round((facts.clocks.sysclkHz / 1_000_000) * 10) / 10) + " MHz",
+          peripherals: [...facts.peripherals],
+          notes: [...facts.notes],
+          written: [...result.written],
+          skipped: [...result.skipped],
+        },
+      });
+    }
+    return ok({
+      brief: {
+        ...emptyBrief,
+        ok: true,
+        mcu: facts.mcu.cpn,
+        clocks: facts.clocks.sysclkHz === null ? "" : String(Math.round((facts.clocks.sysclkHz / 1_000_000) * 10) / 10) + " MHz",
+        peripherals: [...facts.peripherals],
+        notes: [...facts.notes],
+      },
+    });
+  }
 
   if (path === WEB_API_PREFIX + "/ecad/power") {
     // 功耗与电源树（S160）：只合计用户填的电流，按名字估的另计；线宽判据复用 EMC 的 IPC-2221。

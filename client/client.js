@@ -2800,6 +2800,52 @@ function useEmc(projectDir) {
   return { emc: emc, error: error };
 }
 
+// 需求文档（S161）：看三份文档在不在；点「生成骨架」才 POST 写出（默认不覆盖）。
+function useBrief(projectDir) {
+  const [brief, setBrief] = useState(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let closed = false;
+    if (typeof projectDir !== "string" || projectDir === "") {
+      setBrief(null);
+      setError("");
+      return () => {
+        closed = true;
+      };
+    }
+    const load = async () => {
+      const result = await callApi("GET", "ecad/brief?projectDir=" + encodeURIComponent(projectDir));
+      if (closed) return;
+      if (result.ok) {
+        setBrief(result.value.brief);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+    };
+    load();
+    return () => {
+      closed = true;
+    };
+  }, [projectDir, tick]);
+  return {
+    brief: brief,
+    error: error,
+    reload: () => setTick((value) => value + 1),
+    generate: async (force) => {
+      const result = await callApi("POST", "ecad/brief?projectDir=" + encodeURIComponent(projectDir), { write: true, force: force === true });
+      if (result.ok) {
+        setBrief(result.value.brief);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+      return result;
+    },
+  };
+}
+
 // 电源预算（S160）：只读板上网络与最窄走线；电流要么按名字估、要么在工具里填。
 function usePower(projectDir) {
   const [power, setPower] = useState(null);
@@ -2879,6 +2925,7 @@ function EcadPanel(props) {
       const stackup = useStackup(projectDir);
       const emc = useEmc(projectDir);
       const power = usePower(projectDir);
+      const brief = useBrief(projectDir);
       const [ipc, setIpc] = useState(null);
       const checkIpc = () => {
         setIpc({ ok: true, pending: true });
@@ -3187,6 +3234,45 @@ function EcadPanel(props) {
             ),
             findings.length > 4 ? e("div", { key: "emc-more", style: { fontSize: "11px", opacity: 0.6 } }, "还有 " + String(findings.length - 4) + " 条，用 stm32_emc 看全量") : null,
             emcView.notes.length > 0 ? e("div", { key: "emc-notes", style: { fontSize: "11px", opacity: 0.6, padding: "4px 0 0" } }, emcView.notes.join("；")) : null,
+          ),
+        );
+      }
+
+      // 需求文档（S161）：三份文档的落盘状态 + 一键生成骨架。
+      const briefView = brief.brief;
+      if (briefView !== null && briefView !== undefined) {
+        const files = Array.isArray(briefView.files) ? briefView.files : [];
+        const missing = files.filter((file) => !file.exists).length;
+        rows.push(
+          e(
+            "div",
+            { key: "brief-view", style: { padding: "0 0 10px" } },
+            e(
+              "div",
+              { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", padding: "4px 0 6px" } },
+              e("span", { style: Object.assign({}, D32_LABEL_MONO, { letterSpacing: "0.12em" }) }, "需求文档"),
+              e("span", { style: { fontSize: "12px", opacity: 0.85 } }, briefView.ok ? (missing === 0 ? "三份都在" : "缺 " + String(missing) + " 份") : briefView.error),
+              briefView.mcu !== "" ? e("span", { style: { fontSize: "12px", opacity: 0.6 } }, briefView.mcu + (briefView.clocks !== "" ? " · " + briefView.clocks : "")) : null,
+              e("button", {
+                key: "brief-generate",
+                type: "button",
+                onClick: () => { brief.generate(false); },
+                style: { fontFamily: D32_FONT_CODE, fontSize: "11px", padding: "2px 8px", background: "transparent", color: "inherit", border: D32_HAIR, cursor: "pointer" },
+              }, missing === 0 ? "补齐缺失" : "生成骨架"),
+              missing === 0
+                ? e("button", {
+                  key: "brief-force",
+                  type: "button",
+                  onClick: () => { brief.generate(true); },
+                  style: { fontFamily: D32_FONT_CODE, fontSize: "11px", padding: "2px 8px", background: "transparent", color: D32_WARN, border: D32_HAIR, cursor: "pointer" },
+                }, "全部重写")
+                : null,
+            ),
+            ...files.map((file) =>
+              e("div", { key: "brief-" + String(file.name), style: { fontSize: "12px", opacity: 0.85, padding: "1px 0", fontFamily: D32_FONT_CODE } },
+                String(file.name) + " · " + (file.exists ? (Math.round(file.bytes / 100) / 10).toFixed(1) + " KB" : "还没有"))),
+            briefView.notes.length > 0 ? e("div", { key: "brief-notes", style: { fontSize: "11px", opacity: 0.6, padding: "4px 0 0" } }, briefView.notes.join("；")) : null,
+            brief.error !== "" ? e("div", { key: "brief-error", style: { fontSize: "11px", color: "var(--dsw-alias-state-error-primary)" } }, brief.error) : null,
           ),
         );
       }

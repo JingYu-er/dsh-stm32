@@ -227,9 +227,10 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
 });
 
 test("WEB_API_PATHS：五十七条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 57);
-  assert.equal(new Set(WEB_API_PATHS).size, 57);
+  assert.equal(WEB_API_PATHS.length, 58);
+  assert.equal(new Set(WEB_API_PATHS).size, 58);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
@@ -1572,7 +1573,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/stackup"), true, "少了这条，叠层只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/emc"), true, "少了这条，EMC 只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/power"), true, "少了这条，电源预算只会看到 404");
-  assert.equal(registered.length, 57);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
+  assert.equal(registered.length, 58);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1613,6 +1615,68 @@ test("GET /ecad/power：电源网络与线宽判据都在报告里，缺工程�
     const badReply = await handleWebApi({
       method: "GET",
       path: "/dsh-stm32/api/ecad/power",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(badReply.status, 400);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("GET/POST /ecad/brief：先看三份文档在不在，POST 才写出骨架（S161）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-brief-"));
+  try {
+    const program = path.join(dir, "program");
+    fs.mkdirSync(program, { recursive: true });
+    fs.writeFileSync(
+      path.join(program, "demo.ioc"),
+      [
+        "Mcu.CPN=STM32F103C8T6",
+        "Mcu.Name=STM32F103C8Tx",
+        "Mcu.Package=LQFP48",
+        "RCC.APB1Freq_Value=36000000",
+        "RCC.APB2Freq_Value=72000000",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const first = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/brief",
+      query: { projectDir: dir },
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(first.status, 200);
+    const before = first.body.brief;
+    assert.equal(before.ok, true, before.error);
+    assert.equal(before.files.length, 3);
+    assert.equal(before.files.filter((file) => file.exists).length, 0, "还没生成时三份都该是缺的");
+    assert.equal(before.mcu, "STM32F103C8T6");
+
+    const written = await handleWebApi({
+      method: "POST",
+      path: "/dsh-stm32/api/ecad/brief",
+      query: { projectDir: dir },
+      body: JSON.stringify({ write: true }),
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(written.status, 200);
+    assert.equal(written.body.brief.written.length, 3);
+    assert.equal(fs.existsSync(path.join(dir, "docs", "01-MRD.md")), true);
+
+    const again = await handleWebApi({
+      method: "POST",
+      path: "/dsh-stm32/api/ecad/brief",
+      query: { projectDir: dir },
+      body: JSON.stringify({ write: true }),
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(again.body.brief.skipped.length, 3, "已有文件不能再覆盖一次");
+
+    const badReply = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/brief",
       query: {},
       deps: { subprocess: fakeSubprocess, env: process.env },
     });
