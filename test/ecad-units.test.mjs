@@ -18,6 +18,7 @@ import { parseJlcpcbFootprints, vendorJlcpcbFootprints } from "../lib/engine/eca
 import { collectModelPaths, prepareModels3d, resolveModels, rewriteModelPaths } from "../lib/engine/ecad/models3d.js";
 import { exportFabrication } from "../lib/engine/ecad/fabrication.js";
 import { FAB_RULE_FLOOR, countCopperLayers, ensureDesignRules, fabFloorForLayers } from "../lib/engine/ecad/pcb/rules.js";
+import { parseMech, renderMechDxf, writeMechDxf } from "../lib/engine/ecad/pcb/mech.js";
 import { analyzeStackup } from "../lib/engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../lib/engine/ecad/pcb/emc.js";
 import { collectBriefFacts, writeBriefs } from "../lib/engine/ecad/brief.js";
@@ -1447,4 +1448,56 @@ test("电源预算：只合计你填的电流，按名字估的另计，未填�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("机械：板框与定位孔从 pcb 里读，孔位按板框左下角归一，DXF 只画定位孔（S162）", () => {
+  const board = [
+    "(kicad_pcb (version 20241229) (generator pcbnew)",
+    '  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))',
+    '  (gr_line (start 100 50) (end 140 50) (width 0.1) (layer "Edge.Cuts"))',
+    '  (gr_line (start 140 50) (end 140 80) (width 0.1) (layer "Edge.Cuts"))',
+    '  (gr_line (start 140 80) (end 100 80) (width 0.1) (layer "Edge.Cuts"))',
+    '  (gr_line (start 100 80) (end 100 50) (width 0.1) (layer "Edge.Cuts"))',
+    '  (footprint "MountingHole" (layer "F.Cu") (at 102 52)',
+    '    (property "Reference" "H1" (at 0 0 0))',
+    '    (pad "" np_thru_hole circle (at 0 0) (size 2.2 2.2) (drill 2.2) (layers "*.Cu" "*.Mask"))',
+    "  )",
+    '  (footprint "connector" (layer "F.Cu") (at 138 78 90)',
+    '    (property "Reference" "J1" (at 0 0 0))',
+    '    (pad "1" thru_hole circle (at 1 0) (size 1.6 1.6) (drill 1) (layers "*.Cu" "*.Mask"))',
+    "  )",
+    ")",
+    "",
+  ].join("\n");
+  const report = parseMech(board, "board.kicad_pcb");
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.widthMm, 40);
+  assert.equal(report.heightMm, 30);
+  assert.equal(report.areaCm2, 12);
+  assert.equal(report.holes.length, 2);
+  assert.equal(report.mountingHoles, 1, "只有非金属化孔算定位孔");
+  assert.equal(report.minHoleEdgeMm, 2, "H1 在 (2,2)：离两条边各 2 mm");
+  assert.equal(report.findings.length, 0);
+  const mount = report.holes.find((hole) => !hole.plated);
+  assert.equal(mount.x, 2);
+  assert.equal(mount.y, 2);
+
+  const dxf = renderMechDxf(report);
+  assert.equal((dxf.match(/^LINE$/gmu) ?? []).length, 4, "板框四条线");
+  assert.equal((dxf.match(/^CIRCLE$/gmu) ?? []).length, 1, "只画定位孔");
+  assert.equal(dxf.includes("H1") || dxf.includes("J1"), false, "DXF 不带位号");
+
+  const dir = mkdtempSync(join(tmpdir(), "dsh-mech-"));
+  try {
+    const file = join(dir, "mech", "board.dxf");
+    const bytes = writeMechDxf(file, report);
+    assert.equal(bytes > 0, true);
+    assert.equal(readFileSync(file, "utf8").startsWith("0\nSECTION"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const missingOutline = parseMech("(kicad_pcb (version 20241229))", "x.kicad_pcb");
+  assert.equal(missingOutline.ok, false);
+  assert.match(missingOutline.error, /板框/u);
 });

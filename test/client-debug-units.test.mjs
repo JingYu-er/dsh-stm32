@@ -363,3 +363,13 @@ test("电路设计页能看需求文档：先看状态，点生成才 POST（S16
   assert.match(source, /write: true, force: force === true/u);
   assert.equal(source.indexOf("function useBrief(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
 });
+
+test("电路设计页能看机械约束：板框与定位孔，点导出才 POST（S162）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.match(source, /function useMech\(/u);
+  assert.match(source, /"ecad\/mech\?projectDir="/u);
+  assert.match(source, /"机械"/u);
+  assert.match(source, /"导出 DXF"/u);
+  assert.match(source, /\{ export: true \}/u);
+  assert.equal(source.indexOf("function useMech(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
+});

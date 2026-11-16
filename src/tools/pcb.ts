@@ -24,6 +24,7 @@ import { readBoardBox, readBoardFacts } from "../engine/ecad/dfm.js";
 import { resolveProjectDir } from "./project-dir.js";
 import { krtRoot, krtStatus, krtVersion, quoteLayerNames, runKrtAutoroute, runKrtConnectedCheck } from "../engine/ecad/pcb/krt.js";
 import { readPcbScene } from "../engine/ecad/pcb/scene.js";
+import { readMech, writeMechDxf } from "../engine/ecad/pcb/mech.js";
 import { renderPcbSvg } from "../engine/ecad/pcb/pcb-svg.js";
 import { runPcbIpc } from "../engine/ecad/pcb/ipc.js";
 import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine/ecad/bom.js";
@@ -43,6 +44,7 @@ export const PCB_STACKUP_TOOL = "stm32_stackup";
 export const PCB_BRIEF_TOOL = "stm32_brief";
 export const PCB_POWER_TOOL = "stm32_power";
 export const PCB_EMC_TOOL = "stm32_emc";
+export const PCB_MECH_TOOL = "stm32_mech";
 
 const output: JsonSchema = {
   type: "object",
@@ -1209,6 +1211,147 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+
+  const mechOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      boardFile: { type: "string" },
+      savedTo: { type: "string" },
+      bytes: { type: "number" },
+      widthMm: { type: "number" },
+      heightMm: { type: "number" },
+      thicknessMm: { type: "number" },
+      areaCm2: { type: "number" },
+      outlinePoints: { type: "number" },
+      holes: { type: "number" },
+      mountingHoles: { type: "number" },
+      minHoleEdgeMm: { type: "number" },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            severity: { type: "string" },
+            message: { type: "string" },
+            fix: { type: "string" },
+          },
+          required: ["id", "severity", "message", "fix"],
+        },
+      },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "boardFile", "savedTo", "bytes", "widthMm", "heightMm", "thicknessMm", "areaCm2", "outlinePoints", "holes", "mountingHoles", "minHoleEdgeMm", "findings", "notes"],
+  };
+
+  const mechTool: ToolDefinition = {
+    name: PCB_MECH_TOOL,
+    description:
+      "出外壳与机械约束：板框尺寸、定位孔（非金属化孔）坐标与孔径、孔到板边的最小距离、面积，可选导出 DXF（R12，外形 + 定位孔）给机械软件做外壳。元件高度板子里没有，不给。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        export: { type: "boolean", description: "是否写出 DXF；默认 false 只出报告。" },
+        saveAs: { type: "string", description: "DXF 落盘路径（相对工程根），默认 mech/board.dxf。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: mechOutput,
+      render: (args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          savedTo: string;
+          widthMm: number;
+          heightMm: number;
+          thicknessMm: number;
+          areaCm2: number;
+          holes: number;
+          mountingHoles: number;
+          minHoleEdgeMm: number;
+          findings: { severity: string; message: string; fix: string }[];
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "机械报告失败：" + result.error }];
+        const lines = [
+          "板框 " + String(result.widthMm) + " × " + String(result.heightMm) + " mm · 厚 " + String(result.thicknessMm) + " mm · 面积 " + String(result.areaCm2) + " cm²",
+          "孔 " + String(result.holes) + " 个，其中定位孔 " + String(result.mountingHoles) + " 个；孔到边最小 " + String(result.minHoleEdgeMm) + " mm",
+        ];
+        for (const finding of result.findings) lines.push((finding.severity === "warning" ? "注意：" : "提示：") + finding.message + "；" + finding.fix);
+        if (result.savedTo !== "") lines.push("DXF 已写到 " + result.savedTo);
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; boardFile?: string; export?: boolean; saveAs?: string }, exec: ToolExec) => {
+      const empty = {
+        ok: false,
+        error: "",
+        boardFile: "",
+        savedTo: "",
+        bytes: 0,
+        widthMm: 0,
+        heightMm: 0,
+        thicknessMm: 0,
+        areaCm2: 0,
+        outlinePoints: 0,
+        holes: 0,
+        mountingHoles: 0,
+        minHoleEdgeMm: 0,
+        findings: [] as Array<Record<string, unknown>>,
+        notes: [] as string[],
+      };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      let boardFile = "";
+      if (typeof args.boardFile === "string" && args.boardFile !== "") {
+        boardFile = resolve(resolved.projectDir, args.boardFile);
+      } else {
+        const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+        const latest = findLatestKicadBuild(workspace);
+        if (!latest.ok || latest.pcbFile === "") return { ...empty, error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error };
+        boardFile = latest.pcbFile;
+      }
+      if (!existsSync(boardFile)) return { ...empty, boardFile, error: "找不到板子文件：" + boardFile };
+      const report = readMech(boardFile, (file) => readFileSync(file, "utf8"));
+      if (!report.ok) return { ...empty, boardFile, error: report.error };
+      let savedTo = "";
+      let bytes = 0;
+      if (args.export === true) {
+        const target = args.saveAs !== undefined && args.saveAs !== "" ? resolve(resolved.projectDir, args.saveAs) : join(resolved.projectDir, "mech", "board.dxf");
+        bytes = writeMechDxf(target, report);
+        savedTo = target;
+      }
+      return {
+        ok: true,
+        error: "",
+        boardFile: report.boardFile,
+        savedTo,
+        bytes,
+        widthMm: report.widthMm,
+        heightMm: report.heightMm,
+        thicknessMm: report.thicknessMm,
+        areaCm2: report.areaCm2,
+        outlinePoints: report.outlinePoints,
+        holes: report.holes.length,
+        mountingHoles: report.mountingHoles,
+        minHoleEdgeMm: report.minHoleEdgeMm,
+        findings: report.findings.map((finding) => ({ ...finding })),
+        notes: [...report.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
@@ -1217,4 +1360,5 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(emcTool);
   ctx.tools.register(briefTool);
   ctx.tools.register(powerTool);
+  ctx.tools.register(mechTool);
 }

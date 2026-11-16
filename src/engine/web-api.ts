@@ -74,6 +74,7 @@ import { analyzeStackup, DEFAULT_TARGETS } from "./ecad/pcb/stackup.js";
 import { analyzeEmc } from "./ecad/pcb/emc.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
+import { readMech, writeMechDxf } from "./ecad/pcb/mech.js";
 import { readCircuitNetlist } from "./ecad/pcb/netlist.js";
 import { ensurePrices, priceCachePath, readPriceCache } from "./datasheet/price.js";
 import { runEcadDesign } from "./ecad/design.js";
@@ -568,6 +569,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/emc",
   WEB_API_PREFIX + "/ecad/power",
   WEB_API_PREFIX + "/ecad/brief",
+  WEB_API_PREFIX + "/ecad/mech",
   WEB_API_PREFIX + "/ecad/ipc",
   WEB_API_PREFIX + "/ecad/action",
   WEB_API_PREFIX + "/layout",
@@ -830,17 +832,18 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/emc" &&
     path !== WEB_API_PREFIX + "/ecad/power" &&
     path !== WEB_API_PREFIX + "/ecad/brief" &&
+    path !== WEB_API_PREFIX + "/ecad/mech" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
   // /watch 与 /ecad/brief 一个路径两种动词：GET 读、POST 写（改登记表 / 生成文档）。
-  if (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief") {
+  if (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech") {
     if (method !== "GET" && method !== "POST") return fail(405, "这个接口只接受 GET 或 POST");
   } else if (needsBody && method !== "POST") {
     return fail(405, "这个接口只接受 POST");
   } else if (!needsBody && method !== "GET") {
     return fail(405, "这个接口只接受 GET");
   }
-  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief") && method === "POST";
+  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech") && method === "POST";
   const parsed = needsBody || twoVerb ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);
@@ -1314,6 +1317,63 @@ export async function handleWebApi(input: {
     });
   }
 
+
+  if (path === WEB_API_PREFIX + "/ecad/mech") {
+    // 外壳与机械约束（S162）：GET 出报告；POST {export:true} 才写 DXF。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const workspace = planEcadWorkspace(projectDir, resolveProjectLayout(projectDir).hardwareDir);
+    const latest = findLatestKicadBuild(workspace);
+    const emptyMech = {
+      ok: false,
+      error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error,
+      boardFile: "",
+      savedTo: "",
+      bytes: 0,
+      widthMm: 0,
+      heightMm: 0,
+      thicknessMm: 0,
+      areaCm2: 0,
+      outlinePoints: 0,
+      holes: [] as Array<Record<string, unknown>>,
+      mountingHoles: 0,
+      minHoleEdgeMm: 0,
+      findings: [] as Array<Record<string, unknown>>,
+      notes: [] as string[],
+    };
+    if (!latest.ok || latest.pcbFile === "") return ok({ mech: emptyMech });
+    const report = readMech(latest.pcbFile, (file) => readFileSync(file, "utf8"));
+    if (!report.ok) return ok({ mech: { ...emptyMech, boardFile: latest.pcbFile, error: report.error } });
+    let savedTo = "";
+    let bytes = 0;
+    if (method === "POST" && parsed.value.export === true) {
+      const target = typeof parsed.value.saveAs === "string" && parsed.value.saveAs !== ""
+        ? resolve(projectDir, parsed.value.saveAs)
+        : join(projectDir, "mech", "board.dxf");
+      bytes = writeMechDxf(target, report);
+      savedTo = target;
+    }
+    return ok({
+      mech: {
+        ok: true,
+        error: "",
+        boardFile: report.boardFile,
+        savedTo,
+        bytes,
+        widthMm: report.widthMm,
+        heightMm: report.heightMm,
+        thicknessMm: report.thicknessMm,
+        areaCm2: report.areaCm2,
+        outlinePoints: report.outlinePoints,
+        holes: report.holes.map((hole) => ({ ...hole })),
+        mountingHoles: report.mountingHoles,
+        minHoleEdgeMm: report.minHoleEdgeMm,
+        findings: report.findings.map((finding) => ({ ...finding })),
+        notes: [...report.notes],
+      },
+    });
+  }
 
   if (path === WEB_API_PREFIX + "/ecad/brief") {
     // 需求文档（S161）：GET 看三份文档在不在、多大；POST 才生成骨架（默认不覆盖）。

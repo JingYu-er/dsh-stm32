@@ -121,7 +121,8 @@ export interface BoardFacts {
 
 
 /** 取出所有落在某层上的图形块（`gr_*` 且块内出现该层名）。 */
-function blocksOnLayer(text: string, layer: string): string[] {
+/** 取落在某一层上的整块图元（按括号配对），板框与丝印都用它。 */
+export function blocksOnLayer(text: string, layer: string): string[] {
   const blocks: string[] = [];
   const pattern = /\(gr_[a-z]+/gu;
   let match = pattern.exec(text);

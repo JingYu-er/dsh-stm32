@@ -227,10 +227,11 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
 });
 
 test("WEB_API_PATHS：五十七条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 58);
-  assert.equal(new Set(WEB_API_PATHS).size, 58);
+  assert.equal(WEB_API_PATHS.length, 59);
+  assert.equal(new Set(WEB_API_PATHS).size, 59);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
@@ -1574,7 +1575,8 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/emc"), true, "少了这条，EMC 只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/power"), true, "少了这条，电源预算只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
-  assert.equal(registered.length, 58);
+  assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
+  assert.equal(registered.length, 59);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1677,6 +1679,67 @@ test("GET/POST /ecad/brief：先看三份文档在不在，POST 才写出骨架�
     const badReply = await handleWebApi({
       method: "GET",
       path: "/dsh-stm32/api/ecad/brief",
+      query: {},
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(badReply.status, 400);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("GET/POST /ecad/mech：读板框与定位孔，POST 才写 DXF（S162）", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-mech-"));
+  try {
+    const kicad = path.join(dir, "hardware", "kicad");
+    fs.mkdirSync(kicad, { recursive: true });
+    fs.writeFileSync(
+      path.join(kicad, "board.kicad_pcb"),
+      [
+        "(kicad_pcb (version 20241229) (generator pcbnew)",
+        '  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))',
+        '  (gr_line (start 0 0) (end 20 0) (width 0.1) (layer "Edge.Cuts"))',
+        '  (gr_line (start 20 0) (end 20 10) (width 0.1) (layer "Edge.Cuts"))',
+        '  (gr_line (start 20 10) (end 0 10) (width 0.1) (layer "Edge.Cuts"))',
+        '  (gr_line (start 0 10) (end 0 0) (width 0.1) (layer "Edge.Cuts"))',
+        '  (footprint "MountingHole" (layer "F.Cu") (at 2 2)',
+        '    (property "Reference" "H1" (at 0 0 0))',
+        '    (pad "" np_thru_hole circle (at 0 0) (size 2.2 2.2) (drill 2.2) (layers "*.Cu" "*.Mask"))',
+        "  )",
+        ")",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const read = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/mech",
+      query: { projectDir: dir },
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(read.status, 200);
+    const mech = read.body.mech;
+    assert.equal(mech.ok, true, mech.error);
+    assert.equal(mech.widthMm, 20);
+    assert.equal(mech.heightMm, 10);
+    assert.equal(mech.mountingHoles, 1);
+    assert.equal(mech.savedTo, "", "GET 不落盘");
+    assert.equal(fs.existsSync(path.join(dir, "mech", "board.dxf")), false);
+
+    const exported = await handleWebApi({
+      method: "POST",
+      path: "/dsh-stm32/api/ecad/mech",
+      query: { projectDir: dir },
+      body: JSON.stringify({ export: true }),
+      deps: { subprocess: fakeSubprocess, env: process.env },
+    });
+    assert.equal(exported.status, 200);
+    assert.equal(exported.body.mech.bytes > 0, true);
+    assert.equal(fs.existsSync(path.join(dir, "mech", "board.dxf")), true);
+
+    const badReply = await handleWebApi({
+      method: "GET",
+      path: "/dsh-stm32/api/ecad/mech",
       query: {},
       deps: { subprocess: fakeSubprocess, env: process.env },
     });

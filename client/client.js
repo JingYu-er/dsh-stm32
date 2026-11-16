@@ -2800,6 +2800,52 @@ function useEmc(projectDir) {
   return { emc: emc, error: error };
 }
 
+// 外壳与机械（S162）：看板框与定位孔；点「导出 DXF」才 POST 写出。
+function useMech(projectDir) {
+  const [mech, setMech] = useState(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let closed = false;
+    if (typeof projectDir !== "string" || projectDir === "") {
+      setMech(null);
+      setError("");
+      return () => {
+        closed = true;
+      };
+    }
+    const load = async () => {
+      const result = await callApi("GET", "ecad/mech?projectDir=" + encodeURIComponent(projectDir));
+      if (closed) return;
+      if (result.ok) {
+        setMech(result.value.mech);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+    };
+    load();
+    return () => {
+      closed = true;
+    };
+  }, [projectDir, tick]);
+  return {
+    mech: mech,
+    error: error,
+    reload: () => setTick((value) => value + 1),
+    export: async () => {
+      const result = await callApi("POST", "ecad/mech?projectDir=" + encodeURIComponent(projectDir), { export: true });
+      if (result.ok) {
+        setMech(result.value.mech);
+        setError("");
+      } else {
+        setError(result.error);
+      }
+      return result;
+    },
+  };
+}
+
 // 需求文档（S161）：看三份文档在不在；点「生成骨架」才 POST 写出（默认不覆盖）。
 function useBrief(projectDir) {
   const [brief, setBrief] = useState(null);
@@ -2926,6 +2972,7 @@ function EcadPanel(props) {
       const emc = useEmc(projectDir);
       const power = usePower(projectDir);
       const brief = useBrief(projectDir);
+      const mech = useMech(projectDir);
       const [ipc, setIpc] = useState(null);
       const checkIpc = () => {
         setIpc({ ok: true, pending: true });
@@ -3234,6 +3281,39 @@ function EcadPanel(props) {
             ),
             findings.length > 4 ? e("div", { key: "emc-more", style: { fontSize: "11px", opacity: 0.6 } }, "还有 " + String(findings.length - 4) + " 条，用 stm32_emc 看全量") : null,
             emcView.notes.length > 0 ? e("div", { key: "emc-notes", style: { fontSize: "11px", opacity: 0.6, padding: "4px 0 0" } }, emcView.notes.join("；")) : null,
+          ),
+        );
+      }
+
+      // 外壳与机械（S162）：板框、定位孔、边距 + 导出 DXF。
+      const mechView = mech.mech;
+      if (mechView !== null && mechView !== undefined) {
+        const findings = Array.isArray(mechView.findings) ? mechView.findings : [];
+        rows.push(
+          e(
+            "div",
+            { key: "mech-view", style: { padding: "0 0 10px" } },
+            e(
+              "div",
+              { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", padding: "4px 0 6px" } },
+              e("span", { style: Object.assign({}, D32_LABEL_MONO, { letterSpacing: "0.12em" }) }, "机械"),
+              e("span", { style: { fontSize: "12px", opacity: 0.85 } },
+                mechView.ok
+                  ? String(mechView.widthMm) + " × " + String(mechView.heightMm) + " mm · 定位孔 " + String(mechView.mountingHoles) + " 个 · 边距 " + String(mechView.minHoleEdgeMm) + " mm"
+                  : mechView.error),
+              e("button", {
+                key: "mech-export",
+                type: "button",
+                onClick: () => { mech.export(); },
+                style: { fontFamily: D32_FONT_CODE, fontSize: "11px", padding: "2px 8px", background: "transparent", color: "inherit", border: D32_HAIR, cursor: "pointer" },
+              }, "导出 DXF"),
+              mechView.savedTo !== "" ? e("span", { style: { fontSize: "11px", opacity: 0.6 } }, "已写 " + String(Math.round(mechView.bytes / 100) / 10) + " KB") : null,
+            ),
+            ...findings.slice(0, 3).map((finding, index) =>
+              e("div", { key: "mech-finding-" + String(index), style: { fontSize: "12px", color: finding.severity === "warning" ? D32_WARN : "inherit", opacity: 0.9 } },
+                finding.message + "；" + finding.fix)),
+            findings.length > 3 ? e("div", { key: "mech-more", style: { fontSize: "11px", opacity: 0.6 } }, "另有 " + String(findings.length - 3) + " 条") : null,
+            mech.error !== "" ? e("div", { key: "mech-error", style: { fontSize: "11px", color: "var(--dsw-alias-state-error-primary)" } }, mech.error) : null,
           ),
         );
       }
