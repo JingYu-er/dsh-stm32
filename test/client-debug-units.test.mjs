@@ -381,3 +381,11 @@ test("电路设计页能搜器件：输入关键词才联网（S163）", () => {
   assert.match(source, /器件搜索/u);
   assert.ok(source.indexOf("function useParts(") < source.indexOf("function EcadPanel("), "useParts 要在 EcadPanel 之前定义");
 });
+
+test("电路设计页能看布线体检：差分对、平面层与去耦距离（S165）", () => {
+  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(clientSource.includes("function useLinks("), "要有 useLinks");
+  assert.ok(clientSource.includes("ecad/links?projectDir="), "请求要走 ecad/links");
+  assert.ok(clientSource.includes('"布线体检"'), "要有布线体检区块");
+  assert.ok(clientSource.indexOf("function useLinks(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
+});

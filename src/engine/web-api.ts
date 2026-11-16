@@ -72,6 +72,7 @@ import { renderPcbSvg } from "./ecad/pcb/pcb-svg.js";
 import { applyQuotes, readBom } from "./ecad/bom.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "./ecad/pcb/stackup.js";
 import { analyzeEmc } from "./ecad/pcb/emc.js";
+import { readLinks } from "./ecad/pcb/links.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readMech, writeMechDxf } from "./ecad/pcb/mech.js";
@@ -568,6 +569,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/bom",
   WEB_API_PREFIX + "/ecad/stackup",
   WEB_API_PREFIX + "/ecad/emc",
+  WEB_API_PREFIX + "/ecad/links",
   WEB_API_PREFIX + "/ecad/power",
   WEB_API_PREFIX + "/ecad/brief",
   WEB_API_PREFIX + "/ecad/mech",
@@ -833,6 +835,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/bom" &&
     path !== WEB_API_PREFIX + "/ecad/stackup" &&
     path !== WEB_API_PREFIX + "/ecad/emc" &&
+    path !== WEB_API_PREFIX + "/ecad/links" &&
     path !== WEB_API_PREFIX + "/ecad/power" &&
     path !== WEB_API_PREFIX + "/ecad/brief" &&
     path !== WEB_API_PREFIX + "/ecad/mech" &&
@@ -1533,6 +1536,43 @@ export async function handleWebApi(input: {
         efficiency: budget.efficiency,
         unfilled: budget.unfilled,
         notes: budget.notes,
+      },
+    });
+  }
+
+  if (path === WEB_API_PREFIX + "/ecad/links") {
+    // 布线进阶体检（S165）：差分对长度差、平面层被信号割裂、去耦电容到负载引脚的距离。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const layout = resolveProjectLayout(projectDir);
+    const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
+    const latest = findLatestKicadBuild(workspace);
+    const emptyLinks = {
+      ok: false,
+      error: latest.ok ? "还没有 .kicad_pcb：先构建一次，或在 KiCad 里存一次板子。" : latest.error,
+      boardFile: "",
+      copperLayers: 0,
+      pairs: [] as Array<Record<string, unknown>>,
+      decaps: [] as Array<Record<string, unknown>>,
+      planes: [] as Array<Record<string, unknown>>,
+      findings: [] as Array<Record<string, unknown>>,
+      notes: [] as string[],
+    };
+    if (!latest.ok || latest.pcbFile === "") return ok({ links: emptyLinks });
+    const report = readLinks(latest.pcbFile);
+    if (!report.ok) return ok({ links: { ...emptyLinks, boardFile: latest.pcbFile, error: report.error } });
+    return ok({
+      links: {
+        ok: true,
+        error: "",
+        boardFile: report.boardFile,
+        copperLayers: report.copperLayers,
+        pairs: report.pairs.map((item) => ({ ...item, notes: [...item.notes] })),
+        decaps: report.decaps.map((item) => ({ ...item })),
+        planes: report.planes.map((item) => ({ ...item, planeNets: [...item.planeNets], signalNets: [...item.signalNets] })),
+        findings: report.findings.map((item) => ({ ...item })),
+        notes: [...report.notes],
       },
     });
   }

@@ -227,14 +227,15 @@ test("handleWebApi：探测与安装计划的入参校验在动手之前", async
 });
 
 test("WEB_API_PATHS：六十条路由都在前缀下，且没有重复", () => {
-  assert.equal(WEB_API_PATHS.length, 60);
-  assert.equal(new Set(WEB_API_PATHS).size, 60);
+  assert.equal(WEB_API_PATHS.length, 61);
+  assert.equal(new Set(WEB_API_PATHS).size, 61);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/power"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/brief"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/mech"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/parts"), true, "器件搜索必须有独立路由");
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/stackup"), true);
   assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/emc"), true);
+  assert.equal(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/links"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad/bom"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/ecad"), true);
   assert.equal(WEB_API_PATHS.includes("/dsh-stm32/api/schematic/review"), true);
@@ -1578,7 +1579,7 @@ test("registerWebRoutes：host 的 dispatch 表里真的有板图路由（S151 �
   assert.equal(registered.includes("/dsh-stm32/api/ecad/brief"), true, "少了这条，需求文档只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/mech"), true, "少了这条，机械只会看到 404");
   assert.equal(registered.includes("/dsh-stm32/api/ecad/parts"), true, "少了这条，器件搜索只会看到 404");
-  assert.equal(registered.length, 60);
+  assert.equal(registered.length, 61);
   assert.equal(registered.includes("/dsh-stm32/api/ecad"), true);
 });
 
@@ -1859,4 +1860,42 @@ test("GET /ecad/parts：命中缓存时不联网，空关键词 400（S163）", 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("GET /ecad/links：差分对、平面层与去耦距离都在报告里，缺工程时 400（S165）", async () => {
+  assert.ok(WEB_API_PATHS.includes(WEB_API_PREFIX + "/ecad/links"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-links-"));
+  const kicad = path.join(root, "hardware", "circuit", "dist", "board", "kicad");
+  fs.mkdirSync(kicad, { recursive: true });
+  fs.writeFileSync(path.join(kicad, "board.kicad_pcb"), [
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "In1.Cu" "B.Cu")',
+    '  (net 1 "GND")',
+    '  (net 2 "V3V3")',
+    '  (net 3 "USB_DP")',
+    '  (net 4 "USB_DN")',
+    '  (footprint "x:u1" (layer "F.Cu") (at 10 10) (property "Reference" "U1")',
+    '    (pad "1" smd rect (at 0 0) (layers "F.Cu") (net 2 "V3V3"))',
+    '    (pad "2" smd rect (at 2 0) (layers "F.Cu") (net 1 "GND")))',
+    '  (footprint "x:c1" (layer "F.Cu") (at 11 10) (property "Reference" "C1") (property "Value" "100nF")',
+    '    (pad "1" smd rect (at 0 0) (layers "F.Cu") (net 2 "V3V3"))',
+    '    (pad "2" smd rect (at 1 0) (layers "F.Cu") (net 1 "GND")))',
+    '  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 3))',
+    '  (segment (start 0 1) (end 10 1) (width 0.2) (layer "In1.Cu") (net 4))',
+    '  (zone (net 1) (layer "In1.Cu") (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10))))',
+    "  )",
+    "",
+  ].join("\n"), "utf8");
+  const deps = { subprocess: fakeSubprocess, env: {} };
+  const got = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/links", query: { projectDir: root }, deps });
+  assert.equal(got.status, 200);
+  const view = got.body.links;
+  assert.equal(view.ok, true, view.error);
+  assert.equal(view.copperLayers, 3);
+  assert.equal(view.pairs.length, 1);
+  assert.equal(view.pairs[0].id, "USB");
+  assert.equal(view.decaps.length, 1);
+  assert.equal(view.decaps[0].ref, "C1");
+  const bad = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/ecad/links", query: {}, deps });
+  assert.equal(bad.status, 400);
 });

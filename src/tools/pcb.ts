@@ -31,6 +31,7 @@ import { applyQuotes, readBom, renderBomCsv, renderBomMarkdown } from "../engine
 import { ensurePrices, priceCachePath, readPriceCache } from "../engine/datasheet/price.js";
 import { analyzeStackup, DEFAULT_TARGETS } from "../engine/ecad/pcb/stackup.js";
 import { analyzeEmc, defaultCurrentForNet, requiredWidthMm } from "../engine/ecad/pcb/emc.js";
+import { readLinks } from "../engine/ecad/pcb/links.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
 import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
 
@@ -45,6 +46,7 @@ export const PCB_BRIEF_TOOL = "stm32_brief";
 export const PCB_POWER_TOOL = "stm32_power";
 export const PCB_EMC_TOOL = "stm32_emc";
 export const PCB_MECH_TOOL = "stm32_mech";
+export const PCB_LINKS_TOOL = "stm32_pcb_links";
 
 const output: JsonSchema = {
   type: "object",
@@ -1352,6 +1354,179 @@ export function registerPcbTools(ctx: DshContext): void {
     },
   };
 
+  const linksOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      boardFile: { type: "string" },
+      copperLayers: { type: "number" },
+      pairs: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            positive: { type: "string" },
+            negative: { type: "string" },
+            routedP: { type: "boolean" },
+            routedN: { type: "boolean" },
+            lengthPMm: { type: "number" },
+            lengthNMm: { type: "number" },
+            deltaMm: { type: "number" },
+            viasP: { type: "number" },
+            viasN: { type: "number" },
+            ok: { type: "boolean" },
+            notes: { type: "array", items: { type: "string" } },
+          },
+          required: ["id", "positive", "negative", "routedP", "routedN", "lengthPMm", "lengthNMm", "deltaMm", "viasP", "viasN", "ok", "notes"],
+        },
+      },
+      decaps: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ref: { type: "string" },
+            value: { type: "string" },
+            powerNet: { type: "string" },
+            groundNet: { type: "string" },
+            distanceMm: { type: "number" },
+            nearestRef: { type: "string" },
+            ok: { type: "boolean" },
+            note: { type: "string" },
+          },
+          required: ["ref", "value", "powerNet", "groundNet", "distanceMm", "nearestRef", "ok", "note"],
+        },
+      },
+      planes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            layer: { type: "string" },
+            planeNets: { type: "array", items: { type: "string" } },
+            trackCount: { type: "number" },
+            signalNets: { type: "array", items: { type: "string" } },
+          },
+          required: ["layer", "planeNets", "trackCount", "signalNets"],
+        },
+      },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            severity: { type: "string" },
+            message: { type: "string" },
+            fix: { type: "string" },
+          },
+          required: ["id", "severity", "message", "fix"],
+        },
+      },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "boardFile", "copperLayers", "pairs", "decaps", "planes", "findings", "notes"],
+  };
+
+  const linksTool: ToolDefinition = {
+    name: PCB_LINKS_TOOL,
+    description:
+      "布线进阶体检：按网络名认差分对并算长度差与过孔数，逐层报铺铜与层上的信号线数（平面被割裂的证据），算两脚电容的电源脚到最近 IC 引脚的距离。只看几何与网络名，不做仿真。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        toleranceMm: { type: "number", description: "差分对两条线的长度差上限（mm），默认 0.5。" },
+        decapMm: { type: "number", description: "去耦电容到负载引脚的距离上限（mm），默认 5。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: linksOutput,
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          copperLayers: number;
+          pairs: { id: string; lengthPMm: number; lengthNMm: number; deltaMm: number; viasP: number; viasN: number; ok: boolean; routedP: boolean; routedN: boolean }[];
+          decaps: { ref: string; powerNet: string; distanceMm: number; nearestRef: string; ok: boolean }[];
+          planes: { layer: string; planeNets: string[]; trackCount: number }[];
+          findings: { severity: string; message: string; fix: string }[];
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "布线体检失败：" + result.error }];
+        const lines: string[] = ["布线体检：" + String(result.copperLayers) + " 层铜"];
+        for (const pair of result.pairs) {
+          lines.push(
+            "差分对 " + pair.id + "：" + (pair.routedP && pair.routedN ? pair.lengthPMm + " / " + pair.lengthNMm + " mm，差 " + pair.deltaMm + " mm" : "未布通") +
+              "（过孔 " + String(pair.viasP) + " / " + String(pair.viasN) + "）" + (pair.ok ? "" : "（不达标）"),
+          );
+        }
+        for (const plane of result.planes) {
+          lines.push("层 " + plane.layer + "：铺铜 " + (plane.planeNets.length === 0 ? "无" : plane.planeNets.join("、")) + " · 信号线 " + String(plane.trackCount) + " 段");
+        }
+        for (const decap of result.decaps.slice(0, 6)) {
+          lines.push("去耦 " + decap.ref + "：" + decap.powerNet + " 到 " + (decap.nearestRef === "" ? "（无其他引脚）" : decap.nearestRef) + " " + String(decap.distanceMm) + " mm" + (decap.ok ? "" : "（偏远）"));
+        }
+        for (const finding of result.findings) lines.push((finding.severity === "warning" ? "注意：" : "提示：") + finding.message + " → " + finding.fix);
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\\n") }];
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    execute: async (args: { projectDir?: string; boardFile?: string; toleranceMm?: number; decapMm?: number }, exec: ToolExec) => {
+      const empty = {
+        ok: false,
+        error: "",
+        boardFile: "",
+        copperLayers: 0,
+        pairs: [] as Array<Record<string, unknown>>,
+        decaps: [] as Array<Record<string, unknown>>,
+        planes: [] as Array<Record<string, unknown>>,
+        findings: [] as Array<Record<string, unknown>>,
+        notes: [] as string[],
+      };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      let boardFile = "";
+      if (typeof args.boardFile === "string" && args.boardFile !== "") {
+        boardFile = resolve(resolved.projectDir, args.boardFile);
+      } else {
+        const workspace = planEcadWorkspace(resolved.projectDir, join(resolved.projectDir, "hardware"));
+        const latest = findLatestKicadBuild(workspace);
+        if (!latest.ok || latest.pcbFile === "") return { ...empty, error: latest.ok ? "还没有构建产物：先跑一次 stm32_ecad_build" : latest.error };
+        boardFile = latest.pcbFile;
+      }
+      if (!existsSync(boardFile)) return { ...empty, boardFile, error: "找不到板子文件：" + boardFile };
+      const report = readLinks(boardFile, {
+        ...(typeof args.toleranceMm === "number" ? { toleranceMm: args.toleranceMm } : {}),
+        ...(typeof args.decapMm === "number" ? { decapMm: args.decapMm } : {}),
+      });
+      if (!report.ok) return { ...empty, boardFile, error: report.error };
+      return {
+        ok: true,
+        error: "",
+        boardFile: report.boardFile,
+        copperLayers: report.copperLayers,
+        pairs: report.pairs.map((item) => ({ ...item, notes: [...item.notes] })),
+        decaps: report.decaps.map((item) => ({ ...item })),
+        planes: report.planes.map((item) => ({ ...item, planeNets: [...item.planeNets], signalNets: [...item.signalNets] })),
+        findings: report.findings.map((item) => ({ ...item })),
+        notes: [...report.notes],
+      };
+    },
+  };
+
   ctx.tools.register(autorouteTool);
   ctx.tools.register(renderTool);
   ctx.tools.register(ipcTool);
@@ -1361,4 +1536,5 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(briefTool);
   ctx.tools.register(powerTool);
   ctx.tools.register(mechTool);
+  ctx.tools.register(linksTool);
 }

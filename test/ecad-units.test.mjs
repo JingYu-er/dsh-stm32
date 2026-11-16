@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { buildFootprint } from "../lib/engine/ecad/gen/footprint.js";
 import { buildSymbol } from "../lib/engine/ecad/gen/symbol.js";
+import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 
 import { exportStep, findUnnamedNets, runDrc, runErc } from "../lib/engine/ecad/checks.js";
 import { exportEmbeddedLibraries, scanPcbFootprints, scanSchSymbols, upsertLibEntries } from "../lib/engine/ecad/libs.js";
@@ -1551,4 +1552,82 @@ test("符号与封装生成：引脚数、坐标与文件名都对得上（S164�
   const noNum = buildSymbol({ name: "X", pins: [{ number: "", name: "A" }] });
   assert.equal(noNum.ok, false);
   assert.match(noNum.error, /缺 number/u);
+});
+
+test("布线体检：差分对长度差、平面层上的信号、去耦电容到引脚的距离（S165）", () => {
+  const board = [
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "In1.Cu" "B.Cu")',
+    '  (net 0 "")',
+    '  (net 1 "GND")',
+    '  (net 2 "VBUS")',
+    '  (net 3 "USB_DP")',
+    '  (net 4 "USB_DN")',
+    '  (net 5 "V3V3")',
+    '  (footprint "x:u1" (layer "F.Cu") (at 10 10) (property "Reference" "U1")',
+    '    (pad "1" smd rect (at 0 0) (layers "F.Cu") (net 5 "V3V3"))',
+    '    (pad "2" smd rect (at 2 0) (layers "F.Cu") (net 1 "GND")))',
+    '  (footprint "x:c1" (layer "F.Cu") (at 11 10) (property "Reference" "C1") (property "Value" "100nF")',
+    '    (pad "1" smd rect (at 0 0) (layers "F.Cu") (net 5 "V3V3"))',
+    '    (pad "2" smd rect (at 1 0) (layers "F.Cu") (net 1 "GND")))',
+    '  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 3))',
+    '  (segment (start 0 1) (end 10 1) (width 0.2) (layer "B.Cu") (net 4))',
+    '  (via (at 5 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 3))',
+    '  (zone (net 1) (layer "In1.Cu") (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10))))',
+    '  (segment (start 1 5) (end 6 5) (width 0.2) (layer "In1.Cu") (net 2)))',
+    "",
+  ].join("\n");
+  const report = analyzeLinks(board, "board.kicad_pcb");
+  assert.equal(report.ok, true, report.error);
+  assert.equal(report.copperLayers, 3);
+  assert.equal(report.pairs.length, 1);
+  const pair = report.pairs[0];
+  assert.equal(pair.id, "USB");
+  assert.equal(pair.routedP, true);
+  assert.equal(pair.routedN, true);
+  assert.equal(pair.lengthPMm, 10);
+  assert.equal(pair.lengthNMm, 10);
+  assert.equal(pair.deltaMm, 0);
+  assert.equal(pair.viasP, 1);
+  assert.equal(pair.viasN, 0);
+  assert.match(pair.notes.join("；"), /过孔数不同/u);
+
+  assert.equal(report.decaps.length, 1);
+  assert.equal(report.decaps[0].ref, "C1");
+  assert.equal(report.decaps[0].powerNet, "V3V3");
+  assert.equal(report.decaps[0].distanceMm, 1);
+  assert.equal(report.decaps[0].nearestRef, "U1");
+  assert.equal(report.decaps[0].ok, true);
+
+  const inner = report.planes.find((plane) => plane.layer === "In1.Cu");
+  assert.equal(inner.planeNets.length, 1);
+  assert.equal(inner.trackCount, 1);
+  assert.equal(report.findings.some((finding) => finding.id === "plane.signals-on-plane-layer"), true);
+
+  // 长度差超限要报；没有差分对与铺铜时如实说「没有」。
+  const skewed = analyzeLinks(
+    board.replace('(segment (start 0 1) (end 10 1)', '(segment (start 0 1) (end 4 1)'),
+    "board.kicad_pcb",
+    { toleranceMm: 0.5 },
+  );
+  assert.equal(skewed.pairs[0].deltaMm, 6);
+  assert.equal(skewed.pairs[0].ok, false);
+  assert.equal(skewed.findings.some((finding) => finding.id === "pair.length-skew"), true);
+
+  const plain = analyzeLinks([
+    "(kicad_pcb (version 20241229)",
+    '  (layers "F.Cu" "B.Cu")',
+    '  (net 1 "GND")',
+    "  )",
+    "",
+  ].join("\n"), "plain.kicad_pcb");
+  assert.equal(plain.ok, true);
+  assert.equal(plain.pairs.length, 0);
+  assert.equal(plain.decaps.length, 0);
+  assert.match(plain.notes.join("；"), /没有认出差分对/u);
+  assert.match(plain.notes.join("；"), /没有任何铺铜区/u);
+
+  const broken = analyzeLinks("(kicad_pcb", "broken.kicad_pcb");
+  assert.equal(broken.ok, false);
+  assert.match(broken.error, /读不懂|括号/u);
 });
