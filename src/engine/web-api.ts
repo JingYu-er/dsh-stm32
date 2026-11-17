@@ -84,6 +84,7 @@ import { readEmcDeep } from "./ecad/pcb/emc-deep.js";
 import { readLinks } from "./ecad/pcb/links.js";
 import { editStorePath, readSchEdits, replaySchEditsTo, writeSchEdits } from "./schematic/edit.js";
 import { readGerberSet } from "./ecad/pcb/gerber.js";
+import { EMPTY_RENDER3D, renderBoard3d } from "./ecad/pcb/render3d.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readImpedancePlan } from "./ecad/pcb/impedance.js";
@@ -584,6 +585,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/emc",
   WEB_API_PREFIX + "/ecad/links",
   WEB_API_PREFIX + "/ecad/gerber",
+  WEB_API_PREFIX + "/ecad/render3d",
   WEB_API_PREFIX + "/ecad/power",
   WEB_API_PREFIX + "/ecad/brief",
   WEB_API_PREFIX + "/ecad/impedance",
@@ -855,6 +857,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/emc" &&
     path !== WEB_API_PREFIX + "/ecad/links" &&
     path !== WEB_API_PREFIX + "/ecad/gerber" &&
+    path !== WEB_API_PREFIX + "/ecad/render3d" &&
     path !== WEB_API_PREFIX + "/ecad/power" &&
     path !== WEB_API_PREFIX + "/ecad/brief" &&
     path !== WEB_API_PREFIX + "/ecad/impedance" &&
@@ -1813,6 +1816,66 @@ export async function handleWebApi(input: {
         planes: report.planes.map((item) => ({ ...item, planeNets: [...item.planeNets], signalNets: [...item.signalNets] })),
         findings: report.findings.map((item) => ({ ...item })),
         notes: [...report.notes],
+      },
+    });
+  }
+
+  if (path === WEB_API_PREFIX + "/ecad/render3d") {
+    // 3D 预览（S180）：交给 KiCad 的 `pcb render`，顺手报出哪些封装的 3D 模型缺文件。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const base = { ...EMPTY_RENDER3D, dataUrl: "" } as Record<string, unknown>;
+    const located = locateEcadToolchain(envOf(input.deps));
+    if (!located.ok || located.toolchain === null) {
+      return ok({ render3d: { ...base, error: "找不到 KiCad 工具链：" + located.error, models: [], missing: [], notes: [] } });
+    }
+    const latest = findLatestKicadBuild(planEcadWorkspace(projectDir, resolveProjectLayout(projectDir).hardwareDir));
+    if (latest === null || latest.pcbFile === "") {
+      return ok({ render3d: { ...base, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build，或在 KiCad 里存一次板子", models: [], missing: [], notes: [] } });
+    }
+    const sideParam = typeof query["side"] === "string" && query["side"].trim() !== "" ? query["side"].trim() : "top";
+    const side = ["top", "bottom", "left", "right", "front", "back"].includes(sideParam) ? sideParam : "top";
+    const rotateParam = typeof query["rotate"] === "string" && query["rotate"].trim() !== "" ? query["rotate"].trim() : "";
+    const result = await renderBoard3d(
+      {
+        kicadCli: located.toolchain.kicadCli,
+        model3dDir: located.toolchain.model3dDir,
+        run: async (argv, timeoutMs) => {
+          const outcome = await runCapture(input.deps.subprocess, { argv: [...argv], cwd: dirname(latest.pcbFile), timeoutMs });
+          return { exitCode: outcome.exitCode ?? 1, stdout: outcome.stdout, stderr: outcome.stderr };
+        },
+      },
+      latest.pcbFile,
+      {
+        side: side as "top" | "bottom" | "left" | "right" | "front" | "back",
+        ...(rotateParam === "" ? {} : { rotate: rotateParam }),
+        ...(query["perspective"] === "1" ? { perspective: true } : {}),
+        width: 1200,
+        height: 900,
+        output: join(projectDir, "hardware", "out", "board-3d-" + side + ".png"),
+      },
+    );
+    let dataUrl = "";
+    const notes = [...result.notes];
+    if (result.ok && result.bytes > 0 && result.bytes <= 1_500_000) {
+      dataUrl = "data:image/png;base64," + readFileSync(result.file).toString("base64");
+    } else if (result.ok && result.bytes > 1_500_000) {
+      notes.push("图片 " + String(Math.round(result.bytes / 1024)) + " KB，超过 1.5 MB 没有内嵌；直接打开文件看。");
+    }
+    return ok({
+      render3d: {
+        ok: result.ok,
+        error: result.error,
+        file: result.file,
+        bytes: result.bytes,
+        side: result.side,
+        width: result.width,
+        height: result.height,
+        dataUrl,
+        models: result.models.map((model) => ({ ...model })),
+        missing: [...result.missing],
+        notes,
       },
     });
   }

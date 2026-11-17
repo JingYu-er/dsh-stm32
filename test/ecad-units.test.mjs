@@ -18,6 +18,7 @@ import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { fetchEasyedaPackage, easyedaToKicadMod, parseEasyedaPackage } from "../lib/engine/ecad/easyeda.js";
+import { collectBoardModels, renderBoard3d } from "../lib/engine/ecad/pcb/render3d.js";
 import { importPart, parseModelRef, resolveModelPath } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
 import { assignableNet, buildHandSyncScript, parseHandSyncOutput, planHandSync } from "../lib/engine/ecad/pcb/hand-sync.js";
@@ -2463,4 +2464,71 @@ test("器件导入：3D 模型跟着封装一起进工程，路径改写成 KIPR
   assert.ok(missing.notes.some((note) => note.includes("没找到")));
   assert.equal(resolveModelPath("${KISYS3DMOD}/A/B.step", modelDir), join(modelDir, "A", "B.step"));
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("3D 预览：模型路径按 KIPRJMOD 与 KICAD 库目录解析，缺文件要点名，渲染参数原样传给 kicad-cli（S180）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-r3d-"));
+  try {
+    const boardDir = join(dir, "hardware", "kicad");
+    mkdirSync(join(boardDir, "models"), { recursive: true });
+    writeFileSync(join(boardDir, "models", "R.step"), "ISO-10303-21;\n", "utf8");
+    const modelDir = join(dir, "kicad3d");
+    mkdirSync(join(modelDir, "Lib.3dshapes"), { recursive: true });
+    writeFileSync(join(modelDir, "Lib.3dshapes", "C.step"), "ISO-10303-21;\n", "utf8");
+    const board = [
+      "(kicad_pcb (version 20241229)",
+      '  (layers "F.Cu" "B.Cu")',
+      '  (footprint "A" (layer "F.Cu") (at 0 0)',
+      '    (property "Reference" "R1")',
+      '    (model "${KIPRJMOD}/models/R.step")',
+      "  )",
+      '  (footprint "B" (layer "F.Cu") (at 5 5)',
+      '    (property "Reference" "C1")',
+      '    (model "${KICAD10_3DMODEL_DIR}/Lib.3dshapes/C.step")',
+      "  )",
+      '  (footprint "C" (layer "F.Cu") (at 9 9)',
+      '    (property "Reference" "U1")',
+      '    (model "${KIPRJMOD}/models/missing.step")',
+      "  )",
+      ")",
+      "",
+    ].join("\n");
+    writeFileSync(join(boardDir, "b.kicad_pcb"), board, "utf8");
+    const models = collectBoardModels(board, join(boardDir, "b.kicad_pcb"), modelDir);
+    assert.equal(models.models.length, 3);
+    assert.equal(models.models[0].exists, true);
+    assert.equal(models.models[1].exists, true);
+    assert.equal(models.missing.length, 1);
+    assert.match(models.missing[0], /U1.*missing\.step/u);
+
+    const seen = [];
+    const out = join(dir, "out.png");
+    const result = await renderBoard3d(
+      {
+        kicadCli: "kicad-cli",
+        model3dDir: modelDir,
+        run: async (argv) => {
+          seen.push([...argv]);
+          writeFileSync(out, "PNG");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+      join(boardDir, "b.kicad_pcb"),
+      { side: "top", rotate: "-45,0,45", perspective: true, width: 800, height: 600, output: out },
+    );
+    assert.equal(result.ok, true, result.error);
+    assert.equal(seen.length, 1);
+    const argv = seen[0];
+    assert.equal(argv[0], "kicad-cli");
+    assert.equal(argv[1], "pcb");
+    assert.equal(argv[2], "render");
+    assert.equal(argv[argv.indexOf("--side") + 1], "top");
+    assert.equal(argv[argv.indexOf("--rotate") + 1], "-45,0,45");
+    assert.equal(argv.includes("--perspective"), true);
+    assert.equal(argv[argv.indexOf("--width") + 1], "800");
+    assert.equal(argv[argv.indexOf("--height") + 1], "600");
+    assert.equal(result.bytes, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -5900,7 +5900,19 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S179）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S180）
+
+### 一百八十八、3D 预览：渲的是 KiCad 的渲染器，缺模型就空着（S180）
+
+- 一句话：`kicad-cli pcb render` 直接把板子渲成 PNG；插件的活是找板、传参数、把「哪些封装引用的 3D 文件不存在」点名到「位号：路径」。
+- 取证：KiCad 10.0.7 的 `pcb` 子命令有 `render`（`--side/--rotate/--perspective/--zoom/--width/--height/--quality/--background`），`pcb export` 另有 glb/stl/step/vrml/u3d 等二十种格式，本轮只做 PNG。冷启动 8.2 s（加载模型 7.3 s + 渲染 0.12 s），模型已缓存时约 1.2 s。
+- 三条实现选择：
+  1. 模型路径两处替换：`${KIPRJMOD}` → 板子所在目录，`${KICAD10_3DMODEL_DIR}`/`${KISYS3DMOD}` → KiCad 安装里的 3dmodels；替换不了的按原样报缺失。
+  2. 缺文件要点名：tetris 板 40 个模型引用里 `J1`（`tscircuit_builtin.3dshapes/fpc40.step`）与 `U1`（`qfp48_w7.5mm_p0.5mm.step`）不存在——tscircuit 只登记了内置封装名，没有生成这两个 STEP；斜视图上正是这两处空着，报告与图对得上。
+  3. 内嵌图片设上限：路由把 PNG 转 base64 给面板直接显示，超过 1.5 MB 就不内嵌、只给路径，避免一次回包几百 KB 到几 MB。
+- 用法：工具 `stm32_pcb_3d`（`side`/`rotate`/`perspective`）、面板「3D 预览」三档（顶/底/斜视）、路由 `GET /ecad/render3d`。真机 1200×900：顶视 51,684 B、斜视（`-45,0,45` + 透视）193,598 B，回包 1.25 s。
+- 边界：渲染器是 KiCad 的，不是我们的；PCB 真源仍以 `hardware/kicad/*.kicad_pcb` 为准，改了 `circuit.tsx` 要先重建。GLB/STEP 导出继续走 `stm32_ecad_export`。
+- 教训：3D 图是「模型覆盖率的体检」——图上空一块，多半不是渲染坏了，而是那个封装没有 STEP；先看 missing 再怀疑渲染器。
 
 ### 一百八十七、3D 模型跟着封装进工程（S179）
 

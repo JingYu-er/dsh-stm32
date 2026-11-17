@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：65 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：66 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -214,6 +214,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_bom` | 读 `circuit.json` 出 BOM：位号、数量、值、封装、立创编号与替代料；`prices` 为真才联网取价，`format=csv` 出嘉立创贴片列 |
 | `stm32_power` | 算电源树电流预算：每个电源网络的电压、电流、挂着的元件、最窄走线 vs IPC-2221 需求宽度；只合计你填的电流，估算另计，未填标待定 |
 | `stm32_pcb_links` | 布线体检：差分对长度差与过孔数、逐层铺铜与层上信号线数、去耦电容到 IC 电源脚的距离；只算几何与网络名，不做仿真 |
+| `stm32_pcb_3d` | 3D 预览：用 KiCad 的 `kicad-cli pcb render` 把板子渲成 PNG（顶/底/左右/前后、可透视与旋转），并把封装引用的 3D 模型里缺文件的位号点名出来（那些器件在 3D 里是空的）；面板「3D 预览」有顶/底/斜视三档 |
 | `stm32_pcb_gerber` | 制造文件回看：把 `stm32_ecad_export` 导出的 Gerber 与钻孔读回来画成一张 SVG（可选层），交付前核对板框、铜、丝印与孔位；读不懂的构造计入 notes |
 | `stm32_impedance` | 阻抗写回：按叠层算出 50 Ω 单端与 90 Ω 差分该用的线宽与间距，写成 `.kicad_dru` 里的自定义规则（只作用于点名的网络）；KiCad 的 DRC 没有阻抗约束，写入的是可执行的几何量 |
 | `stm32_netgate` | 网表与 PCB 的持续门禁：图纸比板子新、网络拆开、焊盘缺失 |
@@ -501,7 +502,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            65 个工具的注册与参数校验
+  tools/            66 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

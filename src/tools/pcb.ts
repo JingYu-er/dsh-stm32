@@ -22,6 +22,7 @@ import { planRouting } from "../engine/ecad/pcb/router.js";
 import { buildTrackScript, parseTrackReport } from "../engine/ecad/pcb/tracks.js";
 import { readBoardBox, readBoardFacts } from "../engine/ecad/dfm.js";
 import { resolveProjectDir } from "./project-dir.js";
+import { resolveProjectLayout } from "../engine/project-layout.js";
 import { krtRoot, krtStatus, krtVersion, quoteLayerNames, runKrtAutoroute, runKrtConnectedCheck } from "../engine/ecad/pcb/krt.js";
 import { readPcbScene } from "../engine/ecad/pcb/scene.js";
 import { readMech, writeMechDxf } from "../engine/ecad/pcb/mech.js";
@@ -38,11 +39,13 @@ import { readLinks } from "../engine/ecad/pcb/links.js";
 import { readGerberSet } from "../engine/ecad/pcb/gerber.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
 import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
+import { EMPTY_RENDER3D, renderBoard3d } from "../engine/ecad/pcb/render3d.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
 export const PCB_AUTOROUTE_TOOL = "stm32_pcb_autoroute";
 export const PCB_IPC_TOOL = "stm32_pcb_ipc";
+export const PCB_3D_TOOL = "stm32_pcb_3d";
 export const PCB_RENDER_TOOL = "stm32_pcb_render";
 export const PCB_BOM_TOOL = "stm32_bom";
 export const PCB_STACKUP_TOOL = "stm32_stackup";
@@ -1989,5 +1992,124 @@ export function registerPcbTools(ctx: DshContext): void {
   ctx.tools.register(linksTool);
   ctx.tools.register(gerberTool);
   ctx.tools.register(impedanceTool);
+
+  const render3dOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      file: { type: "string" },
+      bytes: { type: "number" },
+      side: { type: "string" },
+      width: { type: "number" },
+      height: { type: "number" },
+      models: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ref: { type: "string" },
+            file: { type: "string" },
+            exists: { type: "boolean" },
+            bytes: { type: "number" },
+          },
+          required: ["ref", "file", "exists", "bytes"],
+        },
+      },
+      missing: { type: "array", items: { type: "string" } },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "file", "bytes", "side", "width", "height", "models", "missing", "notes"],
+  };
+
+  const render3dTool: ToolDefinition = {
+    name: PCB_3D_TOOL,
+    description:
+      "3D 预览：用 KiCad 自带的 `kicad-cli pcb render` 把板子渲成 PNG（顶/底/左右/前后，可透视与旋转），并列出封装引用的 3D 模型里哪些文件不存在（渲染器会跳过它们，对应器件在 3D 里是空的）。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        side: { type: "string", enum: ["top", "bottom", "left", "right", "front", "back"], description: "从哪一侧看，默认 top。" },
+        rotate: { type: "string", description: "旋转角度 X,Y,Z（度），例如 -45,0,45 得等轴视图。" },
+        perspective: { type: "boolean", description: "透视投影；默认正交。" },
+        width: { type: "number", description: "图片宽度，默认 1200。" },
+        height: { type: "number", description: "图片高度，默认 900。" },
+        quality: { type: "string", enum: ["basic", "high", "user", "job_settings"], description: "渲染质量，默认 basic。" },
+        saveAs: { type: "string", description: "输出路径（相对工程根）；缺省 hardware/out/board-3d-<侧>.png。" },
+      },
+      required: [],
+    },
+    output: {
+      schema: render3dOutput,
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          file: string;
+          bytes: number;
+          side: string;
+          width: number;
+          height: number;
+          models: { ref: string; file: string; exists: boolean; bytes: number }[];
+          missing: string[];
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "3D 渲染失败：" + result.error }];
+        const lines: string[] = [
+          "3D 预览：" + result.file,
+          "尺寸 " + String(result.width) + " × " + String(result.height) + " · 视角 " + result.side + " · " + String(Math.round(result.bytes / 1024)) + " KB",
+          "模型：引用 " + String(result.models.length) + " 个 · 缺文件 " + String(result.missing.length) + " 个",
+        ];
+        for (const item of result.missing.slice(0, 8)) lines.push("  缺：" + item);
+        if (result.missing.length > 8) lines.push("  另有 " + String(result.missing.length - 8) + " 个缺文件项");
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 300_000,
+    isConcurrencySafe: () => true,
+    execute: async (
+      args: { projectDir?: string; boardFile?: string; side?: string; rotate?: string; perspective?: boolean; width?: number; height?: number; quality?: string; saveAs?: string },
+      exec: ToolExec,
+    ) => {
+      const empty = { ...EMPTY_RENDER3D, models: [] as Array<Record<string, unknown>>, missing: [] as string[], notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const located = locateEcadToolchain();
+      if (!located.ok || located.toolchain === null) return { ...empty, error: "找不到 KiCad 工具链：" + located.error };
+      const workspace = planEcadWorkspace(resolved.projectDir, resolveProjectLayout(resolved.projectDir).hardwareDir);
+      const boardFile = pickBoard(resolved.projectDir, workspace, args.boardFile);
+      if (boardFile === "") return { ...empty, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build，或在 KiCad 里存一次板子" };
+      const output = typeof args.saveAs === "string" && args.saveAs !== "" ? resolve(resolved.projectDir, args.saveAs) : undefined;
+      const result = await renderBoard3d(
+        {
+          kicadCli: located.toolchain.kicadCli,
+          model3dDir: located.toolchain.model3dDir,
+          run: async (argv, timeoutMs) => {
+            const outcome = await runCapture(ctx.subprocess, { argv: [...argv], cwd: dirname(boardFile), timeoutMs });
+            return { exitCode: outcome.exitCode ?? 1, stdout: outcome.stdout, stderr: outcome.stderr };
+          },
+        },
+        boardFile,
+        {
+          ...(args.side === undefined ? {} : { side: args.side as "top" | "bottom" | "left" | "right" | "front" | "back" }),
+          ...(args.rotate === undefined || args.rotate === "" ? {} : { rotate: args.rotate }),
+          ...(args.perspective === true ? { perspective: true } : {}),
+          ...(typeof args.width === "number" ? { width: args.width } : {}),
+          ...(typeof args.height === "number" ? { height: args.height } : {}),
+          ...(args.quality === undefined ? {} : { quality: args.quality as "basic" | "high" | "user" | "job_settings" }),
+          ...(output === undefined ? {} : { output }),
+        },
+      );
+      return { ...result, models: result.models.map((model) => ({ ...model })), missing: [...result.missing], notes: [...result.notes] };
+    },
+  };
+
   ctx.tools.register(netgateTool);
+  ctx.tools.register(render3dTool);
 }
