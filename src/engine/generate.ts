@@ -10,7 +10,7 @@
  * 这里不做工具注册、不做 job 管理，只接收 onProgress 回调，便于在终端直接跑。
  */
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
@@ -439,6 +439,94 @@ function cleanupGenerated(projectDir: string, generated: string[]): string[] {
   return notes;
 }
 
+/**
+ * 找出「.ioc 声明了、生成结果里没有 MX_<实例>_Init」的外设。
+ *
+ * 只核对真正需要初始化函数的实例：RCC/SYS/NVIC/DMA 本来就不生成 MX_*_Init。
+ * 读不到 main.c（例如 per-ip 布局把初始化拆进 <ip>.c）时退回扫项目里的 Core/Src/*.c。
+ */
+export function missingPeripheralInits(iocText: string, projectDir: string): string[] {
+  const declared = [...iocText.matchAll(/^Mcu\.IP\d+=([A-Za-z0-9_]+)$/gmu)]
+    .map((match) => match[1]!)
+    .filter((ip) => !["RCC", "SYS", "NVIC", "DMA", "IWDG", "WWDG", "RTC"].includes(ip));
+  if (declared.length === 0) return [];
+  const sources: string[] = [];
+  const candidates = ["Core/Src", "Src"];
+  for (const dir of candidates) {
+    const abs = join(projectDir, dir);
+    if (!existsSync(abs)) continue;
+    for (const name of readdirSync(abs)) {
+      if (!name.endsWith(".c")) continue;
+      try {
+        sources.push(readFileSync(join(abs, name), "utf8"));
+      } catch {
+        // 读不了就跳过：这条检查是提醒，不该让生成失败。
+      }
+    }
+  }
+  if (sources.length === 0) return [];
+  const text = sources.join("\n");
+  // 各族的初始化函数名不完全一致（USART 是 MX_USART1_UART_Init，SPI 是 MX_SPI1_Init），
+  // 所以按「MX_<实例>_」前缀判存在，而不是写死 _Init。
+  return declared.filter((ip) => !text.includes("MX_" + ip + "_"));
+}
+
+/** 读日志文件从 offset 到末尾的增量（文件不存在/读不了时回空串，不抛）。 */
+function readLogSince(file: string, offset: number): string {
+  if (file === "") return "";
+  try {
+    const size = statSync(file).size;
+    if (size <= offset) return "";
+    const handle = openSync(file, "r");
+    try {
+      const length = size - offset;
+      const buffer = Buffer.alloc(length);
+      readSync(handle, buffer, 0, length, offset);
+      return buffer.toString("utf8");
+    } finally {
+      closeSync(handle);
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 写一份「不会被迁移弹窗卡住」的 .ioc 副本给 CubeMX 的 config load 用。
+ *
+ * 为什么不是直接改用户的 .ioc：版本号与迁移标记属于工程自己的元数据，插件不该替人升级；
+ * 副本只改两件事——AskForMigrate 置 false、缺这一行就补上。返回是否真的做过改写，供 notes 说明。
+ */
+export function sanitizeIocForHeadless(
+  iocText: string,
+  iocPath: string,
+  tmpDir: string,
+  stamp: string,
+): { path: string; sanitized: boolean; note: string } {
+  const hasKey = /^ProjectManager\.AskForMigrate=/mu.test(iocText);
+  const alreadyOff = /^ProjectManager\.AskForMigrate=false$/mu.test(iocText);
+  if (alreadyOff) return { path: iocPath, sanitized: false, note: "" };
+  const patched = hasKey
+    ? iocText.replace(/^ProjectManager\.AskForMigrate=.*$/mu, "ProjectManager.AskForMigrate=false")
+    : iocText.replace(/\r?\n?$/u, "") + "\nProjectManager.AskForMigrate=false\n";
+  const target = join(tmpDir, "gen-" + stamp + "-input.ioc");
+  try {
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(target, patched, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { path: iocPath, sanitized: false, note: "写不了 CubeMX 的 .ioc 副本（" + target + "）：" + message + "；改用原 .ioc，版本不一致时可能弹出迁移对话框" };
+  }
+  const version = /^MxCube\.Version=(.+)$/mu.exec(iocText);
+  return {
+    path: target,
+    sanitized: true,
+    note:
+      "工程由 CubeMX " + (version === null ? "（版本未记录）" : version[1]!) +
+      " 创建；已用「不迁移」继续（AskForMigrate=false），原 .ioc 不改动。要升级工程版本请在 CubeMX 图形界面里选 Migrate",
+  };
+}
+
 export async function runGenerate(
   subprocess: SubprocessService,
   request: GenerateRequest,
@@ -562,7 +650,16 @@ export async function runGenerate(
   const stamp = nowStamp();
   const tmpDir = join(stateDir, "tmp");
   const scriptPath = join(tmpDir, "gen-" + stamp + ".txt");
-  const script = buildGenerateScript(iocPath.replace(/\\/g, "/"), projectDir.replace(/\\/g, "/"), layout, firmware.dir);
+  // S187：工程是用旧版 CubeMX 建的（.ioc 里带 MxCube.Version + ProjectManager.AskForMigrate=true）而本机版本更新时，
+  // CubeMX 会弹「Migrate / Continue / Cancel」模态框；-q 无头模式没人点，进程就一直卡到超时。
+  // 做法：总是喂给 CubeMX 一份「不询问迁移」的副本（AskForMigrate=false），原 .ioc 一个字节不动。
+  const sanitized = sanitizeIocForHeadless(iocText, iocPath, tmpDir, stamp);
+  const script = buildGenerateScript(
+    sanitized.path.replace(/\\/g, "/"),
+    projectDir.replace(/\\/g, "/"),
+    layout,
+    firmware.dir,
+  );
   // A5：工程盘只读 / .dsh-stm32 被删除 / 权限不足时，此处以前会抛出未捕获异常导致工具失败。
   try {
     mkdirSync(tmpDir, { recursive: true });
@@ -582,6 +679,20 @@ export async function runGenerate(
     return fail(request, describeCubeMxGuiConflict(guiProcesses));
   }
   const startedAt = Date.now();
+  // S187：CubeMX 6.18 起 `-q` 的 stdout 可能整段为空，生成日志只写进自己的日志文件，
+  // 于是「产物明明对了」也会被判成「未报告成功」。这里记住日志文件的起始位置，结束后按增量读。
+  const cubeLogFile = (() => {
+    const home = cubeMxUserHome(process.env);
+    return home === null ? "" : join(home, "STM32CubeMX.log");
+  })();
+  const cubeLogStart = (() => {
+    if (cubeLogFile === "") return 0;
+    try {
+      return statSync(cubeLogFile).size;
+    } catch {
+      return 0;
+    }
+  })();
   if (skipMiss !== "") progress("未跳过 CubeMX：" + skipMiss);
   progress("使用布局：" + (layout === "coupled" ? "coupled（外设初始化并入 main.c）" : "per-ip（每外设一对 .c/.h）"));
   if (firmware.found) {
@@ -609,7 +720,8 @@ export async function runGenerate(
     outcome = await runStreaming(subprocess, {
       argv,
       cwd: projectDir,
-      timeoutMs: request.timeoutMs ?? 600_000,
+      // 实测 F1 冷启动 3–4 分钟、带第三方包或换族可到 8 分钟以上；10 分钟会把正常的一轮判成超时（S187）。
+      timeoutMs: request.timeoutMs ?? 1_800_000,
       maxBytes: 2 * 1024 * 1024,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       onOutput: (stream, text) => {
@@ -627,8 +739,10 @@ export async function runGenerate(
     }
   }
 
-  const log = outcome.stdout + "\n" + outcome.stderr;
+  const fileLog = readLogSince(cubeLogFile, cubeLogStart);
+  const log = [outcome.stdout, outcome.stderr, fileLog].join("\n");
   const verdict = parseGenerateLog(log);
+  const verdictFromFileLog = !parseGenerateLog(outcome.stdout + "\n" + outcome.stderr).ok && verdict.ok;
   const durationMs = Date.now() - startedAt;
   // 失败路径也要把「第三方包索引」的判定与缺包警告带出去：CubeMX 报缺包时，
   // 本插件输出的"本机没有这个包"恰恰是最有用的信息，不能只在成功时给出。
@@ -642,6 +756,12 @@ export async function runGenerate(
         "）：CubeMX 会回退到其识别的版本，生成的 Drivers 可能不是用户期望的版本；" +
         "可以用 stm32_firmware_install 安装一次 —— 生成文件落在 <CubeMX>/dsh-firmware（CubeMX 根目录不可写时落在下载缓存），" +
         "之后再生成时这里会连 CubeMX 根、下载缓存、安装记录一起搜。",
+    );
+  }
+  if (sanitized.sanitized) failureNotes.push(sanitized.note);
+  if (verdictFromFileLog) {
+    failureNotes.push(
+      "CubeMX 的 -q 输出为空，成功判定取自它自己的日志文件（" + cubeLogFile + "）；这是 6.18 起的行为，不是生成失败",
     );
   }
   const baseReport = {
@@ -674,7 +794,16 @@ export async function runGenerate(
     };
   }
   if (outcome.timedOut) {
-    return { ...fail(request, "CubeMX 生成超时", baseReport), ok: false };
+    // 超时不是「CubeMX 坏了」：多发生在冷启动 + 首次建索引。把「等了多久、产物到哪一步」一起说清楚，
+    // 并给出可执行的下一步（调大 timeoutMs 重试、或直接看日志尾部判断卡在哪）。
+    const minutes = Math.max(1, Math.round(durationMs / 60_000));
+    const generatedSoFar = [...listGeneratedFiles(projectDir, "Src"), ...listGeneratedFiles(projectDir, "Inc")];
+    const hint =
+      "已等 " + String(minutes) + " 分钟仍未结束" +
+      (generatedSoFar.length === 0 ? "，CubeMX 还没写出任何 Src/Inc 文件" : "，已写出 " + String(generatedSoFar.length) + " 个 Src/Inc 文件（可能是上一次的残留）") +
+      "；可以调大 timeoutMs 后重试（冷启动首次建索引常见 8–12 分钟），或先看 logTail 里的最后几行判断卡在哪个阶段。" +
+      "CubeMX 被强杀时可能留下半成品，重试前可用 dryRun 看会覆盖哪些文件。";
+    return { ...fail(request, "CubeMX 生成超时：" + hint, baseReport), ok: false };
   }
   if (!verdict.ok) {
     return {
@@ -737,6 +866,19 @@ export async function runGenerate(
       } catch (error) {
         notes.push("没能写生成缓存：" + String((error as Error).message));
       }
+    }
+  }
+  // S187：CubeMX 对「配置不完整」的外设是**静默丢弃**——.ioc 里还在、产物里没有 MX_xxx_Init，
+  // 也不报错（实测：SPI 全双工缺 MISO 时就是这样）。生成成功之后按 Mcu.IPn 逐个核对一遍，
+  // 把丢弃的实例点名报出来，并给出最可能的补法，免得用户对着空函数名猜。
+  {
+    const dropped = missingPeripheralInits(iocText, projectDir);
+    if (dropped.length > 0) {
+      notes.push(
+        "这些外设在 .ioc 里启用了，但生成的代码里没有对应的 MX_<实例>_Init：" + dropped.join("、") +
+          "。CubeMX 遇到配置不完整会静默丢弃它（常见原因：SPI 全双工缺 MISO、引脚 .Mode 与外设模式不一致、IPParameters 漏键）。" +
+          "用 stm32_ioc_verify 可以看 CubeMX 实际认了哪些外设，或改用内置预设（SPI1 / SPI1:tx / I2C1）重配。",
+      );
     }
   }
   return {

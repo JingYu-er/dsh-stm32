@@ -208,18 +208,21 @@ export function registerGenerate(ctx: DshContext): void {
         foreground: { type: "boolean", description: "同步执行并返回完整报告（默认 false，走后台 job）。" },
         cubeMxRoots: { type: "array", items: { type: "string" }, description: "STM32CubeMX 安装根目录候选，优先于默认值/环境变量。" },
         envCheck: ENV_CHECK_SCHEMA,
-        timeoutMs: { type: "number", description: "超时毫秒数，默认 600000（10 分钟）。" },
+        timeoutMs: { type: "number", description: "超时毫秒数，默认 1800000（30 分钟）。冷启动首次建索引实测 8–12 分钟，10 分钟会把正常的一轮判成超时。" },
       },
       required: [],
     },
-    timeoutMs: 20 * 60_000,
+    timeoutMs: 35 * 60_000,
     isConcurrencySafe: () => false,
     output: {
       schema: outputSchema,
       render: (_args, value) => {
         const typed = value as ToolValue;
         const lines = typed.report === undefined ? [typed.message] : formatReport(typed.report);
-        if (typed.mode === "job") lines.push("job：" + typed.jobId + "（用 job_output 读进度，job_kill 停止）");
+        if (typed.mode === "job") {
+          lines.push("job：" + typed.jobId + "（用 job_output 读进度，job_kill 停止）");
+          lines.push("等待方式：job_output 一次最多等 10 分钟；没结束就再等一次，但不要在参数完全相同的情况下连续轮询（宿主会判成重复调用直接拒）。");
+        }
         return [{ type: "text", text: lines.join("\n") }];
       },
     },

@@ -98,6 +98,78 @@ function usart(name: string, tx: string, rx: string): PeripheralPreset {
   };
 }
 
+
+/**
+ * SPI 主机预设（S187）：键集与「引脚 .Mode 必须与模式配套」这两点都是实测出来的。
+ *
+ * 实测（F303 + CubeMX 6.18.1）：`Full_Duplex_Master` 只配了 SCK/MOSI、缺 MISO 时，
+ * CubeMX **静默丢弃整个 SPI1**——不出 spi.c、`HAL_SPI_MODULE_ENABLED` 仍是注释，
+ * 日志里连 `Load IP Config File for SPI1` 都没有。补齐 PA6(MISO) 后立刻生成 MX_SPI1_Init；
+ * 把 Direction 改成 1LINE、两根脚改成 `TransmitOnly_Master`（只发不收）也能生成。
+ * 所以 SPI 的 .Mode 不是装饰：它决定这套脚是否构成一个完整配置。
+ */
+function spi(
+  name: string,
+  mode: "Full_Duplex_Master" | "TransmitOnly_Master" | "ReceiveOnly_Master",
+  pins: Array<{ role: string; pin: string }>,
+): PeripheralPreset {
+  const direction = mode === "Full_Duplex_Master" ? "SPI_DIRECTION_2LINES" : "SPI_DIRECTION_1LINE";
+  const suffix = mode === "Full_Duplex_Master" ? "" : "（" + (mode === "TransmitOnly_Master" ? "只发" : "只收") + "）";
+  return {
+    name: mode === "Full_Duplex_Master" ? name : name + (mode === "TransmitOnly_Master" ? ":tx" : ":rx"),
+    label: name + " SPI 主机" + suffix,
+    ip: name,
+    pins: pins.map((entry) => ({ role: entry.role, defaultPin: entry.pin, signal: name + "_" + entry.role.toUpperCase(), mode })),
+    parameters: [
+      { name: "VirtualType", value: "VM_MASTER" },
+      { name: "Mode", value: "SPI_MODE_MASTER" },
+      { name: "Direction", value: direction },
+      { name: "TIMode", value: "SPI_TIMODE_DISABLE" },
+      { name: "DataSize", value: "SPI_DATASIZE_8BIT" },
+      { name: "FirstBit", value: "SPI_FIRSTBIT_MSB" },
+      { name: "BaudRatePrescaler", value: "SPI_BAUDRATEPRESCALER_4" },
+      { name: "CalculateBaudRate", value: "true" },
+      { name: "CLKPolarity", value: "SPI_POLARITY_LOW" },
+      { name: "CLKPhase", value: "SPI_PHASE_1EDGE" },
+      { name: "NSS", value: "SPI_NSS_SOFT" },
+      { name: "CRCCalculation", value: "SPI_CRCCALCULATION_DISABLE" },
+      { name: "CRCPolynomial", value: "7" },
+    ],
+    notes: [
+      name + "：" + (mode === "Full_Duplex_Master"
+        ? "全双工要求 SCK+MISO+MOSI 三根脚齐全，缺一根 CubeMX 会把整个外设静默丢掉"
+        : "只发/只收模式用 " + String(direction) + "，只占 " + String(pins.length) + " 根脚"),
+      "默认 8Bit / MSB / CPOL=Low / CPHA=1Edge / NSS=软件 / 分频 4（72 MHz 下 18 MHz）；" +
+        "要看实际时钟用 entries 设 " + name + ".BaudRatePrescaler",
+    ],
+  };
+}
+
+/**
+ * I2C 主机预设（S187）：F1/F3 的 I2C v1 用 ClockSpeed + DutyCycle 表达速率。
+ * 引脚 .Mode 是 `I2C`（不是 Asynchronous 那类外设模式名），缺了照样不生成。
+ */
+function i2c(name: string, scl: string, sda: string, speed = 100000): PeripheralPreset {
+  return {
+    name,
+    label: name + " I2C 主机（" + String(speed / 1000) + " kHz）",
+    ip: name,
+    pins: [
+      { role: "scl", defaultPin: scl, signal: name + "_SCL", mode: "I2C" },
+      { role: "sda", defaultPin: sda, signal: name + "_SDA", mode: "I2C" },
+    ],
+    parameters: [
+      { name: "ClockSpeed", value: String(speed) },
+      { name: "DutyCycle", value: "I2C_DUTYCYCLE_2" },
+      { name: "OwnAddress1", value: "0" },
+      { name: "AddressingMode", value: "I2C_ADDRESSINGMODE_7BIT" },
+    ],
+    notes: [
+      name + "：SCL/SDA 都要外接上拉（模块板一般不带上拉）；默认 7 位地址、主机模式、100 kHz",
+    ],
+  };
+}
+
 function timerPwm(name: string, channel: number, pin: string, dbSignal: string): PeripheralPreset {
   const mode = "PWM Generation" + String(channel) + " CH" + String(channel);
   return {
@@ -260,6 +332,27 @@ export const PERIPHERAL_PRESETS: PeripheralPreset[] = [
   usart("USART1", "PA9", "PA10"),
   usart("USART2", "PA2", "PA3"),
   usart("USART3", "PB10", "PB11"),
+  // S187：SPI/I2C 之前完全没有预设，模型只能自己拼键——拼错一根脚就会被 CubeMX 静默丢弃。
+  spi("SPI1", "Full_Duplex_Master", [
+    { role: "sck", pin: "PA5" },
+    { role: "miso", pin: "PA6" },
+    { role: "mosi", pin: "PA7" },
+  ]),
+  spi("SPI1", "TransmitOnly_Master", [
+    { role: "sck", pin: "PA5" },
+    { role: "mosi", pin: "PA7" },
+  ]),
+  spi("SPI1", "ReceiveOnly_Master", [
+    { role: "sck", pin: "PA5" },
+    { role: "miso", pin: "PA6" },
+  ]),
+  spi("SPI2", "Full_Duplex_Master", [
+    { role: "sck", pin: "PB13" },
+    { role: "miso", pin: "PB14" },
+    { role: "mosi", pin: "PB15" },
+  ]),
+  i2c("I2C1", "PB6", "PB7"),
+  i2c("I2C2", "PB10", "PB11"),
   // PA0 的定时器信号在 db 里与 TIM2_ETR 合并成 S_TIM2_CH1_ETR，必须用这个名字。
   timerPwm("TIM2", 1, "PA0", "S_TIM2_CH1_ETR"),
   timerPwm("TIM3", 1, "PA6", "S_TIM3_CH1"),

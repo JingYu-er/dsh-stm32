@@ -5900,7 +5900,29 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S184）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S187）
+
+### 一百九十三、外设预设与 CubeMX 的静默丢弃（S187）
+
+掌机那个会话卡住的地方不在「模型不会配置」，而在三件 CubeMX 的行为，插件当时一件都没接住。
+
+**真因一：迁移对话框把无头生成挂死。** `handheld.ioc` 是 6.15.0 写的、`ProjectManager.AskForMigrate=true`，本机 6.18.1 一加载就弹「Migrate / Continue / Cancel」。`-q` 没人点确定，进程就停在那里（实测最久 35 分钟），stdout 空、日志尾空，插件只能报「生成超时」。修法：`sanitizeIocForHeadless()` 把 `AskForMigrate=false` 写进一份副本交给 `config load`，原 `.ioc` 一字不动，notes 说明「要升版本请在图形界面里点 Migrate」，把选择权留给人。
+
+**真因二：配置不完整的外设会被静默丢掉。** SPI1 是全双工、却只写了 SCK/MOSI，缺 MISO；CubeMX 不报错，直接把整个 SPI1 扔掉——日志里连 `Load IP Config File for SPI1` 都没有，产物没有 `MX_SPI1_Init`、`HAL_SPI_MODULE_ENABLED` 仍是注释。对照实验（同一份 copying）证明：补一行 `PA6.Mode=Full_Duplex_Master` + `PA6.Signal=SPI1_MISO` 立刻恢复；改成 `TransmitOnly_Master` + `SPI_DIRECTION_1LINE`（只接 SCK/MOSI）也能恢复。所以「外设模式」与「引脚 Mode」必须配套，缺哪根脚都不行。
+
+**真因三：6.18 起 `-q` 的 stdout 可能是空的。** 产物明明正确，成功日志却只在 `%USERPROFILE%/.stm32cubemx/STM32CubeMX.log` 里，插件的 `parseGenerateLog` 读 stdout 读不到就判「未报告成功」。修法：spawn 前记日志文件大小，结束后 `readLogSince()` 增量读入合并判定，notes 注明「成功判定取自它自己的日志文件，这是 6.18 起的行为」。
+
+配套改动：
+- 预设补齐 `SPI1`（全双工 SCK/MISO/MOSI）、`SPI1:tx`（只发）、`SPI1:rx`（只收）、`SPI2`、`I2C1`、`I2C2`，键集按 CubeMX 生成结果反推（`VirtualType/Mode/Direction/TIMode/DataSize/FirstBit/BaudRatePrescaler/CalculateBaudRate/CLKPolarity/CLKPhase/NSS/CRCCalculation/CRCPolynomial`）；notes 明写「全双工必须有 MISO，否则整个外设被静默丢弃」。
+- 生成成功的收尾多一道核对：`missingPeripheralInits()` 按 `Mcu.IPn` 逐个找 `MX_<实例>_` 前缀，缺了就点名「这些外设在 .ioc 里启用了，但生成结果里没有初始化函数」并给出「补 MISO / 换预设 / 用 ioc_verify 看实际认了哪些」三条路。
+- 超时默认 600 s → 1800 s；超时消息带「已等几分钟 + 已写出几个文件 + 冷启动 8–12 分钟 + 先看日志尾」；job 模式的渲染说明补一句「不要在参数完全相同时连续轮询，宿主会判成重复调用拒绝」。
+
+真机验证（`C:/Users/Admin/AppData/Local/Temp/i2c-oracle-*/`，F303CCT6 + `STM32Cube_FW_F3_V1.11.6`）：干净工程挂 `SPI1` 全双工预设 → `Src/main.c` 出现三处 `MX_SPI1_Init`、`Inc/stm32f3xx_hal_conf.h` 定义 `HAL_SPI_MODULE_ENABLED`；handheld 的 `TransmitOnly_Master` 变体同样生成。**I2C1 预设仍没跑通**：同一台机器、同一个干净工程，加载后生成阶段报 `CodeEngine:255` 且不产出 `Src/main.c`，键集未确认，先按「未验证」记账。
+
+教训：
+- **「成功」必须从产物与它自己的日志证明**，退出码、stdout、文件存在都不能单独作数。
+- **配置不完整是静默的**：不报错不等于生效，外设初始化函数缺一个就是缺一个。
+- **对话框是无人值守的天敌**：能进副本的参数就别进原文件，能替人关掉的开关就别让它弹。
 
 ### 一百九十二、MCU 事实文件：一份 JSON，两个插件的边界（S184）
 

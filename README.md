@@ -16,7 +16,7 @@ STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deeps
 | HAL 建工程 | 21 个单核族：C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL |
 | 寄存器建工程 | 21 族，均通过 create→build 编译矩阵 |
 | 时钟规划 | 18 族；其中 PLL1 为 H5 / U5 / WBA / L4+ |
-| `.ioc` 外设预设 | 按 CubeMX 官方数据派生：串口 / TIM PWM / ADC |
+| `.ioc` 外设预设 | 按 CubeMX 官方数据派生：串口 / SPI（全双工、只发、只收）/ I2C / TIM PWM / ADC |
 | 寄存器名与位域 | F1 |
 
 **English:** [README_EN.md](./README_EN.md)
@@ -168,6 +168,21 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | 工具 | 用途 |
 | --- | --- |
 | `stm32_ioc_inspect` | 只读解析：型号、引脚、信号、使能外设、中断、时钟树、工程设置与风险提示 |
+### 外设预设（S187）
+
+`stm32_ioc_plan` 的 `peripherals` 直接用名字，插件负责写全套键（引脚 `Mode`+`Signal`、`<IP>.IPParameters` 与各参数）：
+
+| 预设 | 引脚 | 备注 |
+| --- | --- | --- |
+| `USART1` / `USART2` / `USART3` | PA9+PA10 / PA2+PA3 / PB10+PB11 | 默认 115200 8N1 |
+| `SPI1` / `SPI2` | SCK+MISO+MOSI（PA5/PA6/PA7、PB13/PB14/PB15） | **全双工三根脚必须齐**；缺一根 CubeMX 会把整个外设静默丢掉，生成结果里没有 `MX_SPI1_Init` |
+| `SPI1:tx` / `SPI1:rx` | SCK+MOSI / SCK+MISO | 单向：`SPI_DIRECTION_1LINE` + `TransmitOnly_Master` / `ReceiveOnly_Master` |
+| `I2C1` / `I2C2` | SCL+SDA（PB6/PB7、PB10/PB11） | 100 kHz、7 位地址，外部上拉自备 |
+| `TIM2:1` … `TIM4:1` | PA0 / PA6 / PB6 | PWM，默认 1 kHz、50% |
+| `ADC1` / `ADC2` | PA1 | 单通道单 rank |
+
+生成完如果某个外设「启用了却没出现初始化函数」，`stm32_generate` 会点名提醒——这类丢弃是 CubeMX 的静默行为，不是编译错误。
+
 | `stm32_ioc_plan` | 计算逐键差异（不写盘）：支持外设预设、引脚、中断、调试口、时钟规划与批量置键 |
 | `stm32_ioc_apply` | 写入计划：源文件校验 → 备份 → 原子替换；支持按备份回滚 |
 | `stm32_ioc_verify` | 由 CubeMX 自己重读 `.ioc`，指出被静默丢弃的外设与缺失的初始化 |

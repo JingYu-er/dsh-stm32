@@ -440,9 +440,10 @@ test("纯 LF 的 .ioc：写回保持 LF，但计划阶段要告警（CubeMX 另�
 
 test("peripherals：不认识的名字直接报错，并列出内置预设", () => {
   const { projectDir } = freshProject();
-  const report = planIocChanges({ projectDir, peripherals: [{ name: "SPI1" }] });
+  // S187 起 SPI1 已是内置预设，这里必须用真正没有的名字（SPI5）才能测到「认不出」这条路。
+  const report = planIocChanges({ projectDir, peripherals: [{ name: "SPI5" }] });
   assert.equal(report.ok, false);
-  // 现在会先试 db 派生（USART/UART/LPUART），SPI1 还没派生 → 报"认不出/还没派生"并列出内置表
+  // 会先试 db 派生（USART/UART/LPUART），SPI5 没有预设也不派生 → 报"认不出/还没派生"并列出内置表
   assert.match(report.errors.join(" "), /不能启用/u);
   assert.match(report.errors.join(" "), /USART1/u);
 });

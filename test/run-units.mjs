@@ -103,6 +103,7 @@ const suites = [
   "flash-units.test.mjs",
   "generate-cache-units.test.mjs",
   "ioc-plan-units.test.mjs",
+  "preset-units.test.mjs",
   "schema-subset-units.test.mjs",
   "ioc-verify-units.test.mjs",
   "ioc-schema-units.test.mjs",

@@ -16,7 +16,7 @@ Within the supported range the same tools behave the same way from F1 to H7; for
 | HAL scaffolding | 21 single-core families: C0 / F0 / F1 / F2 / F3 / F4 / F7 / G0 / G4 / H5 / H7 / L0 / L1 / L4 / L4+ / L5 / U0 / U3 / U5 / WBA / WL |
 | Register scaffolding | 21 families, all passing the create→build matrix |
 | Clock planning | 18 families; PLL1 on H5 / U5 / WBA / L4+ |
-| `.ioc` peripheral presets | Derived from official CubeMX data: USART / TIM PWM / ADC |
+| `.ioc` peripheral presets | Derived from official CubeMX data: USART / SPI (full-duplex, TX-only, RX-only) / I2C / TIM PWM / ADC |
 | Register names and bitfields | F1 |
 
 **中文:** [README.md](./README.md)
