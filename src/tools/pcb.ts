@@ -40,6 +40,7 @@ import { readGerberSet } from "../engine/ecad/pcb/gerber.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
 import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
 import { EMPTY_RENDER3D, renderBoard3d } from "../engine/ecad/pcb/render3d.js";
+import { suggestModelFixes } from "../engine/ecad/pcb/model-fix.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
@@ -2019,9 +2020,38 @@ export function registerPcbTools(ctx: DshContext): void {
         },
       },
       missing: { type: "array", items: { type: "string" } },
+      fixes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ref: { type: "string" },
+            footprint: { type: "string" },
+            family: { type: "string" },
+            missingFile: { type: "string" },
+            note: { type: "string" },
+            candidates: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  libId: { type: "string" },
+                  stepPath: { type: "string" },
+                  has3d: { type: "boolean" },
+                  pitchMm: { type: "number" },
+                },
+                required: ["libId", "stepPath", "has3d", "pitchMm"],
+              },
+            },
+          },
+          required: ["ref", "footprint", "family", "missingFile", "note", "candidates"],
+        },
+      },
       notes: { type: "array", items: { type: "string" } },
     },
-    required: ["ok", "error", "file", "bytes", "side", "width", "height", "models", "missing", "notes"],
+    required: ["ok", "error", "file", "bytes", "side", "width", "height", "models", "missing", "fixes", "notes"],
   };
 
   const render3dTool: ToolDefinition = {
@@ -2057,6 +2087,7 @@ export function registerPcbTools(ctx: DshContext): void {
           height: number;
           models: { ref: string; file: string; exists: boolean; bytes: number }[];
           missing: string[];
+          fixes: { ref: string; footprint: string; family: string; missingFile: string; note: string; candidates: { libId: string; stepPath: string; has3d: boolean; pitchMm: number }[] }[];
           notes: string[];
         };
         if (!result.ok) return [{ type: "text", text: "3D 渲染失败：" + result.error }];
@@ -2066,6 +2097,13 @@ export function registerPcbTools(ctx: DshContext): void {
           "模型：引用 " + String(result.models.length) + " 个 · 缺文件 " + String(result.missing.length) + " 个",
         ];
         for (const item of result.missing.slice(0, 8)) lines.push("  缺：" + item);
+        for (const fix of result.fixes) {
+          const best = fix.candidates.find((candidate) => candidate.has3d) ?? fix.candidates[0];
+          lines.push(
+            "可换：" + fix.ref + " " + fix.footprint + (best === undefined ? " → 没有同族候选" : " → " + best.libId + (best.has3d ? "（有 STEP）" : "（STEP 也缺）")),
+          );
+          if (best === undefined) lines.push("  " + fix.note);
+        }
         if (result.missing.length > 8) lines.push("  另有 " + String(result.missing.length - 8) + " 个缺文件项");
         for (const note of result.notes) lines.push("说明：" + note);
         return [{ type: "text", text: lines.join("\n") }];
@@ -2077,7 +2115,7 @@ export function registerPcbTools(ctx: DshContext): void {
       args: { projectDir?: string; boardFile?: string; side?: string; rotate?: string; perspective?: boolean; width?: number; height?: number; quality?: string; saveAs?: string },
       exec: ToolExec,
     ) => {
-      const empty = { ...EMPTY_RENDER3D, models: [] as Array<Record<string, unknown>>, missing: [] as string[], notes: [] as string[] };
+      const empty = { ...EMPTY_RENDER3D, models: [] as Array<Record<string, unknown>>, missing: [] as string[], fixes: [] as Array<Record<string, unknown>>, notes: [] as string[] };
       const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
       if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
       const located = locateEcadToolchain();
@@ -2106,7 +2144,17 @@ export function registerPcbTools(ctx: DshContext): void {
           ...(output === undefined ? {} : { output }),
         },
       );
-      return { ...result, models: result.models.map((model) => ({ ...model })), missing: [...result.missing], notes: [...result.notes] };
+      const fixes =
+        result.missing.length > 0 && located.toolchain.footprintDir !== ""
+          ? suggestModelFixes(readFileSync(boardFile, "utf8"), boardFile, { model3dDir: located.toolchain.model3dDir, footprintDir: located.toolchain.footprintDir })
+          : [];
+      return {
+        ...result,
+        models: result.models.map((model) => ({ ...model })),
+        missing: [...result.missing],
+        fixes: fixes.map((fix) => ({ ...fix, candidates: fix.candidates.map((candidate) => ({ ...candidate })) })),
+        notes: [...result.notes],
+      };
     },
   };
 

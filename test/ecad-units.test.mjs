@@ -19,6 +19,7 @@ import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { fetchEasyedaPackage, easyedaToKicadMod, parseEasyedaPackage } from "../lib/engine/ecad/easyeda.js";
 import { collectBoardModels, renderBoard3d } from "../lib/engine/ecad/pcb/render3d.js";
+import { suggestModelFixes } from "../lib/engine/ecad/pcb/model-fix.js";
 import { importPart, parseModelRef, resolveModelPath } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
 import { assignableNet, buildHandSyncScript, parseHandSyncOutput, planHandSync } from "../lib/engine/ecad/pcb/hand-sync.js";
@@ -2528,6 +2529,66 @@ test("3D 预览：模型路径按 KIPRJMOD 与 KICAD 库目录解析，缺文件
     assert.equal(argv[argv.indexOf("--width") + 1], "800");
     assert.equal(argv[argv.indexOf("--height") + 1], "600");
     assert.equal(result.bytes, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("3D 缺模型：给出同族官方封装候选，只认引脚数与间距一致且 STEP 真存在（S181）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-fix-"));
+  try {
+    const fp = join(dir, "footprints");
+    const m3d = join(dir, "3dmodels");
+    mkdirSync(join(fp, "Package_QFP.pretty"), { recursive: true });
+    mkdirSync(join(fp, "Connector_FFC-FPC.pretty"), { recursive: true });
+    mkdirSync(join(m3d, "Package_QFP.3dshapes"), { recursive: true });
+    mkdirSync(join(m3d, "Connector_FFC-FPC.3dshapes"), { recursive: true });
+    writeFileSync(join(fp, "Package_QFP.pretty", "LQFP-48_7x7mm_P0.5mm.kicad_mod"), "(footprint x)\n", "utf8");
+    writeFileSync(join(fp, "Package_QFP.pretty", "LQFP-48-1EP_7x7mm_P0.5mm_EP3.6x3.6mm.kicad_mod"), "(footprint x)\n", "utf8");
+    writeFileSync(join(fp, "Package_QFP.pretty", "LQFP-64_10x10mm_P0.5mm.kicad_mod"), "(footprint x)\n", "utf8");
+    writeFileSync(join(fp, "Package_QFP.pretty", "LQFP-48_7x7mm_P0.8mm.kicad_mod"), "(footprint x)\n", "utf8");
+    writeFileSync(join(fp, "Connector_FFC-FPC.pretty", "Hirose_FH12-40S-0.5SH_1x40-1MP_P0.50mm_Horizontal.kicad_mod"), "(footprint x)\n", "utf8");
+    writeFileSync(join(m3d, "Package_QFP.3dshapes", "LQFP-48_7x7mm_P0.5mm.step"), "ISO-10303-21;\n", "utf8");
+    writeFileSync(join(m3d, "Package_QFP.3dshapes", "LQFP-48-1EP_7x7mm_P0.5mm_EP3.6x3.6mm.step"), "ISO-10303-21;\n", "utf8");
+    writeFileSync(join(m3d, "Connector_FFC-FPC.3dshapes", "Hirose_FH12-40S-0.5SH_1x40-1MP_P0.50mm_Horizontal.step"), "ISO-10303-21;\n", "utf8");
+
+    const board = [
+      "(kicad_pcb (version 20241229)",
+      '  (footprint "tscircuit:chip_qfp48_w7_5mm_p0_5mm" (layer "F.Cu") (at 0 0)',
+      '    (property "Reference" "U1")',
+      '    (pad "1" smd rect (at 0 0) (size 0.3 1.5) (layers "F.Cu"))',
+      '    (model "${KIPRJMOD}/models/missing.step")',
+      "  )",
+      '  (footprint "tscircuit:connector_fpc40" (layer "F.Cu") (at 20 0)',
+      '    (property "Reference" "J1")',
+      '    (pad "1" smd rect (at 0 0) (size 0.3 1.25) (layers "F.Cu"))',
+      '    (model "${KIPRJMOD}/models/fpc40.step")',
+      "  )",
+      ")",
+      "",
+    ].join("\n");
+    const boardFile = join(dir, "board.kicad_pcb");
+    writeFileSync(boardFile, board, "utf8");
+
+    const fixes = suggestModelFixes(board, boardFile, { model3dDir: m3d, footprintDir: fp });
+    assert.equal(fixes.length, 2);
+    const qfp = fixes.find((fix) => fix.ref === "U1");
+    assert.ok(qfp !== undefined);
+    assert.equal(qfp.family, "qfp");
+    const ids = qfp.candidates.map((candidate) => candidate.libId);
+    assert.equal(ids.includes("Package_QFP:LQFP-48_7x7mm_P0.5mm"), true);
+    assert.equal(ids.some((id) => id.includes("LQFP-64")), false, "引脚数不对的不该出现");
+    assert.equal(ids.some((id) => id.includes("P0.8mm")), false, "间距不对的不该出现");
+    assert.equal(qfp.candidates[0].has3d, true);
+    assert.equal(qfp.candidates[0].pitchMm, 0.5);
+
+    const fpc = fixes.find((fix) => fix.ref === "J1");
+    assert.ok(fpc !== undefined);
+    assert.equal(fpc.family, "fpc");
+    assert.equal(fpc.candidates.length, 1);
+    assert.equal(fpc.candidates[0].has3d, true);
+    assert.equal(fpc.candidates[0].pitchMm, 0.5);
+    assert.match(fpc.note, /没写间距/u, "间距未知要提醒人工核对");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

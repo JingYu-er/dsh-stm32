@@ -433,3 +433,10 @@ test("电路设计页能看 3D 预览：顶/底/斜视三档，缺模型要点�
   assert.ok(clientSource.includes("缺 3D 模型"), "缺模型要列出来");
   assert.ok(clientSource.indexOf("function useRender3d(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
 });
+
+test("3D 缺模型时面板给可换的官方封装（S181）", () => {
+  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(clientSource.includes("可换的官方封装"), "要显示可换封装清单");
+  assert.ok(clientSource.includes("fix.candidates"), "候选要从回包里取");
+  assert.ok(clientSource.includes("有 STEP"), "候选要标明有没有 STEP");
+});

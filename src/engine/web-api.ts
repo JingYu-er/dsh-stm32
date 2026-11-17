@@ -85,6 +85,7 @@ import { readLinks } from "./ecad/pcb/links.js";
 import { editStorePath, readSchEdits, replaySchEditsTo, writeSchEdits } from "./schematic/edit.js";
 import { readGerberSet } from "./ecad/pcb/gerber.js";
 import { EMPTY_RENDER3D, renderBoard3d } from "./ecad/pcb/render3d.js";
+import { suggestModelFixes } from "./ecad/pcb/model-fix.js";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readImpedancePlan } from "./ecad/pcb/impedance.js";
@@ -1856,6 +1857,10 @@ export async function handleWebApi(input: {
         output: join(projectDir, "hardware", "out", "board-3d-" + side + ".png"),
       },
     );
+    const fixes =
+      result.missing.length > 0 && located.toolchain.footprintDir !== ""
+        ? suggestModelFixes(readFileSync(latest.pcbFile, "utf8"), latest.pcbFile, { model3dDir: located.toolchain.model3dDir, footprintDir: located.toolchain.footprintDir })
+        : [];
     let dataUrl = "";
     const notes = [...result.notes];
     if (result.ok && result.bytes > 0 && result.bytes <= 1_500_000) {
@@ -1875,6 +1880,7 @@ export async function handleWebApi(input: {
         dataUrl,
         models: result.models.map((model) => ({ ...model })),
         missing: [...result.missing],
+        fixes: fixes.map((fix) => ({ ...fix, candidates: fix.candidates.map((candidate) => ({ ...candidate })) })),
         notes,
       },
     });

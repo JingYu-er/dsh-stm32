@@ -5900,7 +5900,16 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S180）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S181）
+
+### 一百八十九、缺 3D 模型时，给「引脚数与间距都对得上」的官方封装（S181）
+
+- 目的：3D 图上一块空着，往往是那个封装没有 STEP；先把「能换哪个」算出来，比让人自己翻库快。
+- 判据只有三条，全部是磁盘事实：族（qfp/qfn/fpc/soic/sot 从封装名认）→ 引脚数（封装名里的数字，缺了数焊盘）→ 间距（`p0.5mm`、也认 tscircuit 的 `p0_5mm`）。间距对不上的直接不列；本体宽度只加分不过滤（`w7_5mm` 是含引脚的最大宽度，不是本体）。
+- 候选只来自对应官方库（`Package_QFP` / `Package_DFN_QFN` / `Connector_FFC-FPC` / `Package_SO` / `Package_TO_SOT_SMD`），STEP 按 `<Lib>.3dshapes/<Name>.step`（也认 `.wrl`）实际存在才标 `has3d`。
+- 真机（tetris）：`U1`（`tscircuit:chip_qfp48_w7_5mm_p0_5mm`）→ `Package_QFP:LQFP-48_7x7mm_P0.5mm`（有 STEP）与两个 1EP 变体；`J1`（`tscircuit:connector_fpc40`）→ `Connector_FFC-FPC:Hirose_FH12-40S-0.5SH_1x40-1MP_P0.50mm_Horizontal`（有 STEP），同时提醒「板子上的封装名没写间距，换之前核对」。
+- 呈现：`stm32_pcb_3d` 的输出与 `/ecad/render3d` 回包都带 `fixes`，面板在「缺 3D 模型」下面列前四条；只给候选，不替人改板子。
+- 教训：封装名的信息量决定建议质量——`w7_5mm` 与 `P0_5mm` 这种带下划线的写法要单独认，否则所有候选都「对不上间距」，等于没建议。
 
 ### 一百八十八、3D 预览：渲的是 KiCad 的渲染器，缺模型就空着（S180）
 
