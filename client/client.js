@@ -6157,7 +6157,6 @@ function EcadPanel(props) {
         tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
         tabButton("schematic", DEBUG_LABELS.schematic),
-        tabButton("ecad", DEBUG_LABELS.ecad),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("interrupts", DEBUG_LABELS.interrupts),
         tabButton("faults", DEBUG_LABELS.faults, unseenFails),
@@ -6193,8 +6192,6 @@ function EcadPanel(props) {
             ]
           : tab === "schematic"
           ? [e(SchematicPanel, { key: "schematic", projectDir: projectDir })]
-          : tab === "ecad"
-          ? [e(EcadPanel, { key: "ecad", projectDir: projectDir })]
           : tab === "pinout"
           ? [e(PinoutPanel, { key: "pinout", projectDir: projectDir })]
           : tab === "clocks"

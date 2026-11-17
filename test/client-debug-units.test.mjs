@@ -27,15 +27,6 @@ function stubLocalStorage() {
   };
 }
 
-test("电路设计页显示共享运行时与最近一次自动构建（S136）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function autoBuildText("));
-  assert.ok(source.includes("共享运行时 "));
-  assert.ok(source.includes("本工程未挂载"));
-  assert.ok(source.includes("依赖已挂载"), "工程级挂载状态与机器共享运行时是两个数，标签要分开");
-  assert.ok(source.includes("ecad.autoBuild"));
-  assert.ok(source.includes("autoBuild.lastOk === true"));
-});
 
 test("设计通过后提示是否导出 STEP 与 Gerber（S137）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
@@ -44,11 +35,6 @@ test("设计通过后提示是否导出 STEP 与 Gerber（S137）", () => {
   assert.ok(source.includes('runAction("export")'));
 });
 
-test("电路设计页有一键设计按钮并渲染步骤（S134）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes('["design", "一键设计"]'));
-  assert.ok(source.includes("Array.isArray(outcome.steps)"));
-});
 
 test("client.js：注册设置面板与调试台两个槽位，调试台可渲染", async () => {
   const registered = [];
@@ -242,44 +228,10 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
   }
 });
 
-test("电路设计页签：读 /ecad 并给出下一步动作（S99）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.equal(source.includes("function useEcad("), true);
-  assert.equal(source.includes("function EcadPanel("), true);
-  assert.equal(source.includes('callApi("GET", "ecad?projectDir="'), true);
-  assert.equal(source.includes('tabButton("ecad", DEBUG_LABELS.ecad)'), true);
-  assert.equal(source.includes('tab === "ecad"'), true);
-  assert.match(source, /stm32_ecad_init/u);
-  assert.match(source, /ecad\/action/u);
-  assert.match(source, /const runAction/u);
-});
 
-test("电路设计页签：有「打包交付」按钮，动作走同一个端点（S107）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes('["package", "打包交付"]'), "缺少打包交付按钮");
-  assert.ok(source.includes("outcome.file"), "结果区要显示交付包路径");
-});
 
-test("电路设计结果区显示可制造性与打样成本（S109）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /outcome\.dfm/u);
-  assert.match(source, /dfm\.approxCny/u);
-  assert.match(source, /最细走线/u);
-});
 
-test("电路设计页签：数据手册状态与补齐按钮（S120）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /dsMissing/);
-  assert.match(source, /\["datasheets", "补手册"\]/);
-  assert.match(source, /ecad\.datasheets/);
-});
 
-test("电路设计页签：手册占用与补手册按钮（S124）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /function dsSizeText\(/u);
-  assert.match(source, /dsSizeText\(datasheets\)/u);
-  assert.match(source, /ecad\.datasheets/u);
-});
 
 test("流程图页有一键评审按钮，请求走 /schematic/review（S135）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
@@ -288,127 +240,16 @@ test("流程图页有一键评审按钮，请求走 /schematic/review（S135）"
   assert.equal(source.includes("...reviewRows"), true);
 });
 
-test("电路设计页在数据回来之前不读空对象，避免整页空白（S150）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  // 首次渲染时 ecad 必然是 null；直接读 ecad.autoBuild 会抛错，React 卸载整棵子树。
-  assert.ok(source.includes("const pendingExport = ecad !== null && ecad !== undefined && ecad.autoBuild !== null"));
-  const panel = source.slice(source.indexOf("function EcadPanel("));
-  assert.equal(panel.includes("const pendingExport = ecad.autoBuild"), false);
-});
 
-test("电路设计页显示布线引擎状态，并可勾选含布线（S146）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("布线引擎未安装"));
-  assert.ok(source.includes("含布线"));
-  assert.ok(source.includes("pcb: true"));
-  assert.ok(source.includes("autoroute.ready"));
-});
 
-test("电路设计页能看 BOM：默认只读缓存，点「查价」才联网（S156）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function useBom("));
-  assert.ok(source.includes("\"ecad/bom?\""));
-  assert.ok(source.includes("\"BOM\""));
-  assert.ok(source.includes("\"查价\""));
-  assert.ok(source.includes("params.push(\"prices=1\")"), "只有点查价才带 prices=1");
-  assert.ok(source.indexOf("function useBom(") < source.indexOf("function EcadPanel("));
-});
-test("电路设计页能看 EMC 体检：铺铜与电源线宽写在面板上（S158）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function useEmc("));
-  assert.ok(source.includes("\"ecad/emc?projectDir=\""));
-  assert.ok(source.includes("\"EMC\""));
-  assert.ok(source.includes("emc-deep"), "EMC 块要显示深度体检那一行（S167）");
-  assert.equal(source.includes("function useNetGate("), true, "电路设计页要有一致性门禁的钩子");
-  assert.equal(source.includes("ecad/netgate?projectDir="), true, "一致性门禁走独立接口");
-  assert.equal(source.includes("一致性"), true, "面板上要能看到这一块");
-  assert.equal(source.includes("手绘层"), true, "面板要显示手绘层与生成图纸的差异");
-  assert.ok(source.indexOf("function useNetGate(") < source.indexOf("function EcadPanel("), "钩子要定义在面板之前");
-  assert.equal(source.includes("function useImpedance("), true, "叠层块要有阻抗规则按钮的钩子");
-  assert.equal(source.includes("ecad/impedance?projectDir="), true, "阻抗规则走独立接口");
-  assert.equal(source.includes("写入阻抗规则"), true, "按钮文案要能搜到");
-  assert.ok(source.indexOf("function useImpedance(") < source.indexOf("function EcadPanel("), "钩子要定义在面板之前");
-  assert.ok(source.includes("回流 "));
-  assert.ok(source.indexOf("function useEmc(") < source.indexOf("function EcadPanel("));
-});
 
-test("电路设计页能看电源预算：未填电流标待定（S160）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function usePower("));
-  assert.ok(source.includes("\"ecad/power?projectDir=\""));
-  assert.ok(source.includes("\"电源预算\""));
-  assert.ok(source.includes("电流未填"), "未填电流要如实标，不能当 0 A");
-  assert.ok(source.indexOf("function usePower(") < source.indexOf("function EcadPanel("));
-});
 
-test("电路设计页能看叠层：按工程取阻抗线宽，没有板子就显示提示（S157）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function useStackup("));
-  assert.ok(source.includes("\"ecad/stackup?projectDir=\""));
-  assert.ok(source.includes("\"叠层\""));
-  assert.ok(source.indexOf("function useStackup(") < source.indexOf("function EcadPanel("));
-});
 
-test("电路设计页能看板图：按层开关请求 /ecad/pcb，SVG 内联渲染（S151）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("function usePcbView("));
-  assert.ok(source.includes("\"ecad/pcb?\""));
-  assert.ok(source.includes("\"板图\""));
-  assert.ok(source.includes("d32-pcb-figure"));
-  assert.ok(source.includes("连接 KiCad"), "面板要能手动探一次 IPC 连接");
-  assert.ok(source.includes('"ecad/ipc?open=1"'), "连不上时请求带 open=1，让插件自己把 KiCad 打开");
-  assert.ok(source.includes("reply.value.ipc"), "callApi 已经把回包包进 value，读 ipc 必须先解包");
-  // 关掉的层传 0，位号只有显式打开才请求。
-  assert.ok(source.includes("params.push(name + \"=0\")"));
-  assert.ok(source.includes("params.push(\"refs=1\")"));
-  // 钩子必须定义在面板之前，否则运行期引用不到。
-  assert.ok(source.indexOf("function usePcbView(") < source.indexOf("function EcadPanel("));
-});
 
-test("电路设计页能看需求文档：先看状态，点生成才 POST（S161）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /function useBrief\(/u);
-  assert.match(source, /"ecad\/brief\?projectDir="/u);
-  assert.match(source, /"需求文档"/u);
-  assert.match(source, /"生成骨架"/u);
-  assert.match(source, /write: true, force: force === true/u);
-  assert.equal(source.indexOf("function useBrief(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
-});
 
-test("电路设计页能看机械约束：板框与定位孔，点导出才 POST（S162）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /function useMech\(/u);
-  assert.match(source, /"ecad\/mech\?projectDir="/u);
-  assert.match(source, /"机械"/u);
-  assert.match(source, /"导出 DXF"/u);
-  assert.match(source, /\{ export: true \}/u);
-  assert.equal(source.indexOf("function useMech(") < source.indexOf("function EcadPanel("), true, "hook 必须在组件之前定义");
-});
 
-test("电路设计页能搜器件：输入关键词才联网（S163）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.match(source, /function useParts\(/u);
-  assert.match(source, /"ecad\/parts\?"/u);
-  assert.match(source, /器件搜索/u);
-  assert.ok(source.indexOf("function useParts(") < source.indexOf("function EcadPanel("), "useParts 要在 EcadPanel 之前定义");
-});
 
-test("电路设计页能看布线体检：差分对、平面层与去耦距离（S165）", () => {
-  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(clientSource.includes("function useLinks("), "要有 useLinks");
-  assert.ok(clientSource.includes("ecad/links?projectDir="), "请求要走 ecad/links");
-  assert.ok(clientSource.includes('"布线体检"'), "要有布线体检区块");
-  assert.ok(clientSource.indexOf("function useLinks(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
-});
 
-test("电路设计页能看制造文件：Gerber 与钻孔画成一张图（S166）", () => {
-  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(clientSource.includes("function useGerber("), "要有 useGerber");
-  assert.ok(clientSource.includes("ecad/gerber?"), "请求要走 ecad/gerber");
-  assert.ok(clientSource.includes('"制造文件"'), "要有制造文件区块");
-  assert.ok(clientSource.includes('"F_Cu,Edge_Cuts"'), "默认只看顶层与板框");
-  assert.ok(clientSource.indexOf("function useGerber(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
-});
 
 
 test("面板源码里用到的 D32_* 常量都必须定义过（S170.1）", () => {
@@ -424,15 +265,6 @@ test("原理图页签不放编辑区：改图在 KiCad 里做，再按需导入�
   assert.equal(source.includes("\"连起来\""), false, "引脚连线按钮已撤掉");
 });
 
-test("电路设计页能看 3D 预览：顶/底/斜视三档，缺模型要点名（S180）", () => {
-  const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(clientSource.includes("function useRender3d("), "要有 useRender3d");
-  assert.ok(clientSource.includes("ecad/render3d?"), "请求要走 ecad/render3d");
-  assert.ok(clientSource.includes('"3D 预览"'), "要有 3D 预览区块");
-  assert.ok(clientSource.includes('"斜视"'), "要有等轴视图入口");
-  assert.ok(clientSource.includes("缺 3D 模型"), "缺模型要列出来");
-  assert.ok(clientSource.indexOf("function useRender3d(") < clientSource.indexOf("function EcadPanel("), "hook 要定义在 EcadPanel 之前");
-});
 
 test("3D 缺模型时面板给可换的官方封装（S181）", () => {
   const clientSource = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
@@ -441,13 +273,3 @@ test("3D 缺模型时面板给可换的官方封装（S181）", () => {
   assert.ok(clientSource.includes("有 STEP"), "候选要标明有没有 STEP");
 });
 
-test("3D 预览里能一键换封装、能导出 GLB 与 STEP（S182/S183）", () => {
-  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.ok(source.includes("ecad/swap?projectDir="), "换封装要走 /ecad/swap");
-  assert.ok(source.includes("换过去"), "缺模型的候选旁边要有换过去的按钮");
-  assert.ok(source.includes("ecad/render3d?projectDir="), "导出复用 3D 路由");
-  assert.ok(source.includes("format="), "导出要带 format");
-  assert.ok(source.includes("导出 GLB"), "面板要有 GLB 按钮");
-  assert.ok(source.includes("导出 STEP"), "面板要有 STEP 按钮");
-  assert.ok(source.includes("已导出 "), "导出完要显示文件与大小");
-});

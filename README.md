@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：68 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
+STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：37 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
 在支持范围内，同一套工具从 F1 到 H7 用法一致；遇到不支持的芯片或功能，调用时会直接说明缺什么，不会给出一份猜出来的结果。
 
@@ -22,6 +22,12 @@ STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deeps
 **English:** [README_EN.md](./README_EN.md)
 
 [快速开始](#快速开始最小验证空目录到灯在闪) · [工具参考](#工具参考) · [斜杠命令](#斜杠命令) · [调试台](#调试台面板) · [配置](#配置) · [已知限制](#已知限制) · [排错](#排错) · [规格书](docs/dsh-stm32-plugin-规格.md)
+
+## 拆分说明（0.1.9 起）
+
+硬件侧能力（画原理图、PCB、Gerber、3D、BOM、叠层/阻抗、EMC、机械）已拆到独立插件 **dsh-ecad**，本插件只保留固件侧：工具链、`.ioc` 事务、建工程、编译、烧录、调试、串口/RTT/监视、证据与调试台，另保留「查看 KiCad 原理图、对照引脚、一键评审、导出 `.ioc` 草案」这些固件闭环需要的读图能力。
+
+两个插件通过 `<工程>/dsh/mcu.json`（本插件写，`schema: dsh-mcu/1`，含 `.ioc` 的 sha256 指纹）交换 MCU 事实；同名工具不会重复注册。
 
 ## 它能做什么
 
@@ -504,7 +510,7 @@ source [find target/stm32f1x.cfg]
 ```text
 src/
   index.ts          插件入口：注册工具、斜杠命令、面板 API 与 SKILL
-  tools/            68 个工具的注册与参数校验
+  tools/            37 个工具的注册与参数校验
   engine/           引擎：工程、.ioc、生成、构建、烧录、调试、事件与面板 API
   data/             芯片数据、CubeMX 数据、时钟、搜索根、工具链配置
   commands/         7 条斜杠命令

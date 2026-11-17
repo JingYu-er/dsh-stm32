@@ -24,8 +24,6 @@ import { registerDebugRun } from "./tools/debug.js";
 import { registerDebugSession } from "./tools/debug-session.js";
 import { registerDoctor } from "./tools/doctor.js";
 import { registerDownload } from "./tools/download.js";
-import { registerEcadTools } from "./tools/ecad.js";
-import { registerPcbTools } from "./tools/pcb.js";
 import { registerPdfTools } from "./tools/pdf.js";
 import { registerEnvInstall } from "./tools/env-install.js";
 import { registerFirmwareInstall } from "./tools/firmware-install.js";
@@ -40,14 +38,9 @@ import { registerProjectExport } from "./tools/project-export.js";
 import { registerRegsRead } from "./tools/regs.js";
 import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerSchematicTools } from "./tools/schematic.js";
-import { registerSchEditTools } from "./tools/sch-edit.js";
-import { registerSchDrawTools } from "./tools/sch-draw.js";
 import { registerMcuInfoTools } from "./tools/mcu-info.js";
-import { registerImportTools } from "./tools/import-circuit.js";
 import { registerLayoutTools } from "./tools/layout.js";
 import { registerDatasheetTools } from "./tools/datasheet.js";
-import { registerGenTools } from "./tools/gen.js";
-import { registerPartImportTools } from "./tools/part-import.js";
 import { registerRtt } from "./tools/rtt.js";
 import { registerSerial } from "./tools/serial.js";
 import { registerWatchTool } from "./tools/watch.js";
@@ -55,9 +48,6 @@ import { registerWebRoutes } from "./engine/web-routes.js";
 import { setSessionWorkspaceResolver } from "./engine/web-api.js";
 import { agentIdOf, agentOfSession, noteSessionAgent, noteSessionDir, sessionDirOf } from "./engine/session-context.js";
 import { emitEvent } from "./engine/event-bus.js";
-import { runAutoBuild } from "./engine/ecad/autobuild.js";
-import { locateEcadToolchain } from "./engine/ecad/toolchain.js";
-import { planEcadWorkspace } from "./engine/ecad/tsci.js";
 import { resolveProjectLayout } from "./engine/project-layout.js";
 import { startEventLog } from "./engine/event-log.js";
 import { instrumentContext } from "./engine/tool-events.js";
@@ -138,16 +128,9 @@ export function apply(ctx: DshContext): void {
   registerRegsRead(toolsCtx);
   registerRoutePlan(toolsCtx);
   registerSchematicTools(toolsCtx);
-  registerSchEditTools(toolsCtx);
-  registerSchDrawTools(toolsCtx);
   registerMcuInfoTools(toolsCtx);
-  registerImportTools(toolsCtx);
   registerLayoutTools(toolsCtx);
   registerDatasheetTools(toolsCtx);
-  registerGenTools(toolsCtx);
-  registerPartImportTools(toolsCtx);
-  registerEcadTools(toolsCtx);
-  registerPcbTools(toolsCtx);
   registerPdfTools(toolsCtx);
   registerRtt(toolsCtx);
   registerWatchTool(toolsCtx);
@@ -228,11 +211,6 @@ export function apply(ctx: DshContext): void {
       // persist=true 的会话由 cleanupSerialOnTurnEnd 自己判断并保留（顺带扫死会话目录）。
       // 这里 catch 掉异常：收尾失败不该让宿主事件处理器抛错。
       void cleanupSerialOnTurnEnd({}).catch(() => undefined);
-      // 回合末自动构建（S136）：只在源码比产物新时跑，结果写 .dsh-stm32/ecad-state.json。
-      // 这里不 await：构建要十几秒，不能让事件处理器拖着宿主。
-      const turnSession = sessionIdOf(session);
-      const turnDir = turnSession === "" ? "" : sessionDirOf(turnSession);
-      if (turnDir !== "") void autoBuildInWorkspace(ctx, turnDir, turnSession);
     });
     ctx.on("session/disposed", () => {
       stopChannelTaps();
@@ -251,43 +229,3 @@ export function apply(ctx: DshContext): void {
   }
 }
 
-/** 同一工程同时只跑一条自动构建；回合末重复触发时后来的直接退出。 */
-const autoBuildRunning = new Set<string>();
-
-/**
- * 回合末自动构建入口（S136）。
- *
- * 只做「判断要不要构建」与「别把异常抛给宿主」两件事，具体流水线在 autobuild.ts。
- */
-async function autoBuildInWorkspace(ctx: DshContext, workspaceDir: string, sessionId: string): Promise<void> {
-  if (autoBuildRunning.has(workspaceDir)) return;
-  autoBuildRunning.add(workspaceDir);
-  try {
-    const layout = resolveProjectLayout(workspaceDir);
-    const workspace = planEcadWorkspace(layout.projectDir, layout.hardwareDir);
-    if (!workspace.initialized) return;
-    const located = locateEcadToolchain();
-    if (located.toolchain === null) return;
-    const turn = sessionId + ":" + String(Math.floor(Date.now() / 60_000));
-    const result = await runAutoBuild({
-      subprocess: ctx.subprocess,
-      toolchain: located.toolchain,
-      workspace,
-      turn,
-    });
-    if (result.ran) {
-      emitEvent({
-        kind: result.ok ? "note" : "error",
-        source: "system",
-        summary: result.ok
-          ? "回合末自动构建完成（" + String(Math.round(result.durationMs / 1000)) + " s）"
-          : "回合末自动构建失败：" + result.error,
-        payload: { autoBuild: true, ran: true, ok: result.ok, durationMs: result.durationMs },
-      });
-    }
-  } catch {
-    // 自动构建是便利功能：失败只在状态文件里留痕，不能让宿主事件处理器抛错。
-  } finally {
-    autoBuildRunning.delete(workspaceDir);
-  }
-}

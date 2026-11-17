@@ -8,23 +8,26 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseJlcpcbFootprints } from "../ecad/jlcpcb.js";
-import { planEcadWorkspace } from "../ecad/tsci.js";
 import { resolveProjectLayout } from "../project-layout.js";
 import { datasheetCacheDir, ensureDatasheet, isLcscCode, readIndex } from "./store.js";
 
-/** 本工程 circuit 源码里出现的全部立创编号（去重、排序）。 */
+/** 本工程里出现的全部立创编号（去重、排序）：扫 circuit 源码里的 jlcpcb:C… 与 circuit.json 的供应商编号。 */
 export function projectJlcpcbCodes(projectDir: string): string[] {
   const layout = resolveProjectLayout(projectDir);
-  const workspace = planEcadWorkspace(projectDir, layout.hardwareDir);
-  if (!existsSync(workspace.circuitDir)) return [];
+  const roots = [join(layout.projectDir, "hardware", "circuit"), join(layout.projectDir, "circuit")];
   const found = new Set<string>();
-  for (const name of readdirSync(workspace.circuitDir)) {
-    if (!name.endsWith(".tsx")) continue;
-    const parsed = parseJlcpcbFootprints(readFileSync(join(workspace.circuitDir, name), "utf8"));
-    for (const item of parsed) found.add(item.code);
+  const codeOf = /jlcpcb:(C\d+)/gu;
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    for (const name of readdirSync(root)) {
+      if (!name.endsWith(".tsx")) continue;
+      const text = readFileSync(join(root, name), "utf8");
+      let match: RegExpExecArray | null;
+      const re = new RegExp(codeOf.source, "gu");
+      while ((match = re.exec(text)) !== null) found.add(match[1] ?? "");
+    }
   }
-  return [...found].sort();
+  return [...found].filter((code) => isLcscCode(code)).sort();
 }
 
 export interface DatasheetStatus {

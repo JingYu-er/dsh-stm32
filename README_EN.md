@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 68 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 37 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -22,6 +22,12 @@ Within the supported range the same tools behave the same way from F1 to H7; for
 **中文:** [README.md](./README.md)
 
 [Quick start](#quick-start-minimal-end-to-end-check) · [Tool reference](#tool-reference) · [Slash commands](#slash-commands) · [Debug console](#debug-console-panel) · [Configuration](#configuration) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting)
+
+## Split note (since 0.1.9)
+
+Hardware-side capabilities (schematic authoring, PCB, Gerber, 3D, BOM, stackup/impedance, EMC, mechanical) moved to the separate **dsh-ecad** plugin. This plugin keeps the firmware side: toolchains, `.ioc` transactions, project scaffolding, build, flash, debug, serial/RTT/watch, evidence and the debug console — plus the read-only schematic capabilities the firmware loop needs (read a KiCad schematic, map pins, one-click review, export an `.ioc` draft).
+
+The two plugins exchange MCU facts through `<project>/dsh/mcu.json` (`schema: dsh-mcu/1`, with the `.ioc` sha256 fingerprint); no tool names collide.
 
 ## What it does
 
