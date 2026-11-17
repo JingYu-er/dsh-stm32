@@ -42,6 +42,7 @@ import { registerRoutePlan } from "./tools/route-plan.js";
 import { registerSchematicTools } from "./tools/schematic.js";
 import { registerSchEditTools } from "./tools/sch-edit.js";
 import { registerSchDrawTools } from "./tools/sch-draw.js";
+import { registerMcuInfoTools } from "./tools/mcu-info.js";
 import { registerImportTools } from "./tools/import-circuit.js";
 import { registerLayoutTools } from "./tools/layout.js";
 import { registerDatasheetTools } from "./tools/datasheet.js";
@@ -139,6 +140,7 @@ export function apply(ctx: DshContext): void {
   registerSchematicTools(toolsCtx);
   registerSchEditTools(toolsCtx);
   registerSchDrawTools(toolsCtx);
+  registerMcuInfoTools(toolsCtx);
   registerImportTools(toolsCtx);
   registerLayoutTools(toolsCtx);
   registerDatasheetTools(toolsCtx);

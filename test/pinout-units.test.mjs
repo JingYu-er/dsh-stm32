@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { findIocPath, groupOfPin, groupPins, readPinout } from "../lib/engine/pinout.js";
+import { collectMcuInfo, mcuInfoFreshness, mcuInfoPath, readMcuInfo, writeMcuInfo } from "../lib/engine/mcu-info.js";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -193,4 +194,49 @@ test("readPinout：没有 CubeMX db 时降级为提示，不猜脚号（S77）",
   assert.equal(physical.available, false);
   assert.match(physical.reason, /CubeMX/u);
   assert.ok(physical.positions.every((item) => item.position === null), "缺事实时不编脚号");
+});
+
+test("MCU 事实文件：写成 dsh/mcu.json，读回来一致，改 .ioc 后判陈旧（S184）", () => {
+  const dir = tempDir("dsh-mcuinfo-");
+  fs.writeFileSync(path.join(dir, "demo.ioc"), IOC_TEXT, "utf8");
+  const collected = collectMcuInfo(dir);
+  assert.equal(collected.ok, true, collected.ok ? "" : collected.error);
+  if (!collected.ok || collected.info === null) return;
+  const info = collected.info;
+  assert.equal(info.schema, "dsh-mcu/1");
+  assert.equal(info.mcu.cpn, "STM32F103C8T6");
+  assert.equal(info.clock.sysclkHz, 72000000);
+  assert.equal(info.pins.length, 3);
+  assert.equal(info.debug.serialWire, true);
+  assert.equal(info.source.ioc, "demo.ioc", "来源要写成工程相对路径");
+  assert.match(info.source.iocSha256, /^[0-9a-f]{64}$/u);
+
+  const file = mcuInfoPath(dir);
+  const written = writeMcuInfo(file, info);
+  assert.equal(written.ok, true, written.error);
+  const back = readMcuInfo(file);
+  assert.equal(back.ok, true, back.error);
+  assert.equal(back.info?.mcu.cpn, "STM32F103C8T6");
+  assert.equal(back.info?.pins.length, 3);
+  assert.deepEqual(mcuInfoFreshness(back.info, dir), { stale: false, reason: "" });
+
+  fs.writeFileSync(path.join(dir, "demo.ioc"), IOC_TEXT.replace("PA9.Signal=USART1_TX", "PA9.Signal=USART1_RX"), "utf8");
+  const stale = mcuInfoFreshness(back.info, dir);
+  assert.equal(stale.stale, true, "内容指纹变了必须判陈旧");
+  assert.match(stale.reason, /重新跑/u);
+
+  const badFile = path.join(dir, "bad.json");
+  fs.writeFileSync(badFile, JSON.stringify({ schema: "other/1" }), "utf8");
+  assert.equal(readMcuInfo(badFile).ok, false, "schema 不认识就不能当事实用");
+});
+
+test("MCU 事实文件：.ioc 在 program/ 下也能找到（S184）", () => {
+  const dir = tempDir("dsh-mcuinfo-prog-");
+  const program = path.join(dir, "program");
+  fs.mkdirSync(program);
+  fs.writeFileSync(path.join(program, "demo.ioc"), IOC_TEXT, "utf8");
+  const collected = collectMcuInfo(dir);
+  assert.equal(collected.ok, true, collected.ok ? "" : collected.error);
+  assert.equal(collected.info?.source.ioc, "program/demo.ioc");
+  assert.equal(collectMcuInfo(tempDir("dsh-mcuinfo-none-")).ok, false, "没有 .ioc 就直说");
 });

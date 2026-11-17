@@ -5900,7 +5900,32 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S183）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S184）
+
+### 一百九十二、MCU 事实文件：一份 JSON，两个插件的边界（S184）
+
+固件插件与硬件插件分家之后，硬件侧画原理图需要知道「这颗 MCU 有哪些脚、时钟多少、哪些外设已启用」。直接 import 对方的模块会让两个仓库互相依赖、各自发版还要对齐；所以边界落成文件：`stm32_board_info` 把 `.ioc` 里的事实写成 `<工程>/dsh/mcu.json`，硬件插件只读它。
+
+契约 `dsh-mcu/1` 的字段：
+
+- `mcu`：`cpn / name / family / package`；
+- `clock`：`sysclkHz / ahbHz / apb1Hz / apb2Hz`；
+- `debug`：`serialWire / jtag / pins`；
+- `nvicCount`、`peripherals`、`pins[]`（`pin / signal / label / mode`）；
+- `source`：`ioc`（工程相对路径）、`iocSha256`、`iocMtimeMs`；
+- `generator`：`plugin / version`，`schema` 给消费方判能不能读。
+
+三条硬性规则：
+
+1. **单一写者**：只有 dsh-stm32 写这个文件，消费方只读；写者唯一，冲突才可判定。
+2. **用内容指纹判陈旧**：`source.iocSha256` 与当前 `.ioc` 比，不看 `mtime`——`git checkout`、复制工程都会改 mtime 但内容没变。改过 `.ioc` 后重新生成，消费方看到 `stale` 与原因。
+3. **原子写**：先写 `.tmp` 再 `renameSync`，避免消费方读半截文件。
+
+真机（demo 工程）：`STM32F103C8T6` / LQFP48 / SYSCLK 72 MHz / 10 个引脚 / 3 个外设 / 9 条中断，来源 `program/demo.ioc`、`sha256 176ebde4…`；写盘 → 读回 → `stale: false`，把 `.ioc` 里 `USART1_TX` 改成 `USART1_RX` 后立刻变 `stale: true`。
+
+边界：**事实不是意图**。这份文件里只有「是什么」，没有「为什么这样接」「要满足什么指标」——那些属于需求文档与硬件侧的 `board.json`。把意图写进事实文件，会让消费方把某个人的临时决定当成硬约束。
+
+教训：**共享状态一旦落成文件，写者必须唯一**。两个插件都能写同一份 JSON 时，"以谁为准"就变成运行期的运气问题。
 
 ### 一百九十、换封装：交给 pcbnew 换，网络按焊盘号搬（S182）
 
