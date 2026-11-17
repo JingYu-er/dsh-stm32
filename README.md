@@ -221,7 +221,7 @@ pnpm add "link:D:\path\to\dsh-stm32"
 | `stm32_sch_edit` | 原理图人工编辑：指令存 `schematic-edits.json`，构建收尾重放；KiCad 10 的 IPC 不提供原理图读写 |
 | `stm32_sch_sync` | 手绘层新放的器件补到板子：读 `hardware/schematic/*.kicad_sch` 的位号/值/封装/网络，`planHandSync` 出计划，`apply: true` 时交 KiCad 自带 python 用 `FootprintLoad` 把封装 `Add` 进最近一次构建的 `.kicad_pcb`（写前留 `.bak`）；板上已有的位号跳过，`tscircuit:` 封装与没有 `Footprint` 的件不补，自动网名不赋；坐标暂定在板框下方，notes 会提醒布线前挪 |
 | `stm32_sch_draw` | 图纸手绘层：`wire` 连两脚、`label` 标名、`clone` 复制元件、`place` 从符号库放新器件（内嵌 `lib_symbols`）、`move`/`remove`；写 `hardware/schematic/*.kicad_sch`（构建不碰），不需要打开 KiCad，写完用 `kicad-cli` 导网表校验 |
-| `stm32_part_import` | 器件导入：按 `Lib:Name` 从 KiCad 官方库复制封装；库里没有且给了立创编号时，从立创页面取封装图形转成 `.kicad_mod`（`source=kicad` 可强制只查库）。按焊盘号生成符号骨架，立创编号写成封装属性（`LCSC`/`MPN`/`Brand`/`Datasheet`），并登记 `fp-lib-table`/`sym-lib-table` |
+| `stm32_part_import` | 器件导入：按 `Lib:Name` 从 KiCad 官方库复制封装；库里没有且给了立创编号时，从立创页面取封装图形转成 `.kicad_mod`（`source=kicad` 可强制只查库）。按焊盘号生成符号骨架，立创编号写成封装属性（`LCSC`/`MPN`/`Brand`/`Datasheet`），封装引用的 3D 模型一并收进 `hardware/libs/3d` 并改写为 `${KIPRJMOD}` 相对路径，再登记 `fp-lib-table`/`sym-lib-table` |
 | `stm32_symbol_footprint` | 符号与封装生成：按引脚表出 `.kicad_sym`，按封装尺寸出 `.kicad_mod`（QFP / SOIC / 两脚小件）；尺寸与引脚号必须由调用方给出，缺一个就报错 |
 | `stm32_part_search` | 器件搜索：按型号、参数或立创编号查编号、库存、阶梯价与手册地址；结果缓存 24 小时，封装字段接口不给时留空 |
 | `stm32_mech` | 外壳与机械约束：板框尺寸、定位孔坐标与孔径、孔到边最小距离、面积；`export` 写 DXF（R12，外形 + 定位孔）给机械软件 |

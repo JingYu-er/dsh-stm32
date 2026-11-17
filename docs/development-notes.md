@@ -5900,7 +5900,18 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S178）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S179）
+
+### 一百八十七、3D 模型跟着封装进工程（S179）
+
+`stm32_part_import` 复制 `.kicad_mod` 时，封装里那条 `(model "${KICAD10_3DMODEL_DIR}/…")` 仍指向 KiCad 安装目录。换台机器、KiCad 版本变了，模型就丢——封装还是好的，3D 视图里却成了空壳。这一轮把模型也收进工程：只搬封装**真正引用**的那一个文件，路径改写成工程内相对写法。
+
+- 解析与定位：`parseModelRef(modText)` 取第一个 `(model "…")`；`resolveModelPath(path, model3dDir)` 把 `${KICADnn_3DMODEL_DIR}` / `${KISYS3DMOD}` 换成 `toolchain.model3dDir`，其它写法（绝对路径、`${KIPRJMOD}`）原样保留。文件存在才搬，不存在只在 notes 里说「引用了 X，但在 KiCad 里没找到（找的是 Y）」并保持原路径——不静默改路径，否则模型照样不在。
+- 落点与改写：复制到 `hardware/libs/3d/<Lib>.3dshapes/<文件名>`，封装里的路径改成 `${KIPRJMOD}/../libs/3d/<Lib>.3dshapes/<文件名>`。`${KIPRJMOD}` 是工程目录（`hardware/kicad`），`../libs/3d` 正好落在库文件旁边，跟着工程一起走。
+- 只搬一个：一个封装可以有多条 model（多体），本轮只处理第一条，其余进 notes。立创转来的封装没有 model（EasyEDA 只给模型名），notes 写明「立创只给了模型名（X），转换器不挂 3D：需要时在 KiCad 里手动挂，或换用官方库封装」——不假装有。
+- 输出：工具新增 `modelFile` / `modelBytes`，render 里一行「3D 模型：<路径>（N B）」或「没有（封装不引用，或 KiCad 里缺这个文件）」；预检（`write=false`）也给同样的路径与字节数，先看大小再决定。
+- 真机：`Resistor_SMD:R_0603_1608Metric` → 从 `D:/app/KiCad/10.0/share/kicad/3dmodels/Resistor_SMD.3dshapes/R_0603_1608Metric.step` 搬 40,618 B 到工程，`written` 从 4 个变 5 个，封装里 `(model "${KIPRJMOD}/../libs/3d/Resistor_SMD.3dshapes/R_0603_1608Metric.step"`。
+- 教训：**指向外部目录的路径，要连文件一起搬才算收进来**——只改字符串不改文件，等于把「能看见 3D」换成「看起来像能看见」；判据是文件存在且字节数非零，不是路径文本长什么样。
 
 ### 一百八十六、立创封装：KiCad 库里没有就从页面转（S178）
 

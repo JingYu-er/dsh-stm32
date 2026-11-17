@@ -18,7 +18,7 @@ import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { fetchEasyedaPackage, easyedaToKicadMod, parseEasyedaPackage } from "../lib/engine/ecad/easyeda.js";
-import { importPart } from "../lib/engine/ecad/part-import.js";
+import { importPart, parseModelRef, resolveModelPath } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
 import { assignableNet, buildHandSyncScript, parseHandSyncOutput, planHandSync } from "../lib/engine/ecad/pcb/hand-sync.js";
 
@@ -2424,5 +2424,43 @@ test("器件导入：KiCad 库里没有就回退立创页面，两条都失败�
   assert.equal(failed.ok, false);
   assert.match(failed.error, /库里没有/u);
   assert.match(failed.error, /立创页面返回 404/u);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// S179：封装引用的 3D 模型跟着进工程，路径改成 ${KIPRJMOD} 相对写法；缺文件要说清楚。
+test("器件导入：3D 模型跟着封装一起进工程，路径改写成 KIPRJMOD（S179）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-model-"));
+  const libDir = join(dir, "kicad", "footprints");
+  const modelDir = join(dir, "kicad", "3dmodels");
+  mkdirSync(join(libDir, "Demo.pretty"), { recursive: true });
+  mkdirSync(join(modelDir, "Demo.3dshapes"), { recursive: true });
+  writeFileSync(join(modelDir, "Demo.3dshapes", "DEMO-1.step"), "ISO-10303-21;\nENDSEC;\n");
+  const mod = `(footprint "DEMO-1" (version 20241229) (generator "test") (layer "F.Cu")
+  (pad "1" smd rect (at -0.5 0) (size 0.8 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 0.5 0) (size 0.8 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (model "\${KICAD10_3DMODEL_DIR}/Demo.3dshapes/DEMO-1.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)))
+)`;
+  writeFileSync(join(libDir, "Demo.pretty", "DEMO-1.kicad_mod"), mod);
+  mkdirSync(join(dir, "project", "hardware", "kicad"), { recursive: true });
+
+  const toolchain = { ...fakeToolchain(libDir), model3dDir: modelDir };
+  const written = await importPart(join(dir, "project"), toolchain, { footprint: "Demo:DEMO-1", write: true });
+  assert.equal(written.ok, true);
+  assert.ok(written.model !== null);
+  assert.equal(written.model.bytes, "ISO-10303-21;\nENDSEC;\n".length);
+  assert.ok(written.model.file.endsWith(join("libs", "3d", "Demo.3dshapes", "DEMO-1.step")));
+  assert.ok(existsSync(written.model.file));
+  const saved = readFileSync(written.footprint.file, "utf8");
+  assert.equal(parseModelRef(saved), "${KIPRJMOD}/../libs/3d/Demo.3dshapes/DEMO-1.step");
+  assert.equal(written.written.length, 5);
+
+  // 引用了但 KiCad 里没有这个文件：不搬、不改路径，notes 说清楚。
+  writeFileSync(join(libDir, "Demo.pretty", "DEMO-2.kicad_mod"), mod.replaceAll("DEMO-1", "DEMO-2"));
+  const missing = await importPart(join(dir, "project"), toolchain, { footprint: "Demo:DEMO-2", write: true });
+  assert.equal(missing.ok, true);
+  assert.equal(missing.model, null);
+  assert.equal(parseModelRef(readFileSync(missing.footprint.file, "utf8")), "${KICAD10_3DMODEL_DIR}/Demo.3dshapes/DEMO-2.step");
+  assert.ok(missing.notes.some((note) => note.includes("没找到")));
+  assert.equal(resolveModelPath("${KISYS3DMOD}/A/B.step", modelDir), join(modelDir, "A", "B.step"));
   rmSync(dir, { recursive: true, force: true });
 });

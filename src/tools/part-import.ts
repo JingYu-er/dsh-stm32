@@ -56,6 +56,8 @@ export function registerPartImportTools(ctx: DshContext): void {
           source: { type: "string" },
           footprintFile: { type: "string" },
           symbolFile: { type: "string" },
+          modelFile: { type: "string" },
+          modelBytes: { type: "number" },
           padCount: { type: "number" },
           pads: { type: "array", items: { type: "string" } },
           written: { type: "array", items: { type: "string" } },
@@ -73,6 +75,8 @@ export function registerPartImportTools(ctx: DshContext): void {
           "source",
           "footprintFile",
           "symbolFile",
+          "modelFile",
+          "modelBytes",
           "padCount",
           "pads",
           "written",
@@ -92,6 +96,8 @@ export function registerPartImportTools(ctx: DshContext): void {
           footprintName: string;
           footprintFile: string;
           symbolFile: string;
+          modelFile: string;
+          modelBytes: number;
           padCount: number;
           written: string[];
           notes: string[];
@@ -108,6 +114,11 @@ export function registerPartImportTools(ctx: DshContext): void {
         lines.push(result.written.length > 0 ? "已写：" : "将写（还没有落盘）：");
         lines.push("  封装：" + result.footprintFile);
         lines.push("  符号：" + result.symbolFile);
+        lines.push(
+          result.modelFile !== ""
+            ? "  3D 模型：" + result.modelFile + "（" + result.modelBytes.toLocaleString("en-US") + " B）"
+            : "  3D 模型：没有（封装不引用，或 KiCad 里缺这个文件）",
+        );
         for (const file of result.written.slice(2)) lines.push("  库表：" + file);
         for (const note of result.notes) lines.push("· " + note);
         return [{ type: "text", text: lines.join("\n") }];
@@ -142,6 +153,8 @@ export function registerPartImportTools(ctx: DshContext): void {
           source: "",
           footprintFile: "",
           symbolFile: "",
+          modelFile: "",
+          modelBytes: 0,
           padCount: 0,
           pads: [],
           written: [],
@@ -188,6 +201,8 @@ export function registerPartImportTools(ctx: DshContext): void {
         source: report.footprint?.source ?? "",
         footprintFile: report.footprint?.file ?? "",
         symbolFile: report.symbol?.file ?? "",
+        modelFile: report.model?.file ?? "",
+        modelBytes: report.model?.bytes ?? 0,
         padCount: report.pads.length,
         pads: [...report.pads],
         written: [...report.written],
