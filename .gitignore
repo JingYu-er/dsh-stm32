@@ -13,6 +13,7 @@ node_modules/
 *.log
 .dsh-stm32/
 .tmp-*
+.fake-stdout
 %SystemDrive%/
 
 # 编辑器与系统

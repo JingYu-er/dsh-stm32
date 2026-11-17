@@ -18,7 +18,8 @@ import { analyzeLinks } from "../lib/engine/ecad/pcb/links.js";
 import { readGerberSet } from "../lib/engine/ecad/pcb/gerber.js";
 import { absorbFromKicad, diffImport, readImportState, renderCircuitSource } from "../lib/engine/ecad/import.js";
 import { fetchEasyedaPackage, easyedaToKicadMod, parseEasyedaPackage } from "../lib/engine/ecad/easyeda.js";
-import { collectBoardModels, renderBoard3d } from "../lib/engine/ecad/pcb/render3d.js";
+import { collectBoardModels, export3dArgv, exportBoard3d, renderBoard3d } from "../lib/engine/ecad/pcb/render3d.js";
+import { parseSwapOutput, runSwap } from "../lib/engine/ecad/pcb/swap.js";
 import { suggestModelFixes } from "../lib/engine/ecad/pcb/model-fix.js";
 import { importPart, parseModelRef, resolveModelPath } from "../lib/engine/ecad/part-import.js";
 import { drawOnSheet, drawSheetPath, readDrawSheet, seedDrawSheet, symbolBlocks, writeDrawSheet } from "../lib/engine/schematic/draw.js";
@@ -113,16 +114,23 @@ function fakeSubprocess(options = {}) {
       }
       if (options.stdout !== undefined) writeFileSync(join(spec.cwd, ".fake-stdout"), options.stdout, "utf8");
       const text = options.stdout ?? "";
+      const errText = options.stderr ?? "";
       const reader = {
         readFrom(offset) {
           const slice = text.slice(offset);
           return { text: slice, nextOffset: text.length, lossy: false };
         },
       };
+      const errReader = {
+        readFrom(offset) {
+          const slice = errText.slice(offset);
+          return { text: slice, nextOffset: errText.length, lossy: false };
+        },
+      };
       const done = Promise.resolve({ exitCode: options.exitCode ?? 0, signal: null });
       return {
         done,
-        collected: { stdout: reader, stderr: reader },
+        collected: { stdout: reader, stderr: errReader },
         terminate() {},
         waitForExit() {
           return done;
@@ -2589,6 +2597,127 @@ test("3D 缺模型：给出同族官方封装候选，只认引脚数与间距�
     assert.equal(fpc.candidates[0].has3d, true);
     assert.equal(fpc.candidates[0].pitchMm, 0.5);
     assert.match(fpc.note, /没写间距/u, "间距未知要提醒人工核对");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("换封装：脚本只认最后一行 JSON，焊盘尺寸变化写进说明，失败给 stderr 末尾（S182）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-swap-"));
+  try {
+    const boardFile = join(dir, "board.kicad_pcb");
+    writeFileSync(boardFile, "(kicad_pcb (version 20241229) (generator pcbnew))\n", "utf8");
+    const report = {
+      ok: true,
+      ref: "U1",
+      from: "tscircuit:chip_qfp48_w7_5mm_p0_5mm",
+      to: "Package_QFP:LQFP-48_7x7mm_P0.5mm",
+      applied: true,
+      pads: 48,
+      assigned: 28,
+      lost: [],
+      oldPad: { widthMm: 1, heightMm: 0.25 },
+      newPad: { widthMm: 1.475, heightMm: 0.3 },
+      modelBefore: "${KIPRJMOD}/3dmodels/a.step",
+      modelAfter: "${KICAD10_3DMODEL_DIR}/Package_QFP.3dshapes/b.step",
+    };
+    const stdout = "warning: 忽略\n" + JSON.stringify({ ok: true, data: report }) + "\n";
+    const subprocess = fakeSubprocess({ stdout });
+    const result = await runSwap(
+      { python: "python", subprocess, timeoutMs: 5_000 },
+      { boardFile, ref: "U1", footprint: "Package_QFP:LQFP-48_7x7mm_P0.5mm", footprintDir: join(dir, "libs"), apply: true },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.pads, 48);
+    assert.equal(result.assigned, 28);
+    assert.equal(result.from, "tscircuit:chip_qfp48_w7_5mm_p0_5mm");
+    assert.equal(result.applied, true);
+    assert.match(result.notes.join(" / "), /焊盘尺寸变了：1×0\.25 → 1\.475×0\.3/u);
+    const call = subprocess.calls.at(-1);
+    assert.ok(call !== undefined);
+    assert.equal(call.argv[0], "python");
+    assert.match(call.argv[1], /pcb_swap\.py$/u);
+
+    const parsed = parseSwapOutput("not json\n{\"ok\":true,\"data\":{\"pads\":48}}\n");
+    assert.equal(parsed.ok, true);
+    assert.equal((parsed.data ?? {}).pads, 48);
+    const broken = parseSwapOutput("everything failed\n");
+    assert.equal(broken.ok, false);
+
+    const failed = await runSwap(
+      { python: "python", subprocess: fakeSubprocess({ exitCode: 1, stdout: "", stderr: "boom: one\nboom: two\nboom: three\nboom: four" }), timeoutMs: 5_000 },
+      { boardFile, ref: "U1", footprint: "Package_QFP:X", footprintDir: join(dir, "libs"), apply: false },
+    );
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /boom: (two|three|four)/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("3D 几何导出：GLB 与 STEP 的参数、缺模型说明与文件字节都对（S183）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-export3d-"));
+  try {
+    const boardDir = join(dir, "hardware", "kicad");
+    mkdirSync(boardDir, { recursive: true });
+    const boardFile = join(boardDir, "board.kicad_pcb");
+    writeFileSync(
+      boardFile,
+      [
+        "(kicad_pcb (version 20241229) (generator pcbnew)",
+        '  (footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu") (at 1 1)',
+        '    (property "Reference" "R1" (at 0 0 0))',
+        '    (model "${KIPRJMOD}/3dmodels/R_0402.step")',
+        "  )",
+        '  (footprint "tscircuit:chip_qfp48" (layer "F.Cu") (at 5 5)',
+        '    (property "Reference" "U1" (at 0 0 0))',
+        '    (model "${KICAD10_3DMODEL_DIR}/Package_QFP.3dshapes/nope.step")',
+        "  )",
+        ")",
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(boardDir, "3dmodels"), { recursive: true });
+    writeFileSync(join(boardDir, "3dmodels", "R_0402.step"), "ISO-10303-21;\n", "utf8");
+
+    const glbArgv = export3dArgv(
+      { kicadCli: "kicad-cli", model3dDir: join(dir, "models"), run: async () => ({ exitCode: 0, stdout: "", stderr: "" }) },
+      boardFile,
+      { format: "glb", substModels: true, boardOnly: true, includeTracks: true },
+    );
+    assert.deepEqual(glbArgv.slice(0, 5), ["kicad-cli", "pcb", "export", "glb", "--output"]);
+    assert.ok(glbArgv.includes("--subst-models"));
+    assert.ok(glbArgv.includes("--board-only"));
+    assert.ok(glbArgv.includes("--include-tracks"));
+    assert.ok(glbArgv[glbArgv.length - 1].endsWith("board.kicad_pcb"));
+    assert.ok(glbArgv[5].endsWith(join("out", "board.glb")));
+
+    const stepArgv = export3dArgv(
+      { kicadCli: "kicad-cli", model3dDir: join(dir, "models"), run: async () => ({ exitCode: 0, stdout: "", stderr: "" }) },
+      boardFile,
+      { format: "step", output: join(dir, "b.step") },
+    );
+    assert.equal(stepArgv[3], "step");
+    assert.ok(stepArgv.includes(join(dir, "b.step")));
+
+    const outFile = join(dir, "exported.glb");
+    const result = await exportBoard3d(
+      {
+        kicadCli: "kicad-cli",
+        model3dDir: join(dir, "models"),
+        run: async (argv) => {
+          writeFileSync(argv[argv.indexOf("--output") + 1] ?? outFile, "glTF", "utf8");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+      boardFile,
+      { format: "glb", output: outFile },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.bytes, 4);
+    assert.equal(result.missing.length, 1);
+    assert.match(result.missing[0], /U1.*nope\.step/u);
+    assert.match(result.notes.join(" / "), /对应位置是空的/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

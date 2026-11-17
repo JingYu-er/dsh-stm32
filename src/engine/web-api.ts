@@ -86,6 +86,9 @@ import { editStorePath, readSchEdits, replaySchEditsTo, writeSchEdits } from "./
 import { readGerberSet } from "./ecad/pcb/gerber.js";
 import { EMPTY_RENDER3D, renderBoard3d } from "./ecad/pcb/render3d.js";
 import { suggestModelFixes } from "./ecad/pcb/model-fix.js";
+import { EMPTY_SWAP, runSwap } from "./ecad/pcb/swap.js";
+import { EMPTY_EXPORT3D, exportBoard3d } from "./ecad/pcb/render3d.js";
+import { copyFileSync } from "node:fs";
 import { analyzePowerBudget } from "./ecad/pcb/power.js";
 import { collectBriefFacts, writeBriefs } from "./ecad/brief.js";
 import { readImpedancePlan } from "./ecad/pcb/impedance.js";
@@ -587,6 +590,7 @@ export const WEB_API_PATHS: readonly string[] = [
   WEB_API_PREFIX + "/ecad/links",
   WEB_API_PREFIX + "/ecad/gerber",
   WEB_API_PREFIX + "/ecad/render3d",
+  WEB_API_PREFIX + "/ecad/swap",
   WEB_API_PREFIX + "/ecad/power",
   WEB_API_PREFIX + "/ecad/brief",
   WEB_API_PREFIX + "/ecad/impedance",
@@ -859,6 +863,7 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/links" &&
     path !== WEB_API_PREFIX + "/ecad/gerber" &&
     path !== WEB_API_PREFIX + "/ecad/render3d" &&
+    path !== WEB_API_PREFIX + "/ecad/swap" &&
     path !== WEB_API_PREFIX + "/ecad/power" &&
     path !== WEB_API_PREFIX + "/ecad/brief" &&
     path !== WEB_API_PREFIX + "/ecad/impedance" &&
@@ -875,7 +880,7 @@ export async function handleWebApi(input: {
   } else if (!needsBody && method !== "GET") {
     return fail(405, "这个接口只接受 GET");
   }
-  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit" || path === WEB_API_PREFIX + "/schematic/sync") && method === "POST";
+  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit" || path === WEB_API_PREFIX + "/schematic/sync" || path === WEB_API_PREFIX + "/ecad/swap") && method === "POST";
   const parsed = needsBody || twoVerb ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);
@@ -1821,6 +1826,33 @@ export async function handleWebApi(input: {
     });
   }
 
+  if (path === WEB_API_PREFIX + "/ecad/swap") {
+    // 换封装（S182）：GET 预演，POST { ref, footprint } 才写进板子（写前留 .bak）。
+    const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
+    const projectDir = withProject(requested);
+    if (projectDir === "") return fail(400, PROJECT_DIR_REQUIRED);
+    const ref = typeof query["ref"] === "string" && query["ref"].trim() !== "" ? query["ref"].trim() : (typeof parsed.value.ref === "string" ? parsed.value.ref.trim() : "");
+    const footprint = typeof query["footprint"] === "string" && query["footprint"].trim() !== "" ? query["footprint"].trim() : (typeof parsed.value.footprint === "string" ? parsed.value.footprint.trim() : "");
+    if (ref === "") return fail(400, "ref 不能为空：给要换的位号，例如 U1");
+    if (footprint === "") return fail(400, "footprint 不能为空：写成 Lib:Name，例如 Package_QFP:LQFP-48_7x7mm_P0.5mm");
+    const located = locateEcadToolchain(envOf(input.deps));
+    if (!located.ok || located.toolchain === null) return ok({ swap: { ...EMPTY_SWAP, ref, to: footprint, error: "找不到 KiCad 工具链：" + located.error } });
+    const latest = findLatestKicadBuild(planEcadWorkspace(projectDir, resolveProjectLayout(projectDir).hardwareDir));
+    if (!latest.ok || latest.pcbFile === "") {
+      return ok({ swap: { ...EMPTY_SWAP, ref, to: footprint, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build" } });
+    }
+    if (located.toolchain.footprintDir === "") {
+      return ok({ swap: { ...EMPTY_SWAP, ref, to: footprint, error: "没有找到 KiCad 封装库目录：检查 KiCad 安装" } });
+    }
+    const apply = method === "POST" && (parsed.value.apply === true || parsed.value.apply === undefined);
+    if (apply) copyFileSync(latest.pcbFile, latest.pcbFile + ".bak");
+    const result = await runSwap(
+      { python: located.toolchain.python, subprocess: input.deps.subprocess, timeoutMs: 150_000 },
+      { boardFile: latest.pcbFile, ref, footprint, footprintDir: located.toolchain.footprintDir, apply },
+    );
+    return ok({ swap: { ...result, lost: [...result.lost], notes: [...result.notes] } });
+  }
+
   if (path === WEB_API_PREFIX + "/ecad/render3d") {
     // 3D 预览（S180）：交给 KiCad 的 `pcb render`，顺手报出哪些封装的 3D 模型缺文件。
     const requested = typeof query["projectDir"] === "string" ? query["projectDir"].trim() : "";
@@ -1834,6 +1866,44 @@ export async function handleWebApi(input: {
     const latest = findLatestKicadBuild(planEcadWorkspace(projectDir, resolveProjectLayout(projectDir).hardwareDir));
     if (latest === null || latest.pcbFile === "") {
       return ok({ render3d: { ...base, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build，或在 KiCad 里存一次板子", models: [], missing: [], notes: [] } });
+    }
+    const formatParam = query["format"] === "glb" || query["format"] === "step" ? query["format"] : "";
+    if (formatParam !== "") {
+      const exported = await exportBoard3d(
+        {
+          kicadCli: located.toolchain.kicadCli,
+          model3dDir: located.toolchain.model3dDir,
+          run: async (argv, timeoutMs) => {
+            const outcome = await runCapture(input.deps.subprocess, { argv: [...argv], cwd: dirname(latest.pcbFile), timeoutMs });
+            return { exitCode: outcome.exitCode ?? 1, stdout: outcome.stdout, stderr: outcome.stderr };
+          },
+        },
+        latest.pcbFile,
+        {
+          format: formatParam,
+          output: join(projectDir, "hardware", "out", "board." + formatParam),
+          ...(query["substModels"] === "1" ? { substModels: true } : {}),
+          ...(query["boardOnly"] === "1" ? { boardOnly: true } : {}),
+          ...(query["includeTracks"] === "1" ? { includeTracks: true } : {}),
+          ...(query["includePads"] === "1" ? { includePads: true } : {}),
+        },
+      );
+      return ok({
+        render3d: {
+          ...EMPTY_RENDER3D,
+          ...EMPTY_EXPORT3D,
+          ok: exported.ok,
+          error: exported.error,
+          file: exported.file,
+          bytes: exported.bytes,
+          side: formatParam,
+          dataUrl: "",
+          models: [],
+          missing: [...exported.missing],
+          fixes: [],
+          notes: [...exported.notes],
+        },
+      });
     }
     const sideParam = typeof query["side"] === "string" && query["side"].trim() !== "" ? query["side"].trim() : "top";
     const side = ["top", "bottom", "left", "right", "front", "back"].includes(sideParam) ? sideParam : "top";

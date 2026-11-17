@@ -3192,6 +3192,43 @@ function EcadPanel(props) {
       const [render3dView, setRender3dView] = useState({ side: "top", rotate: "", perspective: false });
       const gerber = useGerber(projectDir, gerberLayers);
       const render3d = useRender3d(projectDir, render3dView);
+      const [exportNote, setExportNote] = useState("");
+      const [exportBusy, setExportBusy] = useState("");
+      async function doExport3d(format) {
+        if (typeof projectDir !== "string" || projectDir === "") return;
+        setExportBusy(format);
+        const result = await callApi("GET", "ecad/render3d?projectDir=" + encodeURIComponent(projectDir) + "&format=" + format + "&substModels=1");
+        setExportBusy("");
+        if (!result.ok) {
+          setExportNote(result.error);
+          return;
+        }
+        const exported = result.value.render3d;
+        setExportNote(exported.ok ? "已导出 " + format.toUpperCase() + "：" + exported.file + "（" + String(Math.round(exported.bytes / 1024)) + " KB）" + (exported.missing.length > 0 ? "；缺 " + String(exported.missing.length) + " 个 3D 模型" : "") : "导出失败：" + exported.error);
+      }
+      const [swapBusy, setSwapBusy] = useState("");
+      const [swapNote, setSwapNote] = useState("");
+      async function doSwap(ref, footprint) {
+        if (typeof projectDir !== "string" || projectDir === "") return;
+        setSwapBusy(ref);
+        const result = await callApi("POST", "ecad/swap?projectDir=" + encodeURIComponent(projectDir), { ref: ref, footprint: footprint });
+        setSwapBusy("");
+        if (!result.ok) {
+          setSwapNote(result.error);
+          return;
+        }
+        const swapped = result.value.swap;
+        if (swapped === null || swapped === undefined) {
+          setSwapNote("接口没回 swap 字段");
+          return;
+        }
+        if (!swapped.ok) {
+          setSwapNote("换封装失败：" + swapped.error);
+          return;
+        }
+        setSwapNote((swapped.applied ? "已换：" : "预演：") + swapped.ref + " " + swapped.from + " → " + swapped.to + (swapped.notes.length > 0 ? "；" + swapped.notes[0] : ""));
+        if (swapped.applied) render3d.reload();
+      }
       const power = usePower(projectDir);
       const brief = useBrief(projectDir);
       const mech = useMech(projectDir);
@@ -3723,7 +3760,10 @@ function EcadPanel(props) {
             e("button", { type: "button", onClick: () => setRender3dView({ side: "bottom", rotate: "", perspective: false }), style: r3dOn(render3dView.side === "bottom") }, "底"),
             e("button", { type: "button", onClick: () => setRender3dView({ side: "top", rotate: "-45,0,45", perspective: true }), style: r3dOn(render3dView.rotate === "-45,0,45") }, "斜视"),
             e("button", { type: "button", onClick: render3d.reload, style: r3dButton }, "重新渲染"),
+            e("button", { type: "button", onClick: () => { doExport3d("glb").catch(() => setExportBusy("")); }, style: r3dButton, disabled: exportBusy !== "" }, exportBusy === "glb" ? "导出中…" : "导出 GLB"),
+            e("button", { type: "button", onClick: () => { doExport3d("step").catch(() => setExportBusy("")); }, style: r3dButton, disabled: exportBusy !== "" }, exportBusy === "step" ? "导出中…" : "导出 STEP"),
           ),
+          exportNote === "" ? null : e("div", { key: "render3d-export-note", style: { fontSize: "11px", opacity: 0.8, padding: "4px 0 0" } }, exportNote),
           r3d !== null && r3d !== undefined && r3d.ok && typeof r3d.dataUrl === "string" && r3d.dataUrl !== ""
             ? e("img", { key: "render3d-img", src: r3d.dataUrl, alt: "PCB 3D", style: { display: "block", width: "100%", maxWidth: "760px", border: D32_HAIR, background: "var(--dsw-alias-bg-base)" } })
             : null,
@@ -3739,12 +3779,27 @@ function EcadPanel(props) {
                   const best = (fix.candidates || []).find((candidate) => candidate.has3d) || (fix.candidates || [])[0];
                   return e(
                     "div",
-                    { key: "render3d-fix-" + fix.ref },
-                    fix.ref + " " + fix.footprint + (best === undefined ? " → 没有同族候选" : " → " + best.libId + (best.has3d ? "（有 STEP）" : "（STEP 也缺）")),
+                    { key: "render3d-fix-" + fix.ref, style: { display: "flex", gap: "6px", alignItems: "baseline", padding: "1px 0" } },
+                    e("span", { style: { flex: "1 1 auto" } }, fix.ref + " " + fix.footprint + (best === undefined ? " → 没有同族候选" : " → " + best.libId + (best.has3d ? "（有 STEP）" : "（STEP 也缺）"))),
+                    best === undefined
+                      ? null
+                      : e(
+                          "button",
+                          {
+                            type: "button",
+                            style: D32_BUTTON,
+                            disabled: swapBusy !== "",
+                            onClick: () => {
+                              doSwap(fix.ref, best.libId).catch(() => setSwapBusy(""));
+                            },
+                          },
+                          swapBusy === fix.ref ? "换…" : "换过去",
+                        ),
                   );
                 }),
               )
             : null,
+          swapNote === "" ? null : e("div", { key: "render3d-swap-note", style: { fontSize: "11px", opacity: 0.8, padding: "4px 0 0" } }, swapNote),
         ),
       );
 

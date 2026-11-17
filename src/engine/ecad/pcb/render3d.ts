@@ -200,3 +200,85 @@ export function pngHeaderOf(file: string): boolean {
 export function renderNameOf(file: string): string {
   return basename(file).replace(/\.(?:png|jpe?g)$/u, "");
 }
+
+/** 3D 几何导出（S183）：GLB 给网页/演示，STEP 给机械。 */
+export type Export3dFormat = "glb" | "step";
+
+export interface Export3dOptions {
+  readonly format: Export3dFormat;
+  readonly output?: string;
+  readonly substModels?: boolean;
+  readonly boardOnly?: boolean;
+  readonly includeTracks?: boolean;
+  readonly includePads?: boolean;
+  readonly includeSilkscreen?: boolean;
+}
+
+export interface Export3dResult {
+  readonly ok: boolean;
+  readonly error: string;
+  readonly file: string;
+  readonly bytes: number;
+  readonly format: Export3dFormat;
+  readonly missing: readonly string[];
+  readonly notes: readonly string[];
+}
+
+export const EMPTY_EXPORT3D: Export3dResult = {
+  ok: false,
+  error: "",
+  file: "",
+  bytes: 0,
+  format: "glb",
+  missing: [],
+  notes: [],
+};
+
+export function export3dArgv(deps: Render3dDeps, boardFile: string, options: Export3dOptions): readonly string[] {
+  const extension = options.format === "glb" ? "glb" : "step";
+  const output =
+    typeof options.output === "string" && options.output.trim() !== ""
+      ? options.output.trim()
+      : join(dirname(boardFile), "..", "out", "board." + extension);
+  const argv = [deps.kicadCli, "pcb", "export", options.format, "--output", output];
+  if (options.substModels === true) argv.push("--subst-models");
+  if (options.boardOnly === true) argv.push("--board-only");
+  if (options.includeTracks === true) argv.push("--include-tracks");
+  if (options.includePads === true) argv.push("--include-pads");
+  if (options.includeSilkscreen === true) argv.push("--include-silkscreen");
+  argv.push(boardFile);
+  return argv;
+}
+
+export async function exportBoard3d(
+  deps: Render3dDeps,
+  boardFile: string,
+  options: Export3dOptions,
+): Promise<Export3dResult> {
+  if (!existsSync(boardFile)) {
+    return { ...EMPTY_EXPORT3D, format: options.format, error: "读不到板子文件：" + boardFile };
+  }
+  const argv = export3dArgv(deps, boardFile, options);
+  const output = argv[argv.indexOf("--output") + 1] ?? "";
+  const started = Date.now();
+  const outcome = await deps.run(argv, 600_000);
+  if (outcome.exitCode !== 0) {
+    const tail = (outcome.stderr + "\n" + outcome.stdout).split(/\r?\n/u).filter((line) => line.trim() !== "").slice(-4).join(" / ");
+    return { ...EMPTY_EXPORT3D, format: options.format, file: output, error: "导出失败（exit " + String(outcome.exitCode ?? -1) + "）：" + tail };
+  }
+  if (!existsSync(output)) {
+    return { ...EMPTY_EXPORT3D, format: options.format, file: output, error: "导出命令成功，但没有拿到文件：" + output };
+  }
+  const models = collectBoardModels(readFileSync(boardFile, "utf8"), boardFile, deps.model3dDir);
+  const notes = ["导出耗时 " + String(Date.now() - started) + " ms", options.format.toUpperCase() + " 只含几何与颜色，不含网络与丝印文字层面的语义"];
+  if (models.missing.length > 0) notes.push("有 " + String(models.missing.length) + " 个器件的 3D 模型缺失，导出里对应位置是空的：" + models.missing.slice(0, 3).join("；"));
+  return {
+    ok: true,
+    error: "",
+    file: output,
+    bytes: statSync(output).size,
+    format: options.format,
+    missing: models.missing,
+    notes,
+  };
+}

@@ -39,14 +39,16 @@ import { readLinks } from "../engine/ecad/pcb/links.js";
 import { readGerberSet } from "../engine/ecad/pcb/gerber.js";
 import { collectBriefFacts, renderBrief, renderMrd, renderPrd, writeBriefs } from "../engine/ecad/brief.js";
 import { analyzePowerBudget } from "../engine/ecad/pcb/power.js";
-import { EMPTY_RENDER3D, renderBoard3d } from "../engine/ecad/pcb/render3d.js";
+import { EMPTY_RENDER3D, exportBoard3d, renderBoard3d } from "../engine/ecad/pcb/render3d.js";
 import { suggestModelFixes } from "../engine/ecad/pcb/model-fix.js";
+import { EMPTY_SWAP, runSwap } from "../engine/ecad/pcb/swap.js";
 
 export const PCB_PLACE_TOOL = "stm32_pcb_place";
 export const PCB_ROUTE_TOOL = "stm32_pcb_route";
 export const PCB_AUTOROUTE_TOOL = "stm32_pcb_autoroute";
 export const PCB_IPC_TOOL = "stm32_pcb_ipc";
 export const PCB_3D_TOOL = "stm32_pcb_3d";
+export const PCB_SWAP_TOOL = "stm32_pcb_swap";
 export const PCB_RENDER_TOOL = "stm32_pcb_render";
 export const PCB_BOM_TOOL = "stm32_bom";
 export const PCB_STACKUP_TOOL = "stm32_stackup";
@@ -2071,6 +2073,11 @@ export function registerPcbTools(ctx: DshContext): void {
         height: { type: "number", description: "图片高度，默认 900。" },
         quality: { type: "string", enum: ["basic", "high", "user", "job_settings"], description: "渲染质量，默认 basic。" },
         saveAs: { type: "string", description: "输出路径（相对工程根）；缺省 hardware/out/board-3d-<侧>.png。" },
+        format: { type: "string", enum: ["png", "glb", "step"], description: "png 是渲染图（默认）；glb 给网页/演示；step 给机械。" },
+        substModels: { type: "boolean", description: "导出时用同名 STEP/IGS 替换 VRML 模型。" },
+        boardOnly: { type: "boolean", description: "只导出板体，不带元件。" },
+        includeTracks: { type: "boolean", description: "导出里带上走线几何。" },
+        includePads: { type: "boolean", description: "导出里带上焊盘几何。" },
       },
       required: [],
     },
@@ -2112,7 +2119,7 @@ export function registerPcbTools(ctx: DshContext): void {
     timeoutMs: 300_000,
     isConcurrencySafe: () => true,
     execute: async (
-      args: { projectDir?: string; boardFile?: string; side?: string; rotate?: string; perspective?: boolean; width?: number; height?: number; quality?: string; saveAs?: string },
+      args: { projectDir?: string; boardFile?: string; side?: string; rotate?: string; perspective?: boolean; width?: number; height?: number; quality?: string; saveAs?: string; format?: string; substModels?: boolean; boardOnly?: boolean; includeTracks?: boolean; includePads?: boolean },
       exec: ToolExec,
     ) => {
       const empty = { ...EMPTY_RENDER3D, models: [] as Array<Record<string, unknown>>, missing: [] as string[], fixes: [] as Array<Record<string, unknown>>, notes: [] as string[] };
@@ -2124,6 +2131,38 @@ export function registerPcbTools(ctx: DshContext): void {
       const boardFile = pickBoard(resolved.projectDir, workspace, args.boardFile);
       if (boardFile === "") return { ...empty, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build，或在 KiCad 里存一次板子" };
       const output = typeof args.saveAs === "string" && args.saveAs !== "" ? resolve(resolved.projectDir, args.saveAs) : undefined;
+      const exportFormat = args.format === "glb" || args.format === "step" ? args.format : "";
+      if (exportFormat !== "") {
+        const exported = await exportBoard3d(
+          {
+            kicadCli: located.toolchain.kicadCli,
+            model3dDir: located.toolchain.model3dDir,
+            run: async (argv, timeoutMs) => {
+              const outcome = await runCapture(ctx.subprocess, { argv: [...argv], cwd: dirname(boardFile), timeoutMs });
+              return { exitCode: outcome.exitCode ?? 1, stdout: outcome.stdout, stderr: outcome.stderr };
+            },
+          },
+          boardFile,
+          {
+            format: exportFormat,
+            ...(output === undefined ? {} : { output }),
+            ...(args.substModels === true ? { substModels: true } : {}),
+            ...(args.boardOnly === true ? { boardOnly: true } : {}),
+            ...(args.includeTracks === true ? { includeTracks: true } : {}),
+            ...(args.includePads === true ? { includePads: true } : {}),
+          },
+        );
+        return {
+          ...empty,
+          ok: exported.ok,
+          error: exported.error,
+          file: exported.file,
+          bytes: exported.bytes,
+          side: exportFormat,
+          missing: [...exported.missing],
+          notes: [...exported.notes],
+        };
+      }
       const result = await renderBoard3d(
         {
           kicadCli: located.toolchain.kicadCli,
@@ -2159,5 +2198,112 @@ export function registerPcbTools(ctx: DshContext): void {
   };
 
   ctx.tools.register(netgateTool);
+
+  const swapOutput: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      error: { type: "string" },
+      ref: { type: "string" },
+      from: { type: "string" },
+      to: { type: "string" },
+      applied: { type: "boolean" },
+      pads: { type: "number" },
+      assigned: { type: "number" },
+      lost: { type: "array", items: { type: "string" } },
+      oldPad: {
+        type: "object",
+        additionalProperties: false,
+        properties: { widthMm: { type: "number" }, heightMm: { type: "number" } },
+        required: ["widthMm", "heightMm"],
+      },
+      newPad: {
+        type: "object",
+        additionalProperties: false,
+        properties: { widthMm: { type: "number" }, heightMm: { type: "number" } },
+        required: ["widthMm", "heightMm"],
+      },
+      modelBefore: { type: "string" },
+      modelAfter: { type: "string" },
+      notes: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok", "error", "ref", "from", "to", "applied", "pads", "assigned", "lost", "oldPad", "newPad", "modelBefore", "modelAfter", "notes"],
+  };
+
+  const swapTool: ToolDefinition = {
+    name: PCB_SWAP_TOOL,
+    description:
+      "换封装：把一个位号换成 KiCad 官方库里的封装（`Lib:Name`），保留位号/值/位置/旋转，并按焊盘编号把旧件的网络搬过去；默认只预演，`apply: true` 才写盘（写前留 .bak）。换封装会改焊盘尺寸与位置，附近走线不会跟着动，notes 会提醒重布。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        projectDir: { type: "string", description: "工程根目录；缺省为当前调试会话的工程。" },
+        boardFile: { type: "string", description: "指定 .kicad_pcb；缺省取最近一次构建的板子。" },
+        ref: { type: "string", description: "要换的位号，例如 U1。" },
+        footprint: { type: "string", description: "目标封装 `Lib:Name`，例如 Package_QFP:LQFP-48_7x7mm_P0.5mm。" },
+        apply: { type: "boolean", description: "true 才真的写进板子；默认只预演。" },
+        footprintDir: { type: "string", description: "KiCad 封装库目录；缺省用探测到的 share/kicad/footprints。" },
+      },
+      required: ["ref", "footprint"],
+    },
+    output: {
+      schema: swapOutput,
+      render: (_args, value) => {
+        const result = value as {
+          ok: boolean;
+          error: string;
+          ref: string;
+          from: string;
+          to: string;
+          applied: boolean;
+          pads: number;
+          assigned: number;
+          lost: string[];
+          oldPad: { widthMm: number; heightMm: number };
+          newPad: { widthMm: number; heightMm: number };
+          modelBefore: string;
+          modelAfter: string;
+          notes: string[];
+        };
+        if (!result.ok) return [{ type: "text", text: "换封装失败：" + result.error }];
+        const lines: string[] = [
+          (result.applied ? "已换：" : "预演（未写盘）：") + result.ref + " " + result.from + " → " + result.to,
+          "焊盘 " + String(result.pads) + " 个 · 网络搬过去 " + String(result.assigned) + " 个" + (result.lost.length > 0 ? " · 丢 " + String(result.lost.length) + " 个" : ""),
+          "焊盘尺寸 " + String(result.oldPad.widthMm) + "×" + String(result.oldPad.heightMm) + " → " + String(result.newPad.widthMm) + "×" + String(result.newPad.heightMm) + " mm",
+          "3D 模型：" + (result.modelAfter === "" ? "新封装没有" : result.modelAfter),
+        ];
+        for (const note of result.notes) lines.push("说明：" + note);
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    execute: async (
+      args: { projectDir?: string; boardFile?: string; ref?: string; footprint?: string; apply?: boolean; footprintDir?: string },
+      exec: ToolExec,
+    ) => {
+      const empty = { ...EMPTY_SWAP, lost: [] as string[], notes: [] as string[] };
+      const resolved = await resolveProjectDir(ctx, args.projectDir, exec);
+      if (resolved.projectDir === "") return { ...empty, error: "projectDir 不能为空：从工具栏「工程」下拉里选一个，或先打开调试会话" };
+      const located = locateEcadToolchain();
+      if (!located.ok || located.toolchain === null) return { ...empty, error: "找不到 KiCad 工具链：" + located.error };
+      const workspace = planEcadWorkspace(resolved.projectDir, resolveProjectLayout(resolved.projectDir).hardwareDir);
+      const boardFile = pickBoard(resolved.projectDir, workspace, args.boardFile);
+      if (boardFile === "") return { ...empty, error: "还没有可用的 .kicad_pcb：先跑一次 stm32_ecad_build" };
+      const footprintDir = typeof args.footprintDir === "string" && args.footprintDir !== "" ? resolve(resolved.projectDir, args.footprintDir) : located.toolchain.footprintDir;
+      if (footprintDir === "") return { ...empty, error: "没有找到 KiCad 封装库目录：给 footprintDir，或检查 KiCad 安装" };
+      const apply = args.apply === true;
+      if (apply && !existsSync(boardFile + ".bak")) copyFileSync(boardFile, boardFile + ".bak");
+      const result = await runSwap(
+        { python: located.toolchain.python, subprocess: ctx.subprocess, timeoutMs: 150_000 },
+        { boardFile, ref: args.ref ?? "", footprint: args.footprint ?? "", footprintDir, apply },
+      );
+      return { ...result, lost: [...result.lost], notes: [...result.notes] };
+    },
+  };
+
   ctx.tools.register(render3dTool);
+  ctx.tools.register(swapTool);
 }

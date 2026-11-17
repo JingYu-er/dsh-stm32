@@ -440,3 +440,14 @@ test("3D 缺模型时面板给可换的官方封装（S181）", () => {
   assert.ok(clientSource.includes("fix.candidates"), "候选要从回包里取");
   assert.ok(clientSource.includes("有 STEP"), "候选要标明有没有 STEP");
 });
+
+test("3D 预览里能一键换封装、能导出 GLB 与 STEP（S182/S183）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes("ecad/swap?projectDir="), "换封装要走 /ecad/swap");
+  assert.ok(source.includes("换过去"), "缺模型的候选旁边要有换过去的按钮");
+  assert.ok(source.includes("ecad/render3d?projectDir="), "导出复用 3D 路由");
+  assert.ok(source.includes("format="), "导出要带 format");
+  assert.ok(source.includes("导出 GLB"), "面板要有 GLB 按钮");
+  assert.ok(source.includes("导出 STEP"), "面板要有 STEP 按钮");
+  assert.ok(source.includes("已导出 "), "导出完要显示文件与大小");
+});

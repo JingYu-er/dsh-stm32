@@ -5900,7 +5900,47 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S181）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S183）
+
+### 一百九十、换封装：交给 pcbnew 换，网络按焊盘号搬（S182）
+
+S181 给出候选，S182 负责真的换过去。`stm32_pcb_swap` 走 pcbnew 的 python 脚本：`LoadBoard` → `FindFootprintByReference` → `FootprintLoad(<库>.pretty, <名>)` → 新件的 `SetPosition/SetOrientation/SetReference/SetValue` 对齐旧件 → 按焊盘编号从 `board.GetNetInfo().NetsByName()` 搬网络 → `apply` 时才 `Remove(old)` / `Add(new)` / `SaveBoard`。默认只预演，写盘前留 `.bak`。
+
+**真机（tetris，U1）**：`tscircuit:chip_qfp48_w7_5mm_p0_5mm` → `Package_QFP:LQFP-48_7x7mm_P0.5mm`，48 个焊盘、28 个网络按编号搬过去；焊盘从 `1×0.25 @ -4.15` 变成 `1.475×0.3 @ -4.1625`；模型从 `${KIPRJMOD}/3dmodels/tscircuit_builtin.3dshapes/…` 换成 `${KICAD10_3DMODEL_DIR}/Package_QFP.3dshapes/…`，3D 预览里 U1 从此有实体。
+
+**换完必须重布**：同一块板换前 DRC 132 条（`text_height 56`、`lib_footprint_issues 45`、`silk_over_copper 26`），换后 407 条（`clearance 229`、`solder_mask_bridge 27`、`hole_clearance 14`）——焊盘变大且位置微移，旧走线贴到焊盘上。工具不自动删线（删线等于替人做决定），只把「这个器件附近的走线要重布」写进 notes。
+
+三条实现细节：
+
+1. `from` 要用 `str(old.GetFPID().GetLibNickname()) + ":" + str(old.GetFPID().GetLibItemName())`：直接 `+` 会 `unsupported operand type(s) for +: 'UTF8' and 'str'`，`fpid.format()` 拿到的是 SWIG proxy 的 repr。
+2. `FootprintLoad` 的目录参数必须是 `<库>.pretty`（不是 base 目录），否则返回 `None`，后面 `.FootprintLoad` 直接 `AttributeError`；脚本对每个候选 base 单独 `try/except`。
+3. 脚本结果写文件而不是靠 stdout：pcbnew 的 swig 警告会混在 stdout 里，`parseSwapOutput` 只认最后一行以 `{` 开头的 JSON（`{ok:true,data:…}` / `{ok:false,error:{message}}`）。
+
+面板在「可换的官方封装」每条右边加了「换过去」：POST `/ecad/swap`，成功后重渲 3D 并显示焊盘尺寸变化与重布提醒。
+
+教训：**换封装不是换个名字**。焊盘尺寸、位置、模型、网络归属四件事都会变，能量出来的写进结果，量不出来的（走线怎么重布）明确交给人。
+
+### 一百九十一、GLB 与 STEP：给网页和机械的几何导出（S183）
+
+和 3D 预览同一个入口，`format: "glb" | "step"` 就给几何、不再出 PNG。两条命令都来自 `kicad-cli pcb export`（10.0.7 的子命令：`glb / stl / step / stpz / brep / 3dpdf / vrml / u3d / xao / ply / svg / pdf / gerbers / drill / pos / dxf / ipc2581 / odb / gencad / stats / ipcd356`），参数照搬：`--output`、`--force`、`--subst-models`（同名 STEP/IGS 替换 VRML）、`--board-only`、`--no-components`、`--include-tracks/pads/zones/inner-copper/silkscreen/soldermask`、`--cut-vias-in-body`。
+
+**实测（tetris，41 元件 / 4 层）**：
+
+| 格式 | 大小 | 耗时 | 说明 |
+| --- | --- | --- | --- |
+| PNG（3D 预览） | 51.7 KB | 1.25 s（热）/ 8.2 s（冷） | 渲染图，含颜色与光照 |
+| GLB | 3.83 MB | 4.3 s | 给浏览器/演示，含几何与颜色 |
+| STEP | 5.01 MB | 4.3 s | 给机械，B-Rep 实体 |
+
+三条口径：
+
+1. **导出的是几何，不是设计数据**。GLB/STEP 里没有网络语义，不能反推网表——反推要走 `stm32_sch_import` 读板子。
+2. **缺 3D 模型的器件就是空的**。导出前 `collectBoardModels` 把「位号：路径」写进 notes；`--subst-models` 只解决「同名 VRML 换成 STEP」，不解决「文件根本不存在」。tetris 上 J1（`fpc40.step`）与 U1（`qfp48_w7.5mm_p0.5mm.step`）就是这样。
+3. **GLB 不认丝印几何**。`--include-silkscreen` 在 STEP 里能出丝印面，GLB 没有对应表达；差异写进 notes，不假装「加了参数就一样」。
+
+面板在「3D 预览」工具条加了「导出 GLB」「导出 STEP」，走同一条 `GET /ecad/render3d?format=…&substModels=1`，回包不带 `dataUrl`（二进制太大），只给文件路径、字节数与缺失模型数；结果落在 `hardware/out/board.glb` / `board.step`。
+
+教训：**「能导出」和「导出的东西能用」是两件事**。验收标准是「拿进 Blender/机械软件能打开、尺寸对」，不是「命令 rc=0」，所以仍要报缺模型，让看图的人知道空白是谁。
 
 ### 一百八十九、缺 3D 模型时，给「引脚数与间距都对得上」的官方封装（S181）
 

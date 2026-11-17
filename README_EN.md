@@ -6,7 +6,7 @@
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
 [![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
-Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 66 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
+Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 67 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
 Within the supported range the same tools behave the same way from F1 to H7; for an unsupported family or capability the call states what is missing instead of returning a guessed result.
 
@@ -213,6 +213,7 @@ Write circuits under `hardware/` with tscircuit, export a real KiCad project, th
 | `stm32_power` | Power-tree current budget: per-rail voltage, current, the parts on it, and the narrowest track vs the IPC-2221 width. Only currents you supply are summed; name-based guesses are reported separately and unknown rails stay "TBD" |
 | `stm32_pcb_links` | Routing review: differential-pair length skew and via counts, per-layer copper pour and signal count, decoupling-cap distance to the IC power pin; geometry only, no simulation |
 | `stm32_pcb_3d` | 3D preview: renders the board to PNG with KiCad's `kicad-cli pcb render` (top/bottom/left/right/front/back, optional perspective and rotation), and names the refs whose referenced 3D model files are missing (those parts are blank in the render); for missing models it suggests official footprints with the same family/pin count/pitch and marks whether their STEP exists; the panel offers top/bottom/iso presets |
+| `stm32_pcb_swap` | Swap footprint: replaces a ref with a footprint from the official KiCad library, keeping ref/value/position/rotation and carrying nets over by pad number; dry-run by default, `apply` writes (with a `.bak`), and a pad-size change is reported as "re-route around this part" |
 | `stm32_pcb_gerber` | Manufacturing-file review: read the Gerber and drill files produced by `stm32_ecad_export` back into one SVG (optional layer filter) to check outline, copper, silk and holes before shipping; unsupported constructs are listed in notes |
 | `stm32_impedance` | Impedance write-back: compute the track width and gap for 50 Ω single-ended and 90 Ω differential from the stackup and write them as custom rules in `.kicad_dru` (named nets only); KiCad DRC has no impedance constraint, so the rules carry geometry |
 | `stm32_netgate` | Keep schematic and PCB in step: stale board, split nets, missing pads |
