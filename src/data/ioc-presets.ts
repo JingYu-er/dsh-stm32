@@ -46,6 +46,11 @@ export interface PeripheralPreset {
   pins: PeripheralPinRole[];
   /** `<ip>.<参数名>` = 值；名字相同的参数会被合并进 `<ip>.IPParameters`。 */
   parameters: Array<{ name: string; value: string }>;
+  /**
+   * 参数键名随芯片的 IP 版本变时置 true（目前只有 I2C：F1/F2/F4/L1 与 F0/F3/L0+/L4 两代键名不同）。
+   * ioc-plan 见到它就用 `i2cParameters(家族, 速率)` 重新生成参数，而不是照抄 `parameters`。
+   */
+  parametersByFamily?: boolean;
   /** 额外的全局键（例如 ADC 的 RCC.ADCPresc）。 */
   extraEntries?: Array<{ key: string; value: string }>;
   /**
@@ -146,9 +151,46 @@ function spi(
 }
 
 /**
- * I2C 主机预设（S187）：F1/F3 的 I2C v1 用 ClockSpeed + DutyCycle 表达速率。
- * 引脚 .Mode 是 `I2C`（不是 Asynchronous 那类外设模式名），缺了照样不生成。
+ * I2C 主机预设（S187）：键名分两代，**按芯片用的 IP 版本选**。
+ *
+ * - 老的 I2C v1（i2c1_v1_0/v1_1，F1/F2/F4/L1 等）：`ClockSpeed` + `DutyCycle` + `OwnAddress1`；
+ * - 新的 I2C v2（i2c2_v1_1，F0/F3/L0+/L4/G0/G4 等）：`I2C_Speed_Mode` + `Speed` + `Timing` + `OwnAddress`
+ *   （见 `db/mcu/IP/I2C-F0-i2c2_v1_1_Cube_Modes.xml` 的 RefMode I2C 参数表）。
+ *
+ * 写错代的键不会报错——CubeMX 只是不认，然后安静地什么都不生成（实测 F303 上第一版用了
+ * `ClockSpeed/DutyCycle`，生成阶段直接 CodeEngine 报错、连 main.c 都没有）。所以这一条按族分派。
+ * 引脚 `.Mode` 两代都是 `I2C`，缺了同样不生成。
  */
+const I2C_LEGACY_FAMILIES = new Set(["F1", "F2", "F4", "L1"]);
+
+/** 从 `Mcu.Name`（例如 STM32F303C(B-C)Tx）里取家族代号：F3 / F1 / L4 … */
+export function chipFamily(iocText: string): string {
+  const name = /^Mcu\.Name=(.+)$/mu.exec(iocText)?.[1] ?? "";
+  const family = /^STM32([A-Z]\d)/u.exec(name.trim());
+  return family === null ? "" : family[1]!;
+}
+
+export function i2cParameters(family: string, speed: number): { name: string; value: string }[] {
+  if (I2C_LEGACY_FAMILIES.has(family)) {
+    return [
+      { name: "ClockSpeed", value: String(speed) },
+      { name: "DutyCycle", value: "I2C_DUTYCYCLE_2" },
+      { name: "OwnAddress1", value: "0" },
+      { name: "AddressingMode", value: "I2C_ADDRESSINGMODE_7BIT" },
+    ];
+  }
+  return [
+    { name: "I2C_Speed_Mode", value: speed > 100000 ? "I2C_Fast" : "I2C_Standard" },
+    { name: "Speed", value: String(speed / 1000) },
+    { name: "Analog_Filter", value: "I2C_ANALOGFILTER_ENABLE" },
+    { name: "OwnAddress", value: "0" },
+    { name: "DualAddressMode", value: "I2C_DUALADDRESS_DISABLE" },
+    { name: "GeneralCallMode", value: "I2C_GENERALCALL_DISABLE" },
+    { name: "NoStretchMode", value: "I2C_NOSTRETCH_DISABLE" },
+    { name: "AddressingMode", value: "I2C_ADDRESSINGMODE_7BIT" },
+  ];
+}
+
 function i2c(name: string, scl: string, sda: string, speed = 100000): PeripheralPreset {
   return {
     name,
@@ -158,14 +200,12 @@ function i2c(name: string, scl: string, sda: string, speed = 100000): Peripheral
       { role: "scl", defaultPin: scl, signal: name + "_SCL", mode: "I2C" },
       { role: "sda", defaultPin: sda, signal: name + "_SDA", mode: "I2C" },
     ],
-    parameters: [
-      { name: "ClockSpeed", value: String(speed) },
-      { name: "DutyCycle", value: "I2C_DUTYCYCLE_2" },
-      { name: "OwnAddress1", value: "0" },
-      { name: "AddressingMode", value: "I2C_ADDRESSINGMODE_7BIT" },
-    ],
+    // 占位：真正的键在 ioc-plan 里按 MCU 家族从 i2cParameters() 取（两代键名不同）。
+    parameters: i2cParameters("", speed),
+    parametersByFamily: true,
     notes: [
-      name + "：SCL/SDA 都要外接上拉（模块板一般不带上拉）；默认 7 位地址、主机模式、100 kHz",
+      name + "：SCL/SDA 都要外接上拉（模块板一般不带上拉）；默认 7 位地址、主机模式、" + String(speed / 1000) + " kHz",
+      "键名按芯片的 I2C IP 代分派：F1/F2/F4/L1 用 ClockSpeed+DutyCycle，F0/F3/L0+/L4/G0/G4 用 I2C_Speed_Mode+Speed",
     ],
   };
 }

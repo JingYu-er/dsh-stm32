@@ -476,12 +476,15 @@ function readLogSince(file: string, offset: number): string {
   if (file === "") return "";
   try {
     const size = statSync(file).size;
-    if (size <= offset) return "";
+    // CubeMX 每次启动都重写自己的日志（不是追加），所以「启动前的大小」经常比现在的新文件还大。
+    // 这时按偏移读会永远读到空串，就会把生成成功判成「未报告成功」——回退到整篇读。
+    const from = size <= offset ? 0 : offset;
+    if (size === from) return "";
     const handle = openSync(file, "r");
     try {
-      const length = size - offset;
+      const length = size - from;
       const buffer = Buffer.alloc(length);
-      readSync(handle, buffer, 0, length, offset);
+      readSync(handle, buffer, 0, length, from);
       return buffer.toString("utf8");
     } finally {
       closeSync(handle);

@@ -38,6 +38,24 @@ test("日志判定：成功行即成功，已知噪音不算错误", () => {
   assert.equal(bad.errors.length, 1);
 });
 
+test("日志判定：6.18 的日志文件里没有成功行，只有 Generated code: …/main.c（S187）", () => {
+  // 实测 6.18.1：`-q` 的 stdout 为空，日志文件里没有 "Code succesfully generated under"，
+  // 只有一串 `Generated code: <工程>\Src\main.c`；不认这条就会把成功判成失败。
+  const fileLog = [
+    "2026-11-17 21:25:37,364 [INFO] CodeEngine:297 - oldGeneratedFile, C:\\p\\Inc\\main.h_save",
+    "2026-11-17 21:25:37,475 [INFO] CodeEngine:321 - Generated code: C:\\p\\Inc\\main.h",
+    "2026-11-17 21:25:37,639 [INFO] CodeEngine:321 - Generated code: C:\\p\\Src\\main.c",
+  ].join("\n");
+  const verdict = parseGenerateLog(fileLog);
+  assert.equal(verdict.ok, true);
+  assert.match(verdict.successLine, /main\.c/u);
+  assert.equal(verdict.errors.length, 0);
+
+  // 只有 .h 没有 main.c 不算成功：main.c 是最后写的那个产物。
+  const partial = parseGenerateLog("Generated code: C:\\p\\Inc\\main.h");
+  assert.equal(partial.ok, false);
+});
+
 test("日志判定：有成功行时过程里的 ERROR 只算告警（Updater is busy 实测）", () => {
   const verdict = parseGenerateLog(
     [

@@ -28,7 +28,8 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { findIocFile, STATE_DIR } from "./generate.js";
 import { decodeIocKey, iocLogicalLines, parseIocEntries, summarizeIoc } from "./ioc.js";
 import { CORE_EXCEPTIONS, checkIocRules, extiIrqName } from "./ioc-rules.js";
-import { findPeripheralPreset, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
+import { findPeripheralPreset, i2cParameters, peripheralPresetNames, pinDbName } from "../data/ioc-presets.js";
+import type { PeripheralPreset } from "../data/ioc-presets.js";
 import { derivePeripheralPreset } from "../data/db-presets.js";
 import { auditIocKeys, iocSchemaCoverage, matchIocKey, renderIocKey } from "../data/ioc-schema.js";
 import type { IocKeyAuditContext } from "../data/ioc-schema.js";
@@ -1274,7 +1275,12 @@ function enablePeripheral(
   // 参数：写 <ip>.<名字>=值，并把名字合并进 <ip>.IPParameters。
   const paramsKey = renderIocKey("periph.ip_parameters", { ip: preset.ip });
   const names = (table.entries.get(paramsKey) ?? "").split(",").map((item) => item.trim()).filter((item) => item !== "");
-  for (const param of preset.parameters) {
+  // I2C 的键名随 IP 代变化（F1/F2/F4/L1 是 ClockSpeed/DutyCycle，F0/F3/L0+/L4 是 I2C_Speed_Mode/Speed），
+  // 写错代 CubeMX 不认、也不报错，只是什么都不生成——所以在这里按家族重新生成参数表。
+  const resolvedParameters = preset.parametersByFamily === true
+    ? i2cParameters(familyId, i2cSpeedOf(preset))
+    : preset.parameters;
+  for (const param of resolvedParameters) {
     table.entries.set(renderIocKey("periph.parameter", { ip: preset.ip, name: param.name }), paramOverrides.get(param.name) ?? param.value);
     if (!names.includes(param.name)) names.push(param.name);
     if (overrodePins && !paramOverrides.has(param.name) && param.name.startsWith("Channel-")) {
@@ -1940,4 +1946,10 @@ export function rollbackIoc(request: { projectDir: string; backupFrom: string })
     shaBefore: currentSha, shaAfter: afterSha, backupPath,
     message: "已把 " + basename(resolved) + " 写回 .ioc（当前内容先备份到 " + backupPath + "）",
   };
+}
+
+/** 从预设标签里取 I2C 速率（`I2C1 I2C 主机（100 kHz）` → 100000）；取不到回 100 kHz。 */
+function i2cSpeedOf(preset: PeripheralPreset): number {
+  const hit = /（(\d+) kHz）/u.exec(preset.label);
+  return hit === null ? 100000 : Number(hit[1]) * 1000;
 }

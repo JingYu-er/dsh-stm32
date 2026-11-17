@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 
-import { PERIPHERAL_PRESETS, peripheralPresetNames } from "../lib/data/ioc-presets.js";
+import { PERIPHERAL_PRESETS, i2cParameters, peripheralPresetNames } from "../lib/data/ioc-presets.js";
 import { missingPeripheralInits, sanitizeIocForHeadless } from "../lib/engine/generate.js";
 
 function preset(name) {
@@ -72,8 +72,25 @@ test("外设预设：I2C 两根脚都写 I2C 模式，键集带时钟与 7 位�
       ["sda", "PB7", "I2C1_SDA", "I2C"],
     ],
   );
-  assert.equal(parameterValue(i2c, "ClockSpeed"), "100000");
-  assert.equal(parameterValue(i2c, "AddressingMode"), "I2C_ADDRESSINGMODE_7BIT");
+  // 键名按芯片的 I2C IP 代分派：F1/F2/F4/L1 用老键，F0/F3/L0+/L4 用新键（S187）。
+  assert.equal(i2c.parametersByFamily, true);
+  const legacy = i2cParameters("F1", 100000);
+  assert.deepEqual(legacy.map((item) => item.name), ["ClockSpeed", "DutyCycle", "OwnAddress1", "AddressingMode"]);
+  assert.equal(legacy[0].value, "100000");
+  const modern = i2cParameters("F3", 100000);
+  assert.deepEqual(modern.map((item) => item.name), [
+    "I2C_Speed_Mode",
+    "Speed",
+    "Analog_Filter",
+    "OwnAddress",
+    "DualAddressMode",
+    "GeneralCallMode",
+    "NoStretchMode",
+    "AddressingMode",
+  ]);
+  assert.equal(modern[0].value, "I2C_Standard");
+  assert.equal(modern[1].value, "100");
+  assert.equal(i2cParameters("F3", 400000)[0].value, "I2C_Fast");
   assert.ok(i2c.notes.length > 0);
 });
 

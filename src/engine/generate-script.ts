@@ -51,7 +51,10 @@ export interface GenerateVerdict {
 }
 
 /** CubeMX 自己拼写为 "Code succesfully generated under ..."。 */
-const SUCCESS_PATTERN = /Code succesfully generated under/iu;
+// 6.18 起 `-q` 的 stdout 常常整段为空，成功行只可能出现在它自己的日志文件里；
+// 而日志文件里没有 "Code succesfully generated under"，只有一串
+// `Generated code: <工程>\Src\main.c`（main.c 是最后写的一个）。两种都认。
+const SUCCESS_PATTERN = /Code succesfully generated under|Generated code: .*[\\/]main\.c/iu;
 
 /**
  * 与本芯片无关的噪音（M0 实测：每次生成都有，永远不消失）。

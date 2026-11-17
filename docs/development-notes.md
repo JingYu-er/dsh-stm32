@@ -5917,7 +5917,9 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 生成成功的收尾多一道核对：`missingPeripheralInits()` 按 `Mcu.IPn` 逐个找 `MX_<实例>_` 前缀，缺了就点名「这些外设在 .ioc 里启用了，但生成结果里没有初始化函数」并给出「补 MISO / 换预设 / 用 ioc_verify 看实际认了哪些」三条路。
 - 超时默认 600 s → 1800 s；超时消息带「已等几分钟 + 已写出几个文件 + 冷启动 8–12 分钟 + 先看日志尾」；job 模式的渲染说明补一句「不要在参数完全相同时连续轮询，宿主会判成重复调用拒绝」。
 
-真机验证（`C:/Users/Admin/AppData/Local/Temp/i2c-oracle-*/`，F303CCT6 + `STM32Cube_FW_F3_V1.11.6`）：干净工程挂 `SPI1` 全双工预设 → `Src/main.c` 出现三处 `MX_SPI1_Init`、`Inc/stm32f3xx_hal_conf.h` 定义 `HAL_SPI_MODULE_ENABLED`；handheld 的 `TransmitOnly_Master` 变体同样生成。**I2C1 预设仍没跑通**：同一台机器、同一个干净工程，加载后生成阶段报 `CodeEngine:255` 且不产出 `Src/main.c`，键集未确认，先按「未验证」记账。
+真机验证（`C:/Users/Admin/AppData/Local/Temp/i2c-oracle-*/`，F303CCT6 + `STM32Cube_FW_F3_V1.11.6`）：干净工程挂 `SPI1` 全双工预设 → `Src/main.c` 出现三处 `MX_SPI1_Init`、`Inc/stm32f3xx_hal_conf.h` 定义 `HAL_SPI_MODULE_ENABLED`；handheld 的 `TransmitOnly_Master` 变体同样生成。**I2C 的坑在键名，不在 CubeMX 版本**：第一版 I2C 预设照 F1 的写法用了 `ClockSpeed` / `DutyCycle` / `OwnAddress1`，F303 上是 `CodeEngine:255`、连 `Src/main.c` 都没有。查 `db/mcu/IP/I2C-F0-i2c2_v1_1_Cube_Modes.xml` 的 RefMode `I2C` 参数表才对上：新 IP（i2c2_v1_1，F0/F3/L0+/L4/G0/G4 等）要 `I2C_Speed_Mode` / `Speed` / `Analog_Filter` / `OwnAddress` / `DualAddressMode` / `GeneralCallMode` / `NoStretchMode`；老 IP（i2c1_v1_0，F1/F2/F4/L1）才是 `ClockSpeed` + `DutyCycle`。预设现在带 `parametersByFamily` 标记，`ioc-plan` 按芯片家族重新生成参数表。改成新键名后同一台机器、同一个干净 F303 工程：`Src/main.c` 里 `MX_I2C1_Init` 三处、`Inc/stm32f3xx_hal_conf.h:76` 定义 `HAL_I2C_MODULE_ENABLED` ✅。
+
+**顺带修掉「成功判定」的第二个漏洞**：日志文件里没有 `Code succesfully generated under`（那是 stdout 的行），只有 `Generated code: …/main.c`；而 CubeMX **每次启动都重写日志文件**，按「启动前的大小」去偏移读会读到空串。两处一起改：`SUCCESS_PATTERN` 增认 `Generated code: …/main.c`，`readLogSince()` 在文件比记录还小时按整篇读（判定为日志被重写）。修完同一次生成从「未报告成功」变成 `ok:true`、6 个文件落位。
 
 教训：
 - **「成功」必须从产物与它自己的日志证明**，退出码、stdout、文件存在都不能单独作数。
