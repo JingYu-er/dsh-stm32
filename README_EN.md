@@ -260,7 +260,7 @@ Design rules follow the **copper layer count** at JLCPCB's standard tier: 0.127 
 | --- | --- |
 | `stm32_code_patch` | Writes only inside `USER CODE BEGIN/END` blocks, preserving all other bytes; backs up first |
 | `stm32_generate` | Runs CubeMX headless, places output in `Core/`, carries `USER CODE` back by tag; skips when `.ioc` is unchanged |
-| `stm32_build` | Builds: infers build directory and `.elf`, returns error lines, warning count, FLASH / RAM usage; optional hex / bin |
+| `stm32_build` | Builds: infers build directory and `.elf`, returns error lines, warning count, FLASH / RAM usage; optional hex / bin; when `CMakeCache.txt` no longer matches the project it names the reason, and `reconfigure: true` clears the cache and reconfigures |
 
 ### Flash, debug and runtime
 
