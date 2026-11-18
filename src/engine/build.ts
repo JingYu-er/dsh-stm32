@@ -6,7 +6,7 @@
  * 产物路径与 CMakePresets.json 的 binaryDir 一致，这样 VS Code 的 F5 与插件看到同一个 .elf。
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { findChipFact } from "../data/device-facts.js";
@@ -22,6 +22,8 @@ export interface BuildRequest {
   buildDir?: string;
   target?: string;
   clean?: boolean;
+  /** 缓存与当前工程不匹配时，先清掉 CMakeCache.txt / CMakeFiles 再重新配置（默认 false：只在报告里说明）。 */
+  reconfigure?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   onProgress?: (line: string) => void;
@@ -63,6 +65,10 @@ export interface BuildReport {
   elf?: ElfInfo;
   /** hex/bin 转换结果（2b）：请求了 artifacts 且转换成功时才有；失败进 notes 降级。 */
   converted?: { kind: "hex" | "bin"; path: string; size: number }[];
+  /** true = 构建目录的 CMake 缓存与当前工程对不上（复制/改名工程、换工具链后常见）。 */
+  cacheStale?: boolean;
+  /** 缓存对不上的具体原因（最多 5 条）。 */
+  cacheIssues?: string[];
   message: string;
   logTail: string;
   notes: string[];
@@ -249,6 +255,73 @@ export function pickConfigurePreset(projectDir: string): { name: string; dir: st
     return leftDebug - rightDebug;
   });
   return sorted[0] ?? null;
+}
+
+/** CMakeCache 里存的路径与当前工程对不对得上（S191）。 */
+export interface CmakeCacheCheck {
+  /** CMakeCache.txt 是否存在。 */
+  present: boolean;
+  /** 发现的问题（最多 5 条），空数组表示看着没问题。 */
+  issues: string[];
+}
+
+function normalizeDir(path: string): string {
+  return path.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+}
+
+/**
+ * 判断 CMakeCache 是不是「这个工程、这台机器」产出的。
+ *
+ * 复制或改名工程目录后，缓存里的绝对路径还指着旧位置；换工具链后编译器路径也可能失效。
+ * 这两种情况 cmake 有时只打一行 CMake Error、退出码却仍是 0（旧 ninja 报 no work to do），
+ * 所以要在编译前与失败后都看一眼缓存，而不是让人去试 clean。
+ */
+export function inspectCmakeCache(
+  buildDir: string,
+  projectDir: string,
+  options: { readText?: (file: string) => string; fileExists?: (file: string) => boolean } = {},
+): CmakeCacheCheck {
+  const cacheFile = join(buildDir, "CMakeCache.txt");
+  const readText = options.readText ?? ((file: string): string => readFileSync(file, "utf8"));
+  const fileExists = options.fileExists ?? ((file: string): boolean => existsSync(file));
+  if (!fileExists(cacheFile)) return { present: false, issues: [] };
+  let text = "";
+  try {
+    text = readText(cacheFile);
+  } catch {
+    return { present: true, issues: ["CMakeCache.txt 读不出来（权限或编码问题）"] };
+  }
+  const values = new Map<string, string>();
+  for (const line of text.split(/\r?\n/u)) {
+    const match = /^([A-Za-z0-9_]+)(?::[A-Za-z0-9_]+)?=(.*)$/u.exec(line);
+    if (match === null) continue;
+    values.set(match[1] as string, match[2] as string);
+  }
+  const issues: string[] = [];
+  const home = values.get("CMAKE_HOME_DIRECTORY") ?? "";
+  if (home !== "" && normalizeDir(home) !== normalizeDir(projectDir)) {
+    issues.push("缓存记录的源码目录是 " + home + "，当前工程是 " + projectDir + "（工程被复制或改名过）");
+  }
+  for (const key of ["CMAKE_C_COMPILER", "CMAKE_MAKE_PROGRAM"]) {
+    const tool = values.get(key) ?? "";
+    if (tool === "" || tool.endsWith("-NOTFOUND")) continue;
+    if (!fileExists(tool)) {
+      issues.push("缓存记录的" + (key === "CMAKE_C_COMPILER" ? "编译器" : "构建器") + "不存在：" + tool);
+    }
+  }
+  return { present: true, issues: issues.slice(0, 5) };
+}
+
+/** 删掉 CMakeCache.txt 与 CMakeFiles，让下一次 cmake 重新配置（reconfigure 用）。 */
+export function clearCmakeCache(buildDir: string): string[] {
+  const removed: string[] = [];
+  for (const name of ["CMakeCache.txt", "CMakeFiles"]) {
+    const target = join(buildDir, name);
+    if (!existsSync(target)) continue;
+    rmSync(target, { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
 }
 
 /** 构建目录里的一个 .elf 候选。 */
@@ -445,6 +518,24 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     preNotes.push("首次构建：自动执行了 cmake --preset " + preset.name + "（" + configureSeconds + " s，省掉手动配置）");
   }
 
+  // S191：缓存可能是从别处复制来的，或者工具链路径已经失效。先看一眼，别等编译完才猜。
+  const cacheCheck = inspectCmakeCache(buildDir, projectDir);
+  const cacheStale = cacheCheck.present && cacheCheck.issues.length > 0;
+  const cacheIssues = cacheCheck.issues;
+  if (cacheStale && request.reconfigure === true) {
+    const removed = clearCmakeCache(buildDir);
+    const retry = await runBuild(subprocess, { ...request, buildDir: undefined, reconfigure: false });
+    return {
+      ...retry,
+      cacheStale: false,
+      cacheIssues,
+      notes: [
+        "构建缓存与当前工程不匹配（" + cacheIssues[0] + "），已清掉 " + (removed.length === 0 ? "缓存（本来就没有可删的）" : removed.join("、")) + " 后重新配置",
+        ...retry.notes,
+      ],
+    };
+  }
+
   const argv = [cmake, "--build", buildDir];
   if (request.target !== undefined) argv.push("--target", request.target);
   if (request.clean === true) argv.push("--clean-first");
@@ -492,6 +583,9 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     logTail: tail(log, 30),
   };
   const notes: string[] = [...preNotes];
+  if (cacheStale) {
+    notes.push("构建缓存与当前工程可能不匹配：" + cacheIssues.slice(0, 2).join("；") + "；reconfigure:true 会清掉缓存重配，clean:true 只清产物");
+  }
   if (elf !== null) {
     notes.push("产物：" + elf.path + "（" + String(elf.size) + " B）");
     const selectionNote = elfSelectionNote(buildDir);
@@ -512,7 +606,15 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
   if (outcome.timedOut) return fail(request, "编译超时（" + String(request.timeoutMs ?? DEFAULT_TIMEOUT_MS) + " ms）", base);
   if (outcome.exitCode !== 0) {
     const first = errors.length > 0 ? errors[0] as string : "exit code " + String(outcome.exitCode);
-    return fail(request, "编译失败：" + first, { ...base, notes });
+    const staleNotes = cacheStale
+      ? ["构建缓存与当前工程不匹配：" + cacheIssues.slice(0, 2).join("；") + "。先 clean:true 重试，或 reconfigure:true 清掉缓存重配，或直接删掉 " + base.buildDir]
+      : [];
+    const staleSuffix = cacheStale ? "（疑因构建缓存不匹配：先 clean 或 reconfigure）" : "";
+    return fail(request, "编译失败：" + first + staleSuffix, {
+      ...base,
+      notes: [...notes, ...staleNotes],
+      ...(cacheStale ? { cacheStale: true, cacheIssues } : {}),
+    });
   }
   // 实测：把整个工程（含 build/）复制/改名后，cmake 会先打印
   // "CMake Error: The current CMakeCache.txt directory ... is different than ..."，
@@ -559,6 +661,7 @@ export async function runBuild(subprocess: SubprocessService, request: BuildRequ
     ok: true,
     ...base,
     ...(converted.length === 0 ? {} : { converted }),
+    ...(cacheStale ? { cacheStale: true, cacheIssues } : {}),
     notes,
     message: "编译成功（" + (durationMs / 1000).toFixed(1) + " s，" + String(errors.length) + " 个错误、" + String(base.warningCount) + " 个警告）",
   };

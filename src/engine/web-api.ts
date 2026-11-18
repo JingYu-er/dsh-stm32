@@ -817,12 +817,21 @@ export async function handleWebApi(input: {
     path !== WEB_API_PREFIX + "/ecad/parts" &&
     path !== WEB_API_PREFIX + "/ecad/ipc" &&
     path !== WEB_API_PREFIX + "/projects";
-  if (needsBody && method !== "POST") {
+  // 一路径两动词的接口：GET 读、POST 改（S191：以前 /watch 的 GET 被 needsBody 挡成 405）。
+  const dualVerb =
+    path === WEB_API_PREFIX + "/watch" ||
+    path === WEB_API_PREFIX + "/ecad/brief" ||
+    path === WEB_API_PREFIX + "/ecad/mech" ||
+    path === WEB_API_PREFIX + "/ecad/impedance" ||
+    path === WEB_API_PREFIX + "/schematic/edit" ||
+    path === WEB_API_PREFIX + "/schematic/sync" ||
+    path === WEB_API_PREFIX + "/ecad/swap";
+  if (!dualVerb && needsBody && method !== "POST") {
     return fail(405, "这个接口只接受 POST");
-  } else if (!needsBody && method !== "GET") {
+  } else if (!dualVerb && !needsBody && method !== "GET") {
     return fail(405, "这个接口只接受 GET");
   }
-  const twoVerb = (path === WEB_API_PREFIX + "/watch" || path === WEB_API_PREFIX + "/ecad/brief" || path === WEB_API_PREFIX + "/ecad/mech" || path === WEB_API_PREFIX + "/ecad/impedance" || path === WEB_API_PREFIX + "/schematic/edit" || path === WEB_API_PREFIX + "/schematic/sync" || path === WEB_API_PREFIX + "/ecad/swap") && method === "POST";
+  const twoVerb = dualVerb && method === "POST";
   const parsed = needsBody || twoVerb ? parseJsonBody(input.body ?? "") : { ok: true, value: {} as Record<string, unknown>, error: "" };
   if (!parsed.ok) return fail(400, parsed.error);
   const env = envOf(input.deps);

@@ -56,6 +56,8 @@ const reportSchema: JsonSchema = {
       items: { type: "object", properties: { kind: { type: "string" }, path: { type: "string" }, size: { type: "number" } }, required: ["kind", "path", "size"], additionalProperties: false },
     },
     elf: elfSchema,
+    cacheStale: { type: "boolean" },
+    cacheIssues: { type: "array", items: { type: "string" } },
     message: { type: "string" },
     logTail: { type: "string" },
     notes: { type: "array", items: { type: "string" } },
@@ -87,6 +89,7 @@ interface BuildArgs {
   buildDir?: string;
   target?: string;
   clean?: boolean;
+  reconfigure?: boolean;
   artifacts?: ("elf" | "hex" | "bin")[];
   foreground?: boolean;
   binDirs?: string[];
@@ -106,6 +109,9 @@ function formatReport(report: BuildReport): string[] {
   lines.push((report.ok ? "编译成功" : "编译失败") + "：" + report.message);
   if (report.buildDir !== "") lines.push("构建目录：" + report.buildDir);
   if (report.command !== "") lines.push("命令：" + report.command);
+  if (report.cacheStale === true) {
+    lines.push("⚠ 构建缓存与当前工程不匹配：" + (report.cacheIssues ?? []).join("；"));
+  }
   if (report.elf !== undefined) lines.push("产物：" + report.elf.path + "（" + String(report.elf.size) + " B）");
   for (const usage of report.memoryUsage as MemoryUsage[]) {
     lines.push("占用：" + usage.raw);
@@ -142,6 +148,7 @@ export function registerBuild(ctx: DshContext): void {
         buildDir: { type: "string", description: "显式构建目录；缺省自动推断（优先含 Debug 的 preset 目录）。" },
         target: { type: "string", description: "只构建某个 CMake target（例如 demo.elf）。" },
         clean: { type: "boolean", description: "先 clean 再编译（全量，慢）。" },
+        reconfigure: { type: "boolean", description: "构建缓存（CMakeCache.txt）与当前工程不匹配时，先清掉缓存重新配置再编译；默认 false 只在报告里说明。" },
         artifacts: {
           type: "array",
           items: { type: "string", enum: ["elf", "hex", "bin"] },
@@ -193,6 +200,7 @@ export function registerBuild(ctx: DshContext): void {
           ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
           ...(args.target === undefined ? {} : { target: args.target }),
           ...(args.clean === undefined ? {} : { clean: args.clean }),
+          ...(args.reconfigure === undefined ? {} : { reconfigure: args.reconfigure }),
     ...(args.artifacts === undefined ? {} : { artifacts: args.artifacts }),
           ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
           ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
@@ -218,6 +226,7 @@ export function registerBuild(ctx: DshContext): void {
             ...(args.buildDir === undefined ? {} : { buildDir: args.buildDir }),
             ...(args.target === undefined ? {} : { target: args.target }),
             ...(args.clean === undefined ? {} : { clean: args.clean }),
+            ...(args.reconfigure === undefined ? {} : { reconfigure: args.reconfigure }),
     ...(args.artifacts === undefined ? {} : { artifacts: args.artifacts }),
             ...(args.binDirs === undefined ? {} : { binDirs: args.binDirs }),
             ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),

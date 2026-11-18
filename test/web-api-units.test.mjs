@@ -303,6 +303,25 @@ test("GET /ioc-keys：读引脚的 .ioc 键，缺参数与缺 .ioc 各自报错"
   fs.rmSync(noIoc, { recursive: true, force: true });
 });
 
+test("监视登记表：GET 只读清单，POST 才改（S191 回归）", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-watch-"));
+  const deps = { subprocess: fakeSubprocess, env: { DSH_STM32_HOME: home } };
+  removeAllWatches(watchState);
+  // GET 以前被 needsBody 的否定链漏掉，面板一打开就 405；有回归就钉在这里。
+  const list = await handleWebApi({ method: "GET", path: WEB_API_PREFIX + "/watch", deps });
+  assert.equal(list.status, 200);
+  assert.equal(Array.isArray(list.body.watch.entries), true);
+  const wrong = await handleWebApi({
+    method: "POST",
+    path: WEB_API_PREFIX + "/watch",
+    body: JSON.stringify({ action: "nope" }),
+    deps,
+  });
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.body.error, /add \/ remove \/ clear/u);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test("串口面板：状态可读、开参数严格校验、关空会话不报错", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-web-serial-"));
   const env = { DSH_STM32_SERIAL_HOME: home };

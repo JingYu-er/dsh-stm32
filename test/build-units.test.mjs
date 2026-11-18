@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { countWarnings, detectBuildDir, findElf, parseBerkeleySize, parseBuildErrors, parseMemoryUsage, runBuild } from "../lib/engine/build.js";
+import { clearCmakeCache, countWarnings, detectBuildDir, findElf, inspectCmakeCache, parseBerkeleySize, parseBuildErrors, parseMemoryUsage, runBuild } from "../lib/engine/build.js";
 
 import { FIXTURE_PROJECT as DEMO } from "./fixtures.mjs";
 
@@ -120,6 +120,53 @@ test("runBuild：无改动构建时用 size 量 elf，并在 notes 说明来源�
   assert.equal(report.memoryUsage[1].usedBytes, 2568, "RAM = data + bss");
   assert.ok(report.notes.some((note) => note.includes("arm-none-eabi-size")), "notes 要说明占用是量出来的");
   assert.ok(report.notes.some((note) => note.includes("没有重新链接")), "notes 要说明本次没链接");
+});
+
+
+test("CMakeCache 与工程目录对不上时报出来（S191）", () => {
+  const cache = [
+    "# This is the CMakeCache file.",
+    "CMAKE_HOME_DIRECTORY:INTERNAL=D:/old/place/demo",
+    "CMAKE_C_COMPILER:FILEPATH=C:/msys64/ucrt64/bin/arm-none-eabi-gcc.exe",
+    "CMAKE_MAKE_PROGRAM:FILEPATH=C:/msys64/ucrt64/bin/ninja.exe",
+    "CMAKE_GENERATOR:INTERNAL=Ninja",
+  ].join("\r\n");
+  const okTool = (file) => file.endsWith("CMakeCache.txt") || file.endsWith("arm-none-eabi-gcc.exe") || file.endsWith("ninja.exe");
+  const stale = inspectCmakeCache("D:/build/Debug", "D:/new/place/demo", {
+    readText: () => cache,
+    fileExists: okTool,
+  });
+  assert.equal(stale.present, true);
+  assert.equal(stale.issues.length, 1, "只应报源码目录不一致");
+  assert.match(stale.issues[0], /D:\/old\/place\/demo/u);
+
+  const sameDir = inspectCmakeCache("D:/build/Debug", "d:/old/place/demo/", {
+    readText: () => cache,
+    fileExists: okTool,
+  });
+  assert.deepEqual(sameDir.issues, [], "大小写与末尾斜杠不该算不一致");
+
+  const deadCompiler = inspectCmakeCache("D:/build/Debug", "D:/old/place/demo", {
+    readText: () => cache,
+    fileExists: (file) => file.endsWith("CMakeCache.txt"),
+  });
+  assert.equal(deadCompiler.issues.length, 2, "编译器与构建器都不存在");
+  assert.ok(deadCompiler.issues.some((note) => note.includes("编译器不存在")));
+});
+
+test("没有 CMakeCache.txt 时不报问题，清缓存只删缓存相关项（S191）", () => {
+  const none = inspectCmakeCache("D:/build/Debug", "D:/demo", { fileExists: () => false });
+  assert.deepEqual(none, { present: false, issues: [] });
+
+  const dir = mkdtempSync(join(tmpdir(), "dsh-stm32-cache-"));
+  mkdirSync(join(dir, "CMakeFiles"), { recursive: true });
+  writeFileSync(join(dir, "CMakeCache.txt"), "CMAKE_HOME_DIRECTORY:INTERNAL=D:/old\n", "utf8");
+  writeFileSync(join(dir, "build.ninja"), "# keep\n", "utf8");
+  const removed = clearCmakeCache(dir);
+  assert.deepEqual(removed.sort(), ["CMakeCache.txt", "CMakeFiles"]);
+  assert.equal(existsSync(join(dir, "CMakeCache.txt")), false);
+  assert.equal(existsSync(join(dir, "build.ninja")), true, "别的文件不该被删");
+  assert.deepEqual(clearCmakeCache(dir), [], "已经清干净后再清不报错");
 });
 
 let failed = 0;

@@ -5900,7 +5900,30 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S187）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S191）
+
+### 一百九十四、构建缓存会撒谎：CMakeCache 里的绝对路径要核对（S191）
+
+会话「STM32掌机设计方案-2」里 `stm32_build` 连着失败，最后一次靠 `clean: true` 才过。查下来不是代码问题：`CMakeCache.txt` 记着 `CMAKE_HOME_DIRECTORY`、编译器与构建器的绝对路径，工程一旦被复制/改名、工具链换了位置，这份缓存就指着不存在的地方。
+
+更糟的是它的失败方式：cmake 只打一行 `CMake Error: The current CMakeCache.txt directory ... is different than ...`，后面 ninja 仍然 `no work to do`、退出码 0——不显式拦就会报「编译成功」，拿的是旧缓存产出的 elf。
+
+现在两个方向都收口：
+
+1. **编译前看缓存**：`inspectCmakeCache(buildDir, projectDir)` 把 `CMakeCache.txt` 解析成键值，比对 `CMAKE_HOME_DIRECTORY`（大小写与末尾斜杠不算差异）、`CMAKE_C_COMPILER` 与 `CMAKE_MAKE_PROGRAM` 是否真的存在。纯函数、可注入 `readText`/`fileExists`，单测不需要真工具链。
+2. **报告里点名 + 一条出路**：失败时 `cacheStale: true`、`cacheIssues: [...]`，message 后缀「（疑因构建缓存不匹配：先 clean 或 reconfigure）」，notes 给具体修法；成功但缓存对不上时也留一条提醒。`reconfigure: true` 则清掉 `CMakeCache.txt` 与 `CMakeFiles`（`clearCmakeCache`，别的文件不碰）后重新配置再编译一次。
+
+真机复核（把 demo 的 `CMakeCache` 改成 `D:/old/place`）：
+
+```
+FIRST  ok=false stale=true issues=1   —— 报出「缓存记录的源码目录是 D:/old/place…」
+SECOND ok=true  stale=false           —— reconfigure:true 后 1.7 s 编译通过，
+                                          notes：「已清掉 CMakeCache.txt、CMakeFiles 后重新配置」
+```
+
+顺手逮到一处回归：验收脚本里 `GET /api/watch` 被 `needsBody` 的否定链挡成 405。原因是只给「写」加白名单、忘了「读也有 GET」。改成显式的 `dualVerb`（GET 读、POST 改，`/watch`、`/ecad/brief`、`/schematic/edit` 等同一批），并加回归用例钉住 `GET /watch` 与 `POST /watch` 两条路径。
+
+教训：**缓存是别人写的事实，不是你的记忆**。凡是把绝对路径存进文件的东西（CMakeCache、`.ioc` 的工程路径、上一轮的构建目录），读回来先问一句「它说的还是当前这个工程吗」。
 
 ### 一百九十三、外设预设与 CubeMX 的静默丢弃（S187）
 

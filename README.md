@@ -279,7 +279,7 @@ git clone --depth 1 https://github.com/drandyhaas/KiCadRoutingTools ~/.dsh-stm32
 | --- | --- |
 | `stm32_code_patch` | 只写 `USER CODE BEGIN/END` 块内内容，块外逐字节保留；写前备份 |
 | `stm32_generate` | 无头运行 CubeMX，产物落到 `Core/`，`USER CODE` 按标签搬回；`.ioc` 未变时跳过 |
-| `stm32_build` | 编译：自动推断构建目录与 `.elf`，返回错误行、警告数、FLASH / RAM 占用；可转出 hex / bin |
+| `stm32_build` | 编译：自动推断构建目录与 `.elf`，返回错误行、警告数、FLASH / RAM 占用；可转出 hex / bin；构建缓存（CMakeCache）与当前工程对不上时点名原因，`reconfigure: true` 清缓存重配 |
 
 ### 烧录、调试与运行时
 
