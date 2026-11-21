@@ -33,7 +33,7 @@ function isAsset(path) {
 const FORBIDDEN = /\.(png|jpe?g|gif|webp|bmp|pdf|html?|zip|7z|exe|dll)$/i;
 /** 这些文档必须在包里（docs/*.md 是白名单，别把整个 docs 排除掉）。 */
 const REQUIRED = [
-  "README.md", "README_EN.md", "LICENSE", "cordis.patch.yml", "docs/reading-guide.md",
+  "README.md", "README_EN.md", "LICENSE", "NOTICE", "cordis.patch.yml", "docs/reading-guide.md",
   "assets/manifest.json", "assets/device/f1/chips.json", "assets/ioc/minimal/STM32F103C8Tx.ioc",
 ];
 

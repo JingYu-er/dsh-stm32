@@ -541,4 +541,10 @@ Thanks also to the upstream projects this plugin depends on or follows:
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE).
+
+The ST and Arm material redistributed under `assets/` (headers, startup files, linker scripts, SVD
+descriptions) keeps the license stated in each file header and is not covered by this project's
+Apache-2.0 grant. `templates/openocd/stm32c0x.cfg` and `stm32u0x.cfg` are modified copies of
+upstream OpenOCD files (GPL-2.0-or-later), shipped as configuration data and loaded by the user's own
+OpenOCD process. See [NOTICE](NOTICE) for the full attributions.

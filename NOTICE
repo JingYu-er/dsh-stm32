@@ -1,0 +1,80 @@
+dsh-stm32
+Copyright 2026 dsh-stm32 contributors
+
+This product is licensed under the Apache License, Version 2.0. See the
+LICENSE file for the full text.
+
+--------------------------------------------------------------------------
+Bundled third-party material
+--------------------------------------------------------------------------
+
+This package redistributes the following files under assets/ together with
+their original license headers. They are not covered by this project's
+Apache-2.0 grant; each keeps the license stated in its own file header.
+
+1. CMSIS device headers (assets/headers/<family>/*.h)
+   Copyright (c) 2017-2021 STMicroelectronics. All rights reserved.
+   License: Apache License 2.0 (see the header comment in each file)
+   Source: STM32Cube firmware packages (Drivers/CMSIS/Device/ST/STM32xx).
+
+2. Device startup files (assets/startup/<family>/startup_*.s)
+   Copyright (c) 2017-2021 STMicroelectronics. All rights reserved.
+   License: Apache License 2.0 (see the header comment in each file)
+   Source: STM32Cube firmware packages.
+
+3. Linker scripts (assets/ld/<family>/*.ld)
+   Copyright STMicroelectronics / STM32CubeMX.
+   License: Apache License 2.0 with the ST "ultimate liability" disclaimer
+   retained in each file.
+   Source: STM32CubeMX generated projects.
+
+4. SVD device descriptions, where present (assets/device/<family>/svd/*.svd)
+   Copyright (c) 2010-2024 Arm Limited and STMicroelectronics.
+   License: Apache License 2.0 (CMSIS-SVD schema material).
+   Source: CMSIS-SVD / STM32CubeMX device database exports.
+
+5. OpenOCD target configurations (templates/openocd/stm32c0x.cfg,
+   templates/openocd/stm32u0x.cfg)
+   Copyright (c) 2005-2024 OpenOCD contributors.
+   License: GNU GPL v2 or later (SPDX: GPL-2.0-or-later), as stated in each
+   file; these two files are modified copies (0.13 syntax adapted for
+   OpenOCD 0.12) and remain under GPL-2.0-or-later. They are configuration
+   data loaded by the user's own OpenOCD process, not linked into this
+   plugin.
+
+--------------------------------------------------------------------------
+Derived factual data (no files copied)
+--------------------------------------------------------------------------
+
+assets/device/<family>/chips.json, assets/ioc/, assets/templates/ and
+lib/data/ are generated fact tables extracted from the locally installed
+STM32CubeMX device database (position, pin names, alternate functions,
+package, clock limits) and from the public STM32 reference manuals. They
+contain facts, not copied source files; regeneration instructions live in
+scripts/build-assets.mjs.
+
+--------------------------------------------------------------------------
+Interoperating software (not redistributed)
+--------------------------------------------------------------------------
+
+The plugin drives the following programs through their own command-line
+interfaces and libraries. They are not part of this package and keep their
+own licenses:
+
+- STM32CubeMX and STM32Cube firmware packages (ST license terms)
+- GNU Arm Embedded Toolchain: arm-none-eabi-gcc, gdb, binutils (GPL-3.0)
+- OpenOCD (GPL-2.0-or-later)
+- CMake (BSD-3-Clause), Ninja (Apache-2.0), MSYS2 (various)
+- Python (PSF-2.0), poppler / pdftotext (GPL-2.0)
+
+--------------------------------------------------------------------------
+Design references (no code copied)
+--------------------------------------------------------------------------
+
+- oh-my-embedded (MIT) — pattern of turning expert advice into small tools.
+- PCB-Agent-Teams (PolyForm Noncommercial 1.0.0) — staged pipeline and
+  gate/rollback discipline; no code copied.
+- kicad-happy (MIT) — EMC / thermal / lifecycle rule sources.
+- KiCadRoutingTools (MIT) — grid autorouting reference.
+- uPesy/easyeda2kicad.py, CMD_FOOTPRINT.md — factual reference for LCSC /
+  EasyEDA footprint fields.

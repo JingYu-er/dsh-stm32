@@ -565,4 +565,8 @@ docs/               开发笔记、精读指南、规格书、图表
 
 ## 许可证
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)。
+
+随包分发的 ST 与 Arm 素材（`assets/headers`、`assets/startup`、`assets/ld`、`assets/device/**/svd`）保留各自文件头里的
+许可声明，不受本项目 Apache-2.0 授权影响；`templates/openocd/stm32c0x.cfg` 与 `stm32u0x.cfg` 是 OpenOCD 上游
+GPL-2.0-or-later 的修改副本，随插件作为配置数据分发、由用户自己的 OpenOCD 进程加载。完整归属见 [NOTICE](NOTICE)。

@@ -5900,7 +5900,24 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S191）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S217）
+
+### 一百九十五、换 Apache-2.0：LICENSE 用原文，NOTICE 分三类（S217）
+
+MIT 换成 Apache-2.0 要动五处，少一处发布包就不合规：
+
+1. `LICENSE` 用 apache.org 的 `LICENSE-2.0.txt` 原文（202 行），末尾补本项目版权与「Licensed under the Apache License, Version 2.0」声明段；手打或改写条文等于换了一份许可证。
+2. `NOTICE` 按三类列归属：
+   - **随包分发、各自带条款**：`assets/headers`（CMSIS 设备头，ST，Apache-2.0）、`assets/startup`（启动文件，ST，Apache-2.0）、`assets/ld`（链接脚本，ST，含免责声明）、`assets/device/**/svd`（Arm/ST，Apache-2.0）、`templates/openocd/stm32c0x.cfg` 与 `stm32u0x.cfg`（OpenOCD，**GPL-2.0-or-later 的修改副本**，作为配置数据由用户自己的 OpenOCD 加载）。
+   - **派生事实数据、未复制文件**：`assets/device/**/chips.json`、`assets/ioc/`、`lib/data/` 是从本机 CubeMX 设备库与公开参考手册提取的事实表。
+   - **只驱动不分发**：CubeMX 与固件包、Arm GCC/GDB、OpenOCD、CMake/Ninja/MSYS2、Python、poppler。
+3. `package.json`：`license: "Apache-2.0"`，`files` 补 `NOTICE`（否则发布包里没有它）。
+4. README 中英的「许可证」段落改成 Apache-2.0，并写清「assets 里的 ST/Arm 素材保留各自文件头许可」「openocd 配置是 GPL 修改副本」。
+5. 版本升 0.1.10 并打 annotated tag。
+
+数字：包体 2265.2 → **2299.8 KB / 385 文件**（解包 16997.9 KB）；许可证与 NOTICE 合计约 16 KB；37 工具 / 49 路由不变，1174 pass 不变。
+
+教训：**「随包分发」与「只驱动」是两类归属**——前者必须逐项写进 NOTICE 并保留文件头，后者只要说明不随包分发；把 GPL 配置副本当成「自己的文件」写，是这类换协议最容易漏的一条。
 
 ### 一百九十四、构建缓存会撒谎：CMakeCache 里的绝对路径要核对（S191）
 
