@@ -206,24 +206,18 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(source.includes("DEBUG_PROJECT_KEY"), "工程选择要按会话记住");
     assert.ok(source.includes("function useProjects("), "面板要读工程索引");
-    assert.ok(source.includes("已回到最近一份回放"), "打开面板时应自动载入最近证据");
-    // 横幅只留日期与条数，证据路径不进正文（人看的不是路径）。
+    assert.ok(source.includes("state.load(pick.path)"), "打开面板时应自动载入最近证据");
+    // S222：回放横幅整条去掉——「哪份文件、几条」不是调试要看的。
+    assert.equal(source.includes("已回到最近一份回放"), false, "不再显示回放横幅");
     assert.equal(source.includes("已载入最近一份历史记录（"), false, "不再把完整证据路径拼进横幅");
     assert.ok(source.includes("fallbackProjectDir"), "没有会话时要退到工作区里的第一个工程");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
-    assert.ok(source.includes("function useSchematic("), "原理图页签要读 /schematic（S90）");
-    assert.ok(source.includes("function layoutSchematic(") && source.includes("function SchematicPanel("), "原理图页要能画模块框图（S90）");
-    assert.ok(source.includes('tabButton("schematic"'), "原理图要有独立页签（S90）");
-    assert.ok(source.includes('tab === "schematic"') && source.includes("schematic?projectDir="), "页签要带工程目录请求（S90）");
-    assert.ok(source.includes("powerNets") && source.includes("d32-sch-grid"), "框图要有网格底与电源网络（S90）");
-    assert.ok(source.includes('schematic: "流程图"'), "页签名改为流程图（S101）");
-    assert.ok(source.includes("function sideToward") && source.includes("function portAnchor"), "连线要能从框的四个方向进出（S103）");
-    assert.ok(source.includes('paintOrder: "stroke"'), "连线标签要描底色，压线时仍然可读（S101）");
-    assert.ok(source.includes("const ringX") && source.includes("const ringY"), "模块要绕主控环形摆放，图不能拉成一条长竖线（S103）");
-    assert.ok(source.includes("const mcuHeight") && source.includes("function roundedPath"), "主控框按连线数长高，拐角走圆角（S103）");
-    assert.ok(source.includes("function blockWidth"), "框宽要跟着文字长度走（S104）");
-    assert.ok(source.includes("const sameAxis"), "同一根轴上的两侧要能拉直，不能为了拐弯而拐弯（S104）");
-    assert.ok(source.includes("strokeWidth: 1.5"), "整框用模块色描边，保留一条左侧竖线会让人猜（S104）");
+    // S222：原理图（流程图）属于硬件台，调试台不再画它，也不再请 /schematic。
+    assert.equal(source.includes('tabButton("schematic"'), false, "调试台没有流程图页签");
+    assert.equal(source.includes("function SchematicPanel("), false, "不再内联原理图面板");
+    assert.equal(source.includes("function layoutSchematic("), false, "不再带框图布局代码");
+    assert.equal(source.includes("schematic?projectDir="), false, "不再请求 /schematic");
+    assert.equal(source.includes('schematic: "流程图"'), false, "页签表里没有流程图");
     assert.ok(source.includes("function setApiSessionId(") && source.includes("function withSessionParam("), "请求要带会话 id（S91）");
     assert.ok(source.includes("setApiSessionId(sessionId)"), "面板挂载时写入当前会话 id（S91）");
   } finally {
@@ -237,11 +231,13 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
 
 
 
-test("流程图页有一键评审按钮，请求走 /schematic/review（S135）", () => {
+test("流程图页随页签一起撤掉：调试台不碰原理图（S135 → S222）", () => {
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
-  assert.equal(source.includes("\"一键评审\""), true);
-  assert.equal(source.includes("schematic/review?projectDir="), true);
-  assert.equal(source.includes("...reviewRows"), true);
+  assert.equal(source.includes("\"一键评审\""), false, "调试台不再有一键评审按钮");
+  assert.equal(source.includes("schematic/review?projectDir="), false, "调试台不再请求 /schematic/review");
+  // 服务端能力还在（工具 stm32_sch_review 与路由保留），只是没有面板入口。
+  const api = readFileSync(new URL("../src/engine/web-api.ts", import.meta.url), "utf8");
+  assert.equal(api.includes("\"/schematic/review\""), true, "服务端路由保留");
 });
 
 

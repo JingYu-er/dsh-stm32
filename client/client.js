@@ -982,7 +982,7 @@ window.__ModuleLoader__.load({
     }
 
     const DEBUG_STATUS_SIGN = { start: "▶", ok: "✔", fail: "✘", info: "·" };
-    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", schematic: "流程图", ecad: "电路设计", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
+    const DEBUG_LABELS = { timeline: "时间线", detail: "事件详情", events: "事件", channels: "实时通道", overview: "概览", ecad: "电路设计", pinout: "引脚", clocks: "时钟", interrupts: "中断", faults: "故障", artifacts: "产物", changes: "变更" };
 
     /** 一条事件的对话引用：单行，贴进对话后模型能对上调试台的序号。 */
     function eventRefLine(event) {
@@ -1947,39 +1947,6 @@ window.__ModuleLoader__.load({
       return { pinout, error, reload: () => setTick((value) => value + 1) };
     }
 
-    /** 原理图：只读 KiCad 工程，取模块框图与检查结论，供面板渲染。 */
-    function useSchematic(projectDir, intervalMs) {
-      const [schematic, setSchematic] = useState(null);
-      const [error, setError] = useState("");
-      const [tick, setTick] = useState(0);
-      useEffect(() => {
-        let closed = false;
-        if (typeof projectDir !== "string" || projectDir === "") {
-          setSchematic(null);
-          setError("");
-          return () => {
-            closed = true;
-          };
-        }
-        const load = async () => {
-          const result = await callApi("GET", "schematic?projectDir=" + encodeURIComponent(projectDir));
-          if (closed) return;
-          if (result.ok) {
-            setSchematic(result.value.schematic);
-            setError("");
-          } else {
-            setError(result.error);
-          }
-        };
-        load();
-        const timer = setInterval(load, intervalMs);
-        return () => {
-          closed = true;
-          clearInterval(timer);
-        };
-      }, [projectDir, tick]);
-      return { schematic, error, reload: () => setTick((value) => value + 1) };
-    }
 
     /** 构建与烧录：人在面板上直接触发，结果按 stm32_build / stm32_flash 事件进时间线。 */
     function BuildCard(props) {
@@ -2463,227 +2430,13 @@ window.__ModuleLoader__.load({
       other: "OTHER",
     };
 
-    /** 把 diagram 排成两列：主控在左、其余在右；返回画布尺寸与坐标。 */
-    /**
-     * 模块框图的布局（S90，S101 重画）。
-     *
-     * 左列是主控，右列是外设；连线走「独立通道」：每条线在自己的 x 上纵向折一次，
-     * 通道按目标高度排序分配，所以不会出现多条线压在同一段竖线上的情况。
-     * 拐角用 6px 圆角，标签压在靠近目标的横段上，并描一圈底色当作遮罩。
-     */
-    // 连线从框的哪一侧出去：谁占主导走谁那一侧。这样同一个框可以从上下左右四个方向进出，
-    // 图就是发散的网状结构，不会把所有线都挤到同一列上、拉成一条很长的竖图。
-    function sideToward(from, to) {
-      const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
-      return dy >= 0 ? "bottom" : "top";
-    }
 
     // 框宽跟着文字走：两个字的「主控」不该占一个能放八个字的框，八个字的模块名也不该被截断。
-    function blockWidth(label) {
-      const length = String(label).length;
-      return Math.max(96, Math.min(236, 30 + Math.ceil(length * 13)));
-    }
 
-    function portAnchor(point, side, t) {
-      const w = typeof point.w === "number" ? point.w : 200;
-      const h = typeof point.h === "number" ? point.h : 62;
-      if (side === "right") return { x: point.x + w, y: point.y + h * t };
-      if (side === "left") return { x: point.x, y: point.y + h * t };
-      if (side === "top") return { x: point.x + w * t, y: point.y };
-      return { x: point.x + w * t, y: point.y + h };
-    }
 
-    function portNormal(side) {
-      if (side === "right") return { x: 1, y: 0 };
-      if (side === "left") return { x: -1, y: 0 };
-      if (side === "top") return { x: 0, y: -1 };
-      return { x: 0, y: 1 };
-    }
 
     // 直角折线 + 圆角：把拐点换成半径 8 的二次贝塞尔，线看起来是「走」过去的，不是硬折。
-    function roundedPath(points) {
-      const radius = 8;
-      let d = "M " + points[0].x + " " + points[0].y;
-      for (let i = 1; i < points.length; i += 1) {
-        const prev = points[i - 1];
-        const curr = points[i];
-        const next = points[i + 1];
-        if (next === undefined) {
-          d += " L " + curr.x + " " + curr.y;
-          continue;
-        }
-        const inX = curr.x - prev.x;
-        const inY = curr.y - prev.y;
-        const outX = next.x - curr.x;
-        const outY = next.y - curr.y;
-        const inLen = Math.hypot(inX, inY);
-        const outLen = Math.hypot(outX, outY);
-        if (inLen < 1 || outLen < 1 || Math.abs(inX * outY - inY * outX) < 0.01) {
-          d += " L " + curr.x + " " + curr.y;
-          continue;
-        }
-        const r = Math.min(radius, inLen / 2, outLen / 2);
-        const ax = curr.x - (inX / inLen) * r;
-        const ay = curr.y - (inY / inLen) * r;
-        const bx = curr.x + (outX / outLen) * r;
-        const by = curr.y + (outY / outLen) * r;
-        d += " L " + ax + " " + ay + " Q " + curr.x + " " + curr.y + " " + bx + " " + by;
-      }
-      return d;
-    }
 
-    // 网状（hub-and-spoke）布局：主控居中，其余模块按连线数从右侧开始绕环摆放，
-    // 连线从各自面对对方的一侧进出。画布接近正方，不会随模块数线性变长。
-    function layoutSchematic(diagram) {
-      const blocks = diagram !== null && Array.isArray(diagram.blocks) ? diagram.blocks : [];
-      const links = diagram !== null && Array.isArray(diagram.links) ? diagram.links : [];
-      const boxH = 62;
-      const stub = 18;
-      const margin = 26;
-      const mcuBlocks = blocks.filter((block) => block.kind === "mcu");
-      const others = blocks.filter((block) => block.kind !== "mcu");
-      const degree = new Map();
-      for (const link of links) {
-        degree.set(link.from, (degree.get(link.from) ?? 0) + 1);
-        degree.set(link.to, (degree.get(link.to) ?? 0) + 1);
-      }
-      others.sort((one, other) => (degree.get(other.id) ?? 0) - (degree.get(one.id) ?? 0));
-      const n = Math.max(others.length, 1);
-      // 主控的端口数决定它的高度；其余框固定高度。环半径随模块数增加，框才不会贴在一起。
-      const mcuLinkCount = links.filter((link) => mcuBlocks.some((block) => block.id === link.from || block.id === link.to)).length;
-      const mcuWidth = blockWidth(mcuBlocks.length > 0 ? mcuBlocks[0].label : "主控");
-      const mcuHeight = Math.max(boxH, mcuLinkCount * 26 + 22);
-      const ringX = 290 + Math.max(0, n - 4) * 36;
-      const ringY = 190 + Math.max(0, n - 4) * 30;
-      const centerX = ringX + mcuWidth / 2 + margin;
-      const centerY = ringY + Math.max(mcuHeight, boxH) / 2 + margin;
-      const pos = new Map();
-      for (const block of mcuBlocks) {
-        pos.set(block.id, { x: centerX - mcuWidth / 2, y: centerY - mcuHeight / 2, w: mcuWidth, h: mcuHeight });
-      }
-      others.forEach((block, index) => {
-        const angle = ((index * 360) / n - 30) * (Math.PI / 180);
-        const px = centerX + Math.cos(angle) * ringX;
-        const py = centerY + Math.sin(angle) * ringY;
-        const w = blockWidth(block.label);
-        pos.set(block.id, { x: px - w / 2, y: py - boxH / 2, w: w, h: boxH });
-      });
-      const boxes = blocks
-        .filter((block) => pos.has(block.id))
-        .map((block) => Object.assign({}, pos.get(block.id), { block: block }));
-      const centerOf = (point) => ({
-        x: point.x + (typeof point.w === "number" ? point.w : 200) / 2,
-        y: point.y + (typeof point.h === "number" ? point.h : boxH) / 2,
-      });
-
-      const edges = [];
-      for (const link of links) {
-        const a = pos.get(link.from);
-        const b = pos.get(link.to);
-        if (a === undefined || b === undefined || a === b) continue;
-        edges.push({ link: link, a: a, b: b, sideA: sideToward(centerOf(a), centerOf(b)), sideB: sideToward(centerOf(b), centerOf(a)) });
-      }
-      // 同一侧的多根线按对端坐标排序后均匀分槽：全落在中点会叠成一根线。
-      const slots = new Map();
-      const pushSlot = (key, entry) => {
-        const list = slots.get(key) ?? [];
-        list.push(entry);
-        slots.set(key, list);
-      };
-      for (const edge of edges) {
-        pushSlot(edge.link.from + "|" + edge.sideA, { side: edge.sideA, other: centerOf(edge.b), edge: edge });
-        pushSlot(edge.link.to + "|" + edge.sideB, { side: edge.sideB, other: centerOf(edge.a), edge: edge });
-      }
-      const tOf = new Map();
-      for (const [key, list] of slots) {
-        const vertical = key.endsWith("|left") || key.endsWith("|right");
-        list.sort((one, other) => (vertical ? one.other.y - other.other.y : one.other.x - other.other.x));
-        list.forEach((entry, index) => {
-          tOf.set(key + "|" + entry.edge.link.from + "|" + entry.edge.link.to, (index + 1) / (list.length + 1));
-        });
-      }
-
-      const buildPath = (edge) => {
-        const keyA = edge.link.from + "|" + edge.sideA;
-        const keyB = edge.link.to + "|" + edge.sideB;
-        const tA = tOf.get(keyA + "|" + edge.link.from + "|" + edge.link.to) ?? 0.5;
-        const tB = tOf.get(keyB + "|" + edge.link.from + "|" + edge.link.to) ?? 0.5;
-        let start = portAnchor(edge.a, edge.sideA, tA);
-        let end = portAnchor(edge.b, edge.sideB, tB);
-        // 能直着走就别拐弯：两端高度（或水平位置）本来就落在对方框的范围内时，
-        // 把端口挪到同一水平线/竖线上，线就是一条直的。
-        const horizontal = edge.sideA === "left" || edge.sideA === "right";
-        // 同一根轴上的两个侧面（左/右，或上/下）就能拉直：不必要求完全同侧，
-        // 否则「下出线上进」这种最常见的连法永远会多拐一个弯。
-        const sameAxis = horizontal === (edge.sideB === "left" || edge.sideB === "right");
-        if (horizontal && sameAxis) {
-          const lowB = edge.b.y + Math.min(16, edge.b.h / 2);
-          const highB = edge.b.y + edge.b.h - Math.min(16, edge.b.h / 2);
-          if (start.y >= lowB && start.y <= highB) {
-            end = { x: end.x, y: start.y };
-          } else {
-            const lowA = edge.a.y + Math.min(16, edge.a.h / 2);
-            const highA = edge.a.y + edge.a.h - Math.min(16, edge.a.h / 2);
-            if (end.y >= lowA && end.y <= highA) start = { x: start.x, y: end.y };
-          }
-        }
-        if (!horizontal && sameAxis) {
-          const lowB = edge.b.x + 20;
-          const highB = edge.b.x + edge.b.w - 20;
-          if (start.x >= lowB && start.x <= highB) {
-            end = { x: start.x, y: end.y };
-          } else {
-            const lowA = edge.a.x + 20;
-            const highA = edge.a.x + edge.a.w - 20;
-            if (end.x >= lowA && end.x <= highA) start = { x: end.x, y: start.y };
-          }
-        }
-        const normalA = portNormal(edge.sideA);
-        const normalB = portNormal(edge.sideB);
-        const from = { x: start.x + normalA.x * stub, y: start.y + normalA.y * stub };
-        const to = { x: end.x + normalB.x * stub, y: end.y + normalB.y * stub };
-        const horizontalFirst = horizontal;
-        const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
-        const points = [start, from];
-        if (Math.abs(corner.x - from.x) > 0.5 || Math.abs(corner.y - from.y) > 0.5) points.push(corner);
-        if (Math.abs(to.x - corner.x) > 0.5 || Math.abs(to.y - corner.y) > 0.5) points.push(to);
-        points.push(end);
-        // 标签放在最长的那一段旁边：贴拐角会压到线，贴框会压到字。
-        let best = { len: 0, mid: { x: start.x, y: start.y }, horizontal: true };
-        for (let i = 1; i < points.length; i += 1) {
-          const p0 = points[i - 1];
-          const p1 = points[i];
-          const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-          if (len > best.len) {
-            best = { len: len, mid: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 }, horizontal: Math.abs(p1.x - p0.x) >= Math.abs(p1.y - p0.y) };
-          }
-        }
-        return {
-          key: edge.link.from + "|" + edge.link.to,
-          d: roundedPath(points),
-          label: edge.link.label,
-          lx: best.mid.x,
-          ly: best.horizontal ? best.mid.y - 6 : best.mid.y,
-          anchor: best.horizontal ? "middle" : "start",
-          dx: best.horizontal ? 0 : 6,
-          ports: [{ x: start.x, y: start.y }, { x: end.x, y: end.y }],
-        };
-      };
-
-      const paths = edges.map(buildPath);
-      const maxX = Math.max(...boxes.map((box) => box.x + box.w), 0);
-      const maxY = Math.max(...boxes.map((box) => box.y + box.h), 0);
-      return {
-        width: Math.max(maxX + margin, 360),
-        height: Math.max(maxY + margin, 240),
-        boxW: 200,
-        boxH: boxH,
-        boxes: boxes,
-        paths: paths,
-      };
-    }
 
 
     /** 原理图页签（S90）：只读 KiCad 工程，画模块框图并列出检查结论。 */
@@ -4114,193 +3867,6 @@ function EcadPanel(props) {
       return e("div", { style: debugStyles.page }, head.concat(rows));
     }
 
-    function SchematicPanel(props) {
-      const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
-      const state = useSchematic(projectDir, 15000);
-      const [review, setReview] = useState({ running: false, result: null, error: "" });
-      const runReview = async () => {
-        if (review.running || projectDir === "") return;
-        setReview({ running: true, result: null, error: "" });
-        const result = await callApi("GET", "schematic/review?projectDir=" + encodeURIComponent(projectDir));
-        if (result.ok) setReview({ running: false, result: result.value.review, error: "" });
-        else setReview({ running: false, result: null, error: result.error });
-      };
-      const schematic = state.schematic;
-      const countOf = (value) => (typeof value === "number" ? value : Array.isArray(value) ? value.length : 0);
-      const hardwareNameOf = (layoutInfo) => {
-        if (layoutInfo === null || layoutInfo === undefined) return "未设置";
-        const dir = typeof layoutInfo.hardwareDir === "string" ? layoutInfo.hardwareDir : "";
-        if (dir === "") return "未找到";
-        const parts = dir.split(/[\\/]/u);
-        return parts.length === 0 ? dir : parts[parts.length - 1];
-      };
-      const layout = layoutSchematic(schematic === null ? null : schematic.diagram);
-      const findings = schematic === null || !Array.isArray(schematic.findings) ? [] : schematic.findings;
-      const errors = findings.filter((item) => item.severity === "error");
-      const warnings = findings.filter((item) => item.severity === "warning");
-      const shown = findings.slice(0, 12);
-      const powerNets = schematic === null || schematic.diagram === undefined || !Array.isArray(schematic.diagram.powerNets) ? [] : schematic.diagram.powerNets;
-      const reviewRows = [];
-      if (projectDir !== "") {
-        reviewRows.push(
-          e(
-            "div",
-            { key: "review-btn", style: { display: "flex", gap: "8px", alignItems: "center", padding: "4px 0 6px" } },
-            e("button", { type: "button", disabled: review.running, onClick: () => runReview(), style: Object.assign({}, debugStyles.button, review.running ? { opacity: 0.5, cursor: "default" } : {}) }, review.running ? "评审中…" : "一键评审"),
-            review.result !== null
-              ? e("span", { style: { fontSize: "12px", color: review.result.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" } }, (review.result.ok ? "评审通过" : "评审未通过") + (review.result.error === "" ? "" : "：" + review.result.error))
-              : null,
-          ),
-        );
-        if (review.error !== "") reviewRows.push(e("div", { key: "review-err", style: { fontSize: "12px", color: "var(--dsw-alias-state-error-primary)" } }, review.error));
-        if (review.result !== null) {
-          reviewRows.push(
-            e(
-              "div",
-              { key: "review-body", style: { display: "grid", gap: "2px", padding: "0 0 8px", fontSize: "12px" } },
-              ...review.result.steps.map((step, index) =>
-                e("div", { key: "rv-" + String(index), style: { display: "flex", gap: "8px", alignItems: "baseline" } },
-                  e("span", { style: Object.assign({}, D32_LABEL_MONO, { color: step.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)" }) }, step.ok ? "OK" : "FAIL"),
-                  e("span", { style: { minWidth: "72px", opacity: 0.85 } }, step.step),
-                  e("span", { style: { opacity: 0.75 } }, step.detail),
-                ),
-              ),
-              ...review.result.decisions.slice(0, 8).map((item, index) =>
-                e("div", { key: "rvd-" + String(index), style: { opacity: 0.8 } }, "? " + item.pin + "（" + item.net + "）：" + item.reason),
-              ),
-              ...review.result.notes.map((note, index) => e("div", { key: "rvn-" + String(index), style: { opacity: 0.6 } }, "! " + note)),
-            ),
-          );
-        }
-      }
-      const head = [];
-      if (projectDir === "") {
-        head.push(e("div", { key: "no-project", style: { padding: "6px 0", opacity: 0.6 } }, "当前没有可用的工程目录：在工具栏「工程」里选一个，或先打开调试会话。"));
-      } else if (state.error !== "") {
-        head.push(e("div", { key: "error", style: { padding: "6px 0", opacity: 0.75 } }, state.error));
-      } else if (schematic === null) {
-        head.push(e("div", { key: "loading", style: { padding: "6px 0", opacity: 0.6 } }, "读取流程图…"));
-      } else {
-        head.push(
-          e(
-            "div",
-            { key: "head", style: { padding: "4px 0 6px", display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", opacity: 0.85 } },
-            e("span", null, schematic.mcu === null || schematic.mcu === undefined ? "未识别主控" : schematic.mcu.value + "（" + schematic.mcu.ref + "）"),
-            e("span", null, "元件 " + String(countOf(schematic.components))),
-            e("span", null, "网络 " + String(countOf(schematic.nets))),
-            e("span", null, schematic.generator === "" ? "KiCad" : schematic.generator),
-            e(
-              "span",
-              { style: { opacity: 0.7 }, title: "工程约定：程序在 program/ 或 firmware/，KiCad 在 hardware/；具体位置见 dsh-stm32.conf" },
-              "硬件 " + hardwareNameOf(schematic.layout),
-            ),
-            e("span", { style: errors.length > 0 ? { color: "var(--dsw-alias-state-error-primary)" } : {} }, "错误 " + String(errors.length)),
-            e("span", { style: warnings.length > 0 ? { color: D32_WARN } : {} }, "提示 " + String(warnings.length)),
-            e("span", { style: { opacity: 0.55 }, title: "只读：本页不改原理图，也不改工程配置（流程图由原理图派生）" }, "只读"),
-          ),
-        );
-      }
-      const diagram =
-        schematic === null
-          ? null
-          : e(
-              "div",
-              { key: "diagram", className: "d32-sch-figure", style: { padding: "0 0 8px", overflowX: "auto" } },
-              e(
-                "svg",
-                { width: "100%", viewBox: "0 0 " + String(layout.width) + " " + String(layout.height), style: { display: "block", maxWidth: String(layout.width) + "px" } },
-                e(
-                  "defs",
-                  { key: "defs" },
-                  e(
-                    "pattern",
-                    { id: "d32-sch-grid", width: "16", height: "16", patternUnits: "userSpaceOnUse" },
-                    e("circle", { cx: "1", cy: "1", r: "1", fill: "var(--dsw-alias-border-l3)" }),
-                  ),
-                ),
-                e("rect", { key: "bg", x: 0, y: 0, width: layout.width, height: layout.height, fill: "url(#d32-sch-grid)", opacity: 0.55 }),
-                ...layout.paths.map((path) =>
-                  e(
-                    "g",
-                    { key: "link-" + path.key },
-                    e("path", { d: path.d, fill: "none", stroke: "var(--dsw-alias-label-tertiary)", strokeWidth: 1 }),
-                    e(
-                      "text",
-                      {
-                        x: path.lx + (typeof path.dx === "number" ? path.dx : 0),
-                        y: path.ly,
-                        fill: "var(--dsw-alias-label-secondary)",
-                        stroke: "var(--dsw-alias-bg-base)",
-                        strokeWidth: 3,
-                        paintOrder: "stroke",
-                        fontFamily: D32_FONT_CODE,
-                        fontSize: "10.5px",
-                        letterSpacing: "0.06em",
-                        textAnchor: path.anchor,
-                        title: path.label,
-                      },
-                      path.label,
-                    ),
-                  ),
-                ),
-                ...layout.boxes.map((box) =>
-                  e(
-                    "g",
-                    { key: "box-" + box.block.id },
-                    // 整框用模块色描边：只给左边一条彩线时，框和类别的关系要靠猜。
-                    e("rect", { x: box.x, y: box.y, width: typeof box.w === "number" ? box.w : layout.boxW, height: box.h ?? layout.boxH, fill: "var(--dsw-alias-bg-layer-1)", stroke: D32_BLOCK_ACCENT[box.block.kind] ?? D32_BLOCK_ACCENT.other, strokeWidth: 1.5, rx: 2 }),
-                    e("text", { x: box.x + 12, y: box.y + 18, fill: "var(--dsw-alias-label-tertiary)", fontFamily: D32_FONT_CODE, fontSize: "10px", letterSpacing: "0.12em" }, D32_BLOCK_TAG[box.block.kind] ?? box.block.id.toUpperCase()),
-                    e("text", { x: box.x + 12, y: box.y + 38, fill: "var(--dsw-alias-label-primary)", fontSize: "13px" }, box.block.label.length > 22 ? box.block.label.slice(0, 21) + "…" : box.block.label),
-                    e("text", { x: box.x + 12, y: box.y + 54, fill: "var(--dsw-alias-label-tertiary)", fontSize: "11px" }, String(Array.isArray(box.block.refs) ? box.block.refs.length : 0) + " 个元件"),
-                  ),
-                ),
-                ...layout.paths.flatMap((path) =>
-                  Array.isArray(path.ports)
-                    ? path.ports.map((port, portIndex) =>
-                        e("circle", { key: "port-" + path.key + "-" + String(portIndex), cx: String(port.x), cy: String(port.y), r: 2, fill: "var(--dsw-alias-label-tertiary)" }),
-                      )
-                    : [],
-                ),
-              ),
-            );
-      const notes = [];
-      if (schematic !== null) {
-        if (powerNets.length > 0) {
-          notes.push(
-            e(
-              "div",
-              { key: "power", style: { padding: "2px 0 6px", fontSize: "12px", opacity: 0.8 } },
-              e("span", { style: Object.assign({}, D32_LABEL_MONO, { marginRight: "8px" }) }, "电源网络"),
-              powerNets.slice(0, 24).join(" · "),
-            ),
-          );
-        }
-        if (shown.length > 0) {
-          notes.push(
-            e(
-              "div",
-              { key: "findings", style: { borderTop: "1px solid var(--dsw-alias-border-l3)", paddingTop: "6px" } },
-              shown.map((item) =>
-                e(
-                  "div",
-                  { key: item.rule + "|" + item.message, className: "d32-sch-finding", style: { display: "flex", gap: "10px", fontSize: "12px", padding: "3px 0" } },
-                  e("span", { style: { width: "190px", flex: "0 0 auto", fontFamily: D32_FONT_CODE, fontSize: "10.5px", letterSpacing: "0.06em", color: item.severity === "error" ? "var(--dsw-alias-state-error-primary)" : item.severity === "warning" ? D32_WARN : "var(--dsw-alias-label-tertiary)" } }, item.rule),
-                  e("span", { style: { opacity: item.severity === "info" ? 0.7 : 0.95 } }, item.message),
-                ),
-              ),
-              findings.length > shown.length
-                ? e("div", { key: "more", style: { fontSize: "11px", opacity: 0.6, paddingTop: "4px" } }, "另有 " + String(findings.length - shown.length) + " 条，用 stm32_sch_check 查看全部")
-                : null,
-            ),
-          );
-        }
-        const warnList = Array.isArray(schematic.warnings) ? schematic.warnings : [];
-        if (warnList.length > 0) {
-          notes.push(e("div", { key: "warn", style: { paddingTop: "6px", fontSize: "11.5px", opacity: 0.65 } }, warnList.join("；")));
-        }
-      }
-      return e("div", { className: "d32-page", style: { display: "flex", flexDirection: "column", gap: "4px" } }, head, ...reviewRows, diagram, ...notes);
-    }
 
     function PinoutPanel(props) {
       const projectDir = typeof props.projectDir === "string" ? props.projectDir : "";
@@ -6205,7 +5771,6 @@ function EcadPanel(props) {
         tabButton("events", DEBUG_LABELS.events),
         tabButton("channels", DEBUG_LABELS.channels, unseenFails),
         tabButton("pinout", DEBUG_LABELS.pinout),
-        tabButton("schematic", DEBUG_LABELS.schematic),
         tabButton("clocks", DEBUG_LABELS.clocks),
         tabButton("interrupts", DEBUG_LABELS.interrupts),
         tabButton("faults", DEBUG_LABELS.faults, unseenFails),
@@ -6239,8 +5804,6 @@ function EcadPanel(props) {
                 e(Detail, { key: "detail", event: props.selected, flex: "0 0 380px" }),
               ),
             ]
-          : tab === "schematic"
-          ? [e(SchematicPanel, { key: "schematic", projectDir: projectDir })]
           : tab === "pinout"
           ? [e(PinoutPanel, { key: "pinout", projectDir: projectDir })]
           : tab === "clocks"
@@ -6657,7 +6220,6 @@ function EcadPanel(props) {
       const [picked, setPicked] = useState([]);
       const [pickNote, setPickNote] = useState("");
       const [pickerOpen, setPickerOpen] = useState(false);
-      const [pickerMessage, setPickerMessage] = useState("");
       const [onlyFail, setOnlyFail] = useState(false);
       const [sortBy, setSortBy] = useState("time");
       /* 新失败主动提示（S70）：不用切标签也能知道刚才那次调用失败了。 */
@@ -6682,10 +6244,6 @@ function EcadPanel(props) {
           const pick = (mine.length > 0 ? mine : files)[0];
           if (pick === undefined) return;
           await state.load(pick.path);
-          // 路径是元数据：只在证据列表里看得到，横幅上只留「哪一天、几条」。
-          const stamp = String(pick.path).match(/(\d{4}-\d{2}-\d{2})\/(?:events-)?(\d{2})(\d{2})(\d{2})/u);
-          const when = stamp === null ? "" : " · " + stamp[1] + " " + stamp[2] + ":" + stamp[3];
-          setPickerMessage("已回到最近一份回放" + when + "；点「退出回放」回到实时。");
         })();
       }, [sessionId, events.length]);
       const [filter, setFilter] = useState("");
@@ -6993,17 +6551,8 @@ function EcadPanel(props) {
             ),
           ),
         ),
-        pickerMessage === "" ? null : e("div", { style: { padding: "2px 10px", opacity: 0.75, fontSize: "12px" } }, pickerMessage),
-        pickerOpen === true && replayState.replay === null ? e(ReplayPicker, { busy: replayState.busy, onLoad: (path) => replayState.load(path), onMessage: (text) => setPickerMessage(text) }) : null,
+        pickerOpen === true && replayState.replay === null ? e(ReplayPicker, { busy: replayState.busy, onLoad: (path) => replayState.load(path), onMessage: () => undefined }) : null,
         replayState.error !== "" ? e("div", { style: { fontSize: "12px", opacity: 0.8, padding: "4px 0" } }, "回放失败：" + replayState.error) : null,
-        replayState.replay === null
-          ? null
-          : e(
-              "div",
-              { style: { display: "flex", gap: "8px", alignItems: "center", fontSize: "12px", padding: "4px 0", opacity: 0.85 } },
-              e("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: replayState.replay.file }, "回放：" + replayState.replay.file + "（" + String(replayState.replay.events.length) + " 条" + (replayState.replay.skipped > 0 ? "，跳过 " + String(replayState.replay.skipped) : "") + "）"),
-              e("span", { style: { opacity: 0.7 } }, "实时事件已暂停显示"),
-            ),
         e("div", { style: debugStyles.grid }, panels),
         e(ConsolePanel, {
           events: visible,
