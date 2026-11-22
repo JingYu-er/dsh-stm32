@@ -270,3 +270,11 @@ test("面板顶部按瑞士风骨架排：eyebrow、大标题、副句、四格�
   const emptyBlock = source.slice(source.indexOf("      empty: {"), source.indexOf("      mono:"));
   assert.equal(emptyBlock.includes("D32_FONT_CODE"), false, "空态不该用等宽字体");
 });
+
+test("内容区占满主列：不再有右侧停靠的分隔条与固定宽度（S223）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.equal(source.includes('divider-right'), false, "主列里不该再留 6px 拖宽条（它会占掉 grid 的第一格）");
+  assert.equal(source.includes('flex: "0 0 " + String(layout.right)'), false, "内容面板不该再按 layout.right 定宽");
+  assert.ok(source.includes('className: "d32-body"'), "内容区要是自己的 .d32-body 列");
+  assert.ok(source.includes('flex: "1 1 auto"'), "内容面板要撑满主列");
+});
