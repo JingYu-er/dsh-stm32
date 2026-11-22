@@ -5900,7 +5900,21 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - **能力矩阵要能表达「能烧但不能调」**：一个布尔 `flash` 会把 CubeProgrammer 和 OpenOCD 混为一谈，最终给出错误建议。
 - **诊断里的「成功」必须来自被诊断对象**：spawn 成功、文件存在、进程退出 0，都不是「页面已打开」或「驱动已装好」。
 
-## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S222）
+## §92 调试台：事件总线、SSE 与停靠网格（2026-11，S1–S223）
+
+### 一百九十八、页签挪到左边，报头跟着页走（S223）
+
+判断：S221 只换了报头（eyebrow、大标题、副句、四格统计），页签仍是顶部一条文字，内容区还是老表格与老卡片——用户看到的是「大框是新的、里面没变」。按 `swiss-panel-ui` 与歸藏设计的骨架，左侧常驻导航加内容区重排才算换完。
+
+取证（`~/.dsh/profiles/desktop/node_modules/dsh-guizang-design/gallery/style.css`）：`.shell` 两列 `216px minmax(0,1fr)`；`.rail` sticky 全高、`padding:24px 12px`、右侧 1px 线；`.nav a` 高 34px、hover 换灰底、选中**墨底纸字**；分组标题 mono 11px/0.1em 大写；`.main` `padding:32px 48px 96px`、`max-width:1180px`。
+
+落地：`page` 改 grid `176px minmax(0,1fr)`；新增 `rail`（品牌行 + 「会话」「目标」两组导航 + 底部版本行）、`navItem`/`navGroup`、`main`（max-width 960）、卡片/表头/空态样式；撤掉 `d32-tabs` 页签条；`StatusBar` 收 `page`/`pageKey`，大标题随页签变、附 `PAGE_LEADS` 副句，34→28px。
+
+结构坑：`tab` 状态原本在 `Channels`，页面外壳在 `DebugConsole`，rail 写错层会报 `rail is not defined`；把 `tab`/`setTab` 提升到 `DebugConsole`、`Channels` 改收 props 后才通。`Channels` 返回里原来还带 `header`（旧页签条），rail 接管后必须一并删掉。
+
+验收：1175 pass / 0 fail、包体 2293.6 KB / 385 文件（解包 16973.0 KB）、`pack-size` 护栏通过。
+
+教训：删页签条与「做左侧导航」是同一件事——旧的 `header` 变量不清掉，页面在运行期才会炸。
 
 ### 一百九十七、调试台里不该有硬件的东西（S222）
 

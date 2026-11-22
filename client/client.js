@@ -704,13 +704,34 @@ window.__ModuleLoader__.load({
       textTransform: "uppercase",
     };
     const debugStyles = {
-      page: {
+      main: {
         display: "flex",
         flexDirection: "column",
+        gap: "14px",
+        minWidth: "0",
+        minHeight: "0",
+        padding: "18px 20px 28px",
+        overflow: "auto",
+      },
+      rail: { display: "flex", flexDirection: "column", padding: "18px 12px 16px", gap: "0", background: "var(--dsw-alias-bg-layer-1)", borderRight: "1px solid var(--dsw-alias-border-l2)", overflowY: "auto" },
+      brandBlock: { padding: "0 8px 14px", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
+      brandName: { fontSize: "15px", fontWeight: 600, letterSpacing: "-0.01em", lineHeight: 1.3 },
+      brandSub: Object.assign({}, D32_LABEL_MONO, { marginTop: "2px", color: "var(--dsw-alias-label-tertiary)" }),
+      navGroup: { marginTop: "14px" },
+      navGroupLabel: Object.assign({}, D32_LABEL_MONO, { padding: "0 8px 6px", color: "var(--dsw-alias-label-tertiary)" }),
+      navItem: { display: "flex", alignItems: "center", gap: "6px", width: "100%", height: "30px", padding: "0 8px", border: 0, background: "transparent", color: "var(--dsw-alias-label-secondary)", fontFamily: "inherit", fontSize: "13px", textAlign: "left", cursor: "pointer" },
+      navItemOn: { background: "var(--dsw-alias-label-primary)", color: "var(--dsw-alias-bg-base)" },
+      navLabel: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+      navBadge: Object.assign({}, D32_LABEL_MONO, { opacity: 0.85 }),
+      secHead: { display: "flex", alignItems: "baseline", gap: "10px", paddingBottom: "6px", borderBottom: "1px solid var(--dsw-alias-label-primary)", fontSize: "13px", fontWeight: 600 },
+      secNum: Object.assign({}, D32_LABEL_MONO, { fontWeight: 400, color: "var(--dsw-alias-label-tertiary)" }),
+      page: {
+        display: "grid",
+        gridTemplateColumns: "176px minmax(0, 1fr)",
         height: "100%",
         minHeight: "420px",
-        gap: "16px",
-        padding: "20px 24px 32px",
+        gap: "0",
+        padding: "0",
         color: "var(--dsw-alias-label-primary)",
         fontSize: "13px",
         lineHeight: "1.5",
@@ -740,7 +761,7 @@ window.__ModuleLoader__.load({
         color: "var(--dsw-alias-label-tertiary)",
       }),
       eyebrowTag: { color: "var(--dsw-alias-label-primary)", fontWeight: 600 },
-      title: { margin: 0, fontSize: "34px", fontWeight: 300, letterSpacing: "-0.02em", lineHeight: 1.15 },
+      title: { margin: 0, fontSize: "28px", fontWeight: 300, letterSpacing: "-0.02em", lineHeight: 1.15 },
       lead: {
         margin: 0,
         maxWidth: "620px",
@@ -783,35 +804,37 @@ window.__ModuleLoader__.load({
       }),
       dot: { width: "5px", height: "5px", background: D32_ACCENT, flex: "0 0 auto" },
       spacer: { flex: "1 1 auto" },
-      grid: { display: "flex", flex: "1 1 auto", gap: "10px", minHeight: "0" },
+      grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "12px", minHeight: "0" },
       panel: {
         display: "flex",
         flexDirection: "column",
         minWidth: "0",
         minHeight: "0",
-        border: D32_HAIR,
-        background: "var(--dsw-alias-bg-layer-1)",
+        border: "1px solid var(--dsw-alias-border-l2)",
+        background: "transparent",
         overflow: "hidden",
       },
-      panelHead: Object.assign({}, D32_LABEL_MONO, {
+      panelHead: {
         display: "flex",
         alignItems: "center",
         gap: "8px",
-        padding: "8px 12px",
-        borderBottom: D32_HAIR,
-        color: "var(--dsw-alias-label-tertiary)",
+        padding: "8px 12px 6px",
+        borderBottom: "1px solid var(--dsw-alias-label-primary)",
+        fontSize: "13px",
+        fontWeight: 600,
+        color: "var(--dsw-alias-label-primary)",
         cursor: "default",
         userSelect: "none",
-      }),
+      },
       panelBody: { flex: "1 1 auto", overflow: "auto", minHeight: "0" },
       divider: { flex: "0 0 6px", cursor: "col-resize", background: "transparent", position: "relative" },
       /** 事件行：发丝线分隔 + 左侧方角状态条（S89）。 */
       row: {
         display: "flex",
         gap: "10px",
-        padding: "7px 12px",
+        padding: "8px 12px",
         cursor: "pointer",
-        borderBottom: "0.5px solid var(--dsw-alias-border-l3)",
+        borderBottom: "1px solid var(--dsw-alias-border-l3)",
         alignItems: "baseline",
       },
       rowTime: {
@@ -855,7 +878,8 @@ window.__ModuleLoader__.load({
         border: "1px solid var(--dsw-alias-border-l2)",
       },
       input: {
-        padding: "4px 8px",
+        height: "30px",
+        padding: "0 8px",
         font: "inherit",
         fontSize: "12px",
         color: "var(--dsw-alias-label-primary)",
@@ -865,12 +889,14 @@ window.__ModuleLoader__.load({
         outline: "none",
       },
       button: {
-        padding: "5px 12px",
+        height: "30px",
+        padding: "0 12px",
         font: "inherit",
         fontSize: "12px",
+        fontWeight: 500,
         color: "var(--dsw-alias-label-primary)",
         background: "transparent",
-        border: D32_HAIR,
+        border: "1px solid var(--dsw-alias-border-l2)",
         cursor: "pointer",
       },
       drawer: {
@@ -897,6 +923,10 @@ window.__ModuleLoader__.load({
       "/* 瑞士国际主义：面板内一律直角，圆角由语言决定，不留给单个组件（S89）。 */",
       ".d32-page, .d32-page * { border-radius: 0 !important; }",
       ".d32-page button, .d32-page input, .d32-page select { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }",
+      ".d32-page [data-clickable-row]:hover { background: var(--dsw-alias-interactive-bg-hover) !important; }",
+      ".d32-page button:focus-visible, .d32-page input:focus-visible, .d32-page select:focus-visible { outline: 1px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }",
+      ".d32-page button:hover { border-color: var(--dsw-alias-label-primary) !important; }",
+      ".d32-page button[data-variant=\"primary\"] { background: var(--dsw-alias-label-primary) !important; color: var(--dsw-alias-bg-base) !important; border-color: var(--dsw-alias-label-primary) !important; }",
       ".d32-page button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover) !important; border-color: var(--dsw-alias-border-l3) !important; color: var(--dsw-alias-label-primary) !important; }",
       ".d32-page button:active:not(:disabled) { background: var(--dsw-alias-interactive-bg-active) !important; }",
       ".d32-page button:focus-visible, .d32-page input:focus-visible, .d32-page select:focus-visible { outline: 2px solid var(--d32-accent); outline-offset: 1px; }",
@@ -924,6 +954,38 @@ window.__ModuleLoader__.load({
       ".d32-page ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 50%, transparent); }",
       ".d32-page ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--dsw-alias-label-secondary) 60%, transparent); }",
       ".d32-page ::-webkit-scrollbar-track { background: transparent; }",
+      /* 瑞士风骨架（S223）：左侧 176px 导航栏 + 右侧内容列；导航用墨底纸字的选中态。 */
+      ".d32-page { display: grid !important; grid-template-columns: 176px minmax(0, 1fr) !important; gap: 0 !important; padding: 0 !important; height: 100%; min-height: 420px; overflow: hidden; }",
+      ".d32-rail { display: flex; flex-direction: column; gap: 0; padding: 18px 12px 16px; background: var(--dsw-alias-bg-layer-1); border-right: 1px solid var(--dsw-alias-border-l2); overflow-y: auto; }",
+      ".d32-brand { padding: 0 8px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); }",
+      ".d32-brand-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }",
+      ".d32-brand-sub { margin-top: 2px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; color: var(--dsw-alias-label-tertiary); }",
+      ".d32-navlist { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }",
+      ".d32-navgroup { margin-top: 14px; }",
+      ".d32-navgroup-label { padding: 0 8px 6px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; letter-spacing: 0.1em; color: var(--dsw-alias-label-tertiary); }",
+      ".d32-nav { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 8px; border: 0 !important; background: transparent !important; color: var(--dsw-alias-label-secondary) !important; font-family: inherit !important; font-size: 13px !important; letter-spacing: 0 !important; text-align: left; cursor: pointer; }",
+      ".d32-nav:hover { background: var(--dsw-alias-interactive-bg-hover) !important; color: var(--dsw-alias-label-primary) !important; }",
+      ".d32-nav[data-active=\"1\"] { background: var(--dsw-alias-label-primary) !important; color: var(--dsw-alias-bg-base) !important; }",
+      ".d32-nav-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+      ".d32-nav-badge { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; opacity: 0.85; }",
+      ".d32-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px 20px 28px; overflow: auto; }",
+      ".d32-main > * { flex: 0 0 auto; }",
+      /* 区块头：等宽编号 + 15px 标题 + 墨色下划线（对齐歸藏设计的 section head）。 */
+      ".d32-sec-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; }",
+      ".d32-sec-num { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; font-weight: 400; color: var(--dsw-alias-label-tertiary); }",
+      ".d32-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); gap: 10px; }",
+      ".d32-tile { border: 1px solid var(--dsw-alias-border-l2); background: transparent; padding: 10px 12px; }",
+      ".d32-tile:hover { border-color: var(--dsw-alias-label-primary); }",
+      ".d32-tile-kicker { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; letter-spacing: 0.1em; color: var(--dsw-alias-label-tertiary); }",
+      ".d32-tile-title { margin-top: 3px; font-size: 13px; font-weight: 600; line-height: 1.5; }",
+      ".d32-tile-sub { margin-top: 2px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }",
+      /* 表格：表头等宽小标，行用发丝线，数字右对齐。 */
+      ".d32-table { width: 100%; border-collapse: collapse; font-size: 12px; }",
+      ".d32-table th { padding: 4px 10px 6px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; font-weight: 400; letter-spacing: 0.08em; text-align: left; color: var(--dsw-alias-label-tertiary); border-bottom: 1px solid var(--dsw-alias-border-l2); white-space: nowrap; }",
+      ".d32-table td { padding: 5px 10px; border-bottom: 1px solid var(--dsw-alias-border-l3); }",
+      ".d32-table tr:hover td { background: var(--dsw-alias-interactive-bg-hover); }",
+      ".d32-table .num { text-align: right; font-family: var(--ds-font-family-code, ui-monospace, monospace); }",
+      ".d32-empty { padding: 28px 16px; border: 1px dashed var(--dsw-alias-border-l2); text-align: center; font-size: 12.5px; line-height: 1.8; color: var(--dsw-alias-label-secondary); }",
     ].join("\n");
 
     /** 样式表只插一次；标签页切来切去不会重复追加。 */
@@ -1087,6 +1149,18 @@ window.__ModuleLoader__.load({
       );
     }
 
+    const PAGE_LEADS = {
+      overview: "工程、工具链与最近一次构建的现状：先看这里判断能不能干活。",
+      events: "本次会话的事件流：谁调了哪个工具、什么时候、结果是什么。",
+      channels: "串口、RTT 与监视变量的实时输出：联调时盯这一页。",
+      faults: "失败与异常按规则合并后的清单：先修能修的那几条。",
+      pinout: "这片 MCU 的引脚占用：哪些脚在用、用的是哪路复用功能。",
+      clocks: "时钟树与派生频率：超限的标出来，并给出改哪一档。",
+      interrupts: "中断向量与优先级：谁能打断谁，一眼看清。",
+      artifacts: "产物与校验和：elf、hex、bin 都在这一页。",
+      changes: "配置变更记录：.ioc 与代码各自什么时候动过。",
+    };
+
     function StatusBar(props) {
       const connectionText = {
         connecting: "连接中",
@@ -1121,8 +1195,8 @@ window.__ModuleLoader__.load({
           e("span", { style: debugStyles.spacer }),
           e("span", null, "只读"),
         ),
-        e("h1", { style: debugStyles.title }, "调试台"),
-        e("p", { style: debugStyles.lead }, "工具调用、串口与调试会话的证据流：一次事件的来龙去脉都在这里。"),
+        e("h1", { style: debugStyles.title }, props.page),
+        e("p", { style: debugStyles.lead }, PAGE_LEADS[props.pageKey] ?? PAGE_LEADS.overview),
         e(
           "div",
           { style: debugStyles.stats },
@@ -1190,6 +1264,7 @@ window.__ModuleLoader__.load({
                 key: String(event.seq),
                 className: "d32-row",
                 "data-status": String(event.status),
+                "data-clickable-row": "1",
                 style: Object.assign(
                   {},
                   debugStyles.row,
@@ -5683,7 +5758,9 @@ function EcadPanel(props) {
 
     function Channels(props) {
       const [view, setView] = useState({});
-      const [tab, setTab] = useState("channels");
+      /* 页签状态提升到 DebugConsole（S223）：左侧导航写在页面外壳里，内容区只负责渲染当前页。 */
+      const tab = props.tab;
+      const setTab = props.setTab;
       useEffect(() => {
         if (typeof props.focusFailures === "number" && props.focusFailures > 0) setTab("channels");
       }, [props.focusFailures]);
@@ -5734,49 +5811,6 @@ function EcadPanel(props) {
         if (tab === "channels" || tab === "faults") setFailSeen(failCount);
       }, [tab, failCount]);
       const unseenFails = Math.max(0, failCount - failSeen);
-      const tabButton = (key, label, badge) =>
-        e(
-          "button",
-          {
-            key: key,
-            type: "button",
-            className: "d32-tab",
-            "data-active": tab === key ? "1" : "0",
-            onClick: () => setTab(key),
-            style: {
-              padding: "8px 13px 7px",
-              fontFamily: D32_FONT_CODE,
-              fontSize: "11px",
-              letterSpacing: "0.08em",
-              border: 0,
-              borderBottom: "2px solid transparent",
-              background: "transparent",
-              color: "inherit",
-              cursor: "pointer",
-            },
-          },
-          label,
-          badge === undefined || badge === 0
-            ? null
-            : e(
-                "span",
-                { key: "badge", style: { marginLeft: "6px", padding: "0 5px", background: D32_ACCENT, color: "var(--dsw-alias-label-primary-foreground)", fontSize: "10px", letterSpacing: "0.04em" } },
-                String(badge),
-              ),
-        );
-      const header = e(
-        "div",
-        { key: "tabs", className: "d32-tabs", style: { display: "flex", gap: "0", padding: "0", background: "transparent", borderBottom: "1px solid var(--dsw-alias-border-l2)" } },
-        tabButton("overview", DEBUG_LABELS.overview),
-        tabButton("events", DEBUG_LABELS.events),
-        tabButton("channels", DEBUG_LABELS.channels, unseenFails),
-        tabButton("pinout", DEBUG_LABELS.pinout),
-        tabButton("clocks", DEBUG_LABELS.clocks),
-        tabButton("interrupts", DEBUG_LABELS.interrupts),
-        tabButton("faults", DEBUG_LABELS.faults, unseenFails),
-        tabButton("artifacts", DEBUG_LABELS.artifacts),
-        tabButton("changes", DEBUG_LABELS.changes),
-      );
       const body =
         tab === "overview"
           ? [e(OverviewPanel, { key: "overview", projectDir: projectDir, debug: debugInfo.debug, events: props.events, onShowFailures: props.onShowFailures, onShowChannels: () => setTab("channels") })]
@@ -5844,7 +5878,6 @@ function EcadPanel(props) {
       return e(
         DebugPanel,
         { title: tab === "channels" ? DEBUG_LABELS.channels : DEBUG_LABELS.channels + " / " + (DEBUG_LABELS[tab] ?? tab), onCollapse: props.onCollapse },
-        header,
         body,
         tab === "channels" ? channelBlocks : null,
       );
@@ -6371,6 +6404,15 @@ function EcadPanel(props) {
         };
       });
 
+      /* 页签状态（S223）：左侧导航与内容区都在页面外壳里，层级与歸藏设计的 rail/main 一致。 */
+      const [tab, setTab] = useState("overview");
+      /* 未读失败角标：停在别的页签时也能看见又有几条失败。 */
+      const failTotal = events.filter((item) => item.status === "fail").length;
+      const [failSeenNav, setFailSeenNav] = useState(0);
+      useEffect(() => {
+        if (tab === "channels" || tab === "faults") setFailSeenNav(failTotal);
+      }, [tab, failTotal]);
+      const unseenFails = Math.max(0, failTotal - failSeenNav);
       const collapsed = layout.collapsed ?? {};
       const panels = [];
       if (collapsed.channels !== true) {
@@ -6384,6 +6426,8 @@ function EcadPanel(props) {
           }),
           e(Channels, {
             key: "channels",
+            tab: tab,
+            setTab: setTab,
             events: visible,
             sessionId: sessionId,
             projectDir: projectOverride,
@@ -6407,13 +6451,66 @@ function EcadPanel(props) {
         );
       }
 
+      const navItem = (key, label, badge) =>
+        e(
+          "button",
+          {
+            key: key,
+            type: "button",
+            className: "d32-nav",
+            "data-active": tab === key ? "1" : "0",
+            style: tab === key ? Object.assign({}, debugStyles.navItem, debugStyles.navItemOn) : debugStyles.navItem,
+            onClick: () => setTab(key),
+          },
+          e("span", { className: "d32-nav-label", style: debugStyles.navLabel }, label),
+          badge === undefined || badge === 0
+            ? null
+            : e("span", { key: "badge", style: debugStyles.navBadge }, String(badge)),
+        );
+      /* 左侧导航（S223）：会话语义在前、目标语义在后，和歸藏设计的「创作 / 资料」分组同一套写法。 */
+      const navGroup = (key, label, items) =>
+        e(
+          "div",
+          { key: key, style: debugStyles.navGroup },
+          e("div", { style: debugStyles.navGroupLabel }, label),
+          items,
+        );
+      const rail = e(
+        "aside",
+        { key: "rail", className: "d32-rail", style: debugStyles.rail },
+        e(
+          "div",
+          { key: "brand", style: debugStyles.brandBlock },
+          e("div", { key: "name", style: debugStyles.brandName }, "调试台"),
+          e("div", { key: "sub", style: debugStyles.brandSub }, "dsh-stm32 · 会话 " + String(sessionId).slice(0, 8)),
+        ),
+        e(
+          "nav",
+          { key: "nav", style: { display: "flex", flexDirection: "column", marginTop: "4px" } },
+          navGroup("session", "会话", [
+            navItem("overview", DEBUG_LABELS.overview),
+            navItem("events", DEBUG_LABELS.events),
+            navItem("channels", DEBUG_LABELS.channels, unseenFails),
+            navItem("faults", DEBUG_LABELS.faults, unseenFails),
+          ]),
+          navGroup("target", "目标", [
+            navItem("pinout", DEBUG_LABELS.pinout),
+            navItem("clocks", DEBUG_LABELS.clocks),
+            navItem("interrupts", DEBUG_LABELS.interrupts),
+            navItem("artifacts", DEBUG_LABELS.artifacts),
+            navItem("changes", DEBUG_LABELS.changes),
+          ]),
+        ),
+      );
       const drawerItems = [];
       if (collapsed.channels === true) drawerItems.push({ key: "channels", label: DEBUG_LABELS.channels });
 
       return e(
         "div",
         { style: debugStyles.page, className: "d32-page" },
-        e(StatusBar, { events, connection, status }),
+        rail,
+        e("main", { key: "main", className: "d32-main", style: debugStyles.main },
+        e(StatusBar, { events, connection, status, page: DEBUG_LABELS[tab] ?? tab, pageKey: tab }),
         failToast === null
           ? null
           : e(
@@ -6581,6 +6678,7 @@ function EcadPanel(props) {
                 ),
               ),
             ),
+        ),
       );
     }
 

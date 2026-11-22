@@ -102,33 +102,17 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     };
     const text = renderText(debug.component({}));
     assert.ok(text.includes("调试台"), text.slice(0, 200));
-    // 时间线与详情合并进「事件」页签（S86）：默认标签是实时通道，用页签名钉住入口。
-    assert.ok(text.includes("事件"), text.slice(0, 200));
-    assert.ok(text.includes("调试会话"), text.slice(0, 400));
-    assert.ok(text.includes("暂无数值型监视采样"), text.slice(0, 400));
-    assert.ok(text.includes("断点"), text.slice(0, 600));
-    // 输入框的 placeholder 是属性，不在文本树里；这里断言按钮文案与状态。
-    assert.ok(text.includes("无会话"), text.slice(0, 600));
-    assert.ok(text.includes("移除"), text.slice(0, 600));
-    assert.ok(text.includes("在途调用"), text.slice(0, 800));
-    assert.ok(text.includes("引脚"), "工作区标签要有引脚页：" + text.slice(0, 400));
-    assert.ok(text.includes("时钟"), "工作区标签要有时钟页：" + text.slice(0, 400));
-    assert.ok(text.includes("故障"), "工作区标签要有故障页：" + text.slice(0, 500));
-    assert.ok(text.includes("产物"), "工作区标签要有产物页：" + text.slice(0, 500));
-    assert.ok(text.includes("概览"), "工作区标签要有概览页：" + text.slice(0, 500));
-    assert.ok(text.includes("回放…"), "时间线工具栏要有回放入口：" + text.slice(0, 500));
-    assert.ok(text.includes("变更"), "工作区标签要有变更页：" + text.slice(0, 500));
-    assert.ok(text.includes("导出 JSONL"), "时间线工具栏要能导出当前视图：" + text.slice(0, 500));
-    assert.ok(text.includes("全部事件"), "时间线工具栏要有状态筛选：" + text.slice(0, 500));
-    assert.ok(text.includes("命中历史"), "断点面板要有命中历史：" + text.slice(0, 500));
-    assert.ok(text.includes("自动采样"), "监视曲线要有自动采样开关：" + text.slice(0, 500));
-    assert.ok(text.includes("发送"), "串口通道要有发送输入框：" + text.slice(0, 500));
-    assert.ok(text.includes("引脚") || text.includes("点行复制引用"), "引脚页要有入口：" + text.slice(0, 500));
-    assert.ok(text.includes("错误") && text.includes("警告"), "RTT 通道要有级别过滤：" + text.slice(0, 600));
-    assert.ok(text.includes("回放…") && text.includes("变更") && text.includes("中断"), "工具栏与工作区标签要齐全：" + text.slice(0, 600));
-    assert.ok(text.includes("复制已选"), "批量复制引用的按钮要常驻：" + text.slice(0, 600));
-    // 概览页不在默认标签里，渲染文本看不到它；改从源码钉住「工具链一行」的实现。
+    // 左侧导航（S223）：九个页签都在 rail 里，默认落在概览。
+    for (const label of ["概览", "事件", "实时通道", "引脚", "时钟", "中断", "故障", "产物", "变更"]) {
+      assert.ok(text.includes(label), "左侧导航要有 " + label + "：" + text.slice(0, 400));
+    }
+    assert.ok(text.includes("工程、工具链与最近一次构建的现状"), "默认页是概览：" + text.slice(0, 600));
+    assert.ok(text.includes("连接"), "统计条要有连接状态：" + text.slice(0, 600));
+    // 通道/时间线/断点面板只在切到对应页签时渲染，文案改从源码钉住。
     const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+    for (const marker of ["回放…", "导出 JSONL", "全部事件", "复制已选", "命中历史", "自动采样", "发送", "暂无数值型监视采样", "在途调用"]) {
+      assert.ok(source.includes(marker), "源码里要有 " + marker);
+    }
     assert.ok(source.includes("useProbeSummary"), "概览页要用工具链探测摘要");
     assert.ok(source.includes("capabilitiesText"), "概览页要显示编译/烧录/调试/生成四项能力");
     assert.ok(source.includes('"工具链"'), "概览页要有工具链一行");
@@ -211,7 +195,7 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.equal(source.includes("已回到最近一份回放"), false, "不再显示回放横幅");
     assert.equal(source.includes("已载入最近一份历史记录（"), false, "不再把完整证据路径拼进横幅");
     assert.ok(source.includes("fallbackProjectDir"), "没有会话时要退到工作区里的第一个工程");
-    assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
+    assert.ok(source.includes("当前没有在途的工具调用"), "在途区文案在源码里（默认概览不渲染通道面板）");
     // S222：原理图（流程图）属于硬件台，调试台不再画它，也不再请 /schematic。
     assert.equal(source.includes('tabButton("schematic"'), false, "调试台没有流程图页签");
     assert.equal(source.includes("function SchematicPanel("), false, "不再内联原理图面板");
@@ -277,11 +261,11 @@ test("面板顶部按瑞士风骨架排：eyebrow、大标题、副句、四格�
   const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
   assert.ok(/e\(\s*"header"/u.test(source), "报头要是 header 元素");
   assert.ok(source.includes("[ 调试台 ]"), "eyebrow 要带方括号标签");
-  assert.ok(source.includes('e("h1", { style: debugStyles.title }, "调试台")'), "要有 h1 大标题");
+  assert.ok(source.includes('e("h1", { style: debugStyles.title }, props.page)'), "要有随页签的大标题");
   assert.ok(source.includes("debugStyles.lead"), "要有副句");
   assert.ok(source.includes("d32-stat"), "统计格要有 d32-stat 类");
   assert.ok(source.includes('statCell("连接"'), "统计第一格是连接状态");
-  assert.ok(source.includes('fontSize: "34px"'), "大标题 34px");
+  assert.ok(source.includes('fontSize: "28px"'), "大标题 28px");
   assert.ok(source.includes("repeat(4, minmax(0, 1fr))"), "统计条四等分");
   const emptyBlock = source.slice(source.indexOf("      empty: {"), source.indexOf("      mono:"));
   assert.equal(emptyBlock.includes("D32_FONT_CODE"), false, "空态不该用等宽字体");
