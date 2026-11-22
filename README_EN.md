@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#known-limitations)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#known-limitations)
-[![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.11-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 Full-chain STM32 tooling distributed as a [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin: 37 tools, 7 slash commands and one bundled SKILL that hand the chain "probe toolchain → scaffold a project → edit `.ioc` (clocks included) → generate code → build → flash → debug → read registers back" to the model, plus serial interaction (Windows) and an in-session debug console panel.
 
@@ -57,7 +57,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 `dsh plugin` runs `pnpm add` inside the profile directory and appends `dsh-stm32` to that profile's `dsh.profile.bundles`. Exit DSH completely and start it again afterwards; bundle layers load at process start only.
 
-- Verify: `dsh plugin --profile desktop why dsh-stm32` prints `0.1.8`
+- Verify: `dsh plugin --profile desktop why dsh-stm32` prints `0.1.11`
 - Uninstall: `dsh plugin --profile desktop remove dsh-stm32`, then restart DSH
 - Web profile: replace `desktop` with `web`
 

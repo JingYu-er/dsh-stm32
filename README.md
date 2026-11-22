@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/JingYu-er/dsh-stm32)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4a6cf7)](#已知限制)
 [![MCU](https://img.shields.io/badge/MCU-STM32%20family-4a6cf7)](#已知限制)
-[![version](https://img.shields.io/badge/version-0.1.8-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
+[![version](https://img.shields.io/badge/version-0.1.11-orange)](https://github.com/JingYu-er/dsh-stm32/releases)
 
 STM32 全流程工具层，以 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 插件形式分发：37 个工具、7 条斜杠命令与 1 个随包下发的 SKILL，把「工具链探测 → 建工程 → 改 `.ioc`（含时钟）→ 生成代码 → 编译 → 烧录 → 调试 → 回读寄存器」这条链交给模型执行，另含串口交互（Windows）与会话内的「调试台」面板。
 
@@ -57,7 +57,7 @@ dsh plugin --profile desktop add dsh-stm32
 
 `dsh plugin` 等价于在 profile 目录执行 `pnpm add`，并把 `dsh-stm32` 写入该 profile 的 `dsh.profile.bundles`。安装后完全退出 DSH 再启动（插件层只在进程启动时加载）。
 
-- 校验：`dsh plugin --profile desktop why dsh-stm32` 显示 `0.1.8`
+- 校验：`dsh plugin --profile desktop why dsh-stm32` 显示 `0.1.11`
 - 卸载：`dsh plugin --profile desktop remove dsh-stm32`，随后重启 DSH
 - 装到 Web：把 `desktop` 换成 `web`
 
