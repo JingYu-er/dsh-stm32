@@ -206,7 +206,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("ProbeCard") && source.includes("probe-info"), "探针信息卡要读 /probe-info");
     assert.ok(source.includes("DEBUG_PROJECT_KEY"), "工程选择要按会话记住");
     assert.ok(source.includes("function useProjects("), "面板要读工程索引");
-    assert.ok(source.includes("已载入最近一份历史记录"), "打开面板时应自动载入最近证据");
+    assert.ok(source.includes("已回到最近一份回放"), "打开面板时应自动载入最近证据");
+    // 横幅只留日期与条数，证据路径不进正文（人看的不是路径）。
+    assert.equal(source.includes("已载入最近一份历史记录（"), false, "不再把完整证据路径拼进横幅");
     assert.ok(source.includes("fallbackProjectDir"), "没有会话时要退到工作区里的第一个工程");
     assert.ok(text.includes("当前没有在途的工具调用"), text.slice(0, 800));
     assert.ok(source.includes("function useSchematic("), "原理图页签要读 /schematic（S90）");

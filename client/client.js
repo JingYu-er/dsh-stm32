@@ -1117,9 +1117,9 @@ window.__ModuleLoader__.load({
           e("span", { style: debugStyles.eyebrowTag }, "[ 调试台 ]"),
           self === null
             ? null
-            : e("span", null, "v" + self.version + " · " + String(self.routeCount) + " 路由" + (staleLib ? " · 有新构建" : "")),
+            : e("span", { title: String(self.routeCount) + " 条接口路由" }, "v" + self.version + (staleLib ? " · 有新构建" : "")),
           e("span", { style: debugStyles.spacer }),
-          e("span", null, "只读 · 事件自动落盘到证据目录"),
+          e("span", null, "只读"),
         ),
         e("h1", { style: debugStyles.title }, "调试台"),
         e("p", { style: debugStyles.lead }, "工具调用、串口与调试会话的证据流：一次事件的来龙去脉都在这里。"),
@@ -5953,9 +5953,10 @@ function EcadPanel(props) {
       return { info: info, error: error, reload: () => setTick((n) => n + 1) };
     }
 
-    /** 探针信息卡：类型 / VID:PID / 序列号 / 位置 / 走哪份 interface 配置。 */
+    /** 探针卡片：默认只给「名称 + 序列号 + 位置」，VID/PID 与 interface 收进「详情」。 */
     function ProbeCard(props) {
       const state = useProbeInfo(30_000);
+      const [showDetail, setShowDetail] = useState(false);
       const info = state.info;
       const line = (label, value) =>
         e(
@@ -5975,14 +5976,32 @@ function EcadPanel(props) {
                   { style: { fontSize: "12px", opacity: 0.75 } },
                   "没看到 SWD 探针（ST-LINK / J-Link / CMSIS-DAP / DAPLink）。" + (info.others.length > 0 ? "其它 USB 设备：" + info.others.slice(0, 3).join("、") : ""),
                 )
-              : e(
-                  "div",
-                  { style: { display: "flex", flexDirection: "column" } },
-                  line("类型", info.probe.label),
-                  line("序列号", info.probe.serial === "" ? "—" : info.probe.serial),
-                  line("位置", info.probe.location === "" ? "—" : info.probe.location),
-                  line("接口", info.interfaceCfg),
-                );
+              : (() => {
+                  // 面板是给人看的：默认只留「是什么、哪一只、插在哪」，VID/PID 与 interface 折叠。
+                  const raw = String(info.probe.label);
+                  const cut = raw.indexOf("（");
+                  const name = cut < 0 ? raw : raw.slice(0, cut);
+                  const detail = cut < 0 ? "" : raw.slice(cut + 1).replace(/）$/u, "");
+                  const serial = String(info.probe.serial);
+                  return e(
+                    "div",
+                    { style: { display: "flex", flexDirection: "column", gap: "2px" } },
+                    e("div", { style: { fontSize: "12.5px" } }, serial === "" ? name : name + " · " + serial),
+                    info.probe.location === "" ? null : line("位置", info.probe.location),
+                    e(
+                      "button",
+                      { type: "button", onClick: () => setShowDetail((value) => value === false), style: Object.assign({}, debugStyles.button, { alignSelf: "flex-start", marginTop: "2px" }) },
+                      showDetail === false ? "详情" : "收起详情",
+                    ),
+                    showDetail === false
+                      ? null
+                      : e(
+                          "div",
+                          { style: { fontSize: "11.5px", opacity: 0.7, lineHeight: "1.6" } },
+                          [detail, "接口 " + info.interfaceCfg].filter((item) => item !== "").join(" · "),
+                        ),
+                  );
+                })();
       return e(
         "div",
         { style: { padding: "6px 10px", border: "1px solid color-mix(in srgb, currentColor 14%, transparent)", borderRadius: "8px", display: "flex", flexDirection: "column", gap: "4px" } },
@@ -6663,7 +6682,10 @@ function EcadPanel(props) {
           const pick = (mine.length > 0 ? mine : files)[0];
           if (pick === undefined) return;
           await state.load(pick.path);
-          setPickerMessage("已载入最近一份历史记录（" + String(pick.path) + "）；点「退出回放」回到实时。");
+          // 路径是元数据：只在证据列表里看得到，横幅上只留「哪一天、几条」。
+          const stamp = String(pick.path).match(/(\d{4}-\d{2}-\d{2})\/(?:events-)?(\d{2})(\d{2})(\d{2})/u);
+          const when = stamp === null ? "" : " · " + stamp[1] + " " + stamp[2] + ":" + stamp[3];
+          setPickerMessage("已回到最近一份回放" + when + "；点「退出回放」回到实时。");
         })();
       }, [sessionId, events.length]);
       const [filter, setFilter] = useState("");
