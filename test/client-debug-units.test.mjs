@@ -278,3 +278,12 @@ test("内容区占满主列：不再有右侧停靠的分隔条与固定宽度�
   assert.ok(source.includes('className: "d32-body"'), "内容区要是自己的 .d32-body 列");
   assert.ok(source.includes('flex: "1 1 auto"'), "内容面板要撑满主列");
 });
+
+test("左侧导航固定，只有右侧内容滚动（S224）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(source.includes(".d32-rail { position: sticky; top: 0;"), "导航栏要 sticky 固定");
+  assert.ok(source.includes("max-height: 100vh"), "导航栏高度不超过视口");
+  assert.equal(source.includes(".d32-page { display: grid !important; grid-template-columns: 176px minmax(0, 1fr) !important; gap: 0 !important; padding: 0 !important; height: 100%;"), false, "整页不该再靠 height:100% 撑高（宿主没给固定高度时整页会一起滚）");
+  const mainRule = source.slice(source.indexOf(".d32-main {"), source.indexOf(".d32-main >"));
+  assert.equal(mainRule.includes("overflow: auto"), false, "内容列不再自建滚动区，滚动交给宿主");
+});

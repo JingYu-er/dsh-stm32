@@ -955,8 +955,8 @@ window.__ModuleLoader__.load({
       ".d32-page ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--dsw-alias-label-secondary) 60%, transparent); }",
       ".d32-page ::-webkit-scrollbar-track { background: transparent; }",
       /* 瑞士风骨架（S223）：左侧 176px 导航栏 + 右侧内容列；导航用墨底纸字的选中态。 */
-      ".d32-page { display: grid !important; grid-template-columns: 176px minmax(0, 1fr) !important; gap: 0 !important; padding: 0 !important; height: 100%; min-height: 420px; overflow: hidden; }",
-      ".d32-rail { display: flex; flex-direction: column; gap: 0; padding: 18px 12px 16px; background: var(--dsw-alias-bg-layer-1); border-right: 1px solid var(--dsw-alias-border-l2); overflow-y: auto; }",
+      ".d32-page { display: grid !important; grid-template-columns: 176px minmax(0, 1fr) !important; gap: 0 !important; padding: 0 !important; align-items: start; min-height: 420px; }",
+      ".d32-rail { position: sticky; top: 0; align-self: start; max-height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; gap: 0; padding: 18px 12px 16px; background: var(--dsw-alias-bg-layer-1); border-right: 1px solid var(--dsw-alias-border-l2); overflow-y: auto; }",
       ".d32-brand { padding: 0 8px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); }",
       ".d32-brand-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }",
       ".d32-brand-sub { margin-top: 2px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; color: var(--dsw-alias-label-tertiary); }",
@@ -968,7 +968,7 @@ window.__ModuleLoader__.load({
       ".d32-nav[data-active=\"1\"] { background: var(--dsw-alias-label-primary) !important; color: var(--dsw-alias-bg-base) !important; }",
       ".d32-nav-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
       ".d32-nav-badge { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; opacity: 0.85; }",
-      ".d32-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px 20px 28px; overflow: auto; }",
+      ".d32-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px 20px 28px; }",
       ".d32-main > * { flex: 0 0 auto; }",
       /* 区块头：等宽编号 + 15px 标题 + 墨色下划线（对齐歸藏设计的 section head）。 */
       ".d32-sec-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; }",
