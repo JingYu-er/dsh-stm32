@@ -189,7 +189,9 @@ test("client.js：注册设置面板与调试台两个槽位，调试台可渲�
     assert.ok(source.includes("--d32-accent") && source.includes("--dsw-alias-state-business-primary"), "强调色取宿主令牌并落到 --d32-accent（S89）");
     assert.ok(source.includes("D32_WARN"), "警告色不再写死 #e8b339（S88）");
     assert.ok(source.includes("D32_LABEL_MONO") && source.includes("textTransform: \"uppercase\""), "小标走等宽大写（S89）");
-    assert.ok(source.includes("data-active=") && source.includes("border-bottom-color: var(--d32-accent)"), "选中页签用下划线而不是填充（S89）");
+    assert.ok(source.includes("data-active="), "页签要标出选中态（S89）");
+    // S221：选中项改成墨色下划线 + 加粗，不再用强调色（一页一个强调色，页签不抢）。
+    assert.ok(source.includes('border-bottom-color: var(--dsw-alias-label-primary) !important'), "选中页签用墨色下划线");
     assert.ok(!source.includes("boxShadow: \"var(--dsw-shadow-lv1)\""), "面板不再套卡片阴影（S89）");
     assert.ok(source.includes("d32-events"), "时间线与详情合并成一个「事件」页签（S86）");
     assert.ok(source.includes("DEBUG_LABELS.detail") && source.includes("事件详情"), "事件详情仍是独立组件（S86）");
@@ -273,3 +275,16 @@ test("3D 缺模型时面板给可换的官方封装（S181）", () => {
   assert.ok(clientSource.includes("有 STEP"), "候选要标明有没有 STEP");
 });
 
+test("面板顶部按瑞士风骨架排：eyebrow、大标题、副句、四格统计（S221）", () => {
+  const source = readFileSync(new URL("../client/client.js", import.meta.url), "utf8");
+  assert.ok(/e\(\s*"header"/u.test(source), "报头要是 header 元素");
+  assert.ok(source.includes("[ 调试台 ]"), "eyebrow 要带方括号标签");
+  assert.ok(source.includes('e("h1", { style: debugStyles.title }, "调试台")'), "要有 h1 大标题");
+  assert.ok(source.includes("debugStyles.lead"), "要有副句");
+  assert.ok(source.includes("d32-stat"), "统计格要有 d32-stat 类");
+  assert.ok(source.includes('statCell("连接"'), "统计第一格是连接状态");
+  assert.ok(source.includes('fontSize: "34px"'), "大标题 34px");
+  assert.ok(source.includes("repeat(4, minmax(0, 1fr))"), "统计条四等分");
+  const emptyBlock = source.slice(source.indexOf("      empty: {"), source.indexOf("      mono:"));
+  assert.equal(emptyBlock.includes("D32_FONT_CODE"), false, "空态不该用等宽字体");
+});
