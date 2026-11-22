@@ -5914,6 +5914,8 @@ DSH 0.2.2-rc.1 把工具 JSON Schema 压成固定子集，违规在**注册期**
 - 删回放横幅与 `pickerMessage` 状态；自动载入最近证据的行为保留（载入成功直接体现在时间线上），`ReplayPicker` 的 `onMessage` 改成空实现。
 - 服务端一处不动：`stm32_sch_*` 工具与 `/schematic`、`/schematic/review` 路由保留，从工具侧照旧能用。
 
+留了一笔未清的账：`client/client.js` 里还躺着整个 `EcadPanel`（拆仓前硬件台的面板）与它专用的 16 个 hook（`useEcad` / `usePcbView` / `useBom` / `useStackup` / `useImpedance` / `useNetGate` / `useEmc` / `useLinks` / `useGerber` / `useRender3d` / `useMech` / `useBrief` / `usePower` / `useParts` / `autoBuildText` / `dsSizeText`），已经没有页签引用它，也不会被挂载。试着用脚本删时，括号配平扫描被字符串里的花括号骗到，误删了仍在用的 `Timeline` 与 `BuildCard`，已 `git checkout --` 回滚；这段清理要按行号或 AST 做，不能靠数括号。
+
 ### 六、验证
 
 - `npx tsc --noEmit` 0、`npm run build` 0。
